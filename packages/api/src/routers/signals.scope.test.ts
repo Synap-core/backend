@@ -336,7 +336,7 @@ describe("signals.list — page lens reports failed halves per class", () => {
     const at = (m: number) => new Date(Date.UTC(2026, 9, 4, 10, m));
     const health = (id: string, m: number, title: string) => ({
       id,
-      type: "pod.storage_warning",
+      type: "pod.resource_warning",
       category: "system",
       title,
       sourceType: "system",
@@ -367,7 +367,7 @@ describe("signals.list — page lens reports failed halves per class", () => {
       title: "Storage at 93% capacity",
       issues: [
         {
-          type: "pod.storage_warning",
+          type: "pod.resource_warning",
           repeatCount: 3,
           notificationIds: ["h1", "h2", "h3"],
         },

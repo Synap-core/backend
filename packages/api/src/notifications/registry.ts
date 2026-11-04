@@ -1339,15 +1339,22 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ],
   },
   {
-    type: "pod.storage_warning",
+    // A resource on the pod's host or database crossed its alert threshold
+    // (plan P3, G10; `services/pod-health/notify.ts`): memory, swap, memory
+    // pressure, a disk, Postgres connections, or the host's readings stopped.
+    // Generalises the never-sent `pod.storage_warning`. To the pod owner +
+    // admins, once per metric and level; dismissed when it clears. One row
+    // per metric (`groupBy`), the status banner (`needsYou: "status"`).
+    type: "pod.resource_warning",
     category: "system",
-    label: "Storage Warning",
-    icon: "hard-drive",
+    label: "Pod resource warning",
+    icon: "gauge",
     priority: "high",
-    titleTemplate: "Storage at {{percent}}% capacity",
-    bodyTemplate: "Consider archiving or cleaning up unused data.",
+    titleTemplate: "{{headline}}",
+    bodyTemplate: "{{detail}}",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
+    groupBy: "metric",
     needsYou: "status",
   },
   {

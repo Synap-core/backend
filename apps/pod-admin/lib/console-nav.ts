@@ -41,6 +41,7 @@ export type NavIconName =
   | "Boxes"
   | "ShieldCheck"
   | "HardDrive"
+  | "Gauge"
   | "RefreshCw"
   | "ScrollText"
   | "Bug"
@@ -319,6 +320,16 @@ export const CONSOLE_NAV = [
     id: "pod",
     label: "Pod",
     items: [
+      {
+        // The pod's machine: memory, disks, database connections against
+        // their alert thresholds, and the safe actions that free room
+        // (plan P3, G10). Home's "resources" row opens here.
+        id: "health",
+        href: "/health",
+        label: "Pod health",
+        icon: "Gauge",
+        audience: "admin",
+      },
       {
         id: "security",
         href: "/security",
@@ -620,6 +631,8 @@ export const DIAGNOSE_DESTINATION: Readonly<Record<string, NavId>> = {
   quality_by_prompt_version: "intelligence",
   schema_hygiene: "kinds",
   schema_contract: "kinds",
+  // Memory, disks, database connections against their alert thresholds.
+  resources: "health",
 };
 
 // ─── next.config.ts ──────────────────────────────────────────────────────────

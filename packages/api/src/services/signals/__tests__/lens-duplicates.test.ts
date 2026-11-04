@@ -165,7 +165,7 @@ describe("system health — ONE banner, never needs-you", () => {
   // status type carries the folding contract.
   const degraded = (id: string, m: number, sourceId: string | null = null) =>
     n(id, {
-      type: "pod.storage_warning",
+      type: "pod.resource_warning",
       title: `Storage warning (${m})`,
       category: "system",
       sourceType: "system",

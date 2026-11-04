@@ -335,7 +335,7 @@ beforeAll(async () => {
     240
   );
   await notify(
-    "pod.storage_warning",
+    "pod.resource_warning",
     "system",
     "system",
     null,
@@ -521,7 +521,7 @@ describe("F7 — health at a narrow scope", () => {
   it("the banner reaches a project page even when the health row is older than the pod's newest 100", async () => {
     const p = await page({ projectId: PN });
     expect(p.status?.issues.map((i) => i.type)).toEqual([
-      "pod.storage_warning",
+      "pod.resource_warning",
     ]);
     expect(p.statusUnreadable).toBe(false);
   });

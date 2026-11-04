@@ -151,6 +151,10 @@ import {
   MORNING_BRIEF_QUEUE,
   MORNING_BRIEF_CRON,
 } from "./workers/morning-brief-worker.js";
+import {
+  POD_HEALTH_QUEUE,
+  POD_HEALTH_CRON,
+} from "./workers/pod-health-worker.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -279,6 +283,11 @@ export async function registerCronSchedules(): Promise<void> {
   // their own brief time, read from their proactive settings)
   await scheduleSafe(boss, MORNING_BRIEF_QUEUE, MORNING_BRIEF_CRON, {});
   logger.info("Registered cron: morning-brief (every 15min)");
+
+  // Pod health check (every 2 min — the host's resource readings and the
+  // pod's own numbers against the alert thresholds; handler slot, IoC)
+  await scheduleSafe(boss, POD_HEALTH_QUEUE, POD_HEALTH_CRON, {});
+  logger.info("Registered cron: pod-health-check (every 2min)");
 
   // Session titler (every 10min — derived names for untitled runs/captures, one
   // generated name per unnamed work session/receipt, one outcome-aware rename

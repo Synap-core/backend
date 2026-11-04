@@ -64,6 +64,7 @@ import { connectorsRouter } from "./routers/connectors-trpc.js";
 import { notifCenterRouter } from "./routers/notif-center.js";
 import { connectionPrefsRouter } from "./routers/connection-prefs.js";
 import { proactiveRouter } from "./routers/proactive.js";
+import { podHealthRouter } from "./routers/pod-health.js";
 import { syncManagementRouter } from "./routers/sync-management.js";
 import { trustedIssuersRouter } from "./routers/trusted-issuers.js";
 import { applicationConnectionsRouter } from "./routers/application-connections.js";
@@ -189,6 +190,8 @@ export const coreRouter = router({
   notifCenter: notifCenterRouter,
   connectionPrefs: connectionPrefsRouter,
   proactive: proactiveRouter,
+  // Pod admin › Pod health: resource readings, alert thresholds, host actions.
+  podHealth: podHealthRouter,
   sync: syncManagementRouter,
   trustedIssuers: trustedIssuersRouter,
   applicationConnections: applicationConnectionsRouter,

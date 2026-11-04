@@ -70,6 +70,11 @@ import {
   type SchemaHygieneSignal,
 } from "./schema-hygiene.js";
 import {
+  gatherResourcesSignal,
+  summarizeResources,
+  type ResourcesSignal,
+} from "./resources.js";
+import {
   readQualityByPromptVersionSignal,
   summarizeQualityByPromptVersion,
   type QualityByPromptVersionSignal,
@@ -248,6 +253,12 @@ export interface GlobalSignals {
    * that says so).
    */
   qualityByPromptVersion?: QualityByPromptVersionSignal;
+  /**
+   * Host + database resources vs their alert thresholds (./resources.ts).
+   * Optional: absent means NOT COMPUTED (the caller is not a pod admin), and
+   * no section is emitted; `available: false` means the read FAILED.
+   */
+  resources?: ResourcesSignal;
 }
 
 /**
@@ -483,6 +494,10 @@ export function summarizeGlobalHealth(
     sections.push(
       summarizeQualityByPromptVersion(signals.qualityByPromptVersion)
     );
+  }
+
+  if (signals.resources) {
+    sections.push(summarizeResources(signals.resources));
   }
 
   // Roll up: worst section wins.
@@ -854,6 +869,7 @@ export async function diagnoseGlobal(params: {
     schemaContract,
     qualityByPromptVersion,
     schemaHygiene,
+    resources,
   ] = await Promise.all([
     Promise.all(
       agentActivityCounts.map(async (a) => ({
@@ -865,6 +881,8 @@ export async function diagnoseGlobal(params: {
     gatherSchemaContractSignal({ userId, workspaceId }),
     readQualityByPromptVersionSignal({ userId, workspaceId }),
     gatherSchemaHygieneSignal({ userId, workspaceId }),
+    // Pod-wide by nature: the lens never narrows the host's resources.
+    gatherResourcesSignal({ userId }),
   ]);
 
   return summarizeGlobalHealth(
@@ -882,6 +900,7 @@ export async function diagnoseGlobal(params: {
       schemaContract,
       schemaHygiene,
       qualityByPromptVersion,
+      ...(resources ? { resources } : {}),
     },
     { workspaceId }
   );
