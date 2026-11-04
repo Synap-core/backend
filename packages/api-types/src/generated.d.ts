@@ -49609,6 +49609,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executionMode?: "async" | "box" | "sync" | undefined;
 				inputMap?: Record<string, unknown> | undefined;
 				intent?: string | undefined;
+				intentOp?: "create" | "renew" | "revoke" | "status" | undefined;
 				kind?: "builtin" | "code" | "declarative" | "instruction" | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				name: string;
