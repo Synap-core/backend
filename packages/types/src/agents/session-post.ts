@@ -172,15 +172,3 @@ export function readSessionPost(metadata: unknown): SessionPostMeta | null {
     ...(readBy ? { readBy } : {}),
   };
 }
-
-/**
- * Client-supplied metadata with the server-owned stamp removed — a caller's
- * `metadata.sessionPost` must never land as a forged sender, target or wake.
- */
-export function withoutSessionPostMeta(
-  metadata: Record<string, unknown> | undefined
-): Record<string, unknown> | undefined {
-  if (!metadata || !(SESSION_POST_META_KEY in metadata)) return metadata;
-  const { [SESSION_POST_META_KEY]: _dropped, ...rest } = metadata;
-  return rest;
-}

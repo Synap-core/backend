@@ -8,7 +8,6 @@ import {
   SESSION_POST_META_KEY,
   isWakeWorthySessionPostIntent,
   readSessionPost,
-  withoutSessionPostMeta,
 } from "./index.js";
 
 const FROM = "11111111-1111-4111-8111-111111111111";
@@ -80,19 +79,6 @@ describe("readSessionPost", () => {
         }),
       })?.refs
     ).toEqual([{ kind: "proposal", id: "p1" }]);
-  });
-});
-
-describe("withoutSessionPostMeta", () => {
-  it("removes a caller's stamp and keeps the rest", () => {
-    expect(
-      withoutSessionPostMeta({ [SESSION_POST_META_KEY]: stamp(), anchor: 1 })
-    ).toEqual({ anchor: 1 });
-  });
-  it("leaves metadata without a stamp as it was", () => {
-    const m = { anchor: 1 };
-    expect(withoutSessionPostMeta(m)).toBe(m);
-    expect(withoutSessionPostMeta(undefined)).toBeUndefined();
   });
 });
 

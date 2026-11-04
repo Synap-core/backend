@@ -1,5 +1,4 @@
 import {
-  ROOM_POST_META_KEY,
   ROOM_POST_SLOT_LABEL_MAX,
   type RoomPostKind,
   type RoomPostMeta,
@@ -34,20 +33,6 @@ export function roomPostMeta(
       ? { confirmationId: confirmation.slice(0, 200) }
       : {}),
   };
-}
-
-/**
- * Client-supplied metadata with the server-owned marker removed — a Hub
- * caller's `metadata.roomPost` must never land as a forged question/answer.
- * The WHOLE key goes, so every stamp under it (`answer` and its provenance,
- * `pendingRelay`, `closed`) is server-owned by construction.
- */
-export function withoutRoomPostMeta(
-  metadata: Record<string, unknown> | undefined
-): Record<string, unknown> | undefined {
-  if (!metadata || !(ROOM_POST_META_KEY in metadata)) return metadata;
-  const { [ROOM_POST_META_KEY]: _dropped, ...rest } = metadata;
-  return rest;
 }
 
 /**

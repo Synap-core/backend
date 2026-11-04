@@ -73,6 +73,7 @@ import {
   resolveContextItemNames,
 } from "./helpers.js";
 import { createLogger } from "@synap-core/core";
+import { withoutServerOwnedMessageMeta } from "@synap-core/types/agents";
 
 const logger = createLogger({ module: "channels" });
 
@@ -742,6 +743,9 @@ export const crudProcedures = {
             ? MessageAuthorType.BOT
             : MessageAuthorType.AI_AGENT;
       const hash = computeMessageHash(msgId, input.content);
+      // `roomPost`, `sessionPost`, `routeChoice` are server-owned: a narrated
+      // system line must not carry a forged "who should answer?" chip.
+      const metadata = withoutServerOwnedMessageMeta(input.metadata);
       const inserted = await db
         .insert(messages)
         .values({
@@ -757,7 +761,7 @@ export const crudProcedures = {
           userId: ctx.userId,
           hash,
           previousHash: "",
-          metadata: input.metadata ?? null,
+          metadata: metadata ?? null,
         })
         .onConflictDoNothing({ target: messages.id })
         .returning({ id: messages.id });
@@ -777,7 +781,7 @@ export const crudProcedures = {
               timestamp: new Date(),
               previousHash: "",
               hash,
-              metadata: input.metadata,
+              metadata,
             },
             userId: ctx.userId,
           },

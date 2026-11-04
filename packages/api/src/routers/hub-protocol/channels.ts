@@ -62,6 +62,7 @@ import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { assertChannelWrite } from "../../utils/assert-channel-write.js";
 import { TRPCError } from "@trpc/server";
 import { recordGrantDenial } from "../../utils/grant-write-check.js";
+import { withoutServerOwnedMessageMeta } from "@synap-core/types/agents";
 
 /**
  * Sources we can map straight to {@link ExternalMessagePlatform} for the
@@ -461,7 +462,8 @@ export const channelsRouter = router({
         metadata: {
           senderName: input.senderName,
           originalTimestamp: input.timestamp,
-          ...(input.metadata ?? {}),
+          // `roomPost`, `sessionPost`, `routeChoice` are server-owned.
+          ...(withoutServerOwnedMessageMeta(input.metadata) ?? {}),
         } as Record<
           string,
           unknown
@@ -688,7 +690,8 @@ export const channelsRouter = router({
         metadata: {
           agentUserId,
           source: "hub-protocol",
-          ...(input.metadata ?? {}),
+          // `roomPost`, `sessionPost`, `routeChoice` are server-owned.
+          ...(withoutServerOwnedMessageMeta(input.metadata) ?? {}),
         } as Record<
           string,
           unknown
