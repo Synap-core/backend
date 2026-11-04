@@ -1262,12 +1262,14 @@ export interface WidgetCapabilityDef {
    * is permitted to reach, e.g. `['https://api.example.com', 'wss://stream.x']`.
    *
    * SECURITY MODEL (default-deny, origin-allowlist): a cell with NO declared
-   * `externalHosts` reaches no arbitrary origin — the composed CSP is
-   * `connect-src blob: https://esm.sh` (esm.sh is always present because the
-   * frame loads its module graph from it), so the only data paths are the host
-   * bridge (onQuery/onMutate, proposal-gated) and the module CDN. Declaring
-   * hosts here ADDS exactly those origins to the frame's `connect-src`/
-   * `img-src`; the composer in `ViewFrame.tsx` drops malformed entries.
+   * `externalHosts` reaches no network origin — the web and desktop module
+   * frame's CSP is `buildCellModuleFrameCsp()` (`@synap-core/types/cell-bridge`):
+   * `connect-src blob:`, no remote script origin (the host hands React and the
+   * kit in as `blob:` modules), so the only data path is the host bridge
+   * (onQuery/onMutate, proposal-gated). Declaring hosts here ADDS exactly those
+   * origins to the frame's `connect-src`/`img-src`, through
+   * `frameExternalOrigins`, which drops malformed entries. (The relay and
+   * telegram frame hosts still load the module graph from esm.sh.)
    *
    * ⚠️ There is NO install-time approval step for this field, and nothing
    * persists it: `install-cell-from-definition.ts` does not thread it, so a

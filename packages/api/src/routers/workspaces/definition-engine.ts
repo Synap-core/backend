@@ -307,9 +307,9 @@ export const definitionEngineProcedures = {
                 })
               )
               .optional(),
-            /** Override the default "Home" name for the workspace home bento view */
             /** Template documents — see `schemas/template-document.ts`. */
             documents: templateDocumentsSchema,
+            /** Override the default "Home" name for the workspace home bento view */
             bentoViewName: z.string().optional(),
             bentoLayout: z
               .array(

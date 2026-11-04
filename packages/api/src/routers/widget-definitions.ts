@@ -192,6 +192,9 @@ const WidgetUpsertSchema = z.object({
   // it (verified across every repo). DO-NOT-REVIVE-AS-IS.
   /**
    * npm package version pins for frame widgets, e.g. { 'recharts': '2.12.0' }.
+   * The web and desktop frames load none (`checkCellSource` refuses a frame
+   * cell whose deps name a module the host does not provide); only the hosts
+   * that still resolve them at runtime (relay, telegram) read them.
    *
    * NOT validated here: `defineCell` (the one write door this mutation
    * delegates to) runs `validateDeps` on every path, so the npm-name/version

@@ -34,9 +34,12 @@ import { widgetDefinitions } from "@synap/database/schema";
 import type { ContentKind } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 
-// deps are spliced into esm.sh import-map URLs inside the sandboxed iframe
-// (cell-runtime ViewFrame) — the regexes are what stops a crafted name/version
-// from manipulating the request path/query (CSP pins the origin, not the path).
+// The web and desktop frames load no runtime deps (`checkCellSource` refuses a
+// frame cell that names any the host does not provide). The hosts that still
+// resolve them (relay-app `CellFrameHost`, telegram `CellFrame`) splice deps
+// into esm.sh import-map URLs — the regexes are what stops a crafted
+// name/version from manipulating the request path/query there (CSP pins the
+// origin, not the path).
 // Enforced HERE, inside the one door, so no caller (route, MCP, marketplace
 // install, future) can reach the upsert with unvalidated deps.
 const NPM_PKG_NAME_RE =

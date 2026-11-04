@@ -68,7 +68,7 @@ export interface FrameLoad {
 }
 
 /** A tag in a page's markup (outside comments and script bodies). */
-export interface MarkupTag {
+interface MarkupTag {
   /** As written (`div`, `IMG`). */
   name: string;
   /** The text between the name and the `>`. */
@@ -355,16 +355,6 @@ function walkMarkup(html: string): MarkupWalk {
     }
   }
   return walk;
-}
-
-/** Every tag of a page, outside comments and script bodies, in order. */
-export function markupTags(html: string): MarkupTag[] {
-  return walkMarkup(html).tags;
-}
-
-/** The comments of a page, as sorted [start, end) ranges. */
-export function markupComments(html: string): [number, number][] {
-  return walkMarkup(html).comments;
 }
 
 /** Every load an HTML page asks for, in source order. Never throws. */
