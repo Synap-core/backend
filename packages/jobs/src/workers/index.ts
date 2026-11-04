@@ -561,6 +561,40 @@ const LONG_WALK_QUEUES = new Map<string, number>([
 ]);
 
 /**
+ * Create every queue this code sends to or works, with its policy. pg-boss v10
+ * refuses a `send` to a queue that does not exist, so a process that only
+ * SENDS (the API of a split pod, SYNAP_PROCESS_ROLE=api) calls this too, and a
+ * queue a new release adds exists before its first send whichever process
+ * boots first. Idempotent: createQueue is ON CONFLICT DO NOTHING, updateQueue
+ * writes the same policy.
+ */
+export async function createAllQueues(): Promise<void> {
+  const boss = getBoss();
+  for (const name of ALL_QUEUES) {
+    const longWalkExpiry = LONG_WALK_QUEUES.get(name);
+    const policy =
+      longWalkExpiry !== undefined
+        ? { name, retryLimit: 0, expireInSeconds: longWalkExpiry }
+        : NO_RETRY_QUEUES.has(name)
+          ? { name, retryLimit: 0 }
+          : undefined;
+    await boss.createQueue(name, policy);
+    // createQueue is `ON CONFLICT DO NOTHING`, so a queue that already exists on
+    // the pod keeps its old policy. updateQueue forces the retry-free policy for
+    // the census queues on redeploy too (pg-boss resolves a job's retry as
+    // COALESCE(jobRetry, queueRetry, ctorDefault) — a queue policy of 0 wins over
+    // the boss.ts default of 3 for any send that doesn't set retryLimit itself).
+    // WITHOUT this updateQueue the fix would be a no-op on every existing pod:
+    // `automation-execute` already exists there with the inherited 15-min/retry-3
+    // policy, so createQueue silently does nothing.
+    if (policy) {
+      await boss.updateQueue(name, policy);
+    }
+  }
+  logger.info({ count: ALL_QUEUES.length }, "Created all pg-boss queues");
+}
+
+/**
  * Register all pg-boss workers.
  * Must be called after startBoss().
  */
@@ -606,28 +640,7 @@ export async function registerAllWorkers(): Promise<void> {
   }
 
   // Create all queues first (pg-boss v10 requires this before work/schedule)
-  for (const name of ALL_QUEUES) {
-    const longWalkExpiry = LONG_WALK_QUEUES.get(name);
-    const policy =
-      longWalkExpiry !== undefined
-        ? { name, retryLimit: 0, expireInSeconds: longWalkExpiry }
-        : NO_RETRY_QUEUES.has(name)
-          ? { name, retryLimit: 0 }
-          : undefined;
-    await boss.createQueue(name, policy);
-    // createQueue is `ON CONFLICT DO NOTHING`, so a queue that already exists on
-    // the pod keeps its old policy. updateQueue forces the retry-free policy for
-    // the census queues on redeploy too (pg-boss resolves a job's retry as
-    // COALESCE(jobRetry, queueRetry, ctorDefault) — a queue policy of 0 wins over
-    // the boss.ts default of 3 for any send that doesn't set retryLimit itself).
-    // WITHOUT this updateQueue the fix would be a no-op on every existing pod:
-    // `automation-execute` already exists there with the inherited 15-min/retry-3
-    // policy, so createQueue silently does nothing.
-    if (policy) {
-      await boss.updateQueue(name, policy);
-    }
-  }
-  logger.info({ count: ALL_QUEUES.length }, "Created all pg-boss queues");
+  await createAllQueues();
 
   // Retire queues whose worker was removed from the code. pg-boss NEVER prunes
   // queues or schedules on its own (ALL_QUEUES is create-only, `schedule()` only

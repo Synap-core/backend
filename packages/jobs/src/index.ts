@@ -14,11 +14,19 @@
 // pg-boss client and lifecycle - re-exported from @synap/events
 export { getBoss, startBoss, stopBoss, emitSideEffects } from "@synap/events";
 
+// Which part of the backend a process runs (SYNAP_PROCESS_ROLE, plan P6)
+export {
+  parseProcessRole,
+  InvalidProcessRoleError,
+  PROCESS_ROLES,
+  type ProcessRole,
+} from "@synap/events";
+
 // Cron scheduler
 export { registerCronSchedules } from "./cron.js";
 
 // Worker registration
-export { registerAllWorkers } from "./workers/index.js";
+export { registerAllWorkers, createAllQueues } from "./workers/index.js";
 
 // Worker registry (admin UI metadata)
 export * from "./worker-registry.js";

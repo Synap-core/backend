@@ -142,6 +142,15 @@ class EventStreamManager {
   }
 
   /**
+   * Whether anyone is listening in this process (a hub subscriber or an admin
+   * client). The cross-process relay (utils/event-stream-relay.ts) reads an
+   * event row only when this is true.
+   */
+  hasListeners(): boolean {
+    return this.subscribers.size > 0 || this.clients.size > 0;
+  }
+
+  /**
    * Decide whether a given event matches a subscriber's filter.
    * Pure function — exported as a method for testability.
    */

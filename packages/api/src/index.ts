@@ -202,6 +202,7 @@ export { podAccessOf, type PodAccess } from "./access/pod-access.js";
 export { eventStreamManager } from "./event-stream-manager.js";
 export { setupEventBroadcasting } from "./setup-event-broadcasting.js";
 export { startSessionChangedListener } from "./utils/session-changed-listener.js";
+export { startEventStreamRelayListener } from "./utils/event-stream-relay.js";
 
 // Export CORS cache for dynamic origin management
 export {

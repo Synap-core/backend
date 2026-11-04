@@ -20,6 +20,7 @@ import { emitDomainEventToRealtime } from "./utils/domain-event-bridge.js";
 import { syncRealtimeHook } from "./utils/sync-realtime-hook.js";
 import { statusRealtimeHook } from "./services/status/status-realtime.js";
 import { registerFacetAttachEmitter } from "./routers/entities/helpers.js";
+import { publishEventToStream } from "./utils/event-stream-relay.js";
 
 const logger = createLogger({ module: "event-broadcasting" });
 
@@ -31,7 +32,17 @@ let isSetup = false;
  * This function should be called once at application startup.
  * It registers hooks with the EventRepository.
  */
-export function setupEventBroadcasting(): void {
+export function setupEventBroadcasting(
+  opts: {
+    /**
+     * Where hook 1 sends an event. `local` (default): this process's SSE
+     * connections. `relay`: a worker process of a split pod holds no SSE
+     * connection, so it NOTIFYs the API, which broadcasts
+     * (utils/event-stream-relay.ts).
+     */
+    stream?: "local" | "relay";
+  } = {}
+): void {
   if (isSetup) {
     logger.warn("Event broadcasting already setup, skipping");
     return;
@@ -43,9 +54,12 @@ export function setupEventBroadcasting(): void {
   registerFacetAttachEmitter();
 
   // Hook 1: SSE broadcast — stream all events to connected clients
-  const broadcastHook: EventHook = (event) => {
-    eventStreamManager.broadcast(event);
-  };
+  const broadcastHook: EventHook =
+    opts.stream === "relay"
+      ? (event) => publishEventToStream(event)
+      : (event) => {
+          eventStreamManager.broadcast(event);
+        };
 
   // Hook 2: Domain event → Socket.IO bridge
   const domainBridgeHook: EventHook = (event) => {
