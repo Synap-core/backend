@@ -253,6 +253,12 @@ services:
     restart: always
     environment:
       <<: *backend-env
+      # Which part of the backend this container runs (plan P6,
+      # @synap/events process-role.ts). Empty = all: the API, MCP and every
+      # pg-boss worker, cron and reactor in one process. SYNAP_SPLIT_WORKERS=1
+      # in deploy/.env makes it the API only, and `synap` then starts the
+      # `backend-worker` service (profile `workers`) beside it. Off by default.
+      SYNAP_PROCESS_ROLE: ${SYNAP_SPLIT_WORKERS:+api}
     volumes:
       # Deploy directory (read-only) so the backend can reference compose file path
       - .:/opt/synap/deploy:ro
@@ -293,6 +299,66 @@ services:
       - synap-net
       - ory-admin
       - sandbox
+
+  # ============================================================================
+  # BACKEND WORKER (pod resilience plan P6 — opt-in, profile `workers`)
+  #
+  # The same image as `backend`, run as SYNAP_PROCESS_ROLE=worker: every
+  # pg-boss worker, the cron clock and the boot one-shots, behind a /health-
+  # only HTTP server (no route Caddy could reach). A stuck job can no longer
+  # freeze the API, nor a stuck request the jobs.
+  #
+  # Off by default. SYNAP_SPLIT_WORKERS=1 in deploy/.env turns it on: `synap`
+  # (install, update, apply) then adds `--profile workers`, and the same
+  # variable makes `backend` the API only (its SYNAP_PROCESS_ROLE above). Any
+  # non-empty value counts, in both places, so the two never disagree.
+  #
+  # Its own Postgres pool, counted by deploy/__tests__/pg-connection-budget.
+  # test.sh (Drizzle WORKER_DB_POOL_SIZE + pg-boss WORKER_PGBOSS_POOL_SIZE).
+  # `synap heal` restarts it like any service (its /health is 503 while its
+  # pg-boss does not run) and probes its event loop; the clean door may
+  # restart it.
+  # ============================================================================
+  backend-worker:
+    logging: *default-logging
+    image: ${SYNAP_IMAGE_BACKEND:-ghcr.io/${GITHUB_REPOSITORY:-synap-core/backend}:${BACKEND_VERSION:?BACKEND_VERSION or SYNAP_IMAGE_BACKEND must be set in deploy/.env - run synap update --release}}
+    restart: always
+    environment:
+      <<: *backend-env
+      SYNAP_PROCESS_ROLE: worker
+      DATABASE_URL: postgresql://synap:${POSTGRES_PASSWORD}@postgres:5432/synap?application_name=backend-worker
+      DB_POOL_SIZE: ${WORKER_DB_POOL_SIZE:-20}
+      PGBOSS_POOL_SIZE: ${WORKER_PGBOSS_POOL_SIZE:-10}
+    volumes:
+      # Read-only, as `backend`'s: the boot one-shots read state/ (the last
+      # update's outcome, heal's events.jsonl). The worker writes no state.
+      - .:/opt/synap/deploy:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:4000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # The jobs reach the same hosts as the API: Ory admin, RSSHub (sandbox).
+    networks:
+      - synap-net
+      - ory-admin
+      - sandbox
+    profiles:
+      - workers
 
   # ============================================================================
   # BACKEND CANARY (update validation — profile-gated, never in production)

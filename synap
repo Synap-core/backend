@@ -695,6 +695,26 @@ _pod_agent_setting() {
     fi
 }
 
+# ── the job workers in their own process (pod resilience plan P6) ─────────────
+# ONE switch, SYNAP_SPLIT_WORKERS in deploy/.env, read by compose and here with
+# the SAME rule: any non-empty value is on. Compose makes `backend` the API only
+# (`SYNAP_PROCESS_ROLE: ${SYNAP_SPLIT_WORKERS:+api}`); `synap` adds the profile
+# that starts `backend-worker`. Off (the default), backend runs everything and
+# no backend-worker may run: split_workers_converge removes a leftover one, so
+# an old worker never keeps working jobs beside a backend that works them too.
+split_workers_enabled() { [ -n "$(_pod_agent_setting SYNAP_SPLIT_WORKERS)" ]; }
+
+split_workers_converge() { # after the backend is up: start or remove backend-worker
+    if split_workers_enabled; then
+        # --no-deps: it runs after backend, whose dependencies (postgres,
+        # minio, the one-shot backend-migrate) are up or done.
+        docker compose --profile workers up -d --no-deps backend-worker
+    elif [ -n "$(docker compose --profile workers ps -a -q backend-worker 2>/dev/null)" ]; then
+        echo -e "${BLUE}  SYNAP_SPLIT_WORKERS is off: removing backend-worker (backend runs the jobs again)${NC}"
+        docker compose --profile workers rm -sf backend-worker >/dev/null
+    fi
+}
+
 _is_canonical_https_url() {
     local value="$1"
     local authority="${value#https://}"
@@ -3290,6 +3310,8 @@ EOF
         fi
     fi
 
+    if split_workers_enabled; then profile_args+=(--profile workers); fi
+
     # Detect whether this "install" is really an update of an already-running
     # pod. When a backend is already serving, protect it with a canary swap so a
     # broken new image can't take the pod down. Fresh installs keep the original
@@ -3322,6 +3344,10 @@ EOF
     else
         docker compose "${profile_args[@]}" up -d --remove-orphans
     fi
+    split_workers_converge || {
+        echo -e "${RED}❌ backend-worker did not start (SYNAP_SPLIT_WORKERS is on): docker compose --profile workers logs backend-worker${NC}"
+        exit 1
+    }
 
     # Reapply auth schema. On a brand-new volume this is a no-op (compose's
     # depends_on already ran kratos-migrate to completion).
@@ -4858,6 +4884,9 @@ _ue_bring_up_rest() { # every non-backend service; never stops half-way
     if printf '%s\n' "${UE_SERVICES[@]}" | grep -qx caddy; then
         _ue_caddy_converge || failed=1
     fi
+    # SYNAP_SPLIT_WORKERS off: a backend-worker left from when it was on would
+    # keep working jobs on the previous release. (On, UE_SERVICES started it.)
+    split_workers_enabled || split_workers_converge || failed=1
     return "$failed"
 }
 
@@ -5054,6 +5083,9 @@ synap_update_engine() {
     UE_PROFILE_ARGS=()
     if should_start_pod_agent; then UE_PROFILE_ARGS=(--profile pod-agent)
     elif [ $? -eq 2 ]; then _ue_rollback "pod-agent misconfigured"; fi
+    # The job workers' own service (plan P6) is one of the services the
+    # release recreates after the backend swap (_ue_services lists it).
+    if split_workers_enabled; then UE_PROFILE_ARGS+=(--profile workers); fi
     UE_SERVICES=()
     local _svc
     while IFS= read -r _svc; do [ -n "$_svc" ] && UE_SERVICES+=("$_svc"); done < <(_ue_services "$UE_EDGE" "${UE_PROFILE_ARGS[@]}")
@@ -5979,7 +6011,7 @@ cmd_apply() {
     local running=() svc
     while IFS= read -r svc; do
         [ -n "$svc" ] && running+=("$svc")
-    done < <(docker compose ps --status running --services 2>/dev/null | grep -vxE 'backend-canary|.*-migrate' || true)
+    done < <(docker compose ps --status running --services 2>/dev/null | grep -vxE 'backend-canary|backend-worker|.*-migrate' || true)
     if [ "${#running[@]}" -eq 0 ]; then
         echo "apply: no running services — the next start/update reads the new .env."
         return 0
@@ -6010,6 +6042,16 @@ cmd_apply() {
         echo -e "${RED}❌ apply: compose up failed — see: docker compose ps; the previous .env is the newest .env.bak.*${NC}" >&2
         exit 1
     }
+    # SYNAP_SPLIT_WORKERS (plan P6): backend-worker follows the switch (started
+    # or removed), AFTER backend took its role from the same .env, so the jobs
+    # always have a process. Only when backend runs: a stopped pod reads the
+    # switch at its next start.
+    if printf '%s\n' "${running[@]}" | grep -qx backend; then
+        split_workers_converge || {
+            echo -e "${RED}❌ apply: backend-worker did not start — docker compose --profile workers logs backend-worker${NC}" >&2
+            exit 1
+        }
+    fi
     # kratos.yml is a bind-mounted FILE: compose cannot see its content change.
     if [ "$kratos_before" != "$kratos_after" ] && printf '%s\n' "${running[@]}" | grep -qx kratos; then
         docker compose up -d --no-deps --force-recreate kratos || exit 1
@@ -6130,6 +6172,18 @@ cmd_doctor() {
                 _dr release ok "running release ${rel_id}${stamp:+ (buildStamp ${stamp:0:12})}"
             fi
         fi
+    fi
+
+    # ── workers (plan P6) ── SYNAP_SPLIT_WORKERS and the services that run.
+    local worker_up=""
+    worker_up="$(docker compose --profile workers ps --status running -q backend-worker 2>/dev/null)" || worker_up=""
+    if split_workers_enabled; then
+        [ "$(_pod_agent_setting SYNAP_SPLIT_WORKERS)" = 1 ] \
+            || _dr workers warn "SYNAP_SPLIT_WORKERS=$(_pod_agent_setting SYNAP_SPLIT_WORKERS) reads as ON (any non-empty value does, for compose too): set it to 1, or unset it to run one process"
+        if [ -n "$worker_up" ]; then _dr workers ok "the job workers run in backend-worker (SYNAP_SPLIT_WORKERS=1)"
+        else _dr workers error "SYNAP_SPLIT_WORKERS is on but backend-worker is not running: no job, cron or automation runs — synap apply (or unset SYNAP_SPLIT_WORKERS)"; fi
+    elif [ -n "$worker_up" ]; then
+        _dr workers warn "backend-worker runs while SYNAP_SPLIT_WORKERS is off: two processes work the jobs — synap apply removes it"
     fi
 
     # ── override ──
@@ -6692,7 +6746,8 @@ _heal_event() { # <status> <service> <reason> [notify 0|1] [why-json]
 # ── why heal acts (plan "Pod resilience" G7a) ─────────────────────────────────
 # Before it restarts a service, heal records WHY, in the pod.heal event the
 # backend reads (state/events.jsonl): Docker's last 3 health results, and for a
-# probed service (SYNAP_HEAL_PROBE_SERVICES, default backend) what the service
+# probed service (SYNAP_HEAL_PROBE_SERVICES, default backend and backend-worker,
+# whose /health also reports its event loop) what the service
 # says about itself: a /health request from INSIDE its container (a fresh node
 # process, so it answers even when the server's own event loop is blocked:
 # answered with eventLoop / timeout / refused), and the last `event loop
@@ -6725,7 +6780,7 @@ _heal_json() { # <text> → the text when it is one JSON value, else null
 
 # What a probed service says about itself, as one JSON object {probe, …}.
 _heal_probe() { # <service>
-    case " ${SYNAP_HEAL_PROBE_SERVICES:-backend} " in *" $1 "*) ;; *) echo '{"probe":"skipped"}'; return 0 ;; esac
+    case " ${SYNAP_HEAL_PROBE_SERVICES:-backend backend-worker} " in *" $1 "*) ;; *) echo '{"probe":"skipped"}'; return 0 ;; esac
     local out
     # shellcheck disable=SC2016 # node source, not shell
     out="$(_heal_capped docker compose exec -T "$1" node -e '
@@ -7305,7 +7360,7 @@ _res_sample() {
 #                      mid-write risks the data) nor postgres-backup.
 # Anything else is refused and runs nothing. Never a volume, a backup or a dump.
 # freedBytes: the free space gained on Docker's data root (df), when measured.
-_CLEAN_RESTARTABLE=" backend pod-admin realtime typesense minio redis kratos "
+_CLEAN_RESTARTABLE=" backend backend-worker pod-admin realtime typesense minio redis kratos "
 _CLEAN_ID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
 # state/clean: created, and given to the backend's uid (deploy/Dockerfile:

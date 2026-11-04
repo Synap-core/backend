@@ -143,6 +143,11 @@ ask "$(req restart-service backend)"; host; rc=$?
 [ "$rc" = 0 ] && [ "$(res .status)" = "done" ] && [ "$(acted)" = "compose restart backend" ] \
   && ok "restart: backend restarted, nothing else" || { bad "restart: rc=$rc acted=$(acted)"; tail -5 "$S/out"; }
 valid_result restart
+setup restartworker
+ask "$(req restart-service backend-worker)"; host; rc=$?
+[ "$rc" = 0 ] && [ "$(res .status)" = "done" ] && [ "$(acted)" = "compose restart backend-worker" ] \
+  && ok "restart: backend-worker (the job workers, plan P6) restarted, nothing else" || { bad "restartworker: rc=$rc acted=$(acted)"; tail -5 "$S/out"; }
+valid_result restartworker
 setup restartfail
 ask "$(req restart-service kratos)"; FAKE_RESTART_FAIL=1 host; rc=$?
 [ "$rc" != 0 ] && [ "$(res .status)" = failed ] && [[ "$(res .detail)" == *boom* ]] && ok "restartfail: a failed restart is failed, with Docker's line" || bad "restartfail: $(res .)"

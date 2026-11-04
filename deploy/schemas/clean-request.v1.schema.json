@@ -18,6 +18,7 @@
       "description": "restart-service only. postgres and postgres-backup are never restarted.",
       "enum": [
         "backend",
+        "backend-worker",
         "pod-admin",
         "realtime",
         "typesense",
