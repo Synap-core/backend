@@ -57,8 +57,11 @@ import {
 } from "@synap/database";
 import {
   BOX_RUNNER_SCOPE,
+  HOST_RUNNER_SCOPE,
   apiKeys,
   deviceAuthRequests,
+  installationBindings,
+  installations,
   podSettings,
   users,
   type AgentMetadata,
@@ -1287,6 +1290,10 @@ async function mintForApprovedRequest(
     .limit(1);
   const runsScripts =
     (machineMeta?.meta as AgentMetadata | null)?.runsScripts === true;
+  // "Hosts services" survives a reconnect the same way (host.runner,
+  // machines.setHostsServices).
+  const hostsServices =
+    (machineMeta?.meta as AgentMetadata | null)?.hostsServices === true;
 
   // One live computer key per SEAT (0395, D4): a re-enrolment replaces only
   // this seat's own — its instance (`seat_id`), or a pre-seat key this seat
@@ -1309,6 +1316,7 @@ async function mintForApprovedRequest(
       scope: [
         ...SETUP_AGENT_HUB_SCOPES,
         ...(runsScripts ? [BOX_RUNNER_SCOPE] : []),
+        ...(hostsServices ? [HOST_RUNNER_SCOPE] : []),
       ],
       userId: machineId,
       keyType: "user_pat",
@@ -1596,8 +1604,10 @@ export async function setMachineBelongsTo(
 // ── Revoke a computer ───────────────────────────────────────────────────────
 
 /**
- * Revoke a computer: its keys AND the keys of every agent it hosts, through
- * the one revoke door. The agents stay listed with their history.
+ * Revoke a computer: its keys, the keys of every agent it hosts, AND the keys
+ * of every installation on it and of each of their bindings (0399, addendum
+ * 000e75ff §7: "removing the computer revokes them all"), through the one
+ * revoke door. The agents and installations stay listed with their history.
  */
 export async function revokeMachine(args: {
   machineUserId: string;
@@ -1610,13 +1620,55 @@ export async function revokeMachine(args: {
       .from(users)
       .where(eq(users.hostUserId, args.machineUserId))
   ).map((r) => r.id);
+  const installed = await installationPrincipalsOn(args.machineUserId);
   const rows = await revokeApiKeys(db, {
     where: and(
-      inArray(apiKeys.userId, [args.machineUserId, ...hosted]),
+      or(
+        inArray(apiKeys.userId, [
+          args.machineUserId,
+          ...hosted,
+          ...installed.userIds,
+        ]),
+        ...(installed.keyIds.length > 0
+          ? [inArray(apiKeys.id, installed.keyIds)]
+          : [])
+      ),
       isNull(apiKeys.revokedAt)
     ),
     revokedBy: args.by,
     reason: args.reason ?? "Computer revoked",
   });
   return rows.length;
+}
+
+/**
+ * The principals of every installation on a computer and of their bindings:
+ * each one's own agent user and its own key (U6 mints them). Removed
+ * installations are included: a key that outlived its removal is revoked too.
+ */
+async function installationPrincipalsOn(
+  machineUserId: string
+): Promise<{ userIds: string[]; keyIds: string[] }> {
+  const rows = await db
+    .select({
+      instAgent: installations.agentUserId,
+      instKey: installations.apiKeyId,
+      bindAgent: installationBindings.agentUserId,
+      bindKey: installationBindings.apiKeyId,
+    })
+    .from(installations)
+    .leftJoin(
+      installationBindings,
+      eq(installationBindings.installationId, installations.id)
+    )
+    .where(eq(installations.machineUserId, machineUserId));
+  const userIds = new Set<string>();
+  const keyIds = new Set<string>();
+  for (const r of rows) {
+    if (r.instAgent) userIds.add(r.instAgent);
+    if (r.bindAgent) userIds.add(r.bindAgent);
+    if (r.instKey) keyIds.add(r.instKey);
+    if (r.bindKey) keyIds.add(r.bindKey);
+  }
+  return { userIds: [...userIds], keyIds: [...keyIds] };
 }
