@@ -29,7 +29,7 @@ const DATABASE_URL =
 // process that imports this module gets its own pool with this cap, and they
 // all share ONE Postgres. On a pod (deploy/docker-compose.yml) the consumers:
 //
-//   backend          DB_POOL_SIZE (50) + 1 dedicated LISTEN connection
+//   backend          DB_POOL_SIZE (20 on a pod) + 1 dedicated LISTEN connection
 //                    + pg-boss's own pool, PGBOSS_POOL_SIZE (10, events/boss.ts)
 //   backend-worker   WORKER_DB_POOL_SIZE (20) + 1 + WORKER_PGBOSS_POOL_SIZE (10),
 //                    only when SYNAP_SPLIT_WORKERS=1 (the job workers in their
@@ -104,14 +104,6 @@ export const db = drizzle(sql, { schema });
 export async function getDb() {
   return db;
 }
-
-logger.info(
-  {
-    poolSize: connectionConfig.max,
-    url: process.env.DATABASE_URL?.substring(0, 30) + "...",
-  },
-  "PostgreSQL connection pool initialized (postgres.js + Drizzle)"
-);
 
 /**
  * Set current user for Row-Level Security (RLS)

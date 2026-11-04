@@ -45,6 +45,7 @@ KRATOS_SECRETS_COOKIE=cookie
 BACKUP_REPOSITORY=/srv/restic
 SYNAP_RELEASE_ID=main-bbbbbbb
 SYNAP_IMAGE_BACKEND=ghcr.io/synap-core/backend@sha256:new
+POSTGRES_TUNE_MEMORY=8192MB
 E
   chmod 600 "$DEPLOY/.env"
   mkdir -p "$DEPLOY/state/backup"; echo pw > "$DEPLOY/state/backup/restic-password"
@@ -104,6 +105,7 @@ case "$*" in
   "exec pgcid psql"*"where datallowconn and not datistemplate"*) printf '%s\n' postgres synap ;;
   "exec pgcid psql -U synap -d synap "*"extname = 'timescaledb'"*) [ "$FAKE_TSDB" = unreadable ] && exit 2; echo 2.26.4 ;;
   "exec pgcid psql"*"from pg_config where name = 'PKGLIBDIR'"*) echo /usr/lib/postgresql/15/lib ;;
+  "exec pgcid psql"*"current_setting('shared_buffers')"*) [ "${FAKE_PG_SB_MB:-}" = unreadable ] && exit 2; echo "${FAKE_PG_SB_MB:-2048}" ;;
   "exec pgcid sh -c ls '/usr/lib/postgresql/15/lib'") for v in $FAKE_TSDB_LIBS; do echo "timescaledb-$v.so"; done ;;
   *"{{range .Config.Env}}"*) echo PGDATA=/home/postgres/pgdata/data ;;
   *"{{range .Mounts}}"*) [ "$FAKE_POD" = drifted ] && echo /var/lib/other || echo /home/postgres/pgdata ;;
@@ -277,4 +279,15 @@ FAKE_TSDB=current FAKE_TSDB_LIBS="2.25.0 2.26.4" doctor healthy --json; rc=$?
   && ok "timescaledb: on the image's newest library → ok" || bad "timescaledb current (rc=$rc): $(jq -c '[.checks[] | select(.check == "timescaledb")]' "$TMP/out")"
 FAKE_TSDB=unreadable FAKE_TSDB_LIBS="2.26.4" doctor healthy --json; rc=$?
 [ "$rc" != 0 ] && finding timescaledb "could not read" && ok "timescaledb: an unreadable extension version is a finding (never 'ok')" || bad "timescaledb unreadable (rc=$rc): $(jq -c '[.checks[] | select(.check == "timescaledb")]' "$TMP/out")"
+
+# ── 13. Postgres sized for this pod (synap _pg_oversized): shared_buffers over
+# half of POSTGRES_TUNE_MEMORY is a finding naming `synap tune-postgres`; an
+# unreadable size is a finding too, never "ok".
+FAKE_TSDB=current FAKE_TSDB_LIBS="2.26.4" doctor healthy --json; rc=$?
+[ "$rc" = 0 ] && jq -e '[.checks[] | select(.check == "postgres-size" and .severity == "ok")] | length == 1' "$TMP/out" >/dev/null \
+  && ok "postgres-size: 2 GB of shared_buffers on an 8 GB share → ok" || bad "postgres-size fits (rc=$rc): $(jq -c '[.checks[] | select(.check == "postgres-size")]' "$TMP/out")"
+FAKE_PG_SB_MB=15872 FAKE_TSDB=current FAKE_TSDB_LIBS="2.26.4" doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding postgres-size "shared_buffers is 15872MB.*synap tune-postgres" && ok "postgres-size: 15.5 GB on an 8 GB share is a finding naming synap tune-postgres" || bad "postgres-size oversized (rc=$rc): $(jq -c '[.checks[] | select(.check == "postgres-size")]' "$TMP/out")"
+FAKE_PG_SB_MB=unreadable FAKE_TSDB=current FAKE_TSDB_LIBS="2.26.4" doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding postgres-size "could not compare" && ok "postgres-size: an unreadable size is a finding (never 'ok')" || bad "postgres-size unreadable (rc=$rc): $(jq -c '[.checks[] | select(.check == "postgres-size")]' "$TMP/out")"
 exit $fail

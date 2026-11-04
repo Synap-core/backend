@@ -774,6 +774,32 @@ pg_tune_memory() { # [MemTotal in kB]
     echo "${mb}MB"
 }
 
+# Is the RUNNING Postgres sized for more memory than this pod has? A cluster
+# keeps the tune of its initdb, and one created before POSTGRES_TUNE_MEMORY
+# existed was tuned for whatever memory its container saw: in an LXC guest,
+# the whole Proxmox host's (a pod, 4 Nov 2026: shared_buffers 15.5 GB in a
+# 16 GB guest, the host 95 % into swap). timescaledb-tune gives shared_buffers
+# about a quarter of the memory it is told; over HALF of this pod's share
+# (POSTGRES_TUNE_MEMORY, else pg_tune_memory) means it was told another size.
+# Prints "<shared_buffers MB>|<share>" when oversized, nothing when it fits;
+# rc 1 when either side cannot be read (never a guess). Run in deploy/.
+_pg_oversized() {
+    local share smb c sb
+    share="$(_ue_env_get POSTGRES_TUNE_MEMORY)"
+    [ -n "$share" ] || share="$(pg_tune_memory)" || return 1
+    case "$share" in
+        *GB) smb="${share%GB}"; [[ "$smb" =~ ^[0-9]+$ ]] || return 1; smb=$(( smb * 1024 )) ;;
+        *MB) smb="${share%MB}"; [[ "$smb" =~ ^[0-9]+$ ]] || return 1 ;;
+        *) return 1 ;;
+    esac
+    c="$(_pgs_container)"
+    [ -n "$c" ] && [ "$c" != direct ] || return 1
+    sb="$(_pgs_psql "$c" synap "select pg_size_bytes(current_setting('shared_buffers')) / 1048576" 2>/dev/null)" || return 1
+    [[ "$sb" =~ ^[0-9]+$ ]] || return 1
+    [ $(( sb * 2 )) -gt "$smb" ] && echo "${sb}|${share}"
+    return 0
+}
+
 # ============================================================================
 # HELPER: Generate secrets and create .env
 # ============================================================================
@@ -4250,6 +4276,14 @@ _ue_tsdb_behind() {
     done <<<"$rows"
 }
 
+_ue_pg_size_notice() { # after a verified update: say so when Postgres is sized for another machine
+    local r
+    r="$(_pg_oversized)" || return 0          # unreadable: synap doctor re-checks
+    [ -n "$r" ] || return 0
+    _ue_warn "Postgres: shared_buffers is ${r%%|*}MB, sized for more memory than this pod's share (${r#*|}). It can push the host into swap. Re-size it (a few seconds of downtime): synap tune-postgres"
+    return 0
+}
+
 _ue_tsdb_notice() { # after a verified update: say so when a database's extension lags the image
     local rows db v newest
     rows="$(_ue_tsdb_behind)" || { _ue_warn "could not compare the TimescaleDB extension with the postgres image (synap doctor re-checks)"; return 0; }
@@ -5153,6 +5187,7 @@ synap_update_engine() {
     _ue_provide_backup_mc
     _ue_units_refresh
     _ue_tsdb_notice
+    _ue_pg_size_notice
     _ue_record succeeded "$UE_FROM" "$UE_TO" "" false "$UE_BACKUP"
     _ue_ok "Release ${UE_TO} is live (verified: buildStamp + migration level)."
     set -e
@@ -6246,6 +6281,17 @@ cmd_doctor() {
             done <<<"$tsdb"
         else
             _dr timescaledb warn "could not read the TimescaleDB extension versions or the postgres image's libraries"
+        fi
+        # ── postgres size ── (the update engine's notice reads the same check)
+        local pgsz
+        if pgsz="$(_pg_oversized)"; then
+            if [ -n "$pgsz" ]; then
+                _dr postgres-size warn "shared_buffers is ${pgsz%%|*}MB, sized for more memory than this pod's share (${pgsz#*|}); re-size it: synap tune-postgres"
+            else
+                _dr postgres-size ok "Postgres is sized for this pod's memory"
+            fi
+        else
+            _dr postgres-size warn "could not compare Postgres's shared_buffers with this pod's memory"
         fi
     fi
 
@@ -7659,6 +7705,12 @@ USAGE
     done
     docker compose exec -T postgres psql -U synap -d synap -tAc "SELECT name || ' = ' || setting || COALESCE(unit, '') FROM pg_settings WHERE name IN ('shared_buffers','effective_cache_size','work_mem','maintenance_work_mem','max_connections') ORDER BY name" \
         || { echo -e "${RED}❌ Postgres is not answering after the restart — put the previous settings back (above).${NC}" >&2; exit 1; }
+    # Record the size, so a later initdb (a restore onto a new volume) and the
+    # oversize check in update and doctor read the size this pod runs with.
+    if [ "$(_ue_env_get POSTGRES_TUNE_MEMORY)" != "$mem" ]; then
+        SYNAP_ENV_FILE=.env envcfg_write_raw S POSTGRES_TUNE_MEMORY "$mem" \
+            || echo -e "${YELLOW}⚠️  Postgres is re-sized, but POSTGRES_TUNE_MEMORY=${mem} could not be written to deploy/.env (synap config set POSTGRES_TUNE_MEMORY=${mem})${NC}"
+    fi
     echo -e "${GREEN}✓ Postgres re-sized${NC}"
 }
 
