@@ -326,6 +326,29 @@ export function attachFailureMeta<E extends object>(
   return err;
 }
 
+const LEAVE_ROW_KEY = "__synapLeaveRowToOtherAttempt";
+
+/**
+ * Mark an approval failure whose proposal row belongs to ANOTHER attempt of
+ * the same approval (it holds, or just released, the at-most-once dispatch
+ * claim; `executors/shared.ts`). That attempt records its own outcome, so the
+ * approval catch must not write this one's sentence over it: a lost claim used
+ * to overwrite the real reason with "already being dispatched" (e74a086c).
+ */
+export function leaveRowToOtherAttempt<E extends object>(err: E): E {
+  (err as Record<string, unknown>)[LEAVE_ROW_KEY] = true;
+  return err;
+}
+
+/** True when {@link leaveRowToOtherAttempt} marked this error. */
+export function leavesRowToOtherAttempt(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as Record<string, unknown>)[LEAVE_ROW_KEY] === true
+  );
+}
+
 /** Read the scalars a thrower ATTACHED (undefined when none were). */
 export function readAttachedFailureMeta(
   err: unknown
