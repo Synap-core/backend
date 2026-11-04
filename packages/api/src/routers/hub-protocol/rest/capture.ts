@@ -787,6 +787,8 @@ export function registerCaptureRoutes(app: HubHono): void {
           sessionId: graph.scope.sessionId,
           ...(graph.deduped ? { deduped: true } : {}),
           ...(graph.dedupedAs ? { dedupedAs: graph.dedupedAs } : {}),
+          // Kept whole on a workspace join (finding 590ca76a): nothing landed.
+          ...(graph.joinGate ? { joinGate: graph.joinGate } : {}),
           ...((result as { intake?: unknown }).intake
             ? { intake: (result as { intake?: unknown }).intake }
             : {}),
