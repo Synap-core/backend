@@ -321,6 +321,10 @@
       "types": "./dist/navigation/index.d.ts",
       "import": "./dist/navigation/index.js"
     },
+    "./website-tools": {
+      "types": "./dist/website-tools/index.d.ts",
+      "import": "./dist/website-tools/index.js"
+    },
     "./capture": {
       "types": "./dist/capture/index.d.ts",
       "import": "./dist/capture/index.js"
