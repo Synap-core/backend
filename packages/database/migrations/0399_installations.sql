@@ -193,17 +193,3 @@ CREATE TABLE IF NOT EXISTS "intent_defaults" (
     ("user_id", "workspace_id", "intent", "constraints_hash")
 );
 
--- `public` is never a remembered choice (addendum §7 rule 1): refuse
--- constraints whose `auth` is, lists, or allows (anyOf) `public`.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'intent_defaults_never_public_check'
-  ) THEN
-    ALTER TABLE "intent_defaults" ADD CONSTRAINT "intent_defaults_never_public_check"
-      CHECK (
-        NOT coalesce(("constraints" -> 'auth') ? 'public', false)
-        AND NOT coalesce(("constraints" -> 'auth' -> 'anyOf') ? 'public', false)
-      );
-  END IF;
-END $$;

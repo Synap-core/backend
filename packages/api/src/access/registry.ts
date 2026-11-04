@@ -633,10 +633,8 @@ registerVisibility({
   table: hostJobs,
   query: () => db.query.hostJobs,
   rule: {
-    kind: "workspaceOwned",
+    kind: "workspace",
     workspaceColumn: hostJobs.workspaceId,
-    userColumn: hostJobs.userId,
-    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 // A remembered provider choice (0399) is a PREFERENCE: the person's alone,
