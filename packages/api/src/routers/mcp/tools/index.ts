@@ -6792,3 +6792,16 @@ export async function readOnlyToolNames(): Promise<Set<string>> {
       .map((t) => t.name)
   );
 }
+
+/**
+ * The tools that declare `openWorldHint: true` (they reach outside the pod: a
+ * capability, an automation, a playbook run). The Hub request guard never
+ * times them out (`middleware/hub-request-guard.ts`).
+ */
+export async function openWorldToolNames(): Promise<Set<string>> {
+  return new Set(
+    (await tools.list())
+      .filter((t) => t.annotations?.openWorldHint === true)
+      .map((t) => t.name)
+  );
+}
