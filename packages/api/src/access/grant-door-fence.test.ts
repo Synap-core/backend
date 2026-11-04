@@ -200,6 +200,54 @@ describe("declared session read doors (a scoped agent key reads its session)", (
   });
 });
 
+describe("one proposal by id: Hub GET /proposals/:id is the MCP door's rule (finding 9a415c59)", () => {
+  const P = `/proposals/${U}`;
+  /** The live shape of a computer's agent key: one unpinned scope. */
+  const AGENT = key({ permissions: ["proposal.read", "entity.*.read"] });
+  const PINNED = key({
+    permissions: ["proposal.read", "entity.*.read"],
+    workspaceIds: ["w1"],
+  });
+  const PROPOSALS_ONLY = key({ permissions: ["proposal.read"] });
+  const DENY_ALL = key({ permissions: [] });
+
+  it("an agent's key reads one proposal over REST, as it does over MCP", () => {
+    expect(restDoorAllowed("GET", P, AGENT)).toBe(true);
+    expect(restDoorAllowed("GET", `${P}/`, AGENT)).toBe(true);
+    expect(restDoorAllowed("GET", P, AI)).toBe(true);
+  });
+
+  it("a key the grant does not let read every proposal is still refused", () => {
+    // The route reads on the person's floor, not through the grant: a pinned
+    // key or one missing a subject would see rows its grant does not reach.
+    expect(restDoorAllowed("GET", P, PINNED)).toBe(false);
+    expect(restDoorAllowed("GET", P, PROPOSALS_ONLY)).toBe(false);
+    expect(restDoorAllowed("GET", P, DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("GET", P, DENY_ALL)).toBe(false);
+  });
+
+  it("REST and MCP answer the same for every key: one rule, not two", () => {
+    for (const g of [AGENT, PINNED, PROPOSALS_ONLY, DOC_ONLY, DENY_ALL, AI])
+      expect(restDoorAllowed("GET", P, g)).toBe(
+        mcpToolAllowed("synap_get_proposal", true, g)
+      );
+  });
+
+  it("only a uuid: a static sibling or a short id is not admitted", () => {
+    expect(restDoorAllowed("GET", "/proposals/dev-approval", AGENT)).toBe(
+      false
+    );
+    expect(restDoorAllowed("GET", "/proposals/0f130009", AGENT)).toBe(false);
+    expect(restDoorAllowed("GET", `${P}/revert`, AGENT)).toBe(false);
+  });
+
+  it("the full-access key is not fenced; the decision doors stay writes", () => {
+    expect(isFencedGrant(key({ permissions: ["*"] }))).toBe(false);
+    expect(restDoorAllowed("POST", `${P}/approve`, AGENT)).toBe(true);
+    expect(restDoorAllowed("POST", `${P}/reject`, AGENT)).toBe(true);
+  });
+});
+
 describe("ids are uuids: a static sibling is never admitted (R1)", () => {
   // Every door that names an id, with the static word a future sibling route
   // could take. Before R1 these were `[^/]+`, so `/projects/summary` would
