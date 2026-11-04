@@ -19,6 +19,7 @@ import { httpBatchLink, httpLink, splitLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import { trpc, POD_URL } from "../lib/trpc";
 import { ConsoleLocaleProvider } from "../lib/i18n/locale-provider";
+import { PresenceProvider } from "./_lib/presence/presence-provider";
 
 export function Providers({ children }: { children: ReactNode }) {
   // QueryClient + tRPC client created once per mount — `useState` keeps
@@ -79,20 +80,25 @@ export function Providers({ children }: { children: ReactNode }) {
       <HeroUIProvider labelPlacement="outside-top" reducedMotion="user">
         <trpc.Provider client={trpcClient} queryClient={queryClient}>
           <QueryClientProvider client={queryClient}>
-            {/* Inside the tRPC + query providers: a toast's content may read
+            {/* The ONE proof-of-presence dialog (W3): every approve door asks
+                through it when the pod wants the person in person. Around the
+                toasts too: a toast's Resume approves. */}
+            <PresenceProvider>
+              {/* Inside the tRPC + query providers: a toast's content may read
                 the pod (the large-approval toast polls its own progress —
                 app/_lib/approval-progress). */}
-            <ToastProvider
-              placement="bottom-right"
-              toastProps={{
-                timeout: 4000,
-                shouldShowTimeoutProgress: true,
-                variant: "flat",
-                radius: "md",
-              }}
-            />
-            {/* The person's language, once (rule i18n §4). */}
-            <ConsoleLocaleProvider>{children}</ConsoleLocaleProvider>
+              <ToastProvider
+                placement="bottom-right"
+                toastProps={{
+                  timeout: 4000,
+                  shouldShowTimeoutProgress: true,
+                  variant: "flat",
+                  radius: "md",
+                }}
+              />
+              {/* The person's language, once (rule i18n §4). */}
+              <ConsoleLocaleProvider>{children}</ConsoleLocaleProvider>
+            </PresenceProvider>
           </QueryClientProvider>
         </trpc.Provider>
       </HeroUIProvider>

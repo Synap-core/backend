@@ -19,6 +19,7 @@ import { setProfilePresentation } from "../repositories/profile-repository.js";
 import type { CreatePropertyDefInput } from "../repositories/property-def-repository.js";
 import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-properties.js";
 import { PROVENANCE_VALUES } from "./provenance.js";
+import { LINKEDIN_CONNECTION_VALUES } from "./linkedin-reach-values.js";
 import { foldPropertyKey } from "../services/did-you-mean.js";
 import { WORKSPACE_MEMBERSHIP_ROLE_CATEGORY } from "./facet-visibility.js";
 import {
@@ -325,6 +326,10 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "description", required: false, displayOrder: 15 },
       { slug: "provenance", required: false, displayOrder: 18 },
       { slug: "provider", required: false, displayOrder: 19 },
+      // Whether the pod's LinkedIn account can reach them (CRM wave 2, S4a):
+      // written by the server only (machine-written, read-only).
+      { slug: "linkedinConnection", required: false, displayOrder: 20 },
+      { slug: "linkedinInvitedAt", required: false, displayOrder: 21 },
     ],
   },
   {
@@ -1138,6 +1143,21 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         valueType: PropertyValueType.STRING,
         constraints: {},
         uiHints: { label: "AI Summary", inputType: "textarea" },
+      },
+      // A person's LinkedIn reach, written by the server only (the send's
+      // reach check, `relation.new`, the daily sweep:
+      // `api/src/services/connectors/linkedin-reach.ts`).
+      {
+        slug: "linkedinConnection",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: [...LINKEDIN_CONNECTION_VALUES] },
+        uiHints: { label: "LinkedIn connection", inputType: "select" },
+      },
+      {
+        slug: "linkedinInvitedAt",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "LinkedIn request sent" },
       },
       // Signal item properties
       {

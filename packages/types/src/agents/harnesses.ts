@@ -7,10 +7,10 @@
  *
  * Three lists used to say this in three places (the API's surface allowlist,
  * the reopenable-conversation list, the device door's enum) and the Claude
- * Code slug had four spellings elsewhere. Backend code reads THIS list, and
- * it is the one list of clients the CLI imports: each row says which doors
- * the client supports (`doors`) and which `synap connect` writer configures
- * it (`cliTarget`). Raycast and Eve still keep copies (see
+ * Code slug had four spellings elsewhere. Backend code reads THIS list. Each
+ * row says which doors the client supports (`doors`) and which `synap
+ * connect` writer configures it (`cliTarget`); the CLI does not import the
+ * list yet and keeps its own `TARGETS`. Raycast and Eve also keep copies (see
  * `harnesses.test.ts` for the pinned slugs).
  *
  * Not the IS persona keys (orchestrator, meta… — WHICH agent answers a turn)

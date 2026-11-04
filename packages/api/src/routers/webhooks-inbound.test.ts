@@ -185,6 +185,11 @@ vi.mock("../services/connectors/inbound-recorder.js", () => ({
   recordInboundMessage: (...args: unknown[]) =>
     recordInboundMessageMock(...args),
 }));
+const recordAcceptedRelationMock = vi.fn();
+vi.mock("../services/connectors/linkedin-reach-sync.js", () => ({
+  recordAcceptedRelation: (...args: unknown[]) =>
+    recordAcceptedRelationMock(...args),
+}));
 const submitCaptureGraphMock = vi.fn();
 // The raw door's own behaviour is proven on PGlite (intake/__tests__); here only
 // that the Cal.com lane reaches it — with what — BEFORE anything is filed.
@@ -973,6 +978,57 @@ describe("messaging inbound webhook: an unhandled event is not a 200", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ type: "account.add" }),
+    });
+    expect(res.status).toBe(500);
+  });
+
+  it("relation.created (Unipile relation.new) marks the person connected through the reach door", async () => {
+    recordAcceptedRelationMock.mockReset();
+    recordAcceptedRelationMock.mockResolvedValue("person-1");
+    messagingConnector = {
+      parseWebhook: async () => ({
+        type: "relation.created",
+        accountExternalId: "acc-1",
+        provider: "linkedin",
+        providerId: "ACoAda",
+        publicIdentifier: "ada-lovelace",
+        name: "Ada Lovelace",
+        at: "2026-11-04T07:00:00.000Z",
+      }),
+    };
+    const res = await app.request("/api/webhooks/messaging", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "relation.new" }),
+    });
+    expect(res.status).toBe(200);
+    expect(recordAcceptedRelationMock).toHaveBeenCalledTimes(1);
+    expect(recordAcceptedRelationMock.mock.calls[0]![0]).toMatchObject({
+      accountExternalId: "acc-1",
+      provider: "linkedin",
+      providerId: "ACoAda",
+      publicIdentifier: "ada-lovelace",
+    });
+  });
+
+  it("relation.created that cannot be recorded is a 500 (Unipile retries)", async () => {
+    recordAcceptedRelationMock.mockReset();
+    recordAcceptedRelationMock.mockRejectedValue(new Error("db down"));
+    messagingConnector = {
+      parseWebhook: async () => ({
+        type: "relation.created",
+        accountExternalId: "acc-1",
+        provider: "linkedin",
+        providerId: "ACoAda",
+        publicIdentifier: null,
+        name: null,
+        at: "2026-11-04T07:00:00.000Z",
+      }),
+    };
+    const res = await app.request("/api/webhooks/messaging", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
     });
     expect(res.status).toBe(500);
   });

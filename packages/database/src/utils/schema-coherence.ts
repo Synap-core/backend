@@ -563,6 +563,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "worker_served_version",
     addedBy: "0385_api_keys_worker_served.sql",
   },
+  // The door that minted the key (0400): /mcp/redeem's 'synap-account' is
+  // how the connector's keys are told apart (isSynapAccountKey).
+  {
+    table: "api_keys",
+    column: "origin",
+    addedBy: "0400_synap_account_key_origin.sql",
+  },
 
   // api_key_external_users — sub-token mappings (0018)
   {
@@ -1350,6 +1357,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "device_auth_requests",
     column: "poll_interval_seconds",
     addedBy: "0321_device_auth_requests.sql",
+  },
+  // Proof of presence (0398): every sensitive approval reads and consumes a
+  // challenge; absence means each one would 42P01.
+  {
+    table: "presence_challenges",
+    column: "consumed_at",
+    addedBy: "0398_presence.sql",
+  },
+  {
+    table: "presence_device_keys",
+    column: "public_key",
+    addedBy: "0398_presence.sql",
   },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.

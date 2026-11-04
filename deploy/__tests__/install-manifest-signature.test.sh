@@ -60,12 +60,27 @@ exit 1
 C
 # docker: `compose version` (step 1) answers ok; `run` is sigstore's image,
 # answering like cosign (or, with STUB_DOCKER_RC, like a daemon that cannot run it).
+# The image runs as its nonroot user (uid 65532), neither owner nor group of
+# anything on the host: like the real container, the stub can read the mounted
+# directory and the two files only through their "other" permission bits
+# (CP ticket 2e10228f: install.sh mounted its 0700 mktemp dir, every fresh host refused).
 cat > "$TMP/bin/docker" <<'C'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 0
 echo docker-cosign >> "$STUB_LOG"
 printf '%s\n' "$@" > "$STUB_DOCKER_ARGS"
 [ -n "${STUB_DOCKER_RC:-}" ] && { echo "docker: Error response from daemon: pull access denied" >&2; exit "$STUB_DOCKER_RC"; }
+src=""; prev=""; files=()
+for a in "$@"; do
+  [ "$prev" = --mount ] && { src="${a#*src=}"; src="${src%%,*}"; }
+  case "$a" in /release/*) files+=("${a#/release/}") ;; esac
+  prev="$a"
+done
+[ -n "$src" ] && [ -n "$(find "$src" -maxdepth 0 -perm -005 2>/dev/null)" ] \
+  || { echo "Error: open /release/${files[${#files[@]}-1]}: permission denied" >&2; exit 1; }
+for f in "${files[@]}"; do
+  [ -n "$(find "$src/$f" -maxdepth 0 -perm -004 2>/dev/null)" ] || { echo "Error: open /release/$f: permission denied" >&2; exit 1; }
+done
 [ "${STUB_COSIGN_RESULT:-ok}" = ok ] && { echo "Verified OK" >&2; exit 0; }
 echo "Error: none of the expected identities matched what was in the certificate" >&2
 exit 1

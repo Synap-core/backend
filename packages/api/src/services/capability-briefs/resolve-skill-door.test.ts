@@ -1,14 +1,15 @@
 /**
  * The skill door follows the KEY on the Synap account connector (W5): every key
- * the Control Plane holds carries its `mcp:` instanceId, whichever client's
- * agent it belongs to, so Grok behind mcp.synap.live is taught `pod__*` names
- * while Grok's own computer key (`synap connect grok`) is taught the pod's.
+ * `/mcp/redeem` mints carries the Synap account origin (0400), whichever
+ * client's agent it belongs to, so ChatGPT behind mcp.synap.live is taught
+ * `pod__*` names while a computer key is taught the pod's. An `mcp:` instance
+ * id is no evidence: `/setup/agent` takes any instance id.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
-  keyInstanceId: null as string | null | undefined,
+  keyOrigin: null as string | null | undefined,
   agentType: null as string | null,
   reads: [] as string[],
 }));
@@ -26,9 +27,9 @@ vi.mock("@synap/database", async (importOriginal) => {
             limit: async () => {
               if (table === actual.apiKeys) {
                 h.reads.push("api_keys");
-                return h.keyInstanceId === undefined
+                return h.keyOrigin === undefined
                   ? []
-                  : [{ instanceId: h.keyInstanceId }];
+                  : [{ origin: h.keyOrigin }];
               }
               if (table !== actual.users)
                 throw new Error("unexpected table read");
@@ -45,28 +46,30 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { resolveSkillDoor } from "./resolve-skill-door.js";
 
 beforeEach(() => {
-  h.keyInstanceId = null;
+  h.keyOrigin = null;
   h.agentType = null;
   h.reads = [];
 });
 
 describe("resolveSkillDoor", () => {
   it("a client's own agent behind the Synap account reads the connector's names", async () => {
-    h.agentType = "grok";
-    h.keyInstanceId = "mcp:cp-user:pod-1:grok";
-    expect(await resolveSkillDoor("agent-grok", "key-1")).toBe("cp-connector");
+    h.agentType = "chatgpt";
+    h.keyOrigin = "synap-account";
+    expect(await resolveSkillDoor("agent-chatgpt", "key-1")).toBe(
+      "cp-connector"
+    );
   });
 
-  it("the same client on its computer key reads the pod's names", async () => {
-    h.agentType = "grok";
-    h.keyInstanceId = "machine-abc";
-    expect(await resolveSkillDoor("agent-grok", "key-2")).toBe("pod-mcp");
+  it("the same client on any other key reads the pod's names", async () => {
+    h.agentType = "chatgpt";
+    h.keyOrigin = null;
+    expect(await resolveSkillDoor("agent-chatgpt", "key-2")).toBe("pod-mcp");
   });
 
   it("the pre-W5 claude-web agent still reads the connector's names, key or not", async () => {
     h.agentType = "claude-web";
     expect(await resolveSkillDoor("agent-web")).toBe("cp-connector");
-    h.keyInstanceId = undefined; // key row gone
+    h.keyOrigin = undefined; // key row gone
     expect(await resolveSkillDoor("agent-web", "key-gone")).toBe(
       "cp-connector"
     );

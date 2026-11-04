@@ -4,8 +4,8 @@
  * siblings need no change for the pod to know who is reading.
  *
  * The Synap account connector (the Control Plane, `pod__*` names) is told by
- * its KEY since W5: every key it holds carries the CP's `mcp:` instanceId,
- * whichever client's agent it belongs to (`grok`, `chatgpt`…:
+ * its KEY since W5: every key it holds carries the Synap account origin
+ * (0400), whichever client's agent it belongs to (`chatgpt`, `generic`…:
  * services/synap-account-client.ts). Without a key, the agent decides, as
  * before (`claude-web` = the connector).
  *
@@ -24,11 +24,11 @@ export async function resolveSkillDoor(
 ): Promise<SkillDoor> {
   if (keyId) {
     const [key] = await db
-      .select({ instanceId: apiKeys.instanceId })
+      .select({ origin: apiKeys.origin })
       .from(apiKeys)
       .where(eq(apiKeys.id, keyId))
       .limit(1);
-    if (isSynapAccountKey({ instanceId: key?.instanceId ?? null })) {
+    if (isSynapAccountKey({ origin: key?.origin ?? null })) {
       return "cp-connector";
     }
   }

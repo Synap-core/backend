@@ -59,6 +59,20 @@ export function isValidSeat(v: unknown): v is string {
   );
 }
 
+/**
+ * The seat of every agent a client reaches through the Synap account (the
+ * Control Plane's MCP connector, `/mcp/redeem`): its own identity axis, so it
+ * is never the same agent as one `/setup/agent` makes or adopts onto a
+ * computer (review bf96d410, lane B). It has a colon, so no CLI can send it
+ * (`isValidSeat`), and such an agent runs on no computer, so no door that
+ * claims a seat ever writes it.
+ */
+export const SYNAP_ACCOUNT_SEAT = "synap:account";
+
+export function isSynapAccountSeat(seat: string | null | undefined): boolean {
+  return seat === SYNAP_ACCOUNT_SEAT;
+}
+
 /** A seat nobody has claimed yet: made before seats, or by an older CLI. */
 export function isUnclaimedSeat(seat: string | null | undefined): boolean {
   return seat == null || isUnnamedSeat(seat);
@@ -67,6 +81,7 @@ export function isUnclaimedSeat(seat: string | null | undefined): boolean {
 /** `OS user "antoine"`, or how an unnamed seat reads. Null for no seat. */
 export function seatLine(seat: string | null | undefined): string | null {
   if (seat == null) return null;
+  if (isSynapAccountSeat(seat)) return null;
   if (isUnnamedSeat(seat)) return "an OS user an older CLI did not name";
   return `OS user "${seat}"`;
 }

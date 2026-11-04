@@ -164,3 +164,112 @@ describe("url identity atom — resolution on a real Postgres", () => {
     expect(res.entity?.id).toBe(id);
   });
 });
+
+/** A signal_item captured through the write door, with its real properties. */
+async function captureSignal(
+  title: string,
+  properties: Record<string, unknown>
+): Promise<string> {
+  const id = randomUUID();
+  await pg.query(
+    `insert into entities (id, user_id, type, title, properties)
+       values ($1, $2, 'signal_item', $3, $4::jsonb)`,
+    [id, USER, title, JSON.stringify(properties)]
+  );
+  await registerIdentitySignals(
+    db,
+    id,
+    extractIdentitySignals(properties, { kind: "signal_item" }),
+    "test"
+  );
+  return id;
+}
+
+/**
+ * CP ticket 7f7f9264: one changelog URL carries many releases. Captured by url
+ * alone, Obsidian 1.14 resolved onto the Obsidian 1.13 item and the merge
+ * overwrote its url / publishedAt / topics. A signal_item is an observation:
+ * its identity is url + publishedAt.
+ */
+describe("signal_item identity (url + publishedAt) — resolution on a real Postgres", () => {
+  it("a new release on the same changelog URL does NOT resolve onto the older item", async () => {
+    await captureSignal("Obsidian 1.13", {
+      url: "https://obsidian.md/changelog/#v1.13",
+      publishedAt: "2026-10-01T10:00:00Z",
+    });
+    for (const url of [
+      "https://obsidian.md/changelog/#v1.14",
+      "https://obsidian.md/changelog/",
+    ]) {
+      const res = await lookup("signal_item", {
+        url,
+        publishedAt: "2026-11-01T10:00:00Z",
+      });
+      expect(res.match).toBeNull();
+    }
+  });
+
+  it("both releases register their own identity: two subjects, each found again", async () => {
+    const v13 = await captureSignal("Raycast 2.6", {
+      url: "https://raycast.com/changelog",
+      publishedAt: "2026-10-01",
+    });
+    const v14 = await captureSignal("Raycast 2.7", {
+      url: "https://raycast.com/changelog",
+      publishedAt: "2026-10-15",
+    });
+    const rows = await pg.query<{ entity_id: string }>(
+      `select entity_id from entity_identity_signals where signal_type = 'url_at'`
+    );
+    expect(new Set(rows.rows.map((r) => r.entity_id))).toEqual(
+      new Set([v13, v14])
+    );
+    const again = await lookup("signal_item", {
+      url: "https://www.raycast.com/changelog/?utm_source=feed",
+      publishedAt: "2026-10-15",
+    });
+    expect(again.match).toBe("strong");
+    expect(again.entity?.id).toBe(v14);
+  });
+
+  it("an item registered before url_at (bare url atom) is found again only at its own publishedAt", async () => {
+    const id = randomUUID();
+    await pg.query(
+      `insert into entities (id, user_id, type, title, properties)
+         values ($1, $2, 'signal_item', 'Old item', $3::jsonb)`,
+      [
+        id,
+        USER,
+        JSON.stringify({
+          url: "https://supermemory.ai/blog/guide",
+          publishedAt: "2026-09-01T08:00:00Z",
+        }),
+      ]
+    );
+    await pg.query(
+      `insert into entity_identity_signals (entity_id, signal_type, signal_value, source)
+         values ($1, 'url', 'https://supermemory.ai/blog/guide', 'legacy')`,
+      [id]
+    );
+    const same = await lookup("signal_item", {
+      url: "https://supermemory.ai/blog/guide/",
+      publishedAt: "2026-09-01T10:00:00+02:00",
+    });
+    expect(same.match).toBe("strong");
+    expect(same.entity?.id).toBe(id);
+    const other = await lookup("signal_item", {
+      url: "https://supermemory.ai/blog/guide",
+      publishedAt: "2026-11-02T08:00:00Z",
+    });
+    expect(other.match).toBeNull();
+  });
+
+  it("a bookmark of the page is not the feed item seen on it", async () => {
+    const item = await captureSignal("HN post", {
+      url: "https://x.com/post",
+      publishedAt: "2026-11-01T10:00:00Z",
+    });
+    const res = await lookup("bookmark", { url: "https://x.com/post" });
+    expect(res.entity?.id).not.toBe(item);
+  });
+});

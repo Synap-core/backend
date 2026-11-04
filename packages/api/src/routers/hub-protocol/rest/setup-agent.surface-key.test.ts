@@ -310,3 +310,25 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
     }
   );
 });
+
+describe("POST /setup/agent — the Synap account and OAuth instances are not this door's (review bf96d410, lane B)", () => {
+  it.each(["mcp:cp-user:pod-1:chatgpt", "oauth:client-a:user-1", "MCP:x"])(
+    "instanceId %s → 400, nothing provisioned",
+    async (instanceId) => {
+      callerKey(false);
+      const res = await connect({ instanceId });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain("instanceId");
+      expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+    }
+  );
+
+  it("a computer's own instance id still connects (control)", async () => {
+    callerKey(false);
+    const res = await connect({ instanceId: "devbox-3f9a" });
+    expect(res.status).toBe(200);
+    expect(provisionSurfaceAgentKey).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: "devbox-3f9a" })
+    );
+  });
+});

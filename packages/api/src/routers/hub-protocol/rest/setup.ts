@@ -6,6 +6,7 @@
  * the regular API-key auth middleware (it does its own auth here).
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
 import { resolveKeyExpiry } from "@synap/governance-policy/grants";
 import { placeBeyondPodWideReads } from "@synap-core/types/grants";
 import {
@@ -792,6 +793,18 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.instanceId === "string" && body.instanceId.trim()
         ? body.instanceId.trim()
         : undefined;
+    // `mcp:` and `oauth:` instances are minted by /mcp/redeem and the OAuth
+    // door only (review bf96d410, lane B): a key from this door never wears
+    // one, so no reader can take it for theirs.
+    if (instanceId && /^(?:mcp|oauth):/i.test(instanceId)) {
+      return c.json(
+        {
+          error:
+            "Invalid `instanceId` — `mcp:` and `oauth:` are kept for the Synap account and OAuth doors.",
+        },
+        400
+      );
+    }
     // The computer's human name for that instance ("devbox", "MacBook") —
     // what the approval page and the connection's name show. Display only:
     // the instance id, never this, decides what an approval replaces.
@@ -824,6 +837,23 @@ export function registerSetupRoutes(app: HubHono): void {
     // inactive and its owner approves it (`agent/connect`). `requireApproval`
     // in the body is no longer an opt-in for a key caller — it is the rule.
     const requireApproval: boolean = authMethod === "api_key_surface";
+    // W3: a computer's key may ask to connect an AI AS THE PERSON (the CLI's
+    // `--as-person`). It is still a pending key + an `agent/connect`
+    // proposal, but one the person must approve with a proof of presence
+    // (services/presence/gate.ts), and then a custom agent type is allowed
+    // and the key keeps the agent's own limits rather than the computer's.
+    // Never a pod-wide agent: it acts for the person.
+    const asPerson: boolean =
+      authMethod === "api_key_surface" && body.asPerson === true;
+    if (asPerson && podWide) {
+      return c.json(
+        {
+          error: "A request made as the person never creates a pod-wide agent.",
+          code: "AS_PERSON_NOT_POD_WIDE",
+        },
+        400
+      );
+    }
 
     // Surface-key path: SURFACE_AGENT_TYPES are always allowed (claude-code, cursor, …).
     // Non-surface types (twin, custom slug, assistant, …) are only allowed when the
@@ -833,7 +863,7 @@ export function registerSetupRoutes(app: HubHono): void {
       const isSurfaceType = (SURFACE_AGENT_TYPES as readonly string[]).includes(
         agentType
       );
-      if (!isSurfaceType && !surfaceKeyIsHumanOwned) {
+      if (!isSurfaceType && !surfaceKeyIsHumanOwned && !asPerson) {
         return c.json(
           {
             error:
@@ -1290,7 +1320,9 @@ export function registerSetupRoutes(app: HubHono): void {
 
       // The new key's grant (the agent's own limits) cut down to the calling
       // key's live grants — a key never hands on more than it may touch.
-      if (authMethod === "api_key_surface") {
+      // Asked AS THE PERSON (W3): not cut — the person approves it with a
+      // proof of presence, and approval is what activates the key.
+      if (authMethod === "api_key_surface" && !asPerson) {
         const keyEndsAt = apiKey.expiresAt ?? null;
         const bounded = scopesWithinLive(
           await liveGrantsOfKey(apiKey.id),
@@ -1377,6 +1409,9 @@ export function registerSetupRoutes(app: HubHono): void {
             agentType,
             instanceId,
             expiresAt: apiKey.expiresAt ?? null,
+            asPerson: asPerson
+              ? { instanceLabel: instanceLabel ?? surfaceHostSeat ?? null }
+              : null,
           }));
         } catch (err) {
           await revokeApiKeys(db, {
@@ -2450,6 +2485,8 @@ export function registerSetupRoutes(app: HubHono): void {
 
   const PendingBatchBodySchema = z.object({
     keyIds: z.array(z.string().uuid()).min(1).max(PENDING_BATCH_MAX),
+    /** Proof of presence (W3), per key: connecting an AI is sensitive. */
+    presenceByKey: z.record(z.string(), presenceProofSchema).optional(),
   });
 
   /**
@@ -2555,12 +2592,28 @@ export function registerSetupRoutes(app: HubHono): void {
         400
       );
     }
-    const results: Array<{ keyId: string; outcome: PendingKeyOutcome }> = [];
+    const results: Array<{
+      keyId: string;
+      outcome: PendingKeyOutcome | "refused";
+      /** Why a key was refused (e.g. PRESENCE_REQUIRED: ask for its proof). */
+      code?: string;
+    }> = [];
     for (const keyId of [...new Set(parsed.data.keyIds)]) {
-      results.push({
-        keyId,
-        outcome: await approvePendingAgentKey({ keyId, approverId }),
-      });
+      try {
+        results.push({
+          keyId,
+          outcome: await approvePendingAgentKey({
+            keyId,
+            approverId,
+            presence: parsed.data.presenceByKey?.[keyId] ?? null,
+          }),
+        });
+      } catch (err) {
+        const code = (err as { cause?: { reasonCode?: unknown } }).cause
+          ?.reasonCode;
+        if (typeof code !== "string") throw err;
+        results.push({ keyId, outcome: "refused", code });
+      }
     }
     const approved = results.filter((r) => r.outcome === "approved").length;
     logger.info(
@@ -2634,6 +2687,8 @@ export function registerSetupRoutes(app: HubHono): void {
         .optional(),
       /** 0395 (D6/D7): how its changes land; omitted = it keeps its own. */
       writeMode: z.enum(AGENT_WRITE_MODES).optional(),
+      /** Proof of presence (W3): connecting an AI is a sensitive approval. */
+      presence: presenceProofSchema.optional(),
     })
     .strict();
 
@@ -2675,6 +2730,7 @@ export function registerSetupRoutes(app: HubHono): void {
         approverId,
         alsoDisconnect: parsed.data.alsoDisconnect ?? [],
         writeMode: parsed.data.writeMode ?? null,
+        presence: parsed.data.presence ?? null,
       });
     } catch (err) {
       // A typed refusal keeps its own status; anything else is a real fault.
@@ -2682,11 +2738,17 @@ export function registerSetupRoutes(app: HubHono): void {
       // Status from the cause walk, never a class-identity check: in the
       // bundled pod that check was always false and a 400 answered 500
       // (no-instanceof-trpcerror-in-rest).
-      if (status !== 500)
+      if (status !== 500) {
+        const code = (err as { cause?: { reasonCode?: unknown } }).cause
+          ?.reasonCode;
         return c.json(
-          { error: err instanceof Error ? err.message : String(err) },
+          {
+            error: err instanceof Error ? err.message : String(err),
+            ...(typeof code === "string" ? { code } : {}),
+          },
           status
         );
+      }
       throw err;
     }
     if (outcome === "forbidden")

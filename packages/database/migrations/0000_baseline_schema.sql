@@ -2917,6 +2917,7 @@ ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_profile" text;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "tool_groups" text[] NOT NULL DEFAULT '{}';
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "worker_served_at" timestamp with time zone;
 ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "worker_served_version" text;
+ALTER TABLE "api_keys" ADD COLUMN IF NOT EXISTS "origin" text;
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'api_keys_tool_profile_check'
@@ -5712,3 +5713,32 @@ CREATE TABLE IF NOT EXISTS "server_faults" (
 
 CREATE INDEX IF NOT EXISTS "idx_server_faults_occurred_at"
   ON "server_faults" ("occurred_at");
+
+-- 0398: proof of presence (challenges, device keys) — mirrors 0398_presence.sql.
+CREATE TABLE IF NOT EXISTS "presence_challenges" (
+  "id"            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"       text        NOT NULL,
+  "subject"       text        NOT NULL,
+  "nonce"         text        NOT NULL,
+  "expires_at"    timestamptz NOT NULL,
+  "consumed_at"   timestamptz,
+  "method"        text,
+  "device_key_id" uuid,
+  "created_at"    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS "presence_challenges_user_subject_idx"
+  ON "presence_challenges" ("user_id", "subject");
+
+CREATE TABLE IF NOT EXISTS "presence_device_keys" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"      text        NOT NULL,
+  "label"        text        NOT NULL,
+  "public_key"   text        NOT NULL,
+  "last_used_at" timestamptz,
+  "revoked_at"   timestamptz,
+  "created_at"   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS "presence_device_keys_user_idx"
+  ON "presence_device_keys" ("user_id");

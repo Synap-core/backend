@@ -390,6 +390,10 @@ export {
   runMessagingWebhookEnsure,
   type RunMessagingWebhookEnsureResult,
 } from "./services/connectors/messaging-webhook-ensure.js";
+export {
+  runLinkedinReachSweep,
+  type LinkedinReachSweepResult,
+} from "./services/connectors/linkedin-reach-sync.js";
 // Entity media copy (D2): the reactor (registered at boot) enqueues; the runner
 // fills the jobs IoC slot and copies an entity's external images into the pod.
 export { runEntityMediaCopy } from "./services/media-copy/copy-entity-media.js";

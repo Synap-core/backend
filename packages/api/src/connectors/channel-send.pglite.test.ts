@@ -309,6 +309,8 @@ beforeEach(async () => {
     publicIdentifier: "marie-dupont",
     name: "Marie Dupont",
     networkDistance: "FIRST_DEGREE",
+    connection: "connected",
+    relationRequest: null,
   });
   // Every test starts from a person with no channel and no proposal.
   await h.client!.exec(
@@ -586,14 +588,18 @@ describe("approval sends once and records the outbound message", () => {
     expect(ids).toEqual(["msg-3", "msg-4"]);
   });
 
-  it("not a 1st-degree connection: refused not_connected BEFORE any send; the claim is released", async () => {
+  it("not a 1st-degree connection at approval: refused not_connected BEFORE any send; the claim is released", async () => {
+    // Connected when filed, no longer when approved: the dispatch check holds.
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ proposed: true });
     getProfile.mockResolvedValue({
       providerId: "ACoMarie",
       publicIdentifier: "marie-dupont",
       name: "Marie Dupont",
       networkDistance: "SECOND_DEGREE",
+      connection: "not_connected",
+      relationRequest: null,
     });
-    const out = await appSendsTo(PERSON);
     let caught: unknown;
     try {
       await approve(out.proposalId as string);
@@ -790,11 +796,11 @@ describe("security review (lane D)", () => {
   });
 
   it("a provider error before the send releases the claim; the retry sends once", async () => {
+    startChat.mockResolvedValue({ chatId: "chat-retry", messageId: "m-retry" });
+    const out = await appSendsTo(PERSON);
     getProfile.mockRejectedValueOnce(
       new Error("Unipile profile lookup failed: 503 — upstream down")
     );
-    startChat.mockResolvedValue({ chatId: "chat-retry", messageId: "m-retry" });
-    const out = await appSendsTo(PERSON);
     let caught: unknown;
     try {
       await approve(out.proposalId as string);
@@ -978,14 +984,28 @@ describe("security review (lane D)", () => {
     expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
   });
 
-  it("LinkedIn: an unknown network distance is not a connection", async () => {
-    getProfile.mockResolvedValue({
+  it("LinkedIn: an unknown network distance is not a connection (refused at filing, and at dispatch)", async () => {
+    const unknownDistance = {
       providerId: "ACoMarie",
       publicIdentifier: "marie-dupont",
       name: "Marie Dupont",
       networkDistance: null,
+      connection: null,
+      relationRequest: null,
+    };
+    getProfile.mockResolvedValue(unknownDistance);
+    const refused = await appSendsTo(PERSON);
+    expect(refused).toMatchObject({
+      success: false,
+      errorClass: "not_connected",
     });
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    // Filed while LinkedIn could not be read, the dispatch check still holds.
+    getProfile.mockRejectedValueOnce(
+      new Error("Unipile getProfile failed: 503")
+    );
     const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ proposed: true });
     let caught: unknown;
     try {
       await approve(out.proposalId as string);
@@ -1154,5 +1174,248 @@ describe("an agent's send beyond its key's grant is a proposed message", () => {
       (await q(`select 1 from messages where channel_id=$1`, [out.channelId]))
         .rows
     ).toHaveLength(1);
+  });
+});
+
+describe("LinkedIn reach: refused when filed, and recorded on the person (CRM wave 2, S4a)", () => {
+  // Rows rule out: a first LinkedIn message to someone not connected (or
+  // whose request still waits) filed as a draft that fails after approval;
+  // a FAILED read refusing the draft or written as "not connected"; the reach
+  // not landing on the person; relation.new not marking them connected; the
+  // daily sweep writing for an account it could not read, or missing the
+  // 21-day rule.
+  const NOW = new Date("2026-11-04T12:00:00.000Z");
+  const daysAgo = (d: number) =>
+    new Date(NOW.getTime() - d * 24 * 60 * 60 * 1000).toISOString();
+  const propsOf = async (id: string) =>
+    (
+      await q<{ properties: Record<string, unknown> }>(
+        `select properties from entities where id=$1`,
+        [id]
+      )
+    ).rows[0]!.properties;
+  const profileSays = (extra: Record<string, unknown>) =>
+    getProfile.mockResolvedValue({
+      providerId: "ACoMarie",
+      publicIdentifier: "marie-dupont",
+      name: "Marie Dupont",
+      ...extra,
+    });
+  /** A person the pod knows by their LinkedIn member id. */
+  async function personWithMemberId(
+    memberId: string,
+    properties: Record<string, unknown> = {}
+  ) {
+    const id = randomUUID();
+    await q(
+      `insert into entities (id, user_id, type, title, properties, created_at, updated_at) values ($1,$2,'person',$3,$4,now(),now())`,
+      [id, OWNER, `Person ${memberId}`, JSON.stringify(properties)]
+    );
+    await q(
+      `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source, created_at) values ($1,$2,'external_id',$3,'test',now())`,
+      [randomUUID(), id, `linkedin:${memberId}`]
+    );
+    return id;
+  }
+
+  beforeEach(async () => {
+    await q(`update entities set properties = $2 where id = $1`, [
+      PERSON,
+      JSON.stringify({
+        linkedinUrl: "https://www.linkedin.com/in/marie-dupont",
+      }),
+    ]);
+  });
+
+  it("not connected: refused when filed with the next step named; nothing filed, nothing sent; the person is 'none'", async () => {
+    profileSays({
+      networkDistance: "SECOND_DEGREE",
+      connection: "not_connected",
+      relationRequest: null,
+    });
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ success: false, errorClass: "not_connected" });
+    expect(out.error).toMatch(/not one of your Linkedin connections yet/i);
+    expect(out.error).toMatch(/Ask to connect first/);
+    expect(out).not.toHaveProperty("proposalId");
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect(startChat).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect((await propsOf(PERSON)).linkedinConnection).toBe("none");
+  });
+
+  it("a request still waiting: refused when filed, saying so; the person is pending since the request's date", async () => {
+    profileSays({
+      networkDistance: "SECOND_DEGREE",
+      connection: "pending",
+      relationRequest: {
+        direction: "sent",
+        status: "pending",
+        sentAt: daysAgo(3),
+      },
+    });
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ success: false, errorClass: "not_connected" });
+    expect(out.error).toMatch(
+      /has not accepted your Linkedin connection request yet/i
+    );
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect(await propsOf(PERSON)).toMatchObject({
+      linkedinConnection: "pending",
+      linkedinInvitedAt: daysAgo(3),
+    });
+  });
+
+  it("LinkedIn could not be read: filed as before (never refused, never 'not connected'); approval reads again and sends", async () => {
+    getProfile.mockRejectedValueOnce(
+      new Error("Unipile getProfile failed: 503 — upstream down")
+    );
+    startChat.mockResolvedValue({ chatId: "chat-s4a", messageId: "m-s4a" });
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ proposed: true });
+    expect(await propsOf(PERSON)).not.toHaveProperty("linkedinConnection");
+    expect(startChat).not.toHaveBeenCalled();
+    await approve(out.proposalId as string);
+    expect(startChat).toHaveBeenCalledTimes(1);
+    expect((await propsOf(PERSON)).linkedinConnection).toBe("connected");
+  });
+
+  it("connected: filed, and the person is recorded connected", async () => {
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ proposed: true });
+    expect((await propsOf(PERSON)).linkedinConnection).toBe("connected");
+  });
+
+  it("an approved send is not checked again at filing: one profile read, at dispatch", async () => {
+    startChat.mockResolvedValue({ chatId: "chat-once", messageId: "m-once" });
+    const out = await appSendsTo(PERSON);
+    getProfile.mockClear();
+    await approve(out.proposalId as string);
+    expect(getProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("relation.new marks the person connected, found by their member id; an unknown member or account writes nothing", async () => {
+    const { recordAcceptedRelation } =
+      await import("../services/connectors/linkedin-reach-sync.js");
+    const ada = await personWithMemberId("ACoAdaS4a", {
+      linkedinConnection: "pending",
+      linkedinInvitedAt: daysAgo(5),
+    });
+    expect(
+      await recordAcceptedRelation({
+        accountExternalId: ACCOUNT,
+        provider: "linkedin",
+        providerId: "ACoAdaS4a",
+        publicIdentifier: null,
+        connector: { getProfile },
+        now: NOW,
+      })
+    ).toBe(ada);
+    expect(await propsOf(ada)).toMatchObject({
+      linkedinConnection: "connected",
+      linkedinInvitedAt: daysAgo(5),
+    });
+    expect(
+      await recordAcceptedRelation({
+        accountExternalId: ACCOUNT,
+        provider: "linkedin",
+        providerId: "ACoNobody",
+        publicIdentifier: null,
+        connector: { getProfile },
+      })
+    ).toBeNull();
+    expect(
+      await recordAcceptedRelation({
+        accountExternalId: "acc-unknown",
+        provider: "linkedin",
+        providerId: "ACoAdaS4a",
+        publicIdentifier: null,
+        connector: { getProfile },
+      })
+    ).toBeNull();
+    // Never a paid lookup to find someone.
+    expect(getProfile).not.toHaveBeenCalled();
+  });
+
+  it("the daily sweep: sent requests mark pending with their date; 21 days pending is ignored; an unreadable account writes nothing", async () => {
+    const { runLinkedinReachSweep } =
+      await import("../services/connectors/linkedin-reach-sync.js");
+    const OTHER = "acc-linkedin-broken";
+    await q(
+      `insert into messaging_accounts (id, user_id, provider, external_id, display_name, status, created_at, updated_at)
+       values ($1,$2,'linkedin',$3,'Second LinkedIn','connected',now(),now())`,
+      [randomUUID(), OWNER, OTHER]
+    );
+    const fresh = await personWithMemberId("ACoFresh");
+    const stale = await personWithMemberId("ACoStale");
+    const storedOld = await personWithMemberId("ACoStoredOld", {
+      linkedinConnection: "pending",
+      linkedinInvitedAt: daysAgo(25),
+    });
+    const storedRecent = await personWithMemberId("ACoStoredRecent", {
+      linkedinConnection: "pending",
+      linkedinInvitedAt: daysAgo(2),
+    });
+    const onBroken = await personWithMemberId("ACoOnBroken");
+    const pages: Record<string, Array<Record<string, unknown>>> = {
+      "": [
+        {
+          id: "inv-1",
+          providerId: "ACoFresh",
+          publicIdentifier: null,
+          name: "Fresh",
+          sentAt: daysAgo(3),
+        },
+      ],
+      "page-2": [
+        {
+          id: "inv-2",
+          providerId: "ACoStale",
+          publicIdentifier: null,
+          name: "Stale",
+          sentAt: daysAgo(30),
+        },
+        {
+          id: "inv-3",
+          providerId: "ACoNotInPod",
+          publicIdentifier: null,
+          name: "Stranger",
+          sentAt: daysAgo(1),
+        },
+      ],
+    };
+    const listSentInvitations = vi.fn(
+      async (accountId: string, cursor?: string) => {
+        if (accountId === OTHER)
+          throw new Error("Unipile listSentInvitations failed: 503");
+        const key = cursor ?? "";
+        return {
+          invitations: pages[key] ?? [],
+          ...(key === "" ? { nextCursor: "page-2" } : {}),
+        };
+      }
+    );
+    const result = await runLinkedinReachSweep({
+      connector: { ...fakeUnipile(), listSentInvitations } as never,
+      now: NOW,
+    });
+    expect(result).toMatchObject({
+      configured: true,
+      accountsRead: 1,
+      accountsFailed: 1,
+      invitations: 3,
+    });
+    expect(await propsOf(fresh)).toMatchObject({
+      linkedinConnection: "pending",
+      linkedinInvitedAt: daysAgo(3),
+    });
+    expect(await propsOf(stale)).toMatchObject({
+      linkedinConnection: "ignored",
+      linkedinInvitedAt: daysAgo(30),
+    });
+    expect((await propsOf(storedOld)).linkedinConnection).toBe("ignored");
+    expect((await propsOf(storedRecent)).linkedinConnection).toBe("pending");
+    expect(await propsOf(onBroken)).not.toHaveProperty("linkedinConnection");
+    expect(result.peopleIgnored).toBeGreaterThanOrEqual(1);
   });
 });

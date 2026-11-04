@@ -688,6 +688,26 @@ export const agentUsersRouter = router({
     }),
 
   /**
+   * YOUR AGENTS AND COMPUTERS, with presence: the ONE read (computers plan v2,
+   * `readAgentsForHandoff`) MCP `synap_list_agents` already answers with, now
+   * on tRPC so the desktop and the phone read it instead of deriving presence
+   * from this router's `list` (plan c727854c W5). Each agent: its computer,
+   * reach, `live`, `nobodyRuns`, whether it can take the person's work; the
+   * person's computers, with how many listed agents run on each. The hand-off
+   * preview is from the calling agent when an agent key calls, else direct (a
+   * person staffing their own work is never gated). A failed read throws.
+   */
+  roster: protectedProcedure.query(async ({ ctx }) => {
+    // Imported at call time: agents-for-handoff reads this router's
+    // `queryAgentUsers`, so a static import would be a module cycle.
+    const { readAgentsForHandoff } =
+      await import("../services/agent-dispatch/agents-for-handoff.js");
+    return readAgentsForHandoff(ctx.userId, {
+      callerAgentUserId: ctx.agentUserId ?? null,
+    });
+  }),
+
+  /**
    * How this agent's writes land, from the decision inputs — its own
    * override (`readAgentGovernance`, the same reader as the Hub
    * `GET /agent-users/:id/governance`) and the pod default — never the raw

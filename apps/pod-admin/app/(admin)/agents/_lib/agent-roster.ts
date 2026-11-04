@@ -11,6 +11,7 @@
 import {
   agentDirectionOf,
   agentMarkText,
+  isSynapAccountSeat,
   resolveAgentMark,
   type AgentDirection,
   type AgentMark,
@@ -80,6 +81,16 @@ const PILL_LABEL: Record<AgentMark["kind"], string> = {
   noKey: "No key",
   unmeasured: "Unknown",
 };
+
+/**
+ * It reaches the pod through the person's Synap account (mcp.synap.live): its
+ * own identity, the Synap account seat (0400). Disconnecting it here revokes
+ * the key that connector holds; this page is where that is done (founder
+ * decision 3 of 4 Nov 2026).
+ */
+export function viaSynapAccount(row: AgentRosterRowLike): boolean {
+  return isSynapAccountSeat(row.hostSeat);
+}
 
 export function agentNeedsReview(row: AgentRosterRowLike): boolean {
   return (row.pendingKeys ?? 0) > 0 || !!row.pendingProposalId;
@@ -189,7 +200,9 @@ export function buildAgentRoster<R extends AgentRosterRowLike>(
       row,
       mark,
       status,
-      sentence: agentStatusSentence(row, mark, relative),
+      sentence: viaSynapAccount(row)
+        ? `${agentStatusSentence(row, mark, relative)} Through your Synap account.`
+        : agentStatusSentence(row, mark, relative),
       direction: agentDirectionOf(row),
       needsReview,
       ownedByViewer:
@@ -229,8 +242,17 @@ const ORIGIN_LINE: Record<string, string> = {
   "intelligence-service": "An Intelligence persona the pod runs",
 };
 
-/** Where the agent came from, in words; `null` when the pod did not record it. */
-export function originLine(origin: string | null | undefined): string | null {
+/**
+ * Where the agent came from, in words; `null` when the pod did not record it.
+ * The Synap account seat wins over `created_via`: that door stamps none of
+ * its own, so such an agent would read as made in a terminal.
+ */
+export function originLine(
+  origin: string | null | undefined,
+  hostSeat?: string | null
+): string | null {
+  if (isSynapAccountSeat(hostSeat))
+    return "Connected through your Synap account (mcp.synap.live)";
   if (!origin) return null;
   return ORIGIN_LINE[origin] ?? null;
 }
