@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { messageAuthor, readingOrder } from "./channel-model";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { linkedObjectChip, messageAuthor, readingOrder } from "./channel-model";
 
 const msg = (extra: Partial<Parameters<typeof messageAuthor>[0]>) => ({
   id: "m",
@@ -33,5 +34,32 @@ describe("readingOrder", () => {
     const newestFirst = [3, 2, 1];
     expect(readingOrder(newestFirst)).toEqual([1, 2, 3]);
     expect(newestFirst).toEqual([3, 2, 1]);
+  });
+});
+
+describe("linkedObjectChip", () => {
+  const SID = "11111111-1111-4111-8111-111111111111";
+
+  it("is a door to the object, named by its title", () => {
+    expect(
+      linkedObjectChip({ type: "session", id: SID, title: "  Ship 0.7.2 " })
+    ).toEqual({ objectKind: "session", id: SID, label: "Ship 0.7.2" });
+  });
+
+  it("names an object it may not read (no title) by its kind, never a token", () => {
+    for (const type of ["session", "entity", "focus_session_x"]) {
+      const label = linkedObjectChip({ type, id: SID, title: "  " })?.label;
+      expect(label).toBe(resolveObjectNoun(type));
+      expect(label).not.toBe(type);
+      expect(label).not.toBe("");
+    }
+  });
+
+  it("draws nothing for a conversation that belongs to nothing", () => {
+    expect(linkedObjectChip(null)).toBeNull();
+    expect(linkedObjectChip(undefined)).toBeNull();
+    expect(
+      linkedObjectChip({ type: "session", id: "", title: "x" })
+    ).toBeNull();
   });
 });
