@@ -1627,42 +1627,22 @@ async function evaluatePermission(
 
   // 4. Check workspace permission using the effective user's role
   try {
-    const { verifyPermission, eq } = await import("@synap/database");
+    const { eq } = await import("@synap/database");
 
     // Workspace-membership RBAC — ONLY when a workspace lens is present.
     // At pod scope (no workspace) the authenticated bearer is the owner, so there
     // is no membership to verify; agent governance still runs below.
     if (workspaceId) {
-      const result = await verifyPermission({
-        db,
-        userId: effectiveUserId,
-        workspace: { id: workspaceId },
+      const result = await verifyWorkspaceAccess({
+        userId,
+        agentUserId,
+        workspaceId,
         requiredPermission,
+        subjectType,
+        action,
+        data,
+        sessionId,
       });
-
-      // DECISION 2a — a started track admits its agent into the track's step
-      // spaces, SCOPED to that track's sessions (`services/tracks/
-      // track-space-grant.ts`). Only a membership MISS by an agent is asked;
-      // admitted ⇒ skip the join and fall through to the governance ladder.
-      if (
-        !result.allowed &&
-        result.reason === "User is not a member of this workspace" &&
-        agentUserId &&
-        (await (
-          await import("../services/tracks/track-space-grant.js")
-        ).admittedByTrackSpaceGrant(db, {
-          userId,
-          agentUserId,
-          workspaceId,
-          requiredPermission,
-          subjectType,
-          action,
-          data,
-          sessionId,
-        }))
-      ) {
-        result.allowed = true;
-      }
 
       if (!result.allowed) {
         // PRODUCT DECISION ("agent asks to join"): an agent actor that is not yet
@@ -1674,8 +1654,7 @@ async function evaluatePermission(
         // retries. Any OTHER denial (insufficient role for a
         // member, etc.) still hard-denies. Gated on the membership-miss reason so a
         // member-but-under-privileged agent is NOT silently escalated to a join.
-        const isMembershipMiss =
-          result.reason === "User is not a member of this workspace";
+        const isMembershipMiss = result.reason === WORKSPACE_MEMBERSHIP_MISS;
         if (isMembershipMiss && agentUserId) {
           const join = await maybeCreateWorkspaceJoinProposal({
             dryRun,
@@ -4816,6 +4795,134 @@ async function createProposal(args: {
     reviewUrl: openLink(proposal.id),
     ...(deduped ? { deduped: true } : {}),
   };
+}
+
+/** `verifyPermission`'s reason for an actor that is not a member of the space. */
+export const WORKSPACE_MEMBERSHIP_MISS =
+  "User is not a member of this workspace";
+
+/**
+ * THE membership check of the gate (rung 4): may the actor (the agent when
+ * there is one, else the person) do `requiredPermission` in `workspaceId`?
+ * A started track admits its agent into the track's step spaces, scoped to
+ * that track's sessions (DECISION 2a, `services/tracks/track-space-grant.ts`):
+ * only a membership MISS by an agent is asked, and an admitted one is allowed.
+ *
+ * Shared by `checkPermissionOrPropose` and `parkWriteOnWorkspaceJoin`, so a
+ * door that checks membership BEFORE it writes reads the same answer the gate
+ * gives at each write.
+ */
+async function verifyWorkspaceAccess(opts: {
+  userId: string;
+  agentUserId?: string;
+  workspaceId: string;
+  requiredPermission: ReturnType<typeof requiredPermissionFor>;
+  subjectType: string;
+  action: string;
+  data?: Record<string, unknown>;
+  sessionId?: string;
+}) {
+  const { verifyPermission } = await import("@synap/database");
+  const result = await verifyPermission({
+    db,
+    userId: opts.agentUserId || opts.userId,
+    workspace: { id: opts.workspaceId },
+    requiredPermission: opts.requiredPermission,
+  });
+  if (
+    !result.allowed &&
+    result.reason === WORKSPACE_MEMBERSHIP_MISS &&
+    opts.agentUserId &&
+    (await (
+      await import("../services/tracks/track-space-grant.js")
+    ).admittedByTrackSpaceGrant(db, {
+      userId: opts.userId,
+      agentUserId: opts.agentUserId,
+      workspaceId: opts.workspaceId,
+      requiredPermission: opts.requiredPermission,
+      subjectType: opts.subjectType,
+      action: opts.action,
+      data: opts.data,
+      sessionId: opts.sessionId,
+    }))
+  ) {
+    result.allowed = true;
+  }
+  return result;
+}
+
+/**
+ * Park a WHOLE multi-step write on a workspace join BEFORE any of it is
+ * written (finding 590ca76a). A door whose one call makes several writes (a
+ * capture graph) cannot let the gate decide at each write: the first write
+ * into a space the agent has not joined is kept on the join, the door then
+ * stops, and the steps before and after are lost or orphaned. So the door
+ * asks here first, for every space the write lands in. When the agent misses
+ * membership of one, the whole write is kept on that space's join as ONE
+ * deferred write (`subjectType/action` must be a replayable pair), the same
+ * join and the same replay every other door uses, and nothing is written.
+ *
+ * Returns null when there is nothing to park: no agent, every space admits
+ * it, or the actor is not an agent user row (the door's own gate then denies,
+ * as it always did). Otherwise the gate's own answer: the join's proposed
+ * envelope (`deferred: true` when the write was kept), or a refusal (an
+ * archived space, the join's cap).
+ */
+export async function parkWriteOnWorkspaceJoin(opts: {
+  userId: string;
+  agentUserId: string | null | undefined;
+  /** Every space the write lands in (null = pod-wide, never a join). */
+  workspaceIds: ReadonlyArray<string | null | undefined>;
+  /** The permission the write needs in each space (its steps' action). */
+  permissionAction: string;
+  /** The replayable pair the whole write is kept under. */
+  subjectType: string;
+  action: string;
+  /** What the replay door rebuilds the write from. */
+  data: Record<string, unknown>;
+  sessionId?: string;
+  projectId?: string | null;
+  sourceMessageId?: string;
+  threadId?: string;
+  reasoning?: string;
+}): Promise<PermissionResult | null> {
+  const agentUserId = getActingAgentUserId() ?? opts.agentUserId ?? undefined;
+  if (!agentUserId) return null;
+  const requiredPermission = requiredPermissionFor(opts.permissionAction);
+  const spaces = [
+    ...new Set(
+      opts.workspaceIds.filter((w): w is string => typeof w === "string")
+    ),
+  ];
+  for (const workspaceId of spaces) {
+    const access = await verifyWorkspaceAccess({
+      userId: opts.userId,
+      agentUserId,
+      workspaceId,
+      requiredPermission,
+      subjectType: opts.subjectType,
+      action: opts.action,
+      data: opts.data,
+      sessionId: opts.sessionId,
+    });
+    if (access.allowed || access.reason !== WORKSPACE_MEMBERSHIP_MISS) continue;
+    const join = await maybeCreateWorkspaceJoinProposal({
+      agentUserId,
+      requesterUserId: opts.userId,
+      workspaceId,
+      sessionId: opts.sessionId,
+      sourceMessageId: opts.sourceMessageId,
+      threadId: opts.threadId,
+      requestedSubjectType: opts.subjectType,
+      requestedAction: opts.action,
+      requestedData: opts.data,
+      requestedProjectId: opts.projectId,
+      requestedReasoning: opts.reasoning,
+    });
+    // Never the dry-run sentinel: this call is not a dry run.
+    return join && !("__dryRunPropose" in join) ? join : null;
+  }
+  return null;
 }
 
 /**

@@ -41,6 +41,9 @@ export const REPLAYABLE_DEFERRED_PAIRS = [
   "entity/update",
   "focus_session/create",
   "document/create",
+  // A whole capture graph, kept as ONE write so it lands all-or-none: its
+  // door checks membership before writing anything (finding 590ca76a).
+  "entity/capture.graph",
 ] as const;
 export type ReplayableDeferredPair = (typeof REPLAYABLE_DEFERRED_PAIRS)[number];
 
