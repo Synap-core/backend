@@ -7,8 +7,10 @@
  *
  * Three lists used to say this in three places (the API's surface allowlist,
  * the reopenable-conversation list, the device door's enum) and the Claude
- * Code slug had four spellings elsewhere. Backend code reads THIS list; the
- * CLI, Raycast and Eve keep copies that a later lane folds in (see
+ * Code slug had four spellings elsewhere. Backend code reads THIS list, and
+ * it is the one list of clients the CLI imports: each row says which doors
+ * the client supports (`doors`) and which `synap connect` writer configures
+ * it (`cliTarget`). Raycast and Eve still keep copies (see
  * `harnesses.test.ts` for the pinned slugs).
  *
  * Not the IS persona keys (orchestrator, meta… — WHICH agent answers a turn)
@@ -36,6 +38,15 @@ export interface HarnessLaunch {
   modelFlag?: string;
 }
 
+/**
+ * How a client reaches the pod (plan "one way to connect an AI to Synap", A):
+ * - `account`: the remote MCP server of the Synap account (`mcp.synap.live`),
+ *   which the client signs in to itself with OAuth. Nothing holds a key.
+ * - `pod`: a pod key the CLI writes into the client's config file.
+ */
+export const HARNESS_DOORS = ["account", "pod"] as const;
+export type HarnessDoor = (typeof HARNESS_DOORS)[number];
+
 export interface AgentHarness {
   /** The agent's `agentType`. */
   slug: string;
@@ -50,9 +61,26 @@ export interface AgentHarness {
   reopen?: HarnessReopen;
   /** Present only where a person starts one with a command. */
   launch?: HarnessLaunch;
+  /**
+   * The doors this client supports, never empty. `account` only where the
+   * client is CONFIRMED to finish OAuth against a URL-only remote server.
+   */
+  doors: readonly [HarnessDoor, ...HarnessDoor[]];
+  /**
+   * The synap-cli `TARGETS` key whose writer configures this client
+   * (`synap connect <cliTarget>`), unique across rows; null where the CLI
+   * writes no config for it.
+   */
+  cliTarget: string | null;
 }
 
 export const AGENT_HARNESSES = [
+  // `doors`: `account` is set ONLY for the clients confirmed to finish OAuth
+  // against a URL-only remote server (claude.ai, ChatGPT, Claude Code,
+  // Cursor). Every other client is `["pod"]` until wave W5's test matrix
+  // confirms it (plan f61a20a5, "Open questions"); add `account` to a row
+  // only with that evidence. claude.ai has no row: it runs on no computer
+  // and holds no key, and its pod identity is the account connector's agent.
   {
     slug: "claude-code",
     label: "Claude Code",
@@ -63,32 +91,120 @@ export const AGENT_HARNESSES = [
       command: (id) => `claude --resume ${id}`,
     },
     launch: { program: "claude", modelFlag: "--model" },
+    doors: ["account", "pod"],
+    cliTarget: "claude-code",
   },
-  { slug: "claude-desktop", label: "Claude Desktop", surface: true },
-  { slug: "cursor", label: "Cursor", surface: true },
-  { slug: "raycast", label: "Raycast", surface: true },
+  {
+    slug: "claude-desktop",
+    label: "Claude Desktop",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "claude-desktop",
+  },
+  {
+    slug: "cursor",
+    label: "Cursor",
+    surface: true,
+    doors: ["account", "pod"],
+    cliTarget: "cursor",
+  },
+  {
+    slug: "raycast",
+    label: "Raycast",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "raycast",
+  },
   {
     slug: "codex",
     label: "Codex",
     surface: true,
     launch: { program: "codex", modelFlag: "--model" },
+    doors: ["pod"],
+    cliTarget: "codex",
   },
-  { slug: "openwebui", label: "Open WebUI", surface: true },
-  { slug: "discord", label: "Discord", surface: true },
-  { slug: "proton", label: "Proton", surface: true },
-  { slug: "generic", label: "Generic", surface: true },
+  {
+    slug: "openwebui",
+    label: "Open WebUI",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "openwebui",
+  },
+  // Discord and Proton hold a pod key, but no `synap connect` writer.
+  {
+    slug: "discord",
+    label: "Discord",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: null,
+  },
+  {
+    slug: "proton",
+    label: "Proton",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: null,
+  },
+  {
+    slug: "generic",
+    label: "Generic",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "generic",
+  },
   // The other clients `synap connect` mints a key for under their own name
   // (synap-cli TARGETS, 4 Nov 2026). Without a row here the setup door
-  // refused them to an agent key (SURFACE_AGENT_TYPE_REQUIRED): 6 of the
-  // CLI's 16 targets could not connect. ChatGPT is still minted as `generic`
-  // by the CLI; its row lets the CLI name it once it mints `chatgpt`.
-  { slug: "chatgpt", label: "ChatGPT", surface: true },
-  { slug: "opencode", label: "OpenCode", surface: true },
-  { slug: "windsurf", label: "Windsurf", surface: true },
-  { slug: "goose", label: "Goose", surface: true },
-  { slug: "zed", label: "Zed", surface: true },
-  { slug: "vscode", label: "VS Code", surface: true },
-  { slug: "grok", label: "Grok", surface: true },
+  // refused them to an agent key (SURFACE_AGENT_TYPE_REQUIRED). ChatGPT is
+  // minted as `chatgpt`, never `generic`.
+  {
+    slug: "chatgpt",
+    label: "ChatGPT",
+    surface: true,
+    doors: ["account", "pod"],
+    cliTarget: "chatgpt",
+  },
+  {
+    slug: "opencode",
+    label: "OpenCode",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "opencode",
+  },
+  {
+    slug: "windsurf",
+    label: "Windsurf",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "windsurf",
+  },
+  {
+    slug: "goose",
+    label: "Goose",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "goose",
+  },
+  {
+    slug: "zed",
+    label: "Zed",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "zed",
+  },
+  {
+    slug: "vscode",
+    label: "VS Code",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "vscode",
+  },
+  {
+    slug: "grok",
+    label: "Grok",
+    surface: true,
+    doors: ["pod"],
+    cliTarget: "grok",
+  },
 ] as const satisfies readonly AgentHarness[];
 
 export type AgentHarnessSlug = (typeof AGENT_HARNESSES)[number]["slug"];
