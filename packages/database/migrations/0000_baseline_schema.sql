@@ -5716,7 +5716,7 @@ CREATE INDEX IF NOT EXISTS "idx_server_faults_occurred_at"
 -- 0398: proof of presence (challenges, device keys) — mirrors 0398_presence.sql.
 CREATE TABLE IF NOT EXISTS "presence_challenges" (
   "id"            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  "user_id"       text        NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "user_id"       text        NOT NULL,
   "subject"       text        NOT NULL,
   "nonce"         text        NOT NULL,
   "expires_at"    timestamptz NOT NULL,
@@ -5731,7 +5731,7 @@ CREATE INDEX IF NOT EXISTS "presence_challenges_user_subject_idx"
 
 CREATE TABLE IF NOT EXISTS "presence_device_keys" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  "user_id"      text        NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "user_id"      text        NOT NULL,
   "label"        text        NOT NULL,
   "public_key"   text        NOT NULL,
   "last_used_at" timestamptz,

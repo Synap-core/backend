@@ -11,15 +11,13 @@
  *    the PUBLIC key is stored. Listed and revocable by the person.
  */
 import { pgTable, uuid, text, timestamp, index } from "drizzle-orm/pg-core";
-import { users } from "./users.js";
 
 export const presenceChallenges = pgTable(
   "presence_challenges",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    /** The person (no foreign key: see migration 0398). */
+    userId: text("user_id").notNull(),
     /** A proposal id, or `enroll:<challenge id>`. */
     subject: text("subject").notNull(),
     /** 32 random bytes, base64url: part of the signed message. */
@@ -45,9 +43,8 @@ export const presenceDeviceKeys = pgTable(
   "presence_device_keys",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    /** The person (no foreign key: see migration 0398). */
+    userId: text("user_id").notNull(),
     /** What the person calls the device ("Antoine's iPhone"). */
     label: text("label").notNull(),
     /** The P-256 public key, SPKI DER, base64url. Never a private key. */
