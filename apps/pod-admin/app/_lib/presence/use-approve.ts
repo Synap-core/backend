@@ -18,6 +18,8 @@ import {
   approveEachWithPresence,
   approveWithPresence,
   asPresenceCode,
+  needsPresence,
+  proveEachUpFront,
 } from "./presence-model";
 import { usePresence } from "./presence-provider";
 
@@ -33,7 +35,13 @@ type BatchMutation = ReturnType<typeof trpc.proposals.batchApprove.useMutation>;
 export type BatchApproveInput = Omit<
   Parameters<BatchMutation["mutateAsync"]>[0],
   "presenceByProposal"
->;
+> & {
+  /**
+   * The items the page knows are sensitive (`needsPresence` on its rows):
+   * proved up front, one by one, before the batch is sent. Not sent to the pod.
+   */
+  upFrontIds?: readonly string[];
+};
 export type BatchApproveOutput = Awaited<
   ReturnType<BatchMutation["mutateAsync"]>
 >;
@@ -92,16 +100,24 @@ function useHandled<I, O>(
 export function useApproveProposal(handlers: Handlers<ApproveOutput> = {}) {
   const approve = trpc.proposals.approve.useMutation();
   const { prove } = usePresence();
-  const { mutate, mutateAsync, running } = useHandled(
-    (input: ApproveInput) =>
-      approveWithPresence({
-        subject: { proposalId: input.proposalId },
-        prove,
-        attempt: (presence) =>
-          approve.mutateAsync(presence ? { ...input, presence } : input),
-      }),
-    handlers
-  );
+  const utils = trpc.useUtils();
+  const { mutate, mutateAsync, running } = useHandled((input: ApproveInput) => {
+    // The request as the page already read it (`proposals.get`, the cache
+    // every approve surface fills): a sensitive one is proved up front.
+    // Not read here = not known sensitive: it goes without a proof, and the
+    // pod decides (PRESENCE_REQUIRED then asks). Never a second read before
+    // the approve.
+    const proposal = utils.proposals.get.getData({
+      proposalId: input.proposalId,
+    });
+    return approveWithPresence({
+      subject: { proposalId: input.proposalId },
+      prove,
+      upFront: proposal ? needsPresence(proposal) : false,
+      attempt: (presence) =>
+        approve.mutateAsync(presence ? { ...input, presence } : input),
+    });
+  }, handlers);
   return {
     mutate,
     mutateAsync,
@@ -121,8 +137,21 @@ export function useBatchApproveProposals(
   const batch = trpc.proposals.batchApprove.useMutation();
   const { prove } = usePresence();
   const { mutate, mutateAsync, running } = useHandled(
-    async (input: BatchApproveInput): Promise<BatchApproveOutput> => {
-      const first = await batch.mutateAsync(input);
+    async ({
+      upFrontIds = [],
+      ...input
+    }: BatchApproveInput): Promise<BatchApproveOutput> => {
+      const ids = new Set(input.proposalIds);
+      const presenceByProposal = await proveEachUpFront({
+        ids: upFrontIds.filter((id) => ids.has(id)),
+        subjectOf: (proposalId) => ({ proposalId }),
+        prove,
+      });
+      const first = await batch.mutateAsync(
+        Object.keys(presenceByProposal).length > 0
+          ? { ...input, presenceByProposal }
+          : input
+      );
       const results = await approveEachWithPresence<BatchItem>({
         results: first.results,
         refusalOf: (r) => {

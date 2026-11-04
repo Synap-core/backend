@@ -128,6 +128,7 @@ describe("proof of presence: the assertion (W3)", () => {
   const request = {
     challenge: "AQID", // [1,2,3]
     rpId: "lab.pod.synap.live",
+    rpIds: ["lab.pod.synap.live", "pod.synap.live"],
     allowCredentials: [{ id: "BAUG", type: "public-key" as const }],
     userVerification: "required" as const,
   };

@@ -14,8 +14,12 @@ import {
   PresenceRefusedError,
   approveEachWithPresence,
   approveWithPresence,
+  needsPresence,
   presenceRefusal,
+  proveEachUpFront,
+  type ProvePresence,
   type PresenceProgress,
+  type ProveOptions,
   type PresenceSubject,
 } from "./presence-model";
 
@@ -33,7 +37,8 @@ function proofs() {
     async (
       subject: PresenceSubject,
       refusal: PresenceRefusalCode,
-      _progress?: PresenceProgress
+      _progress?: PresenceProgress,
+      _options?: ProveOptions
     ): Promise<PresenceProof> => {
       asked.push({ subject, refusal });
       n += 1;
@@ -244,3 +249,106 @@ describe("approveEachWithPresence", () => {
     expect(prove.mock.calls[1]![1]).toBe("PRESENCE_USED");
   });
 });
+
+describe("needsPresence (the pod's own test)", () => {
+  it("a sensitive approval or a request filed as the person; nothing else", () => {
+    expect(
+      needsPresence({ targetType: "agent", proposalType: "connect" })
+    ).toBe(true);
+    expect(
+      needsPresence({ targetType: "entity", proposalType: "delete" })
+    ).toBe(true);
+    expect(
+      needsPresence({
+        targetType: "governance_rule",
+        proposalType: "governance.widen",
+      })
+    ).toBe(true);
+    expect(
+      needsPresence({ targetType: "entity", proposalType: "create" })
+    ).toBe(false);
+    expect(
+      needsPresence({
+        targetType: "entity",
+        proposalType: "create",
+        data: { asPerson: true },
+      })
+    ).toBe(true);
+    expect(needsPresence({})).toBe(false);
+  });
+});
+
+describe("up front", () => {
+  it("a sensitive approval carries its proof on the FIRST try", async () => {
+    const { prove } = proofs();
+    const attempt = vi.fn(async (presence?: PresenceProof) =>
+      presence ? "ok" : "unproved"
+    );
+    await expect(
+      approveWithPresence({
+        subject: { proposalId: "p1" },
+        prove,
+        attempt,
+        upFront: true,
+      })
+    ).resolves.toBe("ok");
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(prove.mock.calls[0]![3]).toEqual({ upFront: true });
+  });
+
+  it("when the person cannot prove here (null), it goes without and the pod decides", async () => {
+    const attempt = vi.fn(async (presence?: PresenceProof) =>
+      presence ? "proved" : "report mode let it through"
+    );
+    await expect(
+      approveWithPresence({
+        subject: { proposalId: "p1" },
+        prove: async () => null,
+        attempt,
+        upFront: true,
+      })
+    ).resolves.toBe("report mode let it through");
+  });
+
+  it("declining up front approves nothing", async () => {
+    const attempt = vi.fn();
+    await expect(
+      approveWithPresence({
+        subject: { proposalId: "p1" },
+        prove: async () => {
+          throw new PresenceDeclined("no");
+        },
+        attempt,
+        upFront: true,
+      })
+    ).rejects.toBeInstanceOf(PresenceDeclined);
+    expect(attempt).not.toHaveBeenCalled();
+  });
+
+  it("proveEachUpFront: one ask per item with 'n of total'; a null item is left out", async () => {
+    let n = 0;
+    const prove = vi.fn<ProvePresence>(async () =>
+      ++n === 2 ? null : proofOf(n)
+    );
+    const out = await proveEachUpFront({
+      ids: ["a", "b", "c"],
+      subjectOf: (id) => ({ proposalId: id }),
+      prove,
+    });
+    expect(Object.keys(out)).toEqual(["a", "c"]);
+    expect(prove.mock.calls.map((c) => c[2])).toEqual([
+      { index: 1, total: 3 },
+      { index: 2, total: 3 },
+      { index: 3, total: 3 },
+    ]);
+  });
+});
+
+function proofOf(n: number): PresenceProof {
+  return {
+    kind: "device_key",
+    challengeId: `c${n}`,
+    keyId: "k",
+    signature: `s${n}`,
+  };
+}
