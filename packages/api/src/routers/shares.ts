@@ -50,6 +50,10 @@
  *                  refused records are reported per record.
  *   - unpublishFromSite  take records off one site (or, no ids, the whole
  *                  site back to draft). Direct for everyone.
+ *   - listSites    every unrevoked site of a project the caller administers
+ *                  (capped, `truncated` says so), with its state, counts and,
+ *                  for the home space's owner, its switch and policy.
+ *                  `siteStatus` also lists the site's charts.
  */
 
 import { z } from "zod";
@@ -77,6 +81,7 @@ import {
 import { registerShareExecutors } from "../services/sharing/share-executors.js";
 import {
   configureSite,
+  listSites,
   publishSite,
   publishToSite,
   revokeSite,
@@ -325,6 +330,10 @@ export const sharesRouter = router({
     .mutation(({ input, ctx }) =>
       revokeSite(shareActorFromCtx(ctx), input.siteId)
     ),
+
+  listSites: protectedProcedure.query(({ ctx }) =>
+    listSites(shareActorFromCtx(ctx))
+  ),
 
   siteStatus: protectedProcedure
     .input(
