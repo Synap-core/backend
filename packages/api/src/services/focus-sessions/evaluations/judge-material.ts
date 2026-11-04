@@ -620,10 +620,13 @@ export function buildJudgeMaterial(
       : "";
     const packed =
       room.status === "ok"
-        ? packRoom(room.messages, shares[produced.length]!)
-        : { text: "", cut: false, kept: 0 };
+        ? {
+            ...packRoom(room.messages, shares[produced.length]!),
+            total: room.messages.length,
+          }
+        : { text: "", cut: false, kept: 0, total: 0 };
     const roomPart = packed.text
-      ? `${roomHeadingFor(packed.kept, room.messages.length - packed.kept)}\n${packed.text}`
+      ? `${roomHeadingFor(packed.kept, packed.total - packed.kept)}\n${packed.text}`
       : roomHeading;
     const roomCut = packed.cut;
     return {
