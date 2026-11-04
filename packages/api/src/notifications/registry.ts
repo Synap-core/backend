@@ -632,6 +632,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{description}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    // The write already happened. News in the bell, not an ask.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     // Proactive twin of the approve-time preflight: a pending proposal whose
@@ -677,6 +680,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       "{{newerRejectPct}}% of {{newerDecided}} reviewed proposals rejected vs {{previousRejectPct}}% of {{previousDecided}} for {{previousPromptVersion}} ({{engine}} / {{model}}).",
     defaultChannels: ["in_app"],
     ttl: 0,
+    // No action: the prompt lives in the IS and no pod write reverts it.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "ai_request.vault_access",
@@ -753,6 +759,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{itemCount}} items imported",
     defaultChannels: ["in_app"],
     ttl: 6_000,
+    // A finished sync asks for nothing. A failure stays an item below.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "connector.sync.failed",
@@ -815,6 +824,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{entityTitle}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
 
   // ── AI ────────────────────────────────────────────────────────────────────
@@ -828,6 +839,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{description}}",
     defaultChannels: ["in_app"],
     ttl: 4_000,
+    // fromSkillTrigger reports that a skill ran. Nothing waits on the person.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "agent.task_complete",
@@ -839,6 +853,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{summary}}",
     defaultChannels: ["in_app"],
     ttl: 6_000,
+    // Finished work stays in the bell. A failure is the ask (agent.task_failed).
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
     actions: [
       {
         id: "view",
@@ -956,6 +973,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{entityType}} was removed",
     defaultChannels: ["in_app"],
     ttl: 6_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "data.document.created",
@@ -967,6 +986,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{description}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "data.view.created",
@@ -978,6 +999,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{viewType}} view created",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "data.relation.created",
@@ -989,6 +1012,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{relationType}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
 
   // ── AI: Proactive Messages ──────────────────────────────────────────────
