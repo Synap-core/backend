@@ -337,6 +337,8 @@ export function activatorRuleDecl(input: {
       ? { maxPendingApprovals: a.maxPendingApprovals }
       : {}),
     ...(perMoment ? { writes: a.mode } : {}),
+    // Omitted when undeclared, so every rule compiled before it is unchanged.
+    ...(a.unless ? { unless: a.unless } : {}),
   };
   const common = {
     playbookId,

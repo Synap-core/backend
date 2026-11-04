@@ -8,13 +8,33 @@ import {
   WORKER_TARGET_ROLE,
   effectiveWorkerSize,
   readWorkerTargetMetadata,
+  skippedByUnless,
 } from "./index.js";
+
+describe("skippedByUnless (an activator's unless)", () => {
+  const unless = { property: "post-copy-of", present: true as const };
+  it("leaves out a thing that carries the property", () => {
+    expect(skippedByUnless(unless, { "post-copy-of": "post-0" })).toBe(true);
+    expect(skippedByUnless(unless, { "post-copy-of": ["a"] })).toBe(true);
+    expect(skippedByUnless(unless, { "post-copy-of": 0 })).toBe(true);
+  });
+  it("keeps a thing whose value is absent or empty, and every thing when there is no unless", () => {
+    expect(skippedByUnless(unless, {})).toBe(false);
+    expect(skippedByUnless(unless, { "post-copy-of": null })).toBe(false);
+    expect(skippedByUnless(unless, { "post-copy-of": " " })).toBe(false);
+    expect(skippedByUnless(unless, { "post-copy-of": [] })).toBe(false);
+    expect(skippedByUnless(unless, null)).toBe(false);
+    expect(skippedByUnless(undefined, { "post-copy-of": "post-0" })).toBe(
+      false
+    );
+  });
+});
 
 describe("worker skip reasons", () => {
   it("every worker skip reason is an automation skip reason (one run-row vocabulary)", () => {
     const automation = new Set<string>(Object.values(AUTOMATION_SKIP_REASONS));
     const worker = Object.values(WORKER_SKIP_REASONS);
-    expect(worker.length).toBe(4);
+    expect(worker.length).toBe(5);
     for (const r of worker) expect(automation.has(r)).toBe(true);
   });
 

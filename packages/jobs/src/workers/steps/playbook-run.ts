@@ -17,6 +17,7 @@ import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_SKIP_REASONS,
+  skippedByUnless,
 } from "@synap-core/types/workers";
 import {
   getPlaybookReadinessGate,
@@ -244,9 +245,10 @@ export async function executePlaybookRun(
   // paramsMapping / trigger payload must not bind a session to an entity in
   // another workspace (write-side IDOR guard; the column has no FK).
   let resolvedSubjectId: string | undefined;
+  let subjectProperties: Record<string, unknown> | null = null;
   if (candidateSubjectId) {
     const subj = await db.query.entities.findFirst({
-      columns: { id: true, workspaceId: true },
+      columns: { id: true, workspaceId: true, properties: true },
       where: eq(entities.id, candidateSubjectId),
     });
     if (
@@ -254,12 +256,28 @@ export async function executePlaybookRun(
       (subj.workspaceId === workspaceId || subj.workspaceId === null)
     ) {
       resolvedSubjectId = subj.id;
+      subjectProperties =
+        (subj.properties as Record<string, unknown> | null) ?? null;
     } else {
       logger.warn(
         { candidateSubjectId, workspaceId },
         "playbook_run: subject not visible in workspace — dropping subject binding"
       );
     }
+  }
+
+  // ── UNLESS: the worker leaves this thing out (its activator's `unless`). ────
+  // Before the proposal and before the run, so a left-out thing files nothing
+  // and starts nothing (Content OS's Repurpose: a post sent for another one).
+  if (
+    data.worker?.unless &&
+    skippedByUnless(data.worker.unless, subjectProperties)
+  ) {
+    return {
+      status: "skipped",
+      reason: WORKER_SKIP_REASONS.unlessProperty,
+      property: data.worker.unless.property,
+    };
   }
 
   // ── PROPOSE: file the governed proposal and STOP. ──────────────────────────

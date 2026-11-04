@@ -804,6 +804,73 @@ describe("stage workers (work model L4)", () => {
     });
   });
 
+  it("an activator's unless rides on the per-thing worker spec, and only when declared", async () => {
+    setPlaybook([
+      {
+        on: "enters_status",
+        status: "published",
+        mode: "propose",
+        unless: { property: "post-copy-of", present: true },
+      },
+    ]);
+    await run();
+    expect(configOf(0).__worker).toEqual({
+      key: "enters_status:published",
+      size: "per_thing",
+      profileSlug: "post",
+      status: "published",
+      unless: { property: "post-copy-of", present: true },
+    });
+  });
+
+  it("the wire admits unless on a per-thing created / enters_status activator only", async () => {
+    const { playbookActivatorSchema } =
+      await import("../../schemas/playbook-process.js");
+    const unless = { property: "post-copy-of", present: true };
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "enters_status",
+        status: "Published",
+        unless,
+      }).success
+    ).toBe(true);
+    expect(
+      playbookActivatorSchema.safeParse({ on: "created", unless }).success
+    ).toBe(true);
+    // A batch has no single thing to leave out; a count or a clock is refused by name.
+    const count = playbookActivatorSchema.safeParse({
+      on: "count",
+      status: "Review",
+      min: 3,
+      unless,
+    });
+    expect(count.success).toBe(false);
+    expect(JSON.stringify(count.error?.issues)).toContain(
+      "unless leaves out ONE thing"
+    );
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "enters_status",
+        status: "Published",
+        size: "per_moment",
+        unless,
+      }).success
+    ).toBe(false);
+    // Only "present" is spelled, and a property is a slug.
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "created",
+        unless: { property: "post-copy-of", present: false },
+      }).success
+    ).toBe(false);
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "created",
+        unless: { property: "a b", present: true },
+      }).success
+    ).toBe(false);
+  });
+
   it("a MANUAL worker compiles no rule", async () => {
     setPlaybook([{ on: "manual", mode: "run" }]);
     const res = await run();

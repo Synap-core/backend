@@ -95,6 +95,38 @@ export interface WorkerActivator {
   mode?: WorkerMode;
   /** Default {@link DEFAULT_WORKER_MAX_PENDING_APPROVALS}. */
   maxPendingApprovals?: number;
+  /**
+   * A per-thing worker (`created` / `enters_status`) leaves out a thing that
+   * carries this property: e.g. Content OS's Repurpose skips a post sent for
+   * another one (`post-copy-of`), so a post that went out on three accounts
+   * files one proposal, not three. See {@link skippedByUnless}.
+   */
+  unless?: WorkerUnless;
+}
+
+/**
+ * "Unless the thing carries `property`": present = a value that is not null,
+ * not an empty string and not an empty list. One shape on purpose: the
+ * activator's other rules are read off its trigger, and this one is read off
+ * the thing itself when the worker fires (the trigger's payload does not carry
+ * the thing's properties).
+ */
+export interface WorkerUnless {
+  property: string;
+  present: true;
+}
+
+/** Does `unless` leave this thing out? Pure; `properties` is the thing's own. */
+export function skippedByUnless(
+  unless: WorkerUnless | undefined,
+  properties: Record<string, unknown> | null | undefined
+): boolean {
+  if (!unless) return false;
+  const v = properties?.[unless.property];
+  if (v === null || v === undefined) return false;
+  if (typeof v === "string") return v.trim().length > 0;
+  if (Array.isArray(v)) return v.length > 0;
+  return true;
 }
 
 /**
@@ -237,6 +269,8 @@ export const WORKER_SKIP_REASONS = {
   staleTransition: "stale_transition",
   /** The daily irreversible-send ceiling for this worker is used up. */
   volumeCeiling: "volume_ceiling",
+  /** The thing carries the activator's `unless` property (see {@link skippedByUnless}). */
+  unlessProperty: "unless_property",
 } as const;
 export type WorkerSkipReason =
   (typeof WORKER_SKIP_REASONS)[keyof typeof WORKER_SKIP_REASONS];

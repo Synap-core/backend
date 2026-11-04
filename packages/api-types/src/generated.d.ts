@@ -3928,6 +3928,17 @@ declare const WORKER_SIZES: readonly [
 ];
 export type WorkerSize = (typeof WORKER_SIZES)[number];
 /**
+ * "Unless the thing carries `property`": present = a value that is not null,
+ * not an empty string and not an empty list. One shape on purpose: the
+ * activator's other rules are read off its trigger, and this one is read off
+ * the thing itself when the worker fires (the trigger's payload does not carry
+ * the thing's properties).
+ */
+export interface WorkerUnless {
+	property: string;
+	present: true;
+}
+/**
  * AutomationTriggerConfig
  *
  * Typed configuration stored as JSONB on the automations table.
@@ -4643,6 +4654,12 @@ export interface PlaybookRunWorkerSpec {
 	minCount?: number;
 	maxPendingApprovals?: number;
 	writes?: "propose" | "run";
+	/**
+	 * The activator's `unless`: the runner leaves out a subject that carries
+	 * this property, before it proposes or starts anything. Omitted when the
+	 * activator declares none (a rule compiled before it existed is unchanged).
+	 */
+	unless?: WorkerUnless;
 }
 export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | EntityReadNodeDef | RelatedEntitiesNodeDef | ComputeNodeDef | SelectNodeDef | ClaimNodeDef | GuardNodeDef | MessagesQueryNodeDef | RunsQueryNodeDef | ProposalsQueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
 export interface AutomationEdge {
@@ -13512,6 +13529,15 @@ export interface PlaybookActivator {
 	mode: "propose" | "run";
 	/** Pending approvals before the worker stops starting runs (default 20). */
 	maxPendingApprovals?: number;
+	/**
+	 * `created` / `enters_status` only: leave out a thing that carries this
+	 * property (a non-empty value), e.g. `{ property: "post-copy-of", present:
+	 * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
+	 */
+	unless?: {
+		present: true;
+		property: string;
+	};
 }
 /**
  * The ASK on a human-owned slot — HOW to answer it.
@@ -43359,6 +43385,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					on: "count" | "created" | "enters_status" | "manual" | "schedule";
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
+					unless?: {
+						present: true;
+						property: string;
+					} | undefined;
 				}[] | undefined;
 				agentUserId?: string | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
@@ -43673,6 +43703,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						on: "count" | "created" | "enters_status" | "manual" | "schedule";
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
+						unless?: {
+							present: true;
+							property: string;
+						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
 				} | undefined;
@@ -44284,6 +44318,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					on: "count" | "created" | "enters_status" | "manual" | "schedule";
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
+					unless?: {
+						present: true;
+						property: string;
+					} | undefined;
 				}[] | undefined;
 				agentUserId?: string | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
@@ -44586,6 +44624,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						on: "count" | "created" | "enters_status" | "manual" | "schedule";
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
+						unless?: {
+							present: true;
+							property: string;
+						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
 				} | undefined;
@@ -54220,6 +54262,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							on: "count" | "created" | "enters_status" | "manual" | "schedule";
 							size?: "per_moment" | "per_thing" | undefined;
 							status?: string | undefined;
+							unless?: {
+								present: true;
+								property: string;
+							} | undefined;
 						}[] | undefined;
 						channelSpec?: Record<string, unknown> | undefined;
 						criteria?: {
@@ -54530,6 +54576,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								on: "count" | "created" | "enters_status" | "manual" | "schedule";
 								size?: "per_moment" | "per_thing" | undefined;
 								status?: string | undefined;
+								unless?: {
+									present: true;
+									property: string;
+								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
 						} | undefined;

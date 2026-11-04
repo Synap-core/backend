@@ -8,7 +8,7 @@
  * code, nothing from the database package.
  */
 
-import type { WorkerSize } from "../workers/index.js";
+import type { WorkerSize, WorkerUnless } from "../workers/index.js";
 
 // ── Flow definition types ───────────────────────────────────────────────────
 
@@ -832,6 +832,12 @@ export interface PlaybookRunWorkerSpec {
   minCount?: number;
   maxPendingApprovals?: number;
   writes?: "run" | "propose";
+  /**
+   * The activator's `unless`: the runner leaves out a subject that carries
+   * this property, before it proposes or starts anything. Omitted when the
+   * activator declares none (a rule compiled before it existed is unchanged).
+   */
+  unless?: WorkerUnless;
 }
 
 export type AutomationNode =
