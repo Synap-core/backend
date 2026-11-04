@@ -26,6 +26,8 @@
  * Pure and dependency-free: safe in Node, browsers, React Native and Next.js.
  */
 
+import { SynapError } from "../errors/index.js";
+
 /** The Control Plane's pod-name grammar (`POD_NAME_RE`, control-plane-api `src/lib/pod-registration-tokens.ts`). */
 export const POD_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
 
@@ -129,6 +131,116 @@ export function normalizeHost(host: string): string | null {
 
 function normalize(host: string): string {
   return normalizeHost(host) ?? "";
+}
+
+/**
+ * The identity of the pod a URL points at, as a storage or comparison key: its
+ * WHATWG origin (`new URL(url).origin`), so scheme and host are lowercased, a
+ * default port is dropped, and the path, query, fragment, credentials and any
+ * trailing slashes are gone. `https://Pod.Example.com:443/api/` and
+ * `https://pod.example.com` are one key, `https://pod.example.com`; a non-default
+ * port stays (`http://localhost:4000`). Null when the URL cannot be parsed or is
+ * not http(s): a bare host with no scheme (`pod.example.com`) is null, never
+ * guessed. A pod is its origin (founder, F6): a legacy-zone host is a different
+ * key from its current-zone twin.
+ */
+export function podUrlKey(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+  return parsed.origin;
+}
+
+/** The loopback hosts, as WHATWG `URL.hostname` spells them (brackets kept). */
+export const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
+  "localhost",
+  "127.0.0.1",
+  "[::1]",
+]);
+
+/** The error {@link canonicalPodUrl} throws: `code` is `"invalid_pod_address"`. */
+export class InvalidPodAddressError extends SynapError {
+  constructor(message: string) {
+    super(message, "invalid_pod_address", 400);
+    this.name = "InvalidPodAddressError";
+  }
+}
+
+function isPrivateIpv4(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a >= 224
+  );
+}
+
+/**
+ * The canonical address of a pod a person typed (or a launch `iss`), checked
+ * strictly; throws {@link InvalidPodAddressError} otherwise. Returns the WHATWG
+ * origin followed by the path without its trailing slashes:
+ * `Pod.Example.com/` → `https://pod.example.com`, `https://pod.example.com/x//`
+ * → `https://pod.example.com/x`. `https://` is added when no scheme is given.
+ * Refused: empty or over 512 characters; not a URL; any scheme but https (http
+ * only for a loopback host with `allowInsecureLoopback`); credentials, a query
+ * or a fragment; unless loopback is allowed, a loopback, IPv6, private or
+ * all-digit IPv4 host, a single-label host, or one under `.local`, `.internal`,
+ * `.localhost`, `.lan` or `.home.arpa`. Unlike {@link podUrlKey} it keeps the
+ * path: it is an issuer, not a key.
+ */
+export function canonicalPodUrl(
+  input: string,
+  opts: { allowInsecureLoopback?: boolean } = {}
+): string {
+  const raw = input.trim();
+  if (!raw || raw.length > 512)
+    throw new InvalidPodAddressError("Empty or overlong pod address");
+  let url: URL;
+  try {
+    url = new URL(
+      /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`
+    );
+  } catch {
+    throw new InvalidPodAddressError("Not a URL");
+  }
+  const host = url.hostname.toLowerCase();
+  const loopbackOk = LOOPBACK_HOSTS.has(host) && !!opts.allowInsecureLoopback;
+  if (!(
+    url.protocol === "https:" ||
+    (url.protocol === "http:" && loopbackOk)
+  )) {
+    throw new InvalidPodAddressError("A pod address must use https");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new InvalidPodAddressError(
+      "A pod address has no credentials, query or fragment"
+    );
+  }
+  if (
+    !loopbackOk &&
+    (LOOPBACK_HOSTS.has(host) ||
+      host.startsWith("[") ||
+      isPrivateIpv4(host) ||
+      /^\d+$/.test(host) ||
+      !host.includes(".") ||
+      /\.(local|internal|localhost|lan|home\.arpa)$/.test(host))
+  ) {
+    throw new InvalidPodAddressError(
+      "A pod address must be a public host name"
+    );
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
 
 /** A name the Control Plane can give a pod: its grammar, and not reserved. */
