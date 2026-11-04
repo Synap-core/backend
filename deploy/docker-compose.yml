@@ -19,7 +19,12 @@ x-backend-env: &backend-env
   # postgres service's max_connections (packages/database/src/client-pg.ts
   # lists the consumers; deploy/__tests__/pg-connection-budget.test.sh sums them).
   # DB_POOL_SIZE caps the Drizzle pool, PGBOSS_POOL_SIZE pg-boss's own pool.
-  DB_POOL_SIZE: ${DB_POOL_SIZE:-50}
+  # 20, not the code's 50 (plan P5, decision 8d8c2fef): each Postgres
+  # connection holds its own memory (~30 MB measured on a pod, 4 Nov 2026: 61
+  # idle backend connections, 2.4 GB of private Postgres memory), and a
+  # one-person pod's API plus its workers do not need 50 at once; postgres.js
+  # queues a query when every connection is busy. A busy pod raises it in .env.
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-20}
   PGBOSS_POOL_SIZE: ${PGBOSS_POOL_SIZE:-10}
   ADMIN_EMAIL: ${ADMIN_EMAIL:-}
   PROVISIONING_TOKEN: ${PROVISIONING_TOKEN:-}
@@ -702,6 +707,12 @@ services:
     logging: *default-logging
     image: ${SYNAP_IMAGE_POSTGRES:-timescale/timescaledb-ha:pg15}
     restart: always
+    # Its own memory is small (pg_dump, and the weekly drill's throwaway
+    # postgres at initdb defaults: 128 MB of shared_buffers), but every hourly
+    # dump it writes fills the page cache, charged to this container: 1.5 GB of
+    # file cache and 0 MB of its own on a pod (4 Nov 2026), on a host already
+    # swapping. The cap makes the kernel reclaim that cache here first.
+    mem_limit: ${PG_BACKUP_MEM_LIMIT:-1g}
     user: "0"
     depends_on:
       postgres:

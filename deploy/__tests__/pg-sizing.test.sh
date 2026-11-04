@@ -107,4 +107,48 @@ grep -q "put them back" "$TMP/out" && grep -q "postgresql.conf.before-tune-" "$T
 : > "$TMP/log"; tune --yes --memory lots; rc=$?
 [ "$rc" != 0 ] && ! grep -q "timescaledb-tune" "$TMP/log" && ok "tune: a memory that is not <n>MB|<n>GB is refused" || bad "tune: bad memory rc=$rc"
 
+# tune-postgres records the size it applied (deploy/.env, through the one writer)
+: > "$TMP/log"; tune --yes --memory 6GB; rc=$?
+[ "$rc" = 0 ] && [ "$(grep -c '^POSTGRES_TUNE_MEMORY=' "$TMP/pod/deploy/.env")" = 1 ] && grep -qx 'POSTGRES_TUNE_MEMORY=6GB' "$TMP/pod/deploy/.env" \
+  && ok "tune --memory 6GB: deploy/.env now says POSTGRES_TUNE_MEMORY=6GB, once" || { bad "tune: .env not updated (rc=$rc)"; grep POSTGRES_TUNE "$TMP/pod/deploy/.env"; }
+: > "$TMP/log"; tune --yes --memory lots
+grep -qx 'POSTGRES_TUNE_MEMORY=6GB' "$TMP/pod/deploy/.env" && ok "tune: a refused size leaves .env as it was" || bad "tune: a refused size changed .env"
+
+# ── 4. _pg_oversized: the running Postgres against this pod's share ──────────
+awk '/^(pg_tune_memory|_pg_oversized|_ue_env_get)\(\) \{/{p=1} p{print} p&&/^}/{p=0}' "$HERE/synap" > "$TMP/ov.sh"
+grep -q '^_pg_oversized()' "$TMP/ov.sh" || { bad "could not extract _pg_oversized from synap"; exit 1; }
+mkdir -p "$TMP/ov"
+ov() { # <.env share or ""> <shared_buffers MB or FAIL> [container] → "<rc>:<out>"
+  ( cd "$TMP/ov"; { [ -n "$1" ] && echo "POSTGRES_TUNE_MEMORY=$1"; echo "X=1"; } > .env
+    # shellcheck disable=SC1091
+    . "$TMP/ov.sh"
+    C="${3-synap-backend-postgres-1}"; _pgs_container() { echo "$C"; }
+    _pgs_psql() { [ "$SB" = FAIL ] && return 1; echo "$SB"; }
+    SB="$2"; out="$(_pg_oversized)"; echo "$?:$out" )
+}
+check_ov() { local got; got="$(ov "$1" "$2" "${4-synap-backend-postgres-1}")"; [ "$got" = "$3" ] && ok "_pg_oversized: share '${1:-<half RAM>}', shared_buffers ${2} → '$3'" || bad "_pg_oversized: share '$1' sb $2 → '$got', want '$3'"; }
+check_ov 8192MB 15872 "0:15872|8192MB"          # the 4 Nov pod: tuned for the 62 GB host
+check_ov 8192MB 2048 "0:"                        # tuned for its share
+check_ov 8192MB 2560 "0:"                        # what tune-postgres applied there (2.5 GB)
+check_ov 4GB 1024 "0:"                           # an 8 GB pod, GB unit
+check_ov 4GB 2100 "0:2100|4GB"                   # just over half of a GB share
+check_ov 8192MB FAIL "1:"                        # unreadable server → no verdict, never "fits"
+check_ov 8192MB 2048 "1:" ""                     # no postgres container
+check_ov 8192MB 2048 "1:" direct                 # a direct host Postgres is not this pod's container
+check_ov lots 2048 "1:"                          # an unreadable share
+[ -r /proc/meminfo ] && check_ov "" 99999 "0:99999|$(pg_tune_memory)"   # no share in .env: half this host's RAM
+
+# ── 5. the update and doctor read that check; the compose sizes ─────────────
+grep -q '^    _ue_pg_size_notice$' "$HERE/synap" && grep -q '_ue_pg_size_notice() {' "$HERE/synap" \
+  && ok "update: a verified update runs the Postgres size notice" || bad "update: no _ue_pg_size_notice call"
+grep -q 'pgsz="$(_pg_oversized)"' "$HERE/synap" && grep -q '_dr postgres-size warn "shared_buffers is' "$HERE/synap" \
+  && ok "doctor: reports an oversized Postgres" || bad "doctor: no postgres-size row"
+python3 - "$HERE/deploy/docker-compose.yml" <<'PY' && ok "compose: postgres-backup capped (PG_BACKUP_MEM_LIMIT, default 1g); backend pool default 20" || bad "compose: backup cap or pool default missing"
+import sys, yaml
+c = yaml.safe_load(open(sys.argv[1]))
+s = c["services"]
+assert s["postgres-backup"].get("mem_limit") == "${PG_BACKUP_MEM_LIMIT:-1g}", s["postgres-backup"].get("mem_limit")
+assert s["backend"]["environment"]["DB_POOL_SIZE"] == "${DB_POOL_SIZE:-20}", s["backend"]["environment"]["DB_POOL_SIZE"]
+PY
+
 [ "$fail" -eq 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }
