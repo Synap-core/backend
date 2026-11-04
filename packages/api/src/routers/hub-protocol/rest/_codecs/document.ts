@@ -26,6 +26,14 @@ export const WireDocumentSchema = z
     scope: z.record(z.string(), z.unknown()).nullable().optional(),
     /** The automation bound to refresh it (0387, D4), or null. */
     refreshAutomationId: z.string().nullable().optional(),
+    /**
+     * `binary` when the read left the stored bytes out because they are not
+     * text (a video, an audio, an image): `content` is then "" by omission,
+     * never an empty document. Fetch the bytes through `fileUrlPath`.
+     */
+    contentOmitted: z.literal("binary").optional(),
+    /** With `contentOmitted`: the file door that signs the bytes (`GET /files/{entityId}/url`), null when no file entity you can read holds it. */
+    fileUrlPath: z.string().nullable().optional(),
   })
   .passthrough()
   .openapi("Document");
