@@ -8,6 +8,7 @@
 
 import PgBoss from "pg-boss";
 import { createLogger } from "@synap-core/core";
+import { parseProcessRole, pgBossProcessOptions } from "./process-role.js";
 
 const logger = createLogger({ module: "pg-boss" });
 
@@ -49,6 +50,11 @@ function createBoss(): PgBoss {
     connectionString,
     // pg-boss 10 hands its config to `new pg.Pool(config)` (src/db.js).
     max: pgBossPoolSize(),
+    // The API of a split pod (SYNAP_PROCESS_ROLE=api) only sends: no
+    // maintenance and no cron clock, which the worker process runs. Read here
+    // because the instance is built at import (`boss` below), before any boot
+    // code could pass options; an invalid role throws, as the boot does.
+    ...pgBossProcessOptions(parseProcessRole()),
     schema: "pgboss",
     // Monitoring interval for job polling (2 seconds for responsiveness)
     monitorStateIntervalSeconds: 30,

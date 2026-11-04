@@ -37,6 +37,11 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
 const BACKEND_ROOT = join(import.meta.dirname, "../../../..");
 const JOBS_SRC = join(BACKEND_ROOT, "packages/jobs/src");
 const BOOT = join(BACKEND_ROOT, "apps/api/src/index.ts");
+/** Boot's background starters (reactors, IoC slots) moved here with the process roles (#753). */
+const STARTERS = join(
+  BACKEND_ROOT,
+  "apps/api/src/process-role/background-starters.ts"
+);
 
 /**
  * Slots that intentionally have no boot-time filler. Each entry must say WHY;
@@ -84,7 +89,7 @@ describe("every @synap/jobs IoC slot is filled at boot", () => {
     return [...names].sort();
   })();
 
-  const boot = stripComments(read(BOOT), "ts");
+  const boot = stripComments(`${read(BOOT)}\n${read(STARTERS)}`, "ts");
 
   it("parsed both sides (the sets are non-empty)", () => {
     // An empty declared set would make every assertion below vacuously true —
@@ -94,7 +99,7 @@ describe("every @synap/jobs IoC slot is filled at boot", () => {
   });
 
   it.each(declared.map((n) => [n]))(
-    "%s is called in apps/api/src/index.ts",
+    "%s is called at boot (apps/api/src/index.ts or its starters table)",
     (name) => {
       if (UNFILLED_BY_DESIGN[name]) {
         expect(
@@ -107,7 +112,7 @@ describe("every @synap/jobs IoC slot is filled at boot", () => {
       // exactly how `registerAgentWaker` would have looked half-done.
       expect(
         new RegExp(`\\b${name}\\s*\\(`).test(boot),
-        `${name} is declared in packages/jobs but never called in apps/api/src/index.ts — the slot is empty and whatever depends on it is dead. Fill it at boot, or add it to UNFILLED_BY_DESIGN with a reason.`
+        `${name} is declared in packages/jobs but never called at boot (apps/api/src/index.ts or process-role/background-starters.ts) — the slot is empty and whatever depends on it is dead. Fill it at boot, or add it to UNFILLED_BY_DESIGN with a reason.`
       ).toBe(true);
     }
   );

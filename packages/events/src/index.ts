@@ -62,6 +62,14 @@ export {
 // ============================================================================
 
 export { getBoss, startBoss, stopBoss, boss } from "./boss.js";
+export {
+  PROCESS_ROLES,
+  PROCESS_ROLE_ENV,
+  InvalidProcessRoleError,
+  parseProcessRole,
+  pgBossProcessOptions,
+  type ProcessRole,
+} from "./process-role.js";
 
 export {
   emitSideEffects,

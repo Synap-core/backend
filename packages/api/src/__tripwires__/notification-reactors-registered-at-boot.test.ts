@@ -32,6 +32,11 @@ const BACKEND_ROOT = join(import.meta.dirname, "../../../..");
 const NOTIFICATIONS_SRC = join(BACKEND_ROOT, "packages/api/src/notifications");
 const BARREL = join(BACKEND_ROOT, "packages/api/src/index.ts");
 const BOOT = join(BACKEND_ROOT, "apps/api/src/index.ts");
+/** Boot's background starters (reactors, IoC slots) moved here with the process roles (#753). */
+const STARTERS = join(
+  BACKEND_ROOT,
+  "apps/api/src/process-role/background-starters.ts"
+);
 
 /**
  * Reactors intentionally NOT registered at boot. Each entry must say WHY; an
@@ -100,7 +105,7 @@ describe("TRIPWIRE: notification reactors are registered at boot", () => {
   });
 
   it("every declared reactor is CALLED at boot", () => {
-    const boot = read(BOOT);
+    const boot = `${read(BOOT)}\n${read(STARTERS)}`;
     const declared = declaredReactors();
     const missing = [...declared].filter((name) => {
       if (UNREGISTERED_BY_DESIGN[name]) return false;
@@ -110,7 +115,7 @@ describe("TRIPWIRE: notification reactors are registered at boot", () => {
     });
     expect(
       missing,
-      `Declared but never registered at boot (apps/api/src/index.ts) — these reactors are dead: ${missing.join(", ")}`
+      `Declared but never registered at boot (apps/api/src/index.ts or process-role/background-starters.ts) — these reactors are dead: ${missing.join(", ")}`
     ).toEqual([]);
   });
 

@@ -58,7 +58,7 @@
 PGDATA_MOUNT_TARGET="/home/postgres/pgdata"
 PGDATA_CLUSTER_DIR="/home/postgres/pgdata/data"
 # Services that write to postgres; stopped before the cluster is moved.
-_PGS_WRITERS="backend backend-canary realtime pod-admin pod-agent kratos"
+_PGS_WRITERS="backend backend-worker backend-canary realtime pod-admin pod-agent kratos"
 
 _pgs_deploy_dir() { echo "${SYNAP_DEPLOY_DIR:-$(pwd)}"; }
 # Where dumps and the init marker live. The host defaults are the deploy dir's

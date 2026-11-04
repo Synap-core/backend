@@ -31,6 +31,9 @@ const DATABASE_URL =
 //
 //   backend          DB_POOL_SIZE (50) + 1 dedicated LISTEN connection
 //                    + pg-boss's own pool, PGBOSS_POOL_SIZE (10, events/boss.ts)
+//   backend-worker   WORKER_DB_POOL_SIZE (20) + 1 + WORKER_PGBOSS_POOL_SIZE (10),
+//                    only when SYNAP_SPLIT_WORKERS=1 (the job workers in their
+//                    own process, plan P6)
 //   backend-canary   CANARY_DB_POOL_SIZE (10) + 1 + CANARY_PGBOSS_POOL_SIZE (5),
 //                    only while `synap update` validates an image
 //   realtime         REALTIME_DB_POOL_SIZE (10): socket auth, room grants,

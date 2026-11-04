@@ -10,6 +10,8 @@
 # pg-boss 10 + LISTEN 1), backend-canary during an update (the same 61),
 # realtime (its own Drizzle pool, 50), backend-migrate (50) and Kratos (Ory's
 # default 2 x CPUs). Nothing bounded the sum, so Kratos lost the race.
+# Since plan P6 a split pod also runs backend-worker (the job workers in their
+# own process, profile `workers`): counted like every profile-gated service.
 #
 # Asserts, on the PARSED compose YAML (merge keys resolved; ${VAR:-default}
 # read as its shipped default):
@@ -188,7 +190,7 @@ for f in fails:
 if not fails:
     print(f"  ✓ {len(consumers)} Postgres consumers, every pool capped, worst case {total} < max_connections {pg_max}")
     print(f"  ✓ sizing: the initdb tune reads TS_TUNE_MAX_CONNS={raw_env.get('TS_TUNE_MAX_CONNS')} (= -c max_connections) and TS_TUNE_MEMORY; the command sets only {sorted(PG_COMMAND_PARAMS)}")
-known = {"backend", "backend-canary", "realtime", "backend-migrate", "kratos", "kratos-migrate", "postgres-backup"}
+known = {"backend", "backend-canary", "backend-worker", "realtime", "backend-migrate", "kratos", "kratos-migrate", "postgres-backup"}
 nv = known <= consumers and "postgres" in svcs
 print(("  ✓ " if nv else "  ✗ ") + f"non-vacuity: consumers {sorted(consumers)} (must include {sorted(known)})")
 sys.exit(1 if fails or not nv else 0)
