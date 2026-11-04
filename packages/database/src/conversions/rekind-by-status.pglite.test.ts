@@ -11,7 +11,8 @@
  *   - b5 is Briefed: rules out "every post";
  *   - x6 is deleted: rules out "deleted things too".
  * A workspace with posts at Idea and no idea kind: the dry run counts them as
- * waiting and the apply refuses, writing and ledgering nothing.
+ * waiting and the apply refuses: it writes nothing and ledgers only its failure
+ * (`error` set), so the op is retried once the target kind exists.
  * DDL: hand-written, only the columns the op touches (sibling convention).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
@@ -188,10 +189,20 @@ const row = async (id: string) =>
       [id]
     )
   )[0];
+/** The applied set, as the engine reads it (engine.ts header). */
 const ledgered = async () =>
-  (await q(`SELECT op_key FROM "_conversions" WHERE dry_run = false`)).map(
-    (r) => r.op_key
-  );
+  (
+    await q(
+      `SELECT op_key FROM "_conversions" WHERE error IS NULL AND dry_run = false`
+    )
+  ).map((r) => r.op_key);
+/** Failed runs: recorded with `error` set, so the next run retries the op. */
+const failed = async () =>
+  (
+    await q(
+      `SELECT op_key FROM "_conversions" WHERE error IS NOT NULL AND dry_run = false`
+    )
+  ).map((r) => r.op_key);
 
 async function seed() {
   const post = await profile("post", WS);
@@ -322,6 +333,7 @@ describe("content-os.post-at-idea-into-idea (rekindByStatus)", () => {
     expect(errorsOf(s).join("\n")).toMatch(/no "idea" kind exists/);
     expect((await row(p)).type).toBe("post");
     expect(await ledgered()).toEqual([]);
+    expect(await failed()).toEqual([KEY]);
   });
 
   it("is deferred at boot and says what it does in one sentence", () => {
