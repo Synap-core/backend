@@ -17,6 +17,8 @@
  * - Complete audit trail.
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForApproval } from "../services/presence/gate.js";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -954,6 +956,8 @@ export const secretsVaultRouter = router({
         // Optional explicit session TTL (minutes). Overrides the proposal's
         // requested ttl for 'session' scope. Ignored for 'once'/'permanent'.
         ttlMinutes: z.number().int().positive().optional(),
+        /** Proof of presence (W3): giving an AI a secret is sensitive. */
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1008,6 +1012,20 @@ export const secretsVaultRouter = router({
           code: "NOT_FOUND",
           message: "Proposal not found",
         });
+      // Proof of presence (W3): this door settles the proposal itself, so it
+      // gates like applyProposalApproval does, before any grant is written.
+      // The request is gated as the vault grant it is, whatever it was filed as.
+      await assertPresenceForApproval({
+        userId: ctx.userId,
+        proposal: {
+          id: proposalRow.id,
+          targetType: "vault",
+          proposalType: "grant",
+          data: proposalRow.data,
+        },
+        proof: input.presence ?? null,
+        door: "trpc.secretsVault.grantAIAccess",
+      });
       // Only an OPEN request is granted: one decided elsewhere (rejected in
       // the console, approved on the phone) must not hand the agent a secret
       // from a card that is still on screen. A failed approval stays open.

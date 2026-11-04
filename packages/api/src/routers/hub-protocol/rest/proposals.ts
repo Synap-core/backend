@@ -2,6 +2,10 @@
  * Hub Protocol REST — proposals
  */
 
+import {
+  presenceProofSchema,
+  type PresenceProof,
+} from "@synap-core/types/presence";
 import { z } from "@hono/zod-openapi";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -720,7 +724,21 @@ export function registerProposalsRoutes(app: HubHono): void {
       identityResolutionByRef?: unknown;
       allowToday?: unknown;
       expectedRevision?: unknown;
+      presence?: unknown;
     };
+    // Proof of presence (W3): a sensitive approval carries one, whatever the
+    // door; a key's session alone never satisfies it.
+    let presence: PresenceProof | undefined;
+    if (rawBody.presence !== undefined) {
+      const parsed = presenceProofSchema.safeParse(rawBody.presence);
+      if (!parsed.success) {
+        return c.json(
+          { error: "Invalid presence proof", code: "PRESENCE_INVALID" },
+          400
+        );
+      }
+      presence = parsed.data;
+    }
     // The revision the approver read (`revisionHistory.length`). Required by
     // the approve door for a proposal someone else revised (audit F1).
     if (
@@ -781,6 +799,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         ...(identityResolutionByRef ? { identityResolutionByRef } : {}),
         ...(allowToday ? { allowToday: true } : {}),
         ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+        ...(presence ? { presence } : {}),
       })) as {
         primaryId?: string;
         /** F3: what "allow today" raised the agent's ceiling to. */
@@ -843,8 +862,17 @@ export function registerProposalsRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error({ err, proposalId }, "approveProposal failed");
+      const reasonCode =
+        err instanceof Error
+          ? (err.cause as { reasonCode?: unknown } | undefined)?.reasonCode
+          : undefined;
       return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
+        {
+          error: err instanceof Error ? err.message : "Unknown error",
+          // The typed refusal (e.g. PRESENCE_REQUIRED) so a client asks for
+          // the proof and retries, without reading the sentence.
+          ...(typeof reasonCode === "string" ? { code: reasonCode } : {}),
+        },
         httpStatusForTrpcError(err)
       );
     }

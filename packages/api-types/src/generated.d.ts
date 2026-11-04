@@ -15451,6 +15451,11 @@ export interface ProposalExecutorResult {
 	joined?: boolean;
 	approvalRun?: ApprovalRunView;
 }
+declare const PRESENCE_REQUIRED: "PRESENCE_REQUIRED";
+declare const PRESENCE_INVALID: "PRESENCE_INVALID";
+declare const PRESENCE_EXPIRED: "PRESENCE_EXPIRED";
+declare const PRESENCE_USED: "PRESENCE_USED";
+export type PresenceRefusalCode = typeof PRESENCE_REQUIRED | typeof PRESENCE_INVALID | typeof PRESENCE_EXPIRED | typeof PRESENCE_USED;
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
@@ -25397,6 +25402,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			opRef?: string | undefined;
 			path?: string;
 			pendingProposalId?: string | undefined;
+			proposalId?: string | undefined;
 			reasonCode?: string;
 			stack?: string;
 		};
@@ -25426,6 +25432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25506,6 +25513,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25625,6 +25633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25690,6 +25699,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25928,6 +25938,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26084,6 +26095,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26197,6 +26209,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26344,6 +26357,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26940,6 +26954,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -27161,6 +27176,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -27669,6 +27685,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -27813,6 +27830,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -27873,6 +27891,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -28413,6 +28432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -28451,6 +28471,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -28557,6 +28578,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -28716,6 +28738,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -29020,6 +29043,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -29323,6 +29347,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30681,6 +30706,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30756,6 +30782,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30931,6 +30958,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30991,6 +31019,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -31055,6 +31084,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -32602,6 +32632,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -32716,6 +32747,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -32767,6 +32799,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33146,6 +33179,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33208,6 +33242,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33260,6 +33295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33430,6 +33466,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33517,6 +33554,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33876,6 +33914,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -35082,6 +35121,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -35274,6 +35314,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -35399,6 +35440,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -36798,6 +36840,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -37700,6 +37743,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -37783,6 +37827,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -37843,6 +37888,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -37964,6 +38010,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38285,6 +38332,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38440,6 +38488,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38708,6 +38757,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38921,6 +38971,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -39030,6 +39081,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -39118,6 +39170,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -39467,6 +39520,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -39793,6 +39847,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40400,6 +40455,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40673,6 +40729,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40737,6 +40794,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40898,6 +40956,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41168,6 +41227,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41277,6 +41337,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41396,6 +41457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -41508,6 +41570,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41728,6 +41791,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41883,6 +41947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41963,6 +42028,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -42235,6 +42301,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -42350,6 +42417,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -42437,6 +42505,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43049,6 +43118,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43101,6 +43171,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43145,6 +43216,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43222,6 +43294,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43259,6 +43332,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43325,6 +43399,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43374,6 +43449,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -43457,6 +43533,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -43503,6 +43580,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -43887,6 +43965,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -44011,6 +44090,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -44833,6 +44913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -44933,6 +45014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45259,6 +45341,137 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 	}>>;
+	presence: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		challenge: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			} | {
+				pendingKeyId: string;
+			};
+			meta: object;
+			output: {
+				challengeId: string;
+				deviceKeys: {
+					id: string;
+					label: string;
+				}[];
+				expiresAt: string;
+				message: string;
+				nonce: string;
+				passkey: {
+					allowCredentials: {
+						id: string;
+						type: "public-key";
+					}[];
+					challenge: string;
+					rpId: string;
+					rpIds: string[];
+					userVerification: "required";
+				} | null;
+				proposalId: string;
+			};
+		}>;
+		devices: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			errorShape: {
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: {
+					candidates?: {
+						id: string;
+						title: string | null;
+						type: string;
+					}[] | undefined;
+					captureQuestionStatus?: string | undefined;
+					causeUrl?: string | undefined;
+					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
+					httpStatus: number;
+					opRef?: string | undefined;
+					path?: string;
+					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
+					reasonCode?: string;
+					stack?: string;
+				};
+				message: string;
+			};
+			meta: object;
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			enroll: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					challengeId: string;
+					label: string;
+					publicKey: string;
+					signature: string;
+				};
+				meta: object;
+				output: {
+					id: string;
+				};
+			}>;
+			enrollChallenge: import("@trpc/server").TRPCMutationProcedure<{
+				input: void;
+				meta: object;
+				output: {
+					challengeId: string;
+					expiresAt: string;
+					message: string;
+				};
+			}>;
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				meta: object;
+				output: {
+					createdAt: Date;
+					id: string;
+					label: string;
+					lastUsedAt: Date | null;
+				}[];
+			}>;
+			revoke: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				meta: object;
+				output: {
+					revoked: boolean;
+				};
+			}>;
+		}>>;
+	}>>;
 	proactive: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -45280,6 +45493,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45422,6 +45636,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45511,6 +45726,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45602,6 +45818,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -46517,6 +46734,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -46808,6 +47026,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -46981,6 +47200,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -47031,6 +47251,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					verb: "fill_empty" | "keep_existing" | "separate" | "use_capture";
 				}> | undefined;
 				identityResolutionForTwins?: "keep_existing" | "separate" | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				propertyDecisions?: Record<string, {
 					action: "keep";
 				} | {
@@ -47083,6 +47325,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				comment?: string | undefined;
 				expectedRevisions?: Record<string, number> | undefined;
+				presenceByProposal?: Record<string, {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				}> | undefined;
 				proposalIds: string[];
 				resolutions?: Record<string, {
 					existingEntityId?: string | undefined;
@@ -47103,7 +47367,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					identity?: ProposalExecutorResult["identity"];
 					opRef?: string;
 					proposalId: string;
-					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE";
+					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
 					refusals?: ProposalExecutorResult["refusals"];
 					relationsFailed?: ProposalExecutorResult["relationsFailed"];
 					success: boolean;
@@ -47836,6 +48100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -47949,6 +48214,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48239,6 +48505,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48358,6 +48625,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48473,6 +48741,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48568,6 +48837,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48661,6 +48931,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		grantAIAccess: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				proposalId: string;
 				scope?: "once" | "permanent" | "session" | undefined;
 				secretId: string;
@@ -48858,6 +49150,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48896,6 +49189,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -49243,6 +49537,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -49410,6 +49705,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -49697,6 +49993,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50130,6 +50427,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50265,6 +50563,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50486,6 +50785,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50623,6 +50923,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50707,6 +51008,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50736,6 +51038,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50775,6 +51078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50934,6 +51238,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -51530,6 +51835,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -51860,6 +52166,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52105,6 +52412,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52427,6 +52735,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52542,6 +52851,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52643,6 +52953,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52742,6 +53053,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53287,6 +53599,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53407,6 +53720,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53633,6 +53947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53668,6 +53983,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53795,6 +54111,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53843,6 +54160,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};

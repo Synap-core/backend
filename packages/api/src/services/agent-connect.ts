@@ -20,6 +20,8 @@
  * the still-inactive key.
  */
 
+import { assertPresenceForApproval } from "./presence/gate.js";
+import type { PresenceProof } from "@synap-core/types/presence";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -255,6 +257,11 @@ export async function fileAgentConnectProposal(args: {
   agentType: string;
   instanceId?: string | null;
   expiresAt: Date | null;
+  /**
+   * Filed by the CLI AS THE PERSON (W3): the person approves it with a proof
+   * of presence, and the key keeps the agent's own limits, not the computer's.
+   */
+  asPerson?: { instanceLabel: string | null } | null;
 }): Promise<{ proposalId: string }> {
   const grant = await new GrantRepository(db).resolveForKey(args.keyId);
   const requests = requestsFromGrantScopes(grant?.scopes ?? []);
@@ -283,6 +290,9 @@ export async function fileAgentConnectProposal(args: {
       expiresAt: accessEndsAt?.toISOString() ?? null,
       requests,
       asked: requests,
+      ...(args.asPerson
+        ? { asPerson: true, instanceLabel: args.asPerson.instanceLabel }
+        : {}),
     },
     createdBy: args.ownerUserId,
     proposedByUserId: args.ownerUserId,
@@ -294,9 +304,13 @@ export async function fileAgentConnectProposal(args: {
 /** The open `agent/connect` proposal for a key, if any. */
 export async function openAgentConnectProposal(
   keyId: string
-): Promise<{ id: string; status: string } | null> {
+): Promise<{ id: string; status: string; data: unknown } | null> {
   const [row] = await db
-    .select({ id: proposals.id, status: proposals.status })
+    .select({
+      id: proposals.id,
+      status: proposals.status,
+      data: proposals.data,
+    })
     .from(proposals)
     .where(
       and(
@@ -590,6 +604,14 @@ export async function approvePendingAgentKey(args: {
    * changes it unless the person did).
    */
   writeMode?: AgentWriteMode | null;
+  /**
+   * Proof of presence (W3): connecting an AI is a sensitive approval. The
+   * pod-admin pages pass the person's proof; the `agent/connect` executor
+   * passes `presenceChecked: "applyProposalApproval"` because that door
+   * already checked (and consumed) it.
+   */
+  presence?: PresenceProof | null;
+  presenceChecked?: "applyProposalApproval";
 }): Promise<PendingKeyOutcome> {
   const key = await db.query.apiKeys.findFirst({
     where: eq(apiKeys.id, args.keyId),
@@ -655,6 +677,29 @@ export async function approvePendingAgentKey(args: {
   }
 
   const proposal = await openAgentConnectProposal(args.keyId);
+  // Proof of presence (W3), before anything below changes: this door settles
+  // the `agent/connect` proposal itself, so it gates like
+  // `applyProposalApproval` does. A pending key with no proposal row is gated
+  // as one named by the key (the challenge's subject), never let through.
+  if (args.presenceChecked !== "applyProposalApproval") {
+    await assertPresenceForApproval({
+      userId: args.approverId,
+      proposal: proposal
+        ? {
+            id: proposal.id,
+            targetType: AGENT_CONNECT_TARGET_TYPE,
+            proposalType: AGENT_CONNECT_PROPOSAL_TYPE,
+            data: proposal.data,
+          }
+        : {
+            id: args.keyId,
+            targetType: AGENT_CONNECT_TARGET_TYPE,
+            proposalType: AGENT_CONNECT_PROPOSAL_TYPE,
+          },
+      proof: args.presence,
+      door: "setup.agent.pending.approve",
+    });
+  }
   if (proposal?.status === ProposalStatus.REJECTED) {
     await revokeApiKeys(db, {
       where: and(eq(apiKeys.id, args.keyId), eq(apiKeys.isActive, false)),
