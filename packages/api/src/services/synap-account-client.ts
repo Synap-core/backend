@@ -26,7 +26,11 @@
  * door) use {@link isSynapAccountKey}.
  */
 
-import { AGENT_HARNESSES, resolveHarness } from "@synap-core/types/agents";
+import {
+  AGENT_HARNESSES,
+  resolveHarness,
+  type HarnessDoor,
+} from "@synap-core/types/agents";
 
 /** The agentType every Synap account key had before W5, and claude.ai's since. */
 const SYNAP_ACCOUNT_LEGACY_AGENT_TYPE = "claude-web";
@@ -68,8 +72,8 @@ const LEGACY_MINT: SynapAccountMint = {
 };
 
 /** The registry slugs a client can reach through the Synap account. */
-const ACCOUNT_DOOR_SLUGS = AGENT_HARNESSES.filter((h) =>
-  h.doors.includes("account")
+const ACCOUNT_DOOR_SLUGS: readonly string[] = AGENT_HARNESSES.filter((h) =>
+  (h.doors as readonly HarnessDoor[]).includes("account")
 ).map((h) => h.slug);
 
 /**

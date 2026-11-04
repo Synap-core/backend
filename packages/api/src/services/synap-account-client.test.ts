@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { AGENT_HARNESSES } from "@synap-core/types/agents";
+import { AGENT_HARNESSES, type HarnessDoor } from "@synap-core/types/agents";
 
 import {
   SYNAP_ACCOUNT_KEY_ORIGIN,
@@ -32,11 +32,13 @@ describe("resolveSynapAccountMint", () => {
 
   // Derived from the registry, never a hand-picked list: the rows whose
   // `doors` include `account` get their own agent, every other row `generic`.
+  const doorsOf = (h: (typeof AGENT_HARNESSES)[number]) =>
+    h.doors as readonly HarnessDoor[];
   const accountDoor = AGENT_HARNESSES.filter((h) =>
-    h.doors.includes("account")
+    doorsOf(h).includes("account")
   );
   const podOnly = AGENT_HARNESSES.filter(
-    (h) => !h.doors.includes("account") && h.slug !== "generic"
+    (h) => !doorsOf(h).includes("account") && h.slug !== "generic"
   );
   it("the registry still has clients on both sides (non-vacuity)", () => {
     expect(accountDoor.map((h) => h.slug)).toContain("chatgpt");
