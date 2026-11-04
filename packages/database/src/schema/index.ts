@@ -194,6 +194,12 @@ export * from "./session-runners.js";
 // Proposal apply runs — a large approval applied by a background job (0352)
 export * from "./proposal-apply-runs.js";
 export * from "./box-runs.js";
+// Installations — capabilities installed on the person's computers, their
+// bindings, host-runner jobs and remembered provider choices (0399)
+export * from "./installations.js";
+export * from "./installation-bindings.js";
+export * from "./host-jobs.js";
+export * from "./intent-defaults.js";
 // API usage telemetry — calls per key / client / conversation, 5-min buckets (0364)
 export * from "./api-usage-buckets.js";
 // Server faults — the exact cause of each 5xx by errorId, pod admins only (0392)
