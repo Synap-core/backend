@@ -20653,6 +20653,12 @@ export interface RailPin {
 	label: string | null;
 	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
 	source: "template" | "user";
+	/**
+	 * A document pin only: the document's own title, read with the pin (the
+	 * same read that drops a document the person can no longer open), so a
+	 * client draws the pin without a read per document. Never stored.
+	 */
+	title?: string;
 }
 export type PublishResult = {
 	proposalId: string;

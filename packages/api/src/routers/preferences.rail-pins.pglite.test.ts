@@ -402,6 +402,7 @@ describe("document pins — a living document on the rail (P4)", () => {
       documentId: MINE,
       label: null,
       source: "user",
+      title: "Doc",
     });
     // Idempotent: pinning it again keeps one pin.
     await as(U).pinSurface({ documentId: MINE, label: "Dashboard" });
@@ -470,6 +471,87 @@ describe("document pins — a living document on the rail (P4)", () => {
     const before = (await keys()).length;
     await as(U).reorderRailPins({ keys: [] });
     expect(await keys()).toHaveLength(before);
+  });
+
+  it("a document pin carries its document's title, read with the pin and never stored (review A7)", async () => {
+    const D = randomUUID();
+    await doc(D, U, W1);
+    await q(`update documents set title = 'Quarterly' where id = $1`, [D]);
+    // The write that pins it answers with the title (the pinned document is
+    // in the same batched read).
+    const written = await as(U).pinSurface({
+      documentId: D,
+      includeDocuments: true,
+    });
+    expect(written.pins.find((p) => p.documentId === D)?.title).toBe(
+      "Quarterly"
+    );
+    // The read follows the document's title as it is now.
+    await q(`update documents set title = 'Quarterly review' where id = $1`, [
+      D,
+    ]);
+    const read = (await as(U).railPins({ includeDocuments: true })).pins;
+    expect(read.find((p) => p.documentId === D)?.title).toBe(
+      "Quarterly review"
+    );
+    // Only a document pin carries one.
+    expect(read.filter((p) => !p.documentId).every((p) => !("title" in p))).toBe(
+      true
+    );
+    // Never stored: the row holds the pin, not its title.
+    const { rows } = await q<{ pins: string }>(
+      `select (ui_preferences #> '{railPins,pins}')::text as pins from user_preferences where user_id = $1`,
+      [U]
+    );
+    expect(rows[0]!.pins).toContain(D);
+    expect(rows[0]!.pins).not.toContain("Quarterly");
+    await as(U).unpinSurface({ key: `doc:${D}` });
+  });
+
+  it("a full rail tells a client that hides documents how many of its pins it does not show (review A11)", async () => {
+    const FULL = randomUUID();
+    await q(`insert into users (id, email) values ($1,$2)`, [
+      FULL,
+      `${FULL}@x.io`,
+    ]);
+    const ids = Array.from({ length: 30 }, () => randomUUID());
+    for (const id of ids) await doc(id, FULL, null);
+    await q(
+      `insert into user_preferences (user_id, ui_preferences) values ($1, $2::jsonb)`,
+      [
+        FULL,
+        JSON.stringify({
+          railPins: {
+            pins: ids.map((documentId) => ({
+              documentId,
+              label: null,
+              source: "user",
+            })),
+            seededWorkspaceIds: [],
+          },
+        }),
+      ]
+    );
+    expect(
+      (await as(FULL).railPins({ includeDocuments: true })).pins
+    ).toHaveLength(30); // non-vacuity: every pin is readable, the rail is full
+    // An old client sees none of them, and is told why its rail is full.
+    expect((await as(FULL).railPins()).pins).toEqual([]);
+    await expect(
+      as(FULL).pinSurface({ profileSlug: "post" })
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringMatching(
+        /30 of them are goals or documents this app does not show/
+      ),
+    });
+    // A client that draws them gets the plain sentence.
+    await expect(
+      as(FULL).pinSurface({ profileSlug: "post", includeDocuments: true })
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "A rail holds at most 30 pins — unpin one first.",
+    });
   });
 
   it("only the person pins a document: a stored 'template' claim reads as theirs, and no sidebar item suggests one", async () => {
