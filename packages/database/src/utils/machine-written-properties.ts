@@ -58,6 +58,10 @@ export const MACHINE_WRITTEN_PROPERTY_SLUGS = [
   "provenance",
   // AI-derived.
   "sentiment",
+  // A person's LinkedIn reach — written by the send's reach check, the
+  // `relation.new` webhook and the daily sweep (CRM wave 2, S4a).
+  "linkedinConnection",
+  "linkedinInvitedAt",
 ] as const;
 
 export type MachineWrittenPropertySlug =
