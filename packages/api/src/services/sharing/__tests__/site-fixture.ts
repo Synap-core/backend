@@ -45,7 +45,7 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${cols.join(", ")});`;
 }
 
-/** Every table of the schema, then the REAL 0276 + 0336 migrations. */
+/** Every table of the schema, then the REAL 0276 + 0336 + 0397 migrations. */
 export async function createSiteSchema(client: PgClient): Promise<void> {
   const tables = (Object.values(schema) as unknown[]).filter(
     (v): v is PgTable =>
@@ -57,6 +57,7 @@ export async function createSiteSchema(client: PgClient): Promise<void> {
   for (const m of [
     "0276_exposure_substrate.sql",
     "0336_site_collections.sql",
+    "0397_site_chart_members.sql",
   ]) {
     await client.exec(
       readFileSync(
@@ -84,6 +85,7 @@ export function sitePolicy(
     projectFields?: string[];
     entityRead?: "direct" | "denied";
     projectRead?: "direct" | "denied";
+    viewRead?: "direct" | "denied";
   } = {}
 ) {
   return {
@@ -97,7 +99,7 @@ export function sitePolicy(
         ),
       },
       document: { ...KIND, public: cell("denied", []) },
-      view: { ...KIND, public: cell("denied", []) },
+      view: { ...KIND, public: cell(opts.viewRead ?? "denied", []) },
       project: {
         ...KIND,
         public: cell(

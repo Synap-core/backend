@@ -13,6 +13,13 @@ import {
   planSitePublish,
   SITE_PUBLISH_MAX_RECORDS,
 } from "./site-service.js";
+import {
+  applyChartsPublish,
+  CHART_MODES,
+  planChartsPublish,
+  SITE_PUBLISH_MAX_CHARTS,
+  type ChartPublishItem,
+} from "./site-charts.js";
 
 /**
  * Approve-executor for `share/create` — an AGENT's share, publish, site
@@ -90,6 +97,76 @@ export function registerShareExecutors(): void {
       // tightened or a record moved while the proposal waited is skipped,
       // never published. The site-level checks refuse the whole approval. An
       // approved member is live at once: the site's token addresses it.
+      // A CHART BATCH into a site (`op: "publish_charts"`, ids + modes +
+      // slugs only). Re-planned NOW on the proposal's SUBJECT through the SAME
+      // `planChartsPublish` the direct door runs; a snapshot is read at
+      // approval time, as that subject.
+      if (inner.op === "publish_charts") {
+        const charts = inner.charts;
+        const valid =
+          audience === "public" &&
+          typeof inner.siteId === "string" &&
+          Array.isArray(charts) &&
+          charts.length > 0 &&
+          charts.length <= SITE_PUBLISH_MAX_CHARTS &&
+          charts.every(
+            (c) =>
+              !!c &&
+              typeof c === "object" &&
+              typeof (c as ChartPublishItem).cellInstanceId === "string" &&
+              (CHART_MODES as readonly string[]).includes(
+                (c as ChartPublishItem).mode
+              ) &&
+              ((c as ChartPublishItem).slug === undefined ||
+                (c as ChartPublishItem).slug === null ||
+                typeof (c as ChartPublishItem).slug === "string")
+          );
+        if (!valid) {
+          throw refuse("the stored chart publish request is malformed.");
+        }
+        if (!ownerUserId) {
+          throw refuse(
+            "the proposal records no owner (subject_user_id), so whose site this is cannot be established."
+          );
+        }
+        const database = await getDb();
+        const plan = await planChartsPublish(database, ownerUserId, {
+          siteId: inner.siteId as string,
+          charts: (charts as ChartPublishItem[]).map((c) => ({
+            cellInstanceId: c.cellInstanceId,
+            mode: c.mode,
+            slug: c.slug,
+          })),
+        });
+        const applied = await applyChartsPublish(database, plan, {
+          userId: ownerUserId,
+          agentUserId: proposal.agentUserId ?? null,
+          sourceProposalId: input.proposalId,
+        });
+        await markApproved();
+        const refusals = [...plan.skipped, ...applied.skipped].map(
+          (k) => `Chart ${k.cellInstanceId} was not published: ${k.reason}`
+        );
+        return {
+          success: true,
+          primaryId: plan.siteId,
+          effect:
+            applied.rowsWritten > 0
+              ? {
+                  applied: "verified" as const,
+                  rows: applied.rowsWritten,
+                  ids: applied.ids,
+                  subject: "share",
+                }
+              : {
+                  applied: "none" as const,
+                  reason:
+                    "None of the charts could be published now; see the refusals.",
+                },
+          ...(refusals.length > 0 ? { refusals } : {}),
+        };
+      }
+
       if (inner.op === "publish_records") {
         const entityIds = inner.entityIds;
         if (

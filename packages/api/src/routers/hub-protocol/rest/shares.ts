@@ -38,6 +38,13 @@
  *   POST /shares/sites/:id/unpublish           { entityIds? } — those records
  *                                              off this site, or (no body) the
  *                                              site back to draft — direct
+ *   POST /shares/sites/:id/charts/publish      { charts: [{ cellInstanceId,
+ *                                              mode: snapshot|live, slug? }]
+ *                                              (≤ 200), reasoning? } — publish
+ *                                              charts INTO the site; an agent
+ *                                              key gets ONE 202 proposal
+ *   POST /shares/sites/:id/charts/unpublish    { cellInstanceIds } — those
+ *                                              charts off this site — direct
  *   POST /shares/sites/:id/revoke              the site (and every member row)
  *                                              revoked for good — direct
  *
@@ -82,6 +89,12 @@ import {
   SITE_PUBLISH_MAX_RECORDS,
   unpublishFromSite,
 } from "../../../services/sharing/site-service.js";
+import {
+  CHART_MODES,
+  publishChartsToSite,
+  SITE_PUBLISH_MAX_CHARTS,
+  unpublishChartsFromSite,
+} from "../../../services/sharing/site-charts.js";
 import {
   publishResource,
   revokePublication,
@@ -128,6 +141,22 @@ const PublishToSiteSchema = z.object({
 });
 const UnpublishFromSiteSchema = z.object({
   entityIds: SiteRecordIds.optional(),
+});
+const PublishChartsSchema = z.object({
+  charts: z
+    .array(
+      z.object({
+        cellInstanceId: Uuid,
+        mode: z.enum(CHART_MODES),
+        slug: z.string().max(96).nullable().optional(),
+      })
+    )
+    .min(1)
+    .max(SITE_PUBLISH_MAX_CHARTS),
+  reasoning: z.string().max(2000).optional(),
+});
+const UnpublishChartsSchema = z.object({
+  cellInstanceIds: z.array(Uuid).min(1).max(SITE_PUBLISH_MAX_CHARTS),
 });
 // One page of a status read's `members` (the service clamps `limit`).
 const SiteMembersPageQuery = z.object({
@@ -300,6 +329,62 @@ export function registerSharesRoutes(app: HubHono): void {
       );
     } catch (err) {
       return fail(c, err, "POST /shares/sites/:id/unpublish");
+    }
+  });
+
+  app.post("/shares/sites/:id/charts/publish", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const body = PublishChartsSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const { reasoning, charts } = body.data;
+      return jsonGoverned(
+        c,
+        await publishChartsToSite(actorOf(c, reasoning), {
+          siteId: id.data,
+          charts,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites/:id/charts/publish");
+    }
+  });
+
+  app.post("/shares/sites/:id/charts/unpublish", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const body = UnpublishChartsSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      return c.json(
+        await unpublishChartsFromSite(actorOf(c), {
+          siteId: id.data,
+          cellInstanceIds: body.data.cellInstanceIds,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites/:id/charts/unpublish");
     }
   });
 

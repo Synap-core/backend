@@ -136,7 +136,7 @@ const day = (d: Date) => d.toISOString().slice(0, 10);
 
 // ── The site ────────────────────────────────────────────────────────────────
 
-interface ResolvedSite {
+export interface ResolvedSite {
   id: string;
   projectId: string;
   homeWorkspaceId: string | null;
@@ -149,7 +149,7 @@ interface ResolvedSite {
  * A token → its LIVE site, or null for every kind of miss. The switch is NOT
  * decided here: each door decides it after its own misses.
  */
-async function resolveSite(token: string): Promise<ResolvedSite | null> {
+export async function resolveSite(token: string): Promise<ResolvedSite | null> {
   // Hash FIRST, always; the indexed lookup runs for every shape of token.
   const tokenHash = hashToken(typeof token === "string" ? token : "");
   const [row] = await db

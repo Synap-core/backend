@@ -590,10 +590,13 @@ describe("public doors — every route under the prefix is covered by the ONE pr
     // Non-vacuity: the legacy projection and at least the share read exist.
     expect(routes.some((r) => r.route === "/public/projection")).toBe(true);
     expect(doors.some((r) => r.route === "/public/shares/:token")).toBe(true);
-    // The site doors (collection door C1b) are reads: the `public_read` class.
+    // The site doors (collection door C1b, chart doors) are reads: the
+    // `public_read` class.
     const siteDoors = doors.filter((r) => r.route.startsWith("/public/sites/"));
     expect(siteDoors.map((r) => r.route).sort()).toEqual([
       "/public/sites/:siteToken",
+      "/public/sites/:siteToken/charts",
+      "/public/sites/:siteToken/charts/:slugOrPublicId",
       "/public/sites/:siteToken/collections/:key",
       "/public/sites/:siteToken/collections/:key/:slugOrPublicId",
     ]);
