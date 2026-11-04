@@ -112,8 +112,10 @@ export interface CellSourceCheckInput {
   externalHosts?: readonly string[] | null;
 }
 
+// `--bundle-deps` is right before and after synap-cli#81 makes bundling the
+// default (the flag stays accepted there), so the sentence teaches it.
 const BUNDLE_FIX =
-  "Bundle the library into the source (`synap cell build <entry> --bundle-deps`) and import only what the host provides: react, react-dom and @synap/kit.";
+  "Bundle the library into the source (`synap cell build <entry> --bundle-deps`) and import only what the host provides: react, react-dom, @synap/kit and @synap/view-sdk.";
 
 const FIX: Record<CellSourceRefusalCode, string> = {
   runtime_deps: `Leave \`deps\` out (or send {}). ${BUNDLE_FIX}`,

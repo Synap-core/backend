@@ -16,6 +16,7 @@ import {
   assertPinnableSurface,
   RailGoalPinsFullError,
   RailPinsFullError,
+  railPinsFullMessage,
   readRailPins,
   writeRailPins,
   type RailPinsOp,
@@ -33,10 +34,15 @@ async function railPinsWrite(
   try {
     return { pins: pinsFor(await writeRailPins(userId, op), include) };
   } catch (err) {
-    if (
-      err instanceof RailPinsFullError ||
-      err instanceof RailGoalPinsFullError
-    ) {
+    if (err instanceof RailPinsFullError) {
+      // The cap counts every pin; say how many this client does not show.
+      const hidden = err.pins.length - pinsFor([...err.pins], include).length;
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: railPinsFullMessage(hidden),
+      });
+    }
+    if (err instanceof RailGoalPinsFullError) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: err.message,
@@ -84,7 +90,8 @@ export const preferencesRouter = router({
    *
    * GOAL pins come back only when asked — `{ includeGoals: true }` — and
    * DOCUMENT pins likewise — `{ includeDocuments: true }` ({@link pinsFor});
-   * the write doors below take the same flags.
+   * the write doors below take the same flags. A document pin carries its
+   * document's `title`, read with the pin (one batched read, never stored).
    */
   railPins: protectedProcedure
     .input(z.object({ includeGoals, includeDocuments }).optional())

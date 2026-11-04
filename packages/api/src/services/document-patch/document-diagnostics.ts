@@ -40,7 +40,16 @@ import { isUuid } from "@synap-core/types/property-render";
 import {
   frameNetworkAssetsNotice,
   frameNetworkCodeRefusal,
+  frameNetworkLoads,
 } from "@synap-core/types/cell-bridge";
+import {
+  ATTENTION_CLASSES,
+  LENS_SECTION_EMPTY_ANSWERS,
+  LENS_SECTION_LIMIT_MAX,
+  LENS_SECTION_LIMIT_MIN,
+  readLensSectionBlock,
+  type LensSectionBlockProblem,
+} from "@synap-core/types/lens";
 import type { Embed } from "@synap-core/markdown-core/embeds";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
@@ -270,7 +279,7 @@ function firstOf(
  * served for as long as their text does not change. Bump it whenever the
  * checker's verdicts change meaning.
  */
-export const DOCUMENT_DIAGNOSTICS_CHECKER = 3;
+export const DOCUMENT_DIAGNOSTICS_CHECKER = 4;
 
 /**
  * Codes a flow may stamp: run-time facts only; content codes are derived,
@@ -334,6 +343,46 @@ function designOfCell(
     });
   }
   return out;
+}
+
+/** The catalog key of a work block (`renderables/widgets.ts`). */
+const LENS_SECTION_KEY = "lens-section";
+
+/** The one fix for a `lens-section` whose props cannot be drawn as written. */
+const LENS_SECTION_FIX = `Set \`section\` to one of ${ATTENTION_CLASSES.join(", ")}; \`empty\` to one of ${LENS_SECTION_EMPTY_ANSWERS.join(", ")}; \`limit\` to a number from ${LENS_SECTION_LIMIT_MIN} to ${LENS_SECTION_LIMIT_MAX} (synap_list_widgets({ surface: "document" }) shows the props).`;
+
+/** What readers see of a `lens-section` problem, said to its author. */
+function lensSectionMessage(problem: LensSectionBlockProblem): {
+  message: string;
+  severity: DocumentDiagnostic["severity"];
+} {
+  switch (problem.why) {
+    case "no-section":
+      return {
+        severity: "error",
+        message: `"${LENS_SECTION_KEY}" names no section; readers see an empty mark.`,
+      };
+    case "unknown-section":
+      return {
+        severity: "error",
+        message: `"${LENS_SECTION_KEY}" names section "${problem.section}", which a work page does not have; readers see an empty mark.`,
+      };
+    case "page-only":
+      return {
+        severity: "error",
+        message: `Section "${problem.section}" belongs to the work page itself and is not drawn in a document; readers see an empty mark.`,
+      };
+    case "bad-empty":
+      return {
+        severity: "warning",
+        message: `"${LENS_SECTION_KEY}" props.empty ${JSON.stringify(problem.value)} is not an empty answer; readers see the section's own.`,
+      };
+    case "bad-limit":
+      return {
+        severity: "warning",
+        message: `"${LENS_SECTION_KEY}" props.limit ${JSON.stringify(problem.value)} is not a number; readers see the section's own row count.`,
+      };
+  }
 }
 
 /**
@@ -440,6 +489,20 @@ export async function diagnoseDocument(
           ...at,
         });
       }
+      // A work block is read in AUTHOR mode here (founder decision Q1): the
+      // reader falls back quietly on a bad `empty` or `limit`, so its author
+      // is the one who must hear it, whichever door wrote it.
+      if (key === LENS_SECTION_KEY && missing.length === 0) {
+        const read = readLensSectionBlock(embed.props, "author");
+        if (!read.ok) {
+          out.push({
+            code: "bad_props",
+            ...lensSectionMessage(read.problem),
+            fix: LENS_SECTION_FIX,
+            ...at,
+          });
+        }
+      }
       if (builtin) out.push(...designOfCell(key, builtin, embed, at));
     }
   }
@@ -489,7 +552,8 @@ export async function diagnoseDocument(
  */
 export function diagnoseHtmlPage(html: string): DocumentDiagnostic[] {
   const out: DocumentDiagnostic[] = [];
-  const refusal = frameNetworkCodeRefusal(html);
+  const loads = frameNetworkLoads(html);
+  const refusal = frameNetworkCodeRefusal(loads);
   if (refusal) {
     out.push({
       code: "network_code",
@@ -498,7 +562,7 @@ export function diagnoseHtmlPage(html: string): DocumentDiagnostic[] {
       fix: GRAMMAR_FIX.network_code,
     });
   }
-  const assets = frameNetworkAssetsNotice(html);
+  const assets = frameNetworkAssetsNotice(loads);
   if (assets) {
     out.push({
       code: "network_assets",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  frameModuleLoads,
   frameNetworkAssetsNotice,
   frameNetworkCodeRefusal,
   frameNetworkLoads,
@@ -77,6 +78,35 @@ describe("frameNetworkLoads: what a stored page asks the network for", () => {
   });
 });
 
+describe("what counts as an import, and as a src or href", () => {
+  it("a quoted string after `from` is an import only in an import or export clause, never JSX prose", () => {
+    const code =
+      'import React, { useState } from "react";\n' +
+      "import type {\n  Row, // one row\n  Col\n} from '@synap/kit';\n" +
+      "export * as kit from '@synap/kit/charts';\n" +
+      "export default function Cell() {\n" +
+      "  return <p>Synced from \"Google Sheets\" at {time}, copied from 'Notion'.</p>;\n" +
+      "}\n";
+    expect(
+      frameModuleLoads(code)
+        .filter((l) => l.kind === "import")
+        .map((l) => l.value)
+    ).toEqual(["react", "@synap/kit", "@synap/kit/charts"]);
+  });
+
+  it("data-src and data-href are not src and href", () => {
+    const page =
+      '<img data-src="https://images.example.com/lazy.png" src="data:image/png;base64,AAAA">' +
+      '<script data-src="https://cdn.jsdelivr.net/npm/x"></script>' +
+      '<link rel="stylesheet" data-href="https://fonts.googleapis.com/css2">' +
+      '<img/src="https://images.example.com/a.png">';
+    expect(frameNetworkLoads(page)).toEqual({
+      code: [],
+      assets: ["images.example.com"],
+    });
+  });
+});
+
 describe("the sentences the author and the reader read", () => {
   it("a page with network code is refused, naming every host", () => {
     const refusal = frameNetworkCodeRefusal(
@@ -118,6 +148,12 @@ describe("the scan is linear in the page (it runs on the pod's request thread)",
     "an unclosed CSS url(": "<style>url(" + " ".repeat(N),
     "an export clause with no from":
       "<script>" + "export a b c ".repeat(N / 13) + "</script>",
+    "an import clause with a from string after each":
+      "<script>" + 'import a from "x" '.repeat(N / 18) + "</script>",
+    "prose with a from string after each":
+      "<script>" + '<p>a from "x"</p> '.repeat(N / 18) + "</script>",
+    "data attributes before each src":
+      "<img " + 'data-src="x" '.repeat(N / 13) + ">",
   };
   for (const [what, page] of Object.entries(pages)) {
     it(`${what}: under a second`, () => {
