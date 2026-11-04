@@ -54,6 +54,10 @@ const NO_HUB_KEY: Record<string, string> = {
     "Credentialless public door: the path token.",
   "GET /public/sites/:siteToken/collections/:key/:slugOrPublicId":
     "Credentialless public door: the path token.",
+  "GET /public/sites/:siteToken/charts":
+    "Credentialless public door: the path token.",
+  "GET /public/sites/:siteToken/charts/:slugOrPublicId":
+    "Credentialless public door: the path token.",
   "POST /setup/agent":
     "Setup door: setup.agent key, PROVISIONING_TOKEN or trusted-issuer JWT, checked in the handler.",
   "POST /setup/service":
@@ -115,7 +119,7 @@ function checksScope(
   block: string,
   helpers: Map<string, string>,
   depth: number,
-  seen: Set<string>
+  seen: Set<string>,
 ): boolean {
   if (DIRECT_IDIOMS.some((re) => re.test(block))) return true;
   if (depth === 0) return false;
@@ -177,7 +181,7 @@ describe("tripwire: every authenticated Hub REST route checks a hub scope", () =
       unscoped,
       'check the key\'s scope first: hasScope(c.get("scopes") as string[], ' +
         '"hub-protocol.read" | "hub-protocol.write"), as the sibling routes do. ' +
-        "A door that takes no hub key goes in NO_HUB_KEY with the credential it takes."
+        "A door that takes no hub key goes in NO_HUB_KEY with the credential it takes.",
     ).toEqual([]);
   });
 
@@ -187,7 +191,7 @@ describe("tripwire: every authenticated Hub REST route checks a hub scope", () =
       .sort();
     expect(
       stale,
-      "these are gone or now check a scope: drop them from NO_HUB_KEY"
+      "these are gone or now check a scope: drop them from NO_HUB_KEY",
     ).toEqual([]);
   });
 });

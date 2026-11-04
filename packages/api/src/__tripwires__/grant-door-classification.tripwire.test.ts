@@ -71,14 +71,14 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
     // Non-vacuity: the scan sees the tool list and the doors it must cover.
     expect(all.length).toBeGreaterThan(60);
     expect(reads).toEqual(
-      expect.arrayContaining(["synap_ask", "synap_orient", "synap_get_entity"])
+      expect.arrayContaining(["synap_ask", "synap_orient", "synap_get_entity"]),
     );
     expect(reads.length).toBeGreaterThanOrEqual(25);
 
     const classified = Object.keys(MCP_READ_TOOL_DOORS);
     expect(
       reads.filter((n) => !classified.includes(n)),
-      "Classify the tool in MCP_READ_TOOL_DOORS (access/grant-door-fence.ts)."
+      "Classify the tool in MCP_READ_TOOL_DOORS (access/grant-door-fence.ts).",
     ).toEqual([]);
     expect(classified.filter((n) => !reads.includes(n))).toEqual([]);
   });
@@ -92,7 +92,7 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
     // rows carry a read door, not WRITE.
     expect(others.length).toBeGreaterThanOrEqual(50);
     expect(others).toEqual(
-      expect.arrayContaining(["synap_wait_for_answer", "synap_get_channel"])
+      expect.arrayContaining(["synap_wait_for_answer", "synap_get_channel"]),
     );
     expect(MCP_WRITE_TOOL_DOORS.synap_wait_for_answer?.bound).toBe("reads");
     expect(MCP_WRITE_TOOL_DOORS.synap_get_channel?.bound).toBe("reads");
@@ -101,7 +101,7 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
     expect(
       others.filter((n) => !classified.includes(n)),
       "Classify the tool in MCP_WRITE_TOOL_DOORS (access/grant-door-fence.ts): " +
-        "WRITE when it only writes through the gate, else the read door of what it returns."
+        "WRITE when it only writes through the gate, else the read door of what it returns.",
     ).toEqual([]);
     expect(classified.filter((n) => !others.includes(n))).toEqual([]);
   });
@@ -111,10 +111,10 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
     const doors = [
       ...Object.entries(MCP_READ_TOOL_DOORS),
       ...Object.entries(MCP_WRITE_TOOL_DOORS).flatMap(([n, d]) =>
-        d.bound === "write" ? [] : [[n, d] as const]
+        d.bound === "write" ? [] : [[n, d] as const],
       ),
       ...[...GRANT_REST_GET_READS, ...GRANT_REST_POST_READS].map(
-        ([r, d]) => [String(r), d] as const
+        ([r, d]) => [String(r), d] as const,
       ),
     ];
     // Non-vacuity: the REST declarations are in the scanned set.
@@ -136,7 +136,7 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
     const unknown = doors.flatMap(([n, d]) =>
       declared(d)
         .filter((s) => !known.has(s))
-        .map((s) => `${n}:${s}`)
+        .map((s) => `${n}:${s}`),
     );
     expect(unknown).toEqual([]);
   });
@@ -220,7 +220,7 @@ function servedRoutes(): ServedRoute[] {
       key,
       prev
         ? { ...prev, source: `${prev.source}\n${source}` }
-        : { method: r.method, path: r.path, source }
+        : { method: r.method, path: r.path, source },
     );
   }
   return [...byKey.values()];
@@ -234,7 +234,7 @@ export function readsThatWrite(routes: readonly ServedRoute[]): string[] {
         r.method !== "GET" &&
         r.method !== "HEAD" &&
         hubRouteClass(r.method, concrete(r.path)) === "read" &&
-        WRITE_GATE.test(r.source)
+        WRITE_GATE.test(r.source),
     )
     .map((r) => `${r.method} ${r.path}`);
 }
@@ -264,19 +264,19 @@ describe("Hub REST route classes (derived from the served routes)", () => {
   it("a route declared `read` (a POST read) reaches no write gate", () => {
     // Non-vacuity: the POST reads are in the scanned set.
     expect(
-      routes.filter((r) => r.method === "POST" && classOf(r) === "read").length
+      routes.filter((r) => r.method === "POST" && classOf(r) === "read").length,
     ).toBeGreaterThanOrEqual(5);
     expect(
       readsThatWrite(routes),
       "A route that writes is declared a read in GRANT_REST_POST_READS " +
-        "(access/grant-door-fence.ts): a scoped key would pass it as a read door."
+        "(access/grant-door-fence.ts): a scoped key would pass it as a read door.",
     ).toEqual([]);
   });
 
   it("self-check: a POST read that names a write gate is flagged", () => {
     const [readPattern] = GRANT_REST_POST_READS[0]!;
     const path = routes.find(
-      (r) => r.method === "POST" && readPattern.test(concrete(r.path))
+      (r) => r.method === "POST" && readPattern.test(concrete(r.path)),
     )!.path;
     expect(
       readsThatWrite([
@@ -289,7 +289,7 @@ describe("Hub REST route classes (derived from the served routes)", () => {
           source: "await (0, __vi_import_3__.canWrite)(p, { workspace: w })",
         },
         { method: "GET", path, source: "await canWrite(p, { workspace: w })" },
-      ])
+      ]),
     ).toEqual([`POST ${path}`, `POST ${path}`]);
   });
 
@@ -297,19 +297,19 @@ describe("Hub REST route classes (derived from the served routes)", () => {
     const served = (methods: string[], r: RegExp) =>
       routes.some(
         (route) =>
-          methods.includes(route.method) && r.test(concrete(route.path))
+          methods.includes(route.method) && r.test(concrete(route.path)),
       );
     const NON_GET = ["POST", "PUT", "PATCH", "DELETE"];
     const stale = [
       ...GRANT_SAFE_REST_READS.filter((r) => !served(["GET"], r)),
       ...GRANT_REST_GET_READS.map(([r]) => r).filter(
-        (r) => !served(["GET"], r)
+        (r) => !served(["GET"], r),
       ),
       ...GRANT_REST_POST_READS.map(([r]) => r).filter(
-        (r) => !served(["POST"], r)
+        (r) => !served(["POST"], r),
       ),
       ...GRANT_OWNER_WIDE_REST_DOORS.filter(
-        (r) => !served(["GET", ...NON_GET], r)
+        (r) => !served(["GET", ...NON_GET], r),
       ),
       ...GRANT_OWNER_WIDE_REST_WRITES.filter((r) => !served(NON_GET, r)),
     ].map(String);
@@ -359,6 +359,16 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../services/sharing/share-service.js"),
     why: "a share is a governed write",
   },
+  "POST /shares/sites/:id/charts/publish": {
+    via: "publishChartsToSite",
+    load: () => import("../services/sharing/site-charts.js"),
+    why: "share.create through checkPermissionOrPropose (an agent's batch is one proposal)",
+  },
+  "POST /shares/sites/:id/charts/unpublish": {
+    via: "unpublishChartsFromSite",
+    load: () => import("../services/sharing/site-charts.js"),
+    why: "narrowing only, still within the key's grant (grantWriteDenial)",
+  },
   "POST /channels/:channelId/bind": {
     via: "proposeChannelBind",
     load: () => import("../utils/propose-channel-bind.js"),
@@ -404,7 +414,7 @@ const GATED_ELSEWHERE: Readonly<
 /** `router.procedure` names a handler calls (`caller.entities.createEntity(`). */
 function trpcCallsOf(source: string): string[] {
   return [...source.matchAll(/\.([a-zA-Z]+)\.([a-zA-Z]+)\s*\(/g)].map(
-    (m) => `${m[1]}.${m[2]}`
+    (m) => `${m[1]}.${m[2]}`,
   );
 }
 
@@ -423,7 +433,7 @@ export function nonGetRouteClass(r: ServedRoute): NonGetClass {
   if (WRITE_GATE.test(r.source)) return "gated";
   if (
     trpcCallsOf(r.source).some(
-      (p) => TRPC_KEY_MUTATION_DOORS[p]?.bound === "gated"
+      (p) => TRPC_KEY_MUTATION_DOORS[p]?.bound === "gated",
     )
   )
     return "gated-trpc";
@@ -435,7 +445,7 @@ export function nonGetRouteClass(r: ServedRoute): NonGetClass {
 
 describe("Hub REST non-GET routes name their gate (closed by default)", () => {
   const nonGet = servedRoutes().filter(
-    (r) => r.method !== "GET" && r.method !== "HEAD"
+    (r) => r.method !== "GET" && r.method !== "HEAD",
   );
   const keyOf = (r: ServedRoute) => `${r.method} ${r.path}`;
   const unclassified = nonGet
@@ -461,7 +471,7 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
       "Name the write gate in the handler (checkPermissionOrPropose, canWrite, …), " +
         "call a `gated` hub tRPC mutation, add a GATED_ELSEWHERE row (its helper " +
         "must name a gate), or declare the route a read in GRANT_REST_POST_READS " +
-        "(access/grant-door-fence.ts). Never add it to the baseline."
+        "(access/grant-door-fence.ts). Never add it to the baseline.",
     ).toEqual([]);
   });
 
@@ -470,13 +480,13 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     expect(
       UNCLASSIFIED_WRITE_ROUTES.filter((k) => !now.has(k)),
       "Classified or no longer served: remove it from grant-door-write-baseline.ts " +
-        "and lower UNCLASSIFIED_WRITE_ROUTES_CAP."
+        "and lower UNCLASSIFIED_WRITE_ROUTES_CAP.",
     ).toEqual([]);
     expect(new Set(UNCLASSIFIED_WRITE_ROUTES).size).toBe(
-      UNCLASSIFIED_WRITE_ROUTES.length
+      UNCLASSIFIED_WRITE_ROUTES.length,
     );
     expect(UNCLASSIFIED_WRITE_ROUTES.length).toBeLessThanOrEqual(
-      UNCLASSIFIED_WRITE_ROUTES_CAP
+      UNCLASSIFIED_WRITE_ROUTES_CAP,
     );
   });
 
@@ -503,27 +513,29 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
       source,
     });
     expect(nonGetRouteClass(write("return c.json({ ok: true })"))).toBe(
-      "unclassified"
+      "unclassified",
     );
     expect(
-      nonGetRouteClass(write("await (0, __vi_import_2__.canWrite)(p, t)"))
+      nonGetRouteClass(write("await (0, __vi_import_2__.canWrite)(p, t)")),
     ).toBe("gated");
     expect(
-      nonGetRouteClass(write("await caller.entities.createEntity(input)"))
+      nonGetRouteClass(write("await caller.entities.createEntity(input)")),
     ).toBe("gated-trpc");
     // An owner-wide or unknown tRPC mutation is not a gate.
     expect(
-      nonGetRouteClass(write("await caller.channels.ensurePersonal(input)"))
+      nonGetRouteClass(write("await caller.channels.ensurePersonal(input)")),
     ).toBe("unclassified");
     expect(
-      nonGetRouteClass(write("await caller.entities.noSuchProcedure(input)"))
+      nonGetRouteClass(write("await caller.entities.noSuchProcedure(input)")),
     ).toBe("unclassified");
     // A GATED_ELSEWHERE row counts only while its handler calls the helper.
     expect(
-      nonGetRouteClass(write("await createProjectGoverned(input)", "/projects"))
+      nonGetRouteClass(
+        write("await createProjectGoverned(input)", "/projects"),
+      ),
     ).toBe("gated-elsewhere");
     expect(
-      nonGetRouteClass(write("await somethingElse(input)", "/projects"))
+      nonGetRouteClass(write("await somethingElse(input)", "/projects")),
     ).toBe("unclassified");
     // A declared read is a read, whatever its source.
     expect(nonGetRouteClass(write("", "/packages/preflight"))).toBe("read");
