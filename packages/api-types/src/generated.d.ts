@@ -8351,6 +8351,15 @@ export interface LinkedMessageItem {
 	message: LinkedMessagePreview;
 }
 /**
+ * A property key the caller wrote that the profile does not model.
+ * Reported, never rejected — see `ValidationResult.unmodeled`.
+ */
+export interface UnmodeledProperty {
+	key: string;
+	/** Closest VALID property slug, when one is close enough to be a likely typo. */
+	didYouMean?: string;
+}
+/**
  * One field a profile MODELS, as a writer needs it before the write: the key,
  * its type and the constraints `validateConstraints` below enforces. Without
  * it an agent told "`price` is unmodeled" could only guess what IS modelled
@@ -13023,6 +13032,16 @@ export interface UpdateEntitiesResult {
 		id: string;
 		proposalId?: string;
 		reason: string;
+	}>;
+	/**
+	 * Present ONLY when an applied item sent property keys its kind does not
+	 * model (finding c161fd43): stored verbatim, not queryable, each with an
+	 * optional `didYouMean`. The item is still in `applied`; these keys are
+	 * what it wrote OUTSIDE the kind's schema.
+	 */
+	unmodeledProperties?: Array<{
+		id: string;
+		unmodeled: UnmodeledProperty[];
 	}>;
 }
 export type PromotePropertyToBodyResult = {
@@ -34826,6 +34845,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewUrl?: undefined;
 				status: string;
 				statusMove?: MoveStatusResult | undefined;
+				unmodeled?: UnmodeledProperty[] | undefined;
 				written: {
 					documentId: string | null;
 					preview: string | null;
