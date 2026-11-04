@@ -6684,9 +6684,112 @@ _heal_count() { # <service> — heal's restarts of it inside the window
     awk -v s="$1" -v t="$since" '$2 == s && $1 >= t' state/heal/restarts.log 2>/dev/null | grep -c . || true
 }
 
-_heal_event() { # <status> <service> <reason> [notify 0|1]
-    _synap_event "$(jq -cn --arg st "$1" --arg svc "$2" --arg r "$3" --argjson n "$(_heal_count "$2")" \
-        '{kind:"pod.heal", status:$st, service:$svc, reason:$r, restartsInWindow:$n}')" "${4:-0}"
+_heal_event() { # <status> <service> <reason> [notify 0|1] [why-json]
+    _synap_event "$(jq -cn --arg st "$1" --arg svc "$2" --arg r "$3" --argjson n "$(_heal_count "$2")" --argjson why "${5:-null}" \
+        '{kind:"pod.heal", status:$st, service:$svc, reason:$r, restartsInWindow:$n} + (if $why == null then {} else {why:$why} end)')" "${4:-0}"
+}
+
+# ── why heal acts (plan "Pod resilience" G7a) ─────────────────────────────────
+# Before it restarts a service, heal records WHY, in the pod.heal event the
+# backend reads (state/events.jsonl): Docker's last 3 health results, and for a
+# probed service (SYNAP_HEAL_PROBE_SERVICES, default backend) what the service
+# says about itself: a /health request from INSIDE its container (a fresh node
+# process, so it answers even when the server's own event loop is blocked:
+# answered with eventLoop / timeout / refused), and the last `event loop
+# blocked` line of its log (the request that held the loop: method, path,
+# running time; never a body, a header, a query string or a key id).
+#
+# It then classes the service:
+#   stuck     — its process is alive and the server does not answer in time
+#               (the probe or Docker's last check timed out, or the loop's p99
+#               delay ≥ SYNAP_HEAL_STUCK_LAG_MS, default 1000). A blocked loop
+#               often frees itself: heal waits SYNAP_HEAL_STUCK_GRACE_TICKS
+#               (default 2) more ticks before it restarts it.
+#   dead      — no process, or nothing listening (connection refused): restarted
+#               at once, as before.
+#   unhealthy — anything else: restarted at once, as before.
+# The healthcheck command, the restart budget and SYNAP_HEAL_NEVER are untouched.
+
+# A probe of a frozen container must never hold the heal tick (the unit's
+# TimeoutStartSec is 10 min, and no other tick runs meanwhile): each docker
+# call heal makes to read WHY is capped (SYNAP_HEAL_PROBE_TIMEOUT_S, default 20).
+_heal_capped() { # <command…>
+    local t="${SYNAP_HEAL_PROBE_TIMEOUT_S:-20}"
+    case "$t" in ''|*[!0-9]*) t=20 ;; esac
+    if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"; else "$@"; fi
+}
+
+_heal_json() { # <text> → the text when it is one JSON value, else null
+    if [ -n "$1" ] && jq -e . >/dev/null 2>&1 <<<"$1"; then jq -c . <<<"$1"; else echo null; fi
+}
+
+# What a probed service says about itself, as one JSON object {probe, …}.
+_heal_probe() { # <service>
+    case " ${SYNAP_HEAL_PROBE_SERVICES:-backend} " in *" $1 "*) ;; *) echo '{"probe":"skipped"}'; return 0 ;; esac
+    local out
+    # shellcheck disable=SC2016 # node source, not shell
+    out="$(_heal_capped docker compose exec -T "$1" node -e '
+const r = require("http").get("http://localhost:4000/health", { timeout: 5000 }, (res) => {
+  let b = ""; res.on("data", (d) => { if (b.length < 262144) b += d; });
+  res.on("end", () => { let e = null; try { e = JSON.parse(b).eventLoop || null; } catch {}
+    console.log(JSON.stringify({ probe: "answered", httpStatus: res.statusCode, eventLoop: e })); process.exit(0); });
+});
+r.on("timeout", () => { console.log(JSON.stringify({ probe: "timeout" })); process.exit(0); });
+r.on("error", (e) => { console.log(JSON.stringify({ probe: e.code === "ECONNREFUSED" ? "refused" : "error", code: String(e.code || "") })); process.exit(0); });
+' 2>/dev/null </dev/null | tail -1)" || true
+    out="$(_heal_json "$out")"
+    if jq -e 'type == "object" and (.probe | type) == "string"' >/dev/null 2>&1 <<<"$out"; then echo "$out"; else echo '{"probe":"unavailable"}'; fi
+}
+
+# The last `event loop blocked` line the container logged (event-loop-watch.ts),
+# projected to what may leave the host: when, how long, and each named
+# request's method, path (already redacted by the backend), running time.
+_heal_last_stall() { # <container id> → JSON object or null
+    local line
+    line="$(_heal_capped docker logs --since "${SYNAP_HEAL_STALL_LOG_SINCE:-30m}" --tail 5000 "$1" 2>&1 </dev/null \
+        | grep -F '"msg":"event loop blocked"' | tail -1)" || true
+    _heal_json "$(jq -c '{at: .time, blockedMs, inFlight,
+        requests: [(.requests // [])[] | {method, path, runningMs, ended}][0:5]}' 2>/dev/null <<<"$line")"
+}
+
+_heal_why() { # <service> → {class, pidAlive, health, probe, eventLoop, lastStall}
+    local cid raw pid="" health=null probe stall=null
+    cid="$(docker compose ps -q "$1" 2>/dev/null | head -1)" || cid=""
+    if [ -n "$cid" ]; then
+        raw="$(_heal_capped docker inspect -f '{{.State.Pid}}|{{json .State.Health}}' "$cid" 2>/dev/null)" || raw=""
+        if [ -n "$raw" ]; then pid="${raw%%|*}"; health="$(_heal_json "${raw#*|}")"; fi
+    fi
+    probe="$(_heal_probe "$1")"
+    if [ -n "$cid" ] && [ "$(jq -r .probe <<<"$probe")" != skipped ]; then stall="$(_heal_last_stall "$cid")"; fi
+    local lag="${SYNAP_HEAL_STUCK_LAG_MS:-1000}"
+    case "$lag" in ''|*[!0-9]*) lag=1000 ;; esac
+    jq -cn --arg pid "$pid" --argjson h "$health" --argjson p "$probe" --argjson s "$stall" --argjson lag "$lag" '
+        def clean: (. // "") | tostring | gsub("\\s+"; " ")
+            | gsub("(?<k>password|passwd|secret|token|bearer|authorization|api[_-]?key)[=: ]+[^ ,;\"]+"; "\(.k)=[redacted]"; "i")
+            | .[0:200];
+        (if ($h | type) == "object" then [(($h.Log // [])[-3:])[] | {at: .End, exitCode: .ExitCode, output: (.Output | clean)}] else [] end) as $log
+        | (($log | last) // {}) as $last
+        | (if $pid == "" then null else (($pid | tonumber? // 0) > 0) end) as $alive
+        | (if ($p.eventLoop | type) == "object" then $p.eventLoop else null end) as $el
+        | {
+            class: (
+              if $alive == false or $p.probe == "refused" then "dead"
+              elif $alive == true and ($p.probe == "timeout"
+                    or (($last.output // "") | test("exceeded timeout"; "i"))
+                    or ((($el.delay.p99Ms // 0) | tonumber? // 0) >= $lag)) then "stuck"
+              elif (($last.output // "") | test("ECONNREFUSED")) then "dead"
+              else "unhealthy" end),
+            pidAlive: $alive,
+            health: $log,
+            probe: $p.probe,
+            eventLoop: (if $el == null then null else {
+              delayP99Ms: $el.delay.p99Ms, delayMaxMs: $el.delay.maxMs,
+              utilization: $el.utilization.ratio, stalls: $el.stalls.count,
+              lastStall: (if ($el.stalls.last | type) == "object"
+                then {at: $el.stalls.last.at, blockedMs: $el.stalls.last.blockedMs, inFlight: $el.stalls.last.inFlight}
+                else null end) } end),
+            lastStall: $s
+          }' 2>/dev/null || echo '{"class":"unhealthy","health":[],"probe":"unavailable"}'
 }
 
 # <state> <restarts-in-window> — 0 when the last verified kratos.yml was restored.
@@ -6745,7 +6848,9 @@ cmd_heal() {
     # failure never stops the tick.
     ( _res_sample ) || echo "synap heal: could not write state/resources.json" >&2
     _clean_dir_layout
-    local max="${SYNAP_HEAL_MAX_RESTARTS:-3}" never=" ${SYNAP_HEAL_NEVER:-postgres postgres-backup} " rows svc st h m n todo=""
+    local max="${SYNAP_HEAL_MAX_RESTARTS:-3}" never=" ${SYNAP_HEAL_NEVER:-postgres postgres-backup} " rows svc st h m n w why cls todo=""
+    local grace="${SYNAP_HEAL_STUCK_GRACE_TICKS:-2}"
+    case "$grace" in ''|*[!0-9]*) grace=2 ;; esac
     rows="$(_heal_rows)"
     while IFS='|' read -r svc st h; do
         [ -n "$svc" ] || continue
@@ -6755,6 +6860,10 @@ cmd_heal() {
                 rm -f "state/heal/${m}-${svc}"
                 _heal_event recovered "$svc" "${svc} is healthy again — heal re-armed" 1
             done
+            if [ -e "state/heal/stuck-${svc}" ]; then
+                w="$(cat "state/heal/stuck-${svc}" 2>/dev/null)" || w=""; rm -f "state/heal/stuck-${svc}"
+                _heal_event recovered "$svc" "${svc} answers again after ${w:-?} tick(s) stuck — no restart was needed" 0
+            fi
         elif { [ "$st" = running ] && [ "$h" = unhealthy ]; } || { [ "$svc" = kratos ] && [ "$st" = restarting ]; }; then
             grep -qx "${svc}|.*" <<<"$todo" || todo="${todo}${svc}|${st}|${h}"$'\n'
         fi
@@ -6784,16 +6893,34 @@ cmd_heal() {
         if [ "$svc" = kratos ] && _heal_kratos_restore "$st" "$n"; then continue; fi
         # A crash loop is Docker's to back off; heal acts on `unhealthy` only.
         [ "$st" = running ] || continue
+        why="$(_heal_why "$svc")"
+        cls="$(jq -r '.class // "unhealthy"' <<<"$why" 2>/dev/null)" || cls=unhealthy
         if [ "$n" -ge "$max" ]; then
-            date +%s > "state/heal/exhausted-${svc}"
-            _heal_event budget_exhausted "$svc" "${svc} was restarted ${n} times in ${SYNAP_HEAL_WINDOW_MIN:-30} min and is still unhealthy — heal stopped restarting it: docker compose logs --tail 100 ${svc}; synap doctor" 1
+            date +%s > "state/heal/exhausted-${svc}"; rm -f "state/heal/stuck-${svc}"
+            _heal_event budget_exhausted "$svc" "${svc} was restarted ${n} times in ${SYNAP_HEAL_WINDOW_MIN:-30} min and is still unhealthy — heal stopped restarting it: docker compose logs --tail 100 ${svc}; synap doctor" 1 "$why"
             continue
         fi
+        w=0
+        if [ "$cls" = stuck ]; then
+            w="$(cat "state/heal/stuck-${svc}" 2>/dev/null)" || w=0; case "$w" in ''|*[!0-9]*) w=0 ;; esac
+            if [ "$w" -lt "$grace" ]; then
+                w=$(( w + 1 )); echo "$w" > "state/heal/stuck-${svc}"
+                _heal_event stuck_waiting "$svc" "${svc} is stuck (running, not answering its health check in time) — heal gives it more time (${w} of ${grace} tick(s)) before restarting it" 0 \
+                    "$(jq -c --argjson w "$w" '. + {waitedTicks: $w}' <<<"$why")"
+                continue
+            fi
+            why="$(jq -c --argjson w "$w" '. + {waitedTicks: $w}' <<<"$why")"
+        fi
+        rm -f "state/heal/stuck-${svc}"
         echo "$(date +%s) ${svc}" >> state/heal/restarts.log
         if docker compose restart "$svc" >/dev/null 2>&1 </dev/null; then
-            _heal_event restarted "$svc" "${svc} was unhealthy" 0
+            case "$cls" in
+                stuck) _heal_event restarted "$svc" "${svc} was stuck (running, not answering its health check in time) — restarted after ${w} more tick(s)" 0 "$why" ;;
+                dead) _heal_event restarted "$svc" "${svc} was not answering (its server was down)" 0 "$why" ;;
+                *) _heal_event restarted "$svc" "${svc} was unhealthy" 0 "$why" ;;
+            esac
         else
-            _heal_event restart_failed "$svc" "docker compose restart ${svc} failed" 1
+            _heal_event restart_failed "$svc" "docker compose restart ${svc} failed" 1 "$why"
         fi
     done <<<"$todo"
     return 0

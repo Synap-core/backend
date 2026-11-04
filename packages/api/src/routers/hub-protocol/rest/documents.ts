@@ -28,6 +28,24 @@ import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { attachCreatedDocument } from "../attach-created-document.js";
 import { preflightAttachToEntity } from "../../../services/entity-body/body-replace-guard.js";
+import type { Context } from "hono";
+import type { HubVariables } from "./_shared.js";
+
+/**
+ * Who read a document, for the one log line of each Hub document read: the
+ * calling key's id, the acting agent when there is one, the person whose
+ * floor the read used and the client's `user-agent`. Never the key secret,
+ * the content or another query value (3 Nov 2026: videos were read
+ * repeatedly and nobody could tell which client read them).
+ */
+function documentReaderFields(c: Context<{ Variables: HubVariables }>) {
+  return {
+    apiKeyId: c.get("apiKeyId") ?? null,
+    agentUserId: c.get("agentUserId") ?? null,
+    userId: c.get("userId") ?? null,
+    userAgent: c.req.header("user-agent") ?? null,
+  };
+}
 
 const UpdateDocumentBodySchema = z.object({
   userId: z.string(),
@@ -253,9 +271,21 @@ export function registerDocumentsRoutes(app: HubHono): void {
         userId,
         ...(format ? { format } : {}),
       });
+      logger.info(
+        {
+          documentId,
+          type: result.document.type,
+          contentOmitted: result.document.contentOmitted ?? null,
+          ...documentReaderFields(c),
+        },
+        "hub document read"
+      );
       return jsonGoverned(c, result);
     } catch (err) {
-      logger.error({ err, documentId }, "getDocument failed");
+      logger.error(
+        { err, documentId, ...documentReaderFields(c) },
+        "getDocument failed"
+      );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)
@@ -283,6 +313,11 @@ export function registerDocumentsRoutes(app: HubHono): void {
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
+      409: {
+        description:
+          "The stored bytes are not text (a video, an audio, an image): `fileUrlPath` names the file door that signs them",
+        schema: ErrorSchema,
+      },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -300,6 +335,30 @@ export function registerDocumentsRoutes(app: HubHono): void {
       const caller = await getCaller(c, { userId });
       const result = await caller.documents.getDocument({ documentId, userId });
       if (!result) return c.json({ error: "Document not found" }, 404);
+      logger.info(
+        {
+          documentId,
+          type: result.document.type,
+          contentOmitted: result.document.contentOmitted ?? null,
+          raw: true,
+          ...documentReaderFields(c),
+        },
+        "hub document read"
+      );
+      // A body whose bytes are not text is never served from here (it was
+      // never downloaded): 409, naming the file door that signs the bytes.
+      if (result.document.contentOmitted) {
+        return c.json(
+          {
+            error:
+              "This document's stored bytes are not text. Fetch them through its file door (`fileUrlPath`).",
+            code: "CONTENT_OMITTED_BINARY",
+            contentOmitted: result.document.contentOmitted,
+            fileUrlPath: result.document.fileUrlPath ?? null,
+          },
+          409
+        );
+      }
 
       const mimeType = "text/plain";
       const filename = (result.document?.title ?? documentId)
@@ -315,7 +374,10 @@ export function registerDocumentsRoutes(app: HubHono): void {
         },
       });
     } catch (err) {
-      logger.error({ err, documentId }, "rawDocument failed");
+      logger.error(
+        { err, documentId, ...documentReaderFields(c) },
+        "rawDocument failed"
+      );
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)

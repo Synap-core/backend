@@ -22,7 +22,10 @@ import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import type { db as DbClient } from "../client-pg.js";
 import { documents } from "../schema/documents.js";
-import { documentVersionContentPreview } from "./document-version-storage.js";
+import {
+  documentVersionContentPreview,
+  isTextMediaType,
+} from "./document-version-storage.js";
 
 /** The prefix the realtime server once stored Yjs state under. */
 export const YJS_STATE_PREFIX = "yjs:";
@@ -98,6 +101,10 @@ export async function loadDocumentBodyTexts(
       // yet — has no body to index.
       if (!key) return;
       const mimeType = key === row.storageKey ? row.mimeType : "text/plain";
+      // A body that is not text (a video, an audio, an image, a PDF) has no
+      // text to index, so it is never downloaded: on 3 Nov 2026 a whole
+      // 126 MB video was loaded into memory here before this answer was "".
+      if (!isTextMediaType(mimeType)) return;
       let body: Buffer;
       try {
         body = await storage.downloadBuffer(key);

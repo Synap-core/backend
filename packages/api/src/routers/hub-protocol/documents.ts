@@ -13,6 +13,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { documentsRouter as regularDocumentsRouter } from "../documents.js";
+import { readableFileEntityIdForDocument } from "../../utils/stored-file-access.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import {
   db,
@@ -505,6 +506,19 @@ export const documentsRouter = router({
       });
       const doc = result.document;
       const raw = result.content ?? "";
+      // A binary body was left in storage (`readOmitsStoredBody`): name the
+      // Hub file door that signs it, through a file entity this caller reads.
+      const omitted =
+        "contentOmitted" in result && result.contentOmitted
+          ? {
+              fileUrlPath: await readableFileEntityIdForDocument(
+                ctx.userId!,
+                doc
+              ).then((entityId) =>
+                entityId ? `/api/hub/files/${entityId}/url` : null
+              ),
+            }
+          : undefined;
       // A file or an oversized document is never parsed on this thread:
       // reading a 126 MB video froze the pod (3 Nov 2026). A stored HTML page
       // gets its page check only (`readsAsPage`: the frame policy, no parse).
@@ -522,7 +536,13 @@ export const documentsRouter = router({
           : unparsedDiagnostics(doc, raw);
 
       return {
-        document: projectAgentDocument(doc, raw, input.format, diagnostics),
+        document: projectAgentDocument(
+          doc,
+          raw,
+          input.format,
+          diagnostics,
+          omitted
+        ),
       };
     }),
 

@@ -2244,7 +2244,9 @@
             ]
           },
           "scope": { "type": ["object", "null"], "additionalProperties": {} },
-          "refreshAutomationId": { "type": ["string", "null"] }
+          "refreshAutomationId": { "type": ["string", "null"] },
+          "contentOmitted": { "type": "string", "enum": ["binary"] },
+          "fileUrlPath": { "type": ["string", "null"] }
         },
         "required": ["id", "userId", "title"],
         "additionalProperties": {}
@@ -11240,6 +11242,14 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The stored bytes are not text (a video, an audio, an image): `fileUrlPath` names the file door that signs them",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

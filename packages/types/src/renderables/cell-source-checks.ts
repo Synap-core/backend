@@ -29,11 +29,27 @@
  *     may run inline script only, and any `import` in it fails.
  *
  * Text checks, not a parser (this subpath stays a leaf: no TypeScript, no
- * acorn). Measured blind spots: an import built at run time
- * (`import(name)`), a URL assembled from parts, a commented-out import that is
- * not at the start of its line (it is still read as an import), and a string
- * that happens to look like an import statement.
+ * acorn), and not a second scanner: every load is read by
+ * `@synap-core/types/cell-bridge` `frameMarkupLoads` / `frameModuleLoads`
+ * (linear in the source, tripwire `one-frame-policy`), and the declared hosts
+ * by `frameExternalOrigins`, the parse the frame's policy uses. This file says
+ * what each load means for a cell, and gives the advice. Measured blind
+ * spots: an import built at run time (`import(name)`), a URL assembled from
+ * parts, a commented-out import that is not at the start of its line (it is
+ * still read as an import), and a string that happens to look like an import
+ * statement.
  */
+
+import { frameExternalOrigins } from "../cell-bridge/external-origins.js";
+import {
+  frameEsmShAt,
+  frameMarkupLoads,
+  frameModuleLoads,
+  frameUrlHost,
+  frameUrlIsInline,
+  frameUrlIsNetwork,
+  type FrameLoad,
+} from "../cell-bridge/network-loads.js";
 
 /**
  * The modules the host hands every `frame` cell through its import map — the
@@ -66,7 +82,8 @@ export type CellSourceRefusalCode =
   | "network_script"
   | "network_stylesheet"
   | "network_request"
-  | "esm_sh";
+  | "esm_sh"
+  | "external_host";
 
 /** What could be better, never a refusal. */
 export type CellSourceAdviceCode =
@@ -113,6 +130,8 @@ const FIX: Record<CellSourceRefusalCode, string> = {
   network_request:
     "The frame reaches no network for data: read through `SynapWidget.query` (the bridge). An installed package may declare the origin in `externalHosts` for a person to approve.",
   esm_sh: `The web and desktop frames refuse any source that names esm.sh. ${BUNDLE_FIX}`,
+  external_host:
+    "Write each host as an origin, its scheme included and nothing after the host: `https://api.vendor.com`. No wildcard, path, query or credentials.",
 };
 
 const ADVICE_FIX: Record<CellSourceAdviceCode, string> = {
@@ -155,52 +174,6 @@ function lineIndex(text: string): (index: number) => number {
 /** Replace `[from, to)` with spaces, keeping newlines. */
 function blankRange(out: string[], from: number, to: number): void {
   for (let i = from; i < to; i++) if (out[i] !== "\n") out[i] = " ";
-}
-
-/** The offset after the spaces and tabs that open the line starting at `lineStart`. */
-function afterIndent(text: string, lineStart: number): number {
-  let j = lineStart;
-  while (text[j] === " " || text[j] === "\t") j++;
-  return j;
-}
-
-/** The start of the line after the one holding `index`, or -1. */
-function nextLine(text: string, index: number): number {
-  const nl = text.indexOf("\n", index);
-  return nl === -1 ? -1 : nl + 1;
-}
-
-/**
- * Blank out comments that open a line (`// …`, and `/* … *\/` blocks that open
- * a line), keeping every newline so line numbers stay true. Comments after
- * code on the same line are kept: a URL's `//` cannot be told from one
- * without a parser.
- */
-function blankLeadingComments(text: string): string {
-  const out = text.split("");
-  // Blocks first: one that opens a line, up to its first `*/`.
-  for (let ls = 0; ls !== -1;) {
-    const j = afterIndent(text, ls);
-    if (text.startsWith("/*", j)) {
-      const end = text.indexOf("*/", j + 2);
-      if (end === -1) break;
-      blankRange(out, j, end + 2);
-      ls = nextLine(text, end + 2);
-    } else {
-      ls = nextLine(text, j);
-    }
-  }
-  // Then line comments, read on what the blocks left.
-  const blocked = out.join("");
-  for (let ls = 0; ls !== -1;) {
-    const j = afterIndent(blocked, ls);
-    const nl = blocked.indexOf("\n", j);
-    if (blocked.startsWith("//", j)) {
-      blankRange(out, j, nl === -1 ? blocked.length : nl);
-    }
-    ls = nl === -1 ? -1 : nl + 1;
-  }
-  return out.join("");
 }
 
 /** Blank out HTML comments, keeping newlines. */
@@ -246,115 +219,6 @@ function tagsOf(markup: string, open: RegExp): Tag[] {
   return tags;
 }
 
-/** The script text of a page, at its own offsets (everything else blanked), so line numbers stay true. */
-function pageScriptText(page: string): string {
-  const out = page.replace(/[^\n]/g, " ").split("");
-  const closing = /<\/script\s*>/gi;
-  for (const tag of tagsOf(page, /<script\b/gi)) {
-    if (tag.end < closing.lastIndex) continue; // inside the body just copied
-    closing.lastIndex = tag.end;
-    const close = closing.exec(page);
-    if (!close) break;
-    for (let i = tag.end; i < close.index; i++) out[i] = page[i]!;
-  }
-  return out.join("");
-}
-
-interface ImportHit {
-  specifier: string;
-  index: number;
-}
-
-const QUOTES = "\"'`";
-
-/** A JS identifier character, `$` included. */
-function isWordChar(ch: string | undefined): boolean {
-  return ch !== undefined && /[\w$]/.test(ch);
-}
-
-/** A character an import clause is made of (`a, { b as c }`, `* as d`, newlines). */
-function isClauseChar(ch: string | undefined): boolean {
-  return ch !== undefined && /[\w$*{}\s,]/.test(ch);
-}
-
-function skipSpace(code: string, i: number): number {
-  while (i < code.length && /\s/.test(code[i]!)) i++;
-  return i;
-}
-
-/**
- * The quoted string opening at `at` (`code[at]` is its quote), when it closes
- * on its line and holds none of `forbidden` (each quote). Its text and the
- * offset after its closing quote.
- */
-function quotedAt(
-  code: string,
-  at: number,
-  forbidden: string
-): { text: string; end: number } | null {
-  const quote = code[at]!;
-  let i = at + 1;
-  while (i < code.length && code[i] !== "\n" && !forbidden.includes(code[i]!)) {
-    i++;
-  }
-  if (i === at + 1 || code[i] !== quote) return null;
-  return { text: code.slice(at + 1, i), end: i + 1 };
-}
-
-/**
- * The module specifiers a source imports, in source order: `import … from
- * "x"`, `import "x"`, `export … from "x"` and `import("x")`. One pass: each
- * `import` / `export` keyword reads its clause only up to the next keyword.
- */
-function importsOf(code: string): ImportHit[] {
-  const keywords: number[] = [];
-  const re = /import|export/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(code))) {
-    const before = code[m.index - 1];
-    if (before === undefined || !(isWordChar(before) || before === ".")) {
-      keywords.push(m.index);
-    }
-  }
-  const hits: ImportHit[] = [];
-  for (let k = 0; k < keywords.length; k++) {
-    const at = keywords[k]!;
-    const limit = keywords[k + 1] ?? code.length;
-    const after = at + 6; // both keywords are 6 letters
-    const first = skipSpace(code, after);
-
-    // import("x")
-    if (code.startsWith("import", at) && code[first] === "(") {
-      const q = skipSpace(code, first + 1);
-      if (QUOTES.includes(code[q] ?? "\0")) {
-        const str = quotedAt(code, q, QUOTES);
-        if (str && code[skipSpace(code, str.end)] === ")") {
-          hits.push({ specifier: str.text, index: q + 1 });
-        }
-      }
-      continue;
-    }
-
-    // import "x" / import … from "x" / export … from "x"
-    let j = after;
-    while (j < limit && isClauseChar(code[j])) j++;
-    if (j >= limit || (code[j] !== '"' && code[j] !== "'")) continue;
-    const clause = code.slice(after, j).trimEnd();
-    if (clause.trim() !== "" && !clause.endsWith("from")) continue;
-    const str = quotedAt(code, j, "\"'");
-    if (str) hits.push({ specifier: str.text, index: j + 1 });
-  }
-  return hits;
-}
-
-function isNetworkUrl(value: string): boolean {
-  return /^(?:https?:)?\/\//i.test(value.trim());
-}
-
-function isInlineUrl(value: string): boolean {
-  return /^(?:data|blob):/i.test(value.trim());
-}
-
 function originOf(url: string): string | null {
   try {
     return new URL(url.startsWith("//") ? `https:${url}` : url).origin;
@@ -364,49 +228,12 @@ function originOf(url: string): string | null {
 }
 
 /**
- * The origin a declared `externalHosts` entry opens in the frame's
- * `connect-src`, or null when the frame drops it. Mirror of synap-app
- * `cell-runtime/ViewFrame.tsx` `buildFrameCsp`: an http(s)/ws(s) origin only;
- * a wildcard, a path, a query, credentials or a host with no scheme
- * (`api.vendor.com`) is dropped, so a request to it is blocked at run time.
- * (backend#730 exports this parse as `frameExternalOrigins`,
- * `@synap-core/types/cell-bridge`; read that once it lands.)
- */
-function frameOriginOf(host: string): string | null {
-  const h = host.trim();
-  if (h.includes("*")) return null;
-  let u: URL;
-  try {
-    u = new URL(h);
-  } catch {
-    return null;
-  }
-  if (!["http:", "https:", "ws:", "wss:"].includes(u.protocol)) return null;
-  if (!u.hostname || u.username || u.password) return null;
-  if (u.pathname !== "/" || u.search || u.hash) return null;
-  return /[\s'";]/.test(u.origin) ? null : u.origin;
-}
-
-/**
- * The value of attribute `name` in one tag's text: quoted (up to the same
- * quote) or bare (up to a space or `>`). The first one only.
- */
-function attrOf(tag: string, name: string): string | null {
-  const m = new RegExp(`\\b${name}\\s*=\\s*`, "i").exec(tag);
-  if (!m) return null;
-  const at = m.index + m[0].length;
-  const quote = tag[at];
-  if (quote === '"' || quote === "'") {
-    const end = tag.indexOf(quote, at + 1);
-    return end === -1 ? null : tag.slice(at + 1, end);
-  }
-  const bare = /^[^\s>"']+/.exec(tag.slice(at));
-  return bare ? bare[0] : null;
-}
-
-/**
  * Check a cell's stored source against what its frame can mount. Pure: the
- * same input always gives the same findings, in source order.
+ * same input always gives the same findings, in source order. Every load is
+ * read by THE scanner (`frameMarkupLoads` for a page, `frameModuleLoads` for
+ * a module, `@synap-core/types/cell-bridge`), and the declared hosts by THE
+ * host rule (`frameExternalOrigins`, the parse the frame's policy uses), so
+ * what this refuses is what the frame would block.
  */
 export function checkCellSource(input: CellSourceCheckInput): CellSourceCheck {
   const refusals: CellSourceFinding<CellSourceRefusalCode>[] = [];
@@ -432,17 +259,49 @@ export function checkCellSource(input: CellSourceCheckInput): CellSourceCheck {
     );
   }
 
-  // ── code: imports, script and stylesheet loads, requests.
   // Every view below keeps the source's offsets, so one line index serves all.
   const lineAt = lineIndex(source);
   const markup = isPage ? blankHtmlComments(source) : source;
-  const code = blankLeadingComments(isPage ? pageScriptText(markup) : source);
 
-  for (const hit of importsOf(code)) {
+  // ── hosts: the frame's policy keeps only a clean origin (scheme, host, no
+  // path); anything else it drops in silence, so every request to it would be
+  // blocked at mount. Refused here, by the same parse. A page reaches no host.
+  // A blank entry declares nothing (the writer drops it, `normalizeStringList`).
+  const declared = isPage
+    ? []
+    : (input.externalHosts ?? []).filter((h) => h.trim() !== "");
+  for (const host of declared) {
+    if (frameExternalOrigins([host]).length === 0) {
+      refuse(
+        "external_host",
+        null,
+        `\`externalHosts\` names "${host}", which is not an origin the frame can reach: the frame drops it, so every request to it is blocked.`
+      );
+    }
+  }
+  const allowed = new Set(frameExternalOrigins(declared));
+  // A ws(s) request is also allowed by its http(s) origin (CSP matches
+  // `https://x` for `wss://x`), never the other way round.
+  const reachable = (origin: string) =>
+    allowed.has(origin) ||
+    (/^wss?:/i.test(origin) && allowed.has(origin.replace(/^ws/i, "http")));
+
+  // ── loads, read by THE scanner: imports, script and stylesheet loads,
+  // requests.
+  const loads = isPage ? frameMarkupLoads(source) : frameModuleLoads(source);
+  const byKind = (kind: FrameLoad["kind"]) =>
+    loads.filter((l) => l.kind === kind);
+  let esmRefused = false;
+  const named = (value: string) => {
+    if (frameUrlHost(value) === "esm.sh") esmRefused = true;
+  };
+
+  for (const hit of byKind("import")) {
     const line = lineAt(hit.index);
-    const s = hit.specifier;
-    if (isInlineUrl(s)) continue;
-    if (isNetworkUrl(s)) {
+    const s = hit.value;
+    if (frameUrlIsInline(s)) continue;
+    if (frameUrlIsNetwork(s)) {
+      named(s);
       refuse(
         "network_import",
         line,
@@ -465,67 +324,50 @@ export function checkCellSource(input: CellSourceCheckInput): CellSourceCheck {
     }
   }
 
-  // The web and desktop frames refuse any source naming esm.sh, wherever it is
-  // (`frameNetworkCodeRefusal`): the import check above may not see it (a URL
-  // in a string), so it is its own refusal unless an import already named it.
-  const esm = /\bhttps?:\/\/esm\.sh\//i.exec(source);
-  if (esm && !refusals.some((r) => /esm\.sh/i.test(r.message))) {
-    const line = lineAt(esm.index);
-    refuse("esm_sh", line, `Line ${line} names esm.sh.`);
+  for (const script of byKind("script")) {
+    if (!script.value || frameUrlIsInline(script.value)) continue;
+    named(script.value);
+    const line = lineAt(script.index);
+    refuse(
+      "network_script",
+      line,
+      `Line ${line} loads the script "${script.value}".`
+    );
   }
-
-  if (isPage) {
-    for (const tag of tagsOf(markup, /<script\b/gi)) {
-      const src = attrOf(tag.text, "src");
-      if (!src || isInlineUrl(src)) continue;
-      const line = lineAt(tag.index);
-      refuse("network_script", line, `Line ${line} loads the script "${src}".`);
-    }
-    for (const tag of tagsOf(markup, /<link\b/gi)) {
-      const rel = attrOf(tag.text, "rel") ?? "";
-      if (!/\b(?:stylesheet|preload|modulepreload)\b/i.test(rel)) continue;
-      const href = attrOf(tag.text, "href") ?? "";
-      if (!href || isInlineUrl(href)) continue;
-      const line = lineAt(tag.index);
-      refuse(
-        "network_stylesheet",
-        line,
-        `Line ${line} loads "${href}" (<link rel="${rel.trim()}">).`
-      );
-    }
-  }
-
-  // CSS `@import` of a remote sheet, in a page's <style> or a module's CSS string.
-  const cssImport =
-    /@import\s+(?:url\(\s*)?(["']?)((?:https?:)?\/\/[^"')\s;]+)\1/gi;
-  let ci: RegExpExecArray | null;
-  while ((ci = cssImport.exec(markup))) {
-    const line = lineAt(ci.index);
+  for (const link of byKind("link")) {
+    const rel = link.rel ?? "";
+    if (!/\b(?:stylesheet|preload|modulepreload)\b/i.test(rel)) continue;
+    if (!link.value || frameUrlIsInline(link.value)) continue;
+    named(link.value);
+    const line = lineAt(link.index);
     refuse(
       "network_stylesheet",
       line,
-      `Line ${line} imports the stylesheet "${ci[2]}".`
+      `Line ${line} loads "${link.value}" (<link rel="${rel}">).`
+    );
+  }
+  // CSS `@import` of a remote sheet, in a page's <style> or a module's CSS string.
+  for (const sheet of byKind("css-import")) {
+    named(sheet.value);
+    const line = lineAt(sheet.index);
+    refuse(
+      "network_stylesheet",
+      line,
+      `Line ${line} imports the stylesheet "${sheet.value}".`
     );
   }
 
+  // The web and desktop frames refuse any source naming esm.sh, wherever it is
+  // (a URL in a string, a comment): its own refusal unless a load named it.
+  const esm = frameEsmShAt(source);
+  if (esm !== -1 && !esmRefused) {
+    const line = lineAt(esm);
+    refuse("esm_sh", line, `Line ${line} names esm.sh.`);
+  }
+
   // Requests to a literal origin the frame may not reach.
-  const allowed = new Set(
-    isPage
-      ? []
-      : (input.externalHosts ?? [])
-          .map(frameOriginOf)
-          .filter((o): o is string => o !== null)
-  );
-  // A ws(s) request is also allowed by its http(s) origin (CSP matches
-  // `https://x` for `wss://x`), never the other way round.
-  const reachable = (origin: string) =>
-    allowed.has(origin) ||
-    (/^wss?:/i.test(origin) && allowed.has(origin.replace(/^ws/i, "http")));
-  const request =
-    /\b(?:fetch|new\s+(?:WebSocket|EventSource))\s*\(\s*(["'`])((?:https?:|wss?:)?\/\/[^"'`\s]+)\1/g;
-  let rq: RegExpExecArray | null;
-  while ((rq = request.exec(code))) {
-    const url = rq[2]!;
+  for (const rq of byKind("request")) {
+    const url = rq.value;
     const origin = originOf(url);
     if (origin && reachable(origin)) continue;
     const line = lineAt(rq.index);

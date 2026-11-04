@@ -229,6 +229,14 @@ describe("a new AI CAN do its daily work", () => {
     expect(mcpToolAllowed("synap_post_message", false, grant)).toBe(true);
   });
 
+  it("waits on its own proposal: GET /proposals/:id passes, the same door as MCP", () => {
+    // `synap proposals await` polls this route; it was refused as undeclared
+    // while `synap_get_proposal` read the same row (finding 9a415c59).
+    const path = `/proposals/${randomUUID()}`;
+    expect(restDoorAllowed("GET", path, grant)).toBe(true);
+    expect(mcpToolAllowed("synap_get_proposal", true, grant)).toBe(true);
+  });
+
   it("rejects (withdraws) its OWN proposal", async () => {
     await asAgentKey(() => {
       assertMayDecideProposal("reject");

@@ -49,6 +49,10 @@ export interface HubDocument {
   userId?: string;
   type?: "text" | "markdown" | "code" | "html" | "pdf" | "docx";
   language?: string | null;
+  /** `binary`: the stored bytes are not text and were left out (`content` is ""). */
+  contentOmitted?: "binary";
+  /** With `contentOmitted`: the Hub file door that signs the bytes, or null. */
+  fileUrlPath?: string | null;
 }
 
 export interface HubChannel {
