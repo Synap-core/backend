@@ -421,6 +421,10 @@ app.get("/status/backup", async (c) =>
   )
 );
 
+// The Synap mark at /favicon.ico, /favicon.svg and /icon.svg: what an MCP
+// client or a favicon service draws for this pod's connector (brand-icons.ts).
+app.route("/", brandIconsApp);
+
 // Root (direct :4000 / dev without Caddy): not the admin SPA — that lives at /admin/
 app.get("/", (c) => {
   return c.json({
@@ -1186,6 +1190,7 @@ app.route("/api/webhooks/intelligence", intelligenceWebhookRouter);
 // Pod-to-Pod Sync receive endpoint (Bearer token auth from registered peers)
 import { syncReceiveApp } from "@synap/api";
 import { registerEventLoopP99Reader } from "@synap/api";
+import { brandIconsApp } from "@synap/api";
 app.route("/api/sync", syncReceiveApp);
 
 // Hub Protocol tRPC bridge — Bearer API-key authenticated tRPC surface used by
