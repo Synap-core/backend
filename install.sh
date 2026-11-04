@@ -137,19 +137,32 @@ SYNAP_RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 SYNAP_COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign:v2.5.3@sha256:f1946d0f30fc8e3777b02f2201e02efdba9fe38f4918162f937052fac98e083f"
 
 # <manifest> <bundle in the same directory> — cosign's verdict. A host cosign
-# wins; otherwise the pinned image runs read-only with no capabilities, the
-# manifest's directory bind-mounted read-only (same flags as `synap`).
+# wins; otherwise the pinned image runs read-only with no capabilities, a
+# read-only bind mount holding the two files (same flags as `synap`).
+# The image runs as its nonroot user (uid 65532), which owns nothing on the
+# host: the manifest's own directory is $WORK, a root-only 0700 mktemp dir, so
+# mounting it made every fresh-host install refuse with "open
+# /release/release.json: permission denied" (CP ticket 2e10228f). The two files
+# are copied into a world-readable directory of their own, whatever the
+# caller's directory mode or umask.
 cosign_verify() {
   local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
               --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
   if command -v cosign >/dev/null 2>&1; then
     cosign "${args[@]}" --bundle "$2" "$1"
   else
-    local dir; dir="$(cd "$(dirname "$1")" && pwd)" || return 1
+    local dir stage="" rc=0
+    dir="$(cd "$(dirname "$1")" && pwd)" || return 1
+    stage="$(mktemp -d "${dir}/.cosign.XXXXXX")" \
+      && cp "$1" "$2" "$stage/" && chmod 0755 "$stage" \
+      && chmod 0644 "$stage/$(basename "$1")" "$stage/$(basename "$2")" \
+      || { echo "could not stage the manifest for the cosign container in ${dir}" >&2; [ -n "$stage" ] && rm -rf "$stage"; return 125; }
     docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
       --tmpfs /home/nonroot:uid=65532,gid=65532 \
-      --mount "type=bind,src=${dir},dst=/release,readonly" "$SYNAP_COSIGN_IMAGE" \
-      "${args[@]}" --bundle "/release/$(basename "$2")" "/release/$(basename "$1")"
+      --mount "type=bind,src=${stage},dst=/release,readonly" "$SYNAP_COSIGN_IMAGE" \
+      "${args[@]}" --bundle "/release/$(basename "$2")" "/release/$(basename "$1")" || rc=$?
+    rm -rf "$stage"
+    return "$rc"
   fi
 }
 
