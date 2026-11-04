@@ -198,3 +198,24 @@ describe("isLivingDocument — the app is the first door (Q8)", () => {
     expect(isLivingDocument(md(CELL, "pdf"))).toBe(false);
   });
 });
+
+describe("documentContent — a body the pod left in storage", () => {
+  it("is a file, never an empty document (contentOmitted: binary)", () => {
+    // A `file` with no stated type would draw as markdown; its content is ""
+    // only because the pod did not download the bytes (3 Nov 2026).
+    const answer = {
+      document: {
+        type: "file",
+        storageKey: "files/ws/take.bin",
+        storageUrl: null,
+        mimeType: null,
+      },
+      content: "",
+      contentOmitted: "binary" as const,
+    };
+    expect(documentContent(null, answer)).toEqual({
+      kind: "file",
+      mimeType: null,
+    });
+  });
+});

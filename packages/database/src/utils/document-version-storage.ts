@@ -1,9 +1,12 @@
 import { storage } from "@synap/storage";
 import type { FileMetadata } from "@synap/storage";
+import { isTextMediaType } from "./text-media-type.js";
 import type {
   NewDocumentVersion,
   DocumentVersion,
 } from "../schema/documents.js";
+
+export { isTextMediaType };
 
 const TEXT_PREVIEW_LIMIT = 64_000;
 
@@ -88,13 +91,7 @@ export function documentVersionContentPreview(
   mimeType?: string | null
 ): string {
   if (Buffer.isBuffer(content)) {
-    const mime = mimeType || "";
-    if (
-      mime.startsWith("text/") ||
-      mime.includes("json") ||
-      mime.includes("html") ||
-      mime.includes("markdown")
-    ) {
+    if (isTextMediaType(mimeType)) {
       return content.toString("utf-8", 0, TEXT_PREVIEW_LIMIT);
     }
     return "";

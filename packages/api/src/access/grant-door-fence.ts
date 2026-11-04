@@ -102,6 +102,17 @@ const REFUSED = (reason: string): FencedReadDoor => ({
   reason,
 });
 
+/**
+ * ONE proposal by id: tRPC `proposals.get`, the row on the person's
+ * visibility floor (`assertProposalVisibleTo`, no grant clause) with the names
+ * of the objects it touches. MCP `synap_get_proposal` and Hub
+ * `GET /proposals/:id` call that same procedure, so they share this one
+ * declaration: a key that reads a proposal over MCP can also wait on it over
+ * REST (`synap proposals await`, `synap app connect`), where it was refused
+ * as undeclared (finding 9a415c59).
+ */
+const PROPOSAL_GET = READS("proposal", "entity");
+
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
@@ -533,6 +544,8 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // transition log, dev facts and proposals, or a PR's dev facts. Same as MCP
   // `synap_get_timeline`.
   [/^\/timeline\/?$/, READS("track", "session", "event", "proposal")],
+  // One proposal: the same door as MCP `synap_get_proposal` (PROPOSAL_GET).
+  [route("/proposals/:id"), PROPOSAL_GET],
   // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
   // every 5xx on the pod, whoever met it. Pod owner or admin only, like
   // `/usage`; no grant can narrow it, so a scoped key is refused.
@@ -686,7 +699,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_workspaces: READS("entity", "project"),
   synap_get_thread_context: READS("channel", "entity", "document"),
   synap_list_proposals: READS("proposal", "entity"),
-  synap_get_proposal: READS("proposal", "entity"),
+  synap_get_proposal: PROPOSAL_GET,
   synap_list_sessions: READS("session", "project"),
   synap_needs_you: READS("session", "proposal", "channel", "entity"),
   // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).

@@ -191,6 +191,12 @@ x-backend-env: &backend-env
   # (packages/api/src/utils/hub-protocol-rate-limit.ts). Empty = the code's
   # default. A refused call carries Retry-After.
   RATE_LIMIT_MCP_MAX: ${RATE_LIMIT_MCP_MAX:-}
+  # Hub request guard (packages/api/src/middleware/hub-request-guard.ts): a
+  # Hub REST or MCP request still running after this many ms answers 503
+  # REQUEST_TIMEOUT, and one key may run at most this many requests at once
+  # (429 TOO_MANY_IN_FLIGHT). Empty = the code's defaults (30000 ms, 32).
+  SYNAP_HUB_REQUEST_TIMEOUT_MS: ${SYNAP_HUB_REQUEST_TIMEOUT_MS:-}
+  SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY: ${SYNAP_HUB_MAX_IN_FLIGHT_PER_KEY:-}
   # Every visitor reaches this pod from ONE client IP (a Cloudflare tunnel's
   # cloudflared peer), so per-IP limits on public pages and forms are one shared
   # bucket. When true, each workspace's public doors are OFF until its owner
@@ -549,6 +555,18 @@ services:
       POSTGRES_DB: synap
       PGDATA: /home/postgres/pgdata/data
       SYNAP_ALLOW_PG_REINIT: ${SYNAP_ALLOW_PG_REINIT:-0}
+      # Sizing (pod resilience plan P5). The image tunes postgresql.conf ONCE,
+      # at initdb (/docker-entrypoint-initdb.d/001_timescaledb_tune.sh runs
+      # timescaledb-tune): shared_buffers = 25% of TS_TUNE_MEMORY,
+      # effective_cache_size = 75%, work_mem sized for TS_TUNE_MAX_CONNS.
+      # `synap install` writes POSTGRES_TUNE_MEMORY (pg_tune_memory: half the
+      # host's RAM, 512MB..8192MB); empty = the image measures the whole host.
+      # An existing cluster is never re-tuned by an update: the opt-in is
+      # `synap tune-postgres`. Memory parameters never go on `command:` below
+      # (pg-connection-budget.test.sh G): a `-c` there would change every
+      # running pod on its next update.
+      TS_TUNE_MEMORY: ${POSTGRES_TUNE_MEMORY:-}
+      TS_TUNE_MAX_CONNS: ${POSTGRES_MAX_CONNECTIONS:-200}
     entrypoint:
       - /bin/sh
       - -c

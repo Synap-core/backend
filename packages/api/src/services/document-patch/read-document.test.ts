@@ -9,6 +9,7 @@ import {
   listDocumentSections,
   projectAgentDocument,
   readableMarkdown,
+  readOmitsStoredBody,
   readsAsMarkdown,
   readsAsPage,
   unparsedDiagnostics,
@@ -240,6 +241,101 @@ describe("projectAgentDocument — a file reads as stored, unparsed", () => {
   });
 });
 
+describe("readOmitsStoredBody — a read never downloads stored bytes that are not text", () => {
+  // 3 Nov 2026: every read of a stored video (46-126 MB) downloaded it whole
+  // and decoded it as UTF-8 before anything looked at its type.
+  const stored = (type: string, mimeType: string | null) => ({
+    type,
+    mimeType,
+    storageKey: "k/blob",
+  });
+
+  it("leaves a video, an audio, an image, a zip in storage", () => {
+    expect(readOmitsStoredBody(stored("file", "video/mp4"))).toBe(true);
+    expect(readOmitsStoredBody(stored("file", "Video/MP4"))).toBe(true);
+    expect(readOmitsStoredBody(stored("text", "audio/wav"))).toBe(true);
+    expect(readOmitsStoredBody(stored("file", "image/png"))).toBe(true);
+    expect(readOmitsStoredBody(stored("file", "application/zip"))).toBe(true);
+    expect(
+      readOmitsStoredBody(stored("file", "application/octet-stream"))
+    ).toBe(true);
+  });
+
+  it("leaves a `file` with no stated type in storage (an upload of bytes)", () => {
+    expect(readOmitsStoredBody(stored("file", null))).toBe(true);
+  });
+
+  it("reads every text body as today", () => {
+    expect(readOmitsStoredBody(stored("markdown", "text/markdown"))).toBe(
+      false
+    );
+    expect(readOmitsStoredBody(stored("markdown", null))).toBe(false);
+    expect(readOmitsStoredBody(stored("file", "text/csv"))).toBe(false);
+    expect(readOmitsStoredBody(stored("code", "application/json"))).toBe(false);
+    expect(readOmitsStoredBody(stored("html", "text/html"))).toBe(false);
+    expect(readOmitsStoredBody(stored("whiteboard", null))).toBe(false);
+  });
+
+  it("reads a PDF and a DOCX (the IS extracts their text from the body)", () => {
+    expect(readOmitsStoredBody(stored("pdf", "application/pdf"))).toBe(false);
+    expect(
+      readOmitsStoredBody(
+        stored(
+          "docx",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+      )
+    ).toBe(false);
+  });
+
+  it("an external reference or an inline body has nothing stored to omit", () => {
+    expect(
+      readOmitsStoredBody({
+        type: "file",
+        mimeType: "video/mp4",
+        storageKey: null,
+      })
+    ).toBe(false);
+  });
+});
+
+describe("projectAgentDocument — a body left in storage says so", () => {
+  const video = {
+    id: "v1",
+    title: "free-take-v1-draft.mp4",
+    type: "file",
+    mimeType: "video/mp4",
+    language: null,
+    workspaceId: "ws-1",
+    contentRevision: 1,
+    currentVersion: 1,
+    scope: null,
+    refreshAutomationId: null,
+    updatedAt: "2026-10-31T00:00:00.000Z",
+    createdAt: "2026-10-31T00:00:00.000Z",
+  };
+
+  it("names the omission and the file door, never an empty document", () => {
+    const out = projectAgentDocument(
+      video,
+      "",
+      "raw",
+      unparsedDiagnostics(video, ""),
+      { fileUrlPath: "/api/hub/files/e1/url" }
+    );
+    expect(out.content).toBe("");
+    expect(out.contentOmitted).toBe("binary");
+    expect(out.fileUrlPath).toBe("/api/hub/files/e1/url");
+  });
+
+  it("a read that omitted nothing carries neither field", () => {
+    const md = { ...video, type: "markdown", mimeType: null };
+    const out = projectAgentDocument(md, "# A", "raw", { items: [] });
+    expect(out).not.toHaveProperty("contentOmitted");
+    expect(out).not.toHaveProperty("fileUrlPath");
+  });
+});
+
 describe("currentDiagnostics — a stored HTML page is checked as a page (frame policy R3)", () => {
   const CDN_PAGE =
     '<!doctype html><html><head><script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script></head><body><canvas></canvas></body></html>';
@@ -307,5 +403,46 @@ describe("readsAsPage — a stored HTML page gets its page check, never a parse"
       false
     );
     expect(readsAsPage({ type: "markdown" }, "# A")).toBe(false);
+  });
+});
+
+describe("currentDiagnostics — a parse that does not finish is 'not checked', and never holds the event loop", () => {
+  // Seconds of parse (thousands of embeds and sections, under the read cap):
+  // the CPU pool's worker runs it and is stopped at the deadline.
+  const heavy = (() => {
+    let s = "# Heavy\n\n";
+    while (s.length < 600_000)
+      s +=
+        '## Part\n\nSome **bold** prose.\n\n:::synap-entity{id="11111111-1111-4111-8111-111111111111"}\nFallback.\n:::\n\n- a\n- b\n\n';
+    return s;
+  })();
+
+  it("past the deadline: { items: null, error } naming why, while a timer kept firing", async () => {
+    expect(heavy.length).toBeLessThan(MARKDOWN_READ_MAX_CHARS);
+    const before = process.env.SYNAP_CPU_TASK_DEADLINE_MS;
+    process.env.SYNAP_CPU_TASK_DEADLINE_MS = "200";
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 10);
+    try {
+      const out = await currentDiagnostics({
+        documentId: "doc-1",
+        workspaceId: null,
+        type: "markdown",
+        metadata: null,
+        revision: 1,
+        content: heavy,
+        readerUserId: "user-1",
+      });
+      expect(out).toEqual({
+        items: null,
+        error:
+          "Diagnostics could not run: the markdown parse for diagnostics ran past its deadline and was stopped (200 ms deadline)",
+      });
+      expect(ticks).toBeGreaterThanOrEqual(10);
+    } finally {
+      clearInterval(timer);
+      if (before === undefined) delete process.env.SYNAP_CPU_TASK_DEADLINE_MS;
+      else process.env.SYNAP_CPU_TASK_DEADLINE_MS = before;
+    }
   });
 });

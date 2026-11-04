@@ -37,6 +37,11 @@ export interface DocumentReadAnswer {
     refreshAutomationId?: string | null;
   };
   content: string;
+  /**
+   * `binary`: the pod left the stored bytes out because they are not text
+   * (`content` is "" by omission, never an empty document).
+   */
+  contentOmitted?: "binary";
 }
 
 const REFERENCE_EMBEDS: ReadonlySet<string> = new Set(EMBED_DIRECTIVES);
@@ -154,7 +159,7 @@ export function documentContent(
   if (!answer) return { kind: "error" };
   const { document, content } = answer;
   const format = documentFormat(document.type, document.mimeType);
-  if (format === null)
+  if (format === null || answer.contentOmitted)
     return { kind: "file", mimeType: document.mimeType ?? null };
   if (!document.storageKey && document.storageUrl) {
     const target = contentHref(content);
