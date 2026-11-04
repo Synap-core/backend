@@ -51,6 +51,7 @@ import { trackHandlers } from "./handlers/track.js";
 import { trackParticipantHandlers } from "./handlers/track-participants.js";
 import { workerHandlers } from "./handlers/workers.js";
 import { devApprovalHandlers } from "./handlers/dev-approval.js";
+import { askPersonHandlers } from "./handlers/ask-person.js";
 import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
 import {
   takeProposalUpdates,
@@ -82,6 +83,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...trackParticipantHandlers,
   ...workerHandlers,
   ...devApprovalHandlers,
+  ...askPersonHandlers,
 };
 
 export async function executeMCPToolViaHubProtocol(

@@ -85,6 +85,7 @@ import {
 // DERIVED from it (below), never hand-copied.
 import {
   ASK_LIMITS,
+  ASK_URGENCIES,
   AskSchema,
   RELAY_SURFACE_MAX_CHARS,
 } from "@synap-core/types/ask";
@@ -722,7 +723,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "THE recall door, for what you cannot already name. Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. " +
+          "THE recall door, for what you cannot already name (it asks the POD; to ask the PERSON, use synap_ask_person). Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. " +
           "COST: an answer (detail full or brief, the default) runs a model and spends this key's AI budget, far smaller than its read budget; detail:'sources' runs no model and is a plain read. " +
           "READ DIRECTLY WHEN YOU CAN: you have the id → synap_get_entity / synap_get_document / synap_get_session; you know the kind → synap_get_entities; you want what links to it → synap_get_graph; your open work → synap_orient. Never ask for something one of those returns. " +
           "Ask when you do not know where the data is, before a non-trivial task or a question about the user's life, work, projects or preferences (the pod is their source of truth, prefer it over your assumptions), and before creating anything, to check what already exists (detail:'sources' is enough for that). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.",
@@ -3087,6 +3088,116 @@ export const tools = {
             },
           },
           required: ["sessionId", "disposition"],
+        },
+      },
+      {
+        name: "synap_ask_person",
+        annotations: {
+          title: "Ask the person",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on a small session opened just for this ask — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. " +
+          "Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. " +
+          "PRIORITY is the pod's, not yours: it derives P0-P3 (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = feed only; P3 = digest). `urgency` is a hint that can only LOWER it ('whenever' never pushes). " +
+          "`dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. " +
+          "Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            question: {
+              type: "string",
+              maxLength: ASK_LIMITS.questionMaxChars,
+              description:
+                "ONE line: what you need from the person ('Publish the launch post today?'). The card's heading.",
+            },
+            ask: {
+              ...ASK_JSON_SCHEMA,
+              description:
+                "HOW the person answers: confirm (yes/no; mark the one you recommend), choose (1-8 options, at most ONE recommended, each with a one-line consequence), form (a small flat form; never a secret), act (a task in the world, with steps and a url; they answer 'I did this'), provide (connection | file | secret, through the vault — never typed in chat). Prefer confirm/choose for a decision. May carry `risk`, `stakes` ('commitment' for deploy, spend, publish, delete: their own tap is then required) and `lookedAt`.",
+            },
+            why: {
+              type: "string",
+              maxLength: 500,
+              description:
+                "ONE line: why it needs the person (what is missing), never a repeat of the question.",
+            },
+            unblocks: {
+              type: "string",
+              maxLength: ASK_LIMITS.unblocksMaxChars,
+              description:
+                "ONE line: what moves once they answer ('the EU launch deploy').",
+            },
+            blockedReason: {
+              type: "string",
+              enum: [...BLOCKED_REASONS],
+              description:
+                "What kind of thing unblocks you. Default from the ask: decision (confirm/choose/form), physical (act, a file), credential (a secret or a connection).",
+            },
+            ref: {
+              description:
+                'Where to go for it: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} in the pod, or {"url":"https://..."}. Refused if you cannot see the object.',
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    kind: { type: "string", enum: [...OUTPUT_REF_KINDS] },
+                    id: { type: "string" },
+                  },
+                  required: ["kind", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: { url: { type: "string", format: "uri" } },
+                  required: ["url"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+            urgency: {
+              type: "string",
+              enum: [...ASK_URGENCIES],
+              description:
+                "A hint: now | today (default) | whenever. It can only LOWER the priority the pod derives; 'whenever' never pushes.",
+            },
+            answerBy: {
+              type: "string",
+              maxLength: ASK_LIMITS.instantMaxChars,
+              description:
+                "When you need the answer: ISO-8601 with its offset ('2026-11-05T17:00:00Z'). Due within the hour, it is their top priority.",
+            },
+            consequence: {
+              type: "string",
+              maxLength: ASK_LIMITS.consequenceMaxChars,
+              description:
+                "ONE line: what the answer will DO ('Publishes the post to LinkedIn').",
+            },
+            reversible: {
+              type: "boolean",
+              description:
+                "Whether what the answer does can be undone. Omit when you do not know.",
+            },
+            dedupeKey: {
+              type: "string",
+              maxLength: ASK_LIMITS.dedupeKeyMaxChars,
+              description:
+                "Your own handle for this ask: the same key again UPDATES your open ask (wherever it was filed) instead of adding a second one.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "Optional: a session of yours, still open, to file it on. Omit it: the ask lands where this conversation's writes are grouped, else on a session of its own.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Optional: the project a NEW one-ask session is filed in (ignored when the ask lands on an existing session).",
+            },
+          },
+          required: ["question", "ask"],
         },
       },
       {

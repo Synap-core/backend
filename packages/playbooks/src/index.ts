@@ -790,7 +790,22 @@ export type SlotAsk = (
   lookedAt?: SlotAskLookedAt[];
   /** How much is at stake: high and medium draw a mark, low draws nothing. */
   risk?: "high" | "medium" | "low";
+  /**
+   * The TICKET fields (mirror of `ticketFields`, `@synap-core/types/ask`):
+   * the asker's urgency HINT (it only lowers the pod-derived priority), the
+   * instant the answer is needed by (ISO-8601 with offset), what the answer
+   * does and whether that can be undone, and the asker's own dedupe handle
+   * (same asker + same key = the same open ask, updated).
+   */
+  urgency?: SlotAskUrgency;
+  answerBy?: string;
+  consequence?: string;
+  reversible?: boolean;
+  dedupeKey?: string;
 };
+
+/** Mirrors `ASK_URGENCIES` (@synap-core/types/ask). */
+export type SlotAskUrgency = "now" | "today" | "whenever";
 
 /** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
 export type SlotAskStakes = "routine" | "commitment";
