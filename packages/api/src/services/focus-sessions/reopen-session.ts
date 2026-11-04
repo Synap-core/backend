@@ -49,6 +49,7 @@ import {
 } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
+import { carrySlotKeys } from "./slot-keys.js";
 
 const logger = createLogger({ module: "reopen-focus-session" });
 
@@ -132,11 +133,10 @@ export async function reopenCancelledSession(params: {
       throw new LifecycleConflictError("cancelled", locked.status);
     }
 
-    const unretired = unretireCancelledSlots(
-      Array.isArray(locked.expectedOutputs)
-        ? (locked.expectedOutputs as ExpectedOutput[])
-        : []
-    );
+    const storedOutputs = Array.isArray(locked.expectedOutputs)
+      ? (locked.expectedOutputs as ExpectedOutput[])
+      : [];
+    const unretired = unretireCancelledSlots(storedOutputs);
 
     const reopened = { at: now.toISOString(), by: userId };
     const { rows } = await setSessionStatus(tx, {
@@ -149,7 +149,11 @@ export async function reopenCancelledSession(params: {
         closedAt: null,
         updatedAt: now,
         ...(unretired.restored > 0
-          ? { expectedOutputs: unretired.outputs }
+          ? {
+              // Every slot keeps its key: the stored one rides the spread,
+              // and one stored without a key is keyed (slot-key tripwire).
+              expectedOutputs: carrySlotKeys(storedOutputs, unretired.outputs),
+            }
           : {}),
         metadata: drizzleSql`jsonb_set(
           coalesce(${focusSessions.metadata}, '{}'::jsonb),
