@@ -137,6 +137,9 @@ async function standingAskSession(input: {
     clientKey,
     // Never turn a conversation's write receipt into the asks session.
     adoptAutoOpened: false,
+    // The marker lookup above IS the dedupe: the goal twin check matches by
+    // goal text, so two agents with one display name would share a session.
+    forceCreate: true,
   });
   if (created.status === "proposed") {
     return {
