@@ -6602,6 +6602,15 @@ _heal_event() { # <status> <service> <reason> [notify 0|1] [why-json]
 #   unhealthy — anything else: restarted at once, as before.
 # The healthcheck command, the restart budget and SYNAP_HEAL_NEVER are untouched.
 
+# A probe of a frozen container must never hold the heal tick (the unit's
+# TimeoutStartSec is 10 min, and no other tick runs meanwhile): each docker
+# call heal makes to read WHY is capped (SYNAP_HEAL_PROBE_TIMEOUT_S, default 20).
+_heal_capped() { # <command…>
+    local t="${SYNAP_HEAL_PROBE_TIMEOUT_S:-20}"
+    case "$t" in ''|*[!0-9]*) t=20 ;; esac
+    if command -v timeout >/dev/null 2>&1; then timeout "$t" "$@"; else "$@"; fi
+}
+
 _heal_json() { # <text> → the text when it is one JSON value, else null
     if [ -n "$1" ] && jq -e . >/dev/null 2>&1 <<<"$1"; then jq -c . <<<"$1"; else echo null; fi
 }
@@ -6611,7 +6620,7 @@ _heal_probe() { # <service>
     case " ${SYNAP_HEAL_PROBE_SERVICES:-backend} " in *" $1 "*) ;; *) echo '{"probe":"skipped"}'; return 0 ;; esac
     local out
     # shellcheck disable=SC2016 # node source, not shell
-    out="$(docker compose exec -T "$1" node -e '
+    out="$(_heal_capped docker compose exec -T "$1" node -e '
 const r = require("http").get("http://localhost:4000/health", { timeout: 5000 }, (res) => {
   let b = ""; res.on("data", (d) => { if (b.length < 262144) b += d; });
   res.on("end", () => { let e = null; try { e = JSON.parse(b).eventLoop || null; } catch {}
@@ -6629,7 +6638,7 @@ r.on("error", (e) => { console.log(JSON.stringify({ probe: e.code === "ECONNREFU
 # request's method, path (already redacted by the backend), running time.
 _heal_last_stall() { # <container id> → JSON object or null
     local line
-    line="$(docker logs --since "${SYNAP_HEAL_STALL_LOG_SINCE:-30m}" --tail 5000 "$1" 2>&1 </dev/null \
+    line="$(_heal_capped docker logs --since "${SYNAP_HEAL_STALL_LOG_SINCE:-30m}" --tail 5000 "$1" 2>&1 </dev/null \
         | grep -F '"msg":"event loop blocked"' | tail -1)" || true
     _heal_json "$(jq -c '{at: .time, blockedMs, inFlight,
         requests: [(.requests // [])[] | {method, path, runningMs, ended}][0:5]}' 2>/dev/null <<<"$line")"
@@ -6639,7 +6648,7 @@ _heal_why() { # <service> → {class, pidAlive, health, probe, eventLoop, lastSt
     local cid raw pid="" health=null probe stall=null
     cid="$(docker compose ps -q "$1" 2>/dev/null | head -1)" || cid=""
     if [ -n "$cid" ]; then
-        raw="$(docker inspect -f '{{.State.Pid}}|{{json .State.Health}}' "$cid" 2>/dev/null)" || raw=""
+        raw="$(_heal_capped docker inspect -f '{{.State.Pid}}|{{json .State.Health}}' "$cid" 2>/dev/null)" || raw=""
         if [ -n "$raw" ]; then pid="${raw%%|*}"; health="$(_heal_json "${raw#*|}")"; fi
     fi
     probe="$(_heal_probe "$1")"

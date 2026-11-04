@@ -131,7 +131,7 @@ case "$1" in
       "compose restart "*) echo "${*: -1}" >> "$F/restarted" ;;
       # heal's why (G7a), only once a test opts in with $F/why
       "compose ps -q "*) [ -e "$F/why" ] && awk -F'|' -v p="$COMPOSE_PROJECT_NAME" -v s="${*: -1}" '$3 == p && $4 == s { print $1 }' "$CT" ;;
-      "compose exec -T "*) [ -e "$F/why" ] && cat "$F/probe-$4" 2>/dev/null ;;
+      "compose exec -T "*) [ -e "$F/probe-hang" ] && exec sleep 60; [ -e "$F/why" ] && cat "$F/probe-$4" 2>/dev/null ;;
     esac; exit 0 ;;
 esac
 exit 0
@@ -441,6 +441,20 @@ sed -i.x 's/^c-backend|\(.*\)|unhealthy$/c-backend|\1|healthy/' "$FAKE/container
 run_synap heal
 [ "$(backend_restarts)" = 0 ] && [ ! -e "$DEPLOY/state/heal/stuck-backend" ] && last_heal recovered | jq -e '.reason | test("no restart was needed")' >/dev/null \
   && ok "(e2) a stuck backend that answers again: never restarted, recovered recorded" || { bad "(e2) unstuck: restarts=$(backend_restarts) $(last_heal recovered)"; show; }
+
+# a probe that hangs (a frozen container) never holds the tick: each docker call
+# heal makes to read why is capped (SYNAP_HEAL_PROBE_TIMEOUT_S); the probe reads
+# "unavailable" and heal goes on. Needs coreutils `timeout` (CI's Linux has it).
+if command -v timeout >/dev/null 2>&1; then
+  why_setup heal-hang '{"probe":"timeout"}' "Error: socket hang up"
+  touch "$FAKE/probe-hang"; t0=$(date +%s)
+  SYNAP_HEAL_PROBE_TIMEOUT_S=1 run_synap heal; took=$(( $(date +%s) - t0 ))
+  [ "$took" -lt 20 ] && last_heal restarted | jq -e '.why.probe == "unavailable"' >/dev/null \
+    && ok "(e2) a hung probe is cut at the cap: heal ended in ${took}s, why.probe unavailable, service restarted" \
+    || { bad "(e2) hung probe: took ${took}s, $(last_heal restarted)"; show; }
+else
+  echo "skip - (e2) hung probe: no coreutils timeout on this host (runs in CI)"
+fi
 
 # postgres stuck too: still never restarted (SYNAP_HEAL_NEVER wins)
 why_setup heal-pg '{"probe":"timeout"}' "Health check exceeded timeout (10s)"
