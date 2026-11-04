@@ -8,18 +8,11 @@
  * "none"; a request THEY sent read as the owner's pending one; a pending read
  * with no date erasing the stored date (which would also stop the 21-day rule).
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 
-// The writer's database handle is not used by these pure rows.
-vi.mock("@synap/database", () => ({
-  db: {},
-  and: () => null,
-  eq: () => null,
-  isNull: () => null,
-  drizzleSql: () => null,
-  LINKEDIN_CONNECTION_VALUES: ["none", "pending", "connected", "ignored"],
-}));
-vi.mock("@synap/database/schema", () => ({ entities: {} }));
+// No database mock: these rows are pure, and `@synap/database`'s client is
+// lazy-connect, so importing the real module opens no socket (the
+// database-mock-total-ratchet tripwire).
 
 import {
   INVITATION_IGNORED_AFTER_DAYS,
