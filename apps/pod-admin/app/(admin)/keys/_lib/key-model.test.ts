@@ -106,6 +106,7 @@ describe("holderHref", () => {
     expect(holderHref(key({ holder: { kind: "app", name: "Invoicer" } }))).toBe(
       null
     );
+    // An agent's key with no holder id has nowhere to open.
     expect(holderHref(key({ holder: { kind: "agent", name: "Claude" } }))).toBe(
       null
     );
@@ -166,8 +167,16 @@ describe("holderHref", () => {
     ).toBe("/computers/c%201");
   });
 
+  it("opens an agent's key on its agent page (the key's holder id)", () => {
+    expect(
+      holderHref(
+        key({ userId: "ag 1", holder: { kind: "agent", name: "Claude" } })
+      )
+    ).toBe("/agents/ag%201");
+  });
+
   it("is null for every other holder, and for a computer key with no holder id", () => {
-    for (const kind of ["app", "agent", "person"] as const)
+    for (const kind of ["app", "person"] as const)
       expect(
         holderHref(key({ userId: "u", holder: { kind, name: "x" } }))
       ).toBeNull();

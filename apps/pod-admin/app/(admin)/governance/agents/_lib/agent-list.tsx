@@ -16,8 +16,7 @@ import { useState } from "react";
 import type { MatrixAgentRow } from "@synap-core/types/agent-matrix";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { trpc } from "../../../../../lib/trpc";
-import { navHref } from "../../../../../lib/console-nav";
-import { openIn } from "../../../../../lib/open-in";
+import { agentHref, navHref } from "../../../../../lib/console-nav";
 import { useT } from "../../../../../lib/i18n/locale-provider";
 import { writesSummary } from "../../../../../lib/agent-writes/agent-writes";
 import { en, fr } from "./copy";
@@ -118,11 +117,7 @@ function AgentRow({
     { agentUserId: agent.agentUserId },
     { staleTime: 60_000, retry: false }
   );
-  const agentHref = openIn({
-    kind: "object",
-    objectKind: "agent",
-    id: agent.agentUserId,
-  }).href;
+  const pageHref = agentHref(agent.agentUserId);
   const who = [
     agent.agentType ? resolveServiceName(agent.agentType) : null,
     computer,
@@ -137,7 +132,7 @@ function AgentRow({
       <Bot className="h-4 w-4 shrink-0 text-foreground/40" aria-hidden />
       <div className="flex min-w-0 flex-1 basis-60 flex-col gap-0.5">
         <Link
-          href={agentHref}
+          href={pageHref}
           className="truncate text-[13px] font-medium text-foreground hover:underline"
         >
           {agent.name}
@@ -185,7 +180,7 @@ function AgentRow({
       <div className="flex shrink-0 items-center gap-2">
         <Button
           as={Link}
-          href={agentHref}
+          href={pageHref}
           size="sm"
           variant="flat"
           radius="md"

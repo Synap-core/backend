@@ -33,8 +33,7 @@ import {
 } from "@synap-core/types/agent-matrix";
 import { resolveMatrixMarkLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
-import { navHref } from "../../../../lib/console-nav";
-import { openIn } from "../../../../lib/open-in";
+import { agentHref, navHref } from "../../../../lib/console-nav";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import {
   AGENT_PARAM,
@@ -245,10 +244,7 @@ function OneAgentGrid({
         <Legend />
         <Button
           as={Link}
-          href={
-            openIn({ kind: "object", objectKind: "agent", id: agentUserId })
-              .href
-          }
+          href={agentHref(agentUserId)}
           size="sm"
           variant="flat"
           radius="md"
