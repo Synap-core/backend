@@ -293,6 +293,16 @@ export const skills = pgTable(
     inputMap: jsonb("input_map").$type<SkillInputMap | null>(),
 
     /**
+     * Which op of its intent's contract this verb implements
+     * (`capability_intents.contract`, 0398): `create`, `status`, `renew` or
+     * `revoke`. A provider qualifies for an intent with a contract when it has
+     * a verb for every required op. NULL = the intent's single default op, so
+     * every verb written before contracts keeps working unchanged. Written by
+     * the definition applier from the catalog skill's `intentOp`.
+     */
+    intentOp: text("intent_op"),
+
+    /**
      * The URLs a READER verb reads — the catalog skill's `urls`, projected by
      * the definition applier (only patterns `isValidUrlPattern` accepts;
      * grammar in `@synap-core/types/url-read`). NULL = not a reader. The intent
@@ -346,8 +356,12 @@ export const skills = pgTable(
     // computer, never in the pod — running it queues a `box_runs` row, and
     // `metadata.box` declares its language, packages, hosts and limits
     // (`services/box-runs/box-spec.ts`). A text column: no DB enum to alter.
+    // `hosted` (0398, plan U1): the verb runs on an INSTALLATION (a service a
+    // capability installed on a computer), which pulls it as a host job. Its
+    // execution lands with the host-job routes (plan U8); until then no door
+    // writes it.
     executionMode: text("execution_mode", {
-      enum: ["sync", "async", "box"],
+      enum: ["sync", "async", "box", "hosted"],
     })
       .notNull()
       .default("sync"),

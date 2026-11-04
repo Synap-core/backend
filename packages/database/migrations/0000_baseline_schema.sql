@@ -2388,6 +2388,9 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "intent" text;
 -- 0368: how this verb's parameters are read from its intent's input (NULL =
 -- not offered to apps for the intent). A RE_APPROVAL field.
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "input_map" jsonb;
+-- 0398: which op of its intent's contract this verb implements (create,
+-- status, renew, revoke). NULL = the intent's single default op.
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "intent_op" text;
 -- 0330: the URL patterns a READER verb declares (`urls` in the catalog; grammar
 -- in `@synap-core/types/url-read`). NULL = not a reader. A RE_APPROVAL field.
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "url_patterns" text[];
@@ -5155,6 +5158,9 @@ CREATE TABLE IF NOT EXISTS "capability_intents" (
 );
 -- 0368: the ONE input shape of an intent (JSON Schema); its seed is in 0368.
 ALTER TABLE "capability_intents" ADD COLUMN IF NOT EXISTS "input_schema" jsonb;
+-- 0398: the intent's contract (ops create/status/renew/revoke, the output every
+-- op returns, constraint keys). NULL = a one-shot intent. Rows seeded in 0398.
+ALTER TABLE "capability_intents" ADD COLUMN IF NOT EXISTS "contract" jsonb;
 
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
