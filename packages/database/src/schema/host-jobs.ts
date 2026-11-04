@@ -133,6 +133,15 @@ export const hostJobs = pgTable(
       mode: "date",
       withTimezone: true,
     }),
+    /**
+     * The last log the runner sent ON REQUEST (masked by the runner), while
+     * the job runs or after; never pushed unasked.
+     */
+    log: jsonb("log").$type<HostJobEvidence["log"]>(),
+    logReceivedAt: timestamp("log_received_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
     evidence: jsonb("evidence").$type<HostJobEvidence>(),
     error: text("error"),
     queuedAt: timestamp("queued_at", { mode: "date", withTimezone: true })
