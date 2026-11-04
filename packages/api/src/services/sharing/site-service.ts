@@ -66,14 +66,16 @@ import {
   uniqueViolationConstraint,
 } from "@synap/database";
 import {
+  cellInstances,
   entities,
   profiles,
   projects,
   relations,
   resourceShares,
+  workspaceMembers,
   workspaces,
 } from "@synap/database/schema";
-import { count, ne, sql } from "drizzle-orm";
+import { count, exists, ne, or, sql } from "drizzle-orm";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
@@ -103,10 +105,16 @@ import {
   type SiteConfigV1,
 } from "./site-config.js";
 import {
+  liveChartWhere,
   liveMemberCounts,
   liveMemberWhere,
   openMemberWorkspaces,
 } from "./site-members.js";
+import { readChartPayload, type ChartMode } from "./chart-payload.js";
+import {
+  resolvePublicDoors,
+  sharedClientIpFromEnv,
+} from "./public-doors-switch.js";
 import { projectPublishedProperties } from "./public-read.js";
 import { clampSiteLimit, SITE_MAX_LIMIT } from "./public-site-read.js";
 import {
@@ -257,9 +265,14 @@ export async function assertCanNarrowSite(
   );
 }
 
+/** Does the home space's policy allow publishing a project (the site)? */
+export function sitePolicyAllows(settings: unknown): boolean {
+  return resolveExposurePolicy(settings).project.public.read === "direct";
+}
+
 /** The home space's policy must allow publishing a project (the site). */
 export function assertSitePolicy(settings: unknown): void {
-  if (resolveExposurePolicy(settings).project.public.read !== "direct") {
+  if (!sitePolicyAllows(settings)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message:

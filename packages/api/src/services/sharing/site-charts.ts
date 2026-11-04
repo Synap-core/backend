@@ -49,9 +49,7 @@ import {
 } from "@synap/database";
 import { cellInstances, resourceShares } from "@synap/database/schema";
 import {
-  WIDGET_BY_KEY,
   chartPropsMadeLive,
-  dataBindingFor,
   hasChartSnapshot,
   isChartCellKey,
   parseChartSnapshot,
@@ -77,6 +75,28 @@ import {
   SLUG_INDEX,
 } from "./site-service.js";
 import { agentOf, type ShareActor } from "./share-service.js";
+import {
+  CELL_KEY_RE,
+  CHART_COLLECTION,
+  CHART_MODES,
+  chartHasQuery,
+  isDate,
+  type ChartMode,
+  type ChartPayload,
+} from "./chart-payload.js";
+
+// The stored payload's shape and decoder live in `chart-payload.ts` (no
+// database, no gate); re-exported so this module stays the one import for
+// the chart doors.
+export {
+  CELL_KEY_RE,
+  CHART_COLLECTION,
+  CHART_MODES,
+  chartHasQuery,
+  readChartPayload,
+  type ChartMode,
+  type ChartPayload,
+} from "./chart-payload.js";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
 
@@ -85,32 +105,10 @@ const notFound = (what: string) =>
 const badRequest = (message: string) =>
   new TRPCError({ code: "BAD_REQUEST", message });
 
-/** The member collection every chart row carries (0397 CHECK). */
-export const CHART_COLLECTION = "@charts";
 /** At most this many charts per publish call (same bound as records). */
 export const SITE_PUBLISH_MAX_CHARTS = 200;
 /** The serialized payload a chart may hold (props + data). */
 export const CHART_PAYLOAD_MAX_BYTES = 256 * 1024;
-/** A cellKey: the catalog's and custom cells' shape. */
-export const CELL_KEY_RE = /^[a-z0-9][a-z0-9._-]{0,99}$/;
-
-export const CHART_MODES = ["snapshot", "live"] as const;
-export type ChartMode = (typeof CHART_MODES)[number];
-
-/**
- * What a chart member row stores in `published_properties`. `data` +
- * `capturedAt` only for a snapshot; a live chart's are read at serve time.
- */
-export interface ChartPayload {
-  v: 1;
-  mode: ChartMode;
-  cellKey: string;
-  title?: string;
-  props: Record<string, unknown>;
-  data?: unknown;
-  capturedAt?: string;
-}
-
 const UUID_ANYWHERE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
@@ -130,47 +128,6 @@ export function publicChartProps(
     out[key] = value;
   }
   return out;
-}
-
-/** Can the pod re-run this cellKey's query (live mode, or a freeze at publish)? */
-export function chartHasQuery(cellKey: string): boolean {
-  if (!isChartCellKey(cellKey)) return false;
-  const def = WIDGET_BY_KEY[cellKey];
-  return !!def && !!dataBindingFor(def)?.supports.includes("query");
-}
-
-const isDate = (v: unknown): v is string =>
-  typeof v === "string" && !Number.isNaN(Date.parse(v));
-
-/**
- * Decode a stored payload, fail-closed: anything unreadable is `null` (the
- * public read then answers the uniform 404, never a half chart).
- */
-export function readChartPayload(raw: unknown): ChartPayload | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const p = raw as Record<string, unknown>;
-  if (p.v !== 1) return null;
-  if (p.mode !== "snapshot" && p.mode !== "live") return null;
-  if (typeof p.cellKey !== "string" || !CELL_KEY_RE.test(p.cellKey))
-    return null;
-  if (!p.props || typeof p.props !== "object" || Array.isArray(p.props))
-    return null;
-  if (p.title !== undefined && typeof p.title !== "string") return null;
-  if (p.mode === "snapshot") {
-    if (!("data" in p) || !isDate(p.capturedAt)) return null;
-  } else if (!chartHasQuery(p.cellKey)) {
-    return null;
-  }
-  return {
-    v: 1,
-    mode: p.mode,
-    cellKey: p.cellKey,
-    ...(typeof p.title === "string" ? { title: p.title } : {}),
-    props: p.props as Record<string, unknown>,
-    ...(p.mode === "snapshot"
-      ? { data: p.data, capturedAt: p.capturedAt as string }
-      : {}),
-  };
 }
 
 /** Rows of the chart's own query, shaped as it draws them, read as `userId`. */

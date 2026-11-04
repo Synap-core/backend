@@ -26,10 +26,16 @@
  */
 
 import { db, and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
-import { entities, relations, resourceShares } from "@synap/database/schema";
+import {
+  cellInstances,
+  entities,
+  relations,
+  resourceShares,
+} from "@synap/database/schema";
 import { count, exists, gt, sql, type SQL } from "drizzle-orm";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { publicDoorsOpenFor } from "./public-doors-switch.js";
+import { CHART_COLLECTION } from "./chart-payload.js";
 
 /** A site the caller resolved: its row id and its project. */
 export interface SiteRef {
@@ -103,6 +109,39 @@ export function liveMemberWhere(
             eq(relations.targetEntityId, site.projectId)
           )
         )
+    )
+  )!;
+}
+
+/**
+ * THE predicate for a site's CHART members (0397, `site-charts.ts`) served
+ * right now: a public `cell` row of the site in the `@charts` collection,
+ * published, not revoked, not expired, from an open workspace, whose cell
+ * instance still exists. The public chart doors (`public-site-charts.ts`) and
+ * the owner's site status both read through it. Whether its stored payload
+ * still decodes is the caller's (`readChartPayload`).
+ */
+export function liveChartWhere(
+  site: { id: string },
+  openWorkspaceIds: readonly string[],
+  now: Date = new Date()
+): SQL {
+  if (openWorkspaceIds.length === 0) return sql`false`;
+  return and(
+    eq(resourceShares.siteShareId, site.id),
+    eq(resourceShares.audience, "public"),
+    eq(resourceShares.resourceType, "cell"),
+    eq(resourceShares.publishedCollection, CHART_COLLECTION),
+    eq(resourceShares.state, "published"),
+    isNull(resourceShares.revokedAt),
+    isNotNull(resourceShares.publishedAt),
+    or(isNull(resourceShares.expiresAt), gt(resourceShares.expiresAt, now)),
+    inArray(resourceShares.workspaceId, [...openWorkspaceIds]),
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(cellInstances)
+        .where(eq(cellInstances.id, resourceShares.resourceId))
     )
   )!;
 }
