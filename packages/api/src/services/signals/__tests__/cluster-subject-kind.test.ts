@@ -16,7 +16,7 @@ const row = (id: string, targetType: string): ClusterInputRow => ({
   id,
   proposalType: "entity.create",
   targetType,
-  targetId: null,
+  targetId: `target-${id}`,
   createdAt: new Date("2026-11-01T10:00:00Z"),
   workspaceId: null,
   data: { title: `Thing ${id}` },
