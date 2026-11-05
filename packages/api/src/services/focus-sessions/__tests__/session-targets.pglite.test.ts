@@ -341,6 +341,11 @@ async function moveAndSync(input: {
 beforeAll(async () => {
   await h.init();
   await h.client!.exec(pgliteAllTablesDdl());
+  // The generated DDL carries no indexes; the link writers' ON CONFLICT
+  // target is the real unique edge (`idx_links_unique_edge`, schema/links.ts).
+  await h.client!.exec(
+    `create unique index if not exists idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type);`
+  );
   await q(
     `insert into users (id, name, email, user_type) values
        ($1, 'Founder', 'f@x', 'human'), ($2, 'Stranger', 's@x', 'human')`,
