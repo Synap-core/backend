@@ -151,6 +151,7 @@ import {
   MAX_AUTO_CONTINUATIONS,
   RUN_CONTINUE_SLOT_LABEL,
   hasNoPersonInTheLoop,
+  runTurnForAnswer,
   type RunTurnsState,
 } from "../run-turn-end.js";
 
@@ -599,6 +600,94 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       (m) => m.id === h.triggers[0]!.userMessageId
     )!;
     expect(notice.content).not.toContain("run-checkpoint");
+  });
+
+  it("one bad record is dropped ON ITS OWN: the rest of the checkpoint rides on (review of backend#816)", async () => {
+    // Before: one record failing an RFC-only uuid check dropped the WHOLE
+    // checkpoint (`.catch(undefined)` on the object), and a pod id with no
+    // version nibble (the IS's own id shape) was such a record.
+    const { sessionId, channelId } = await seedRun();
+    const KEPT = "9d57a207-1c2b-0d3e-0f40-5a6b7c8d9e0f";
+    const r = await completeRun(sessionId, {
+      ...STOPPED,
+      turnKey: "msg-checkpoint-mixed",
+      checkpoint: {
+        records: [
+          { id: "9d57a207", tool: "update_entity" },
+          { id: KEPT, tool: "create_entity" },
+          { id: 42 },
+        ],
+        left: "Left: link the idea.",
+      },
+    });
+    expect(r).toEqual({ code: 200, json: { status: "continued" } });
+    const notice = (await roomMessages(channelId)).find(
+      (m) => m.id === h.triggers[0]!.userMessageId
+    )!;
+    expect(notice.content).toContain("```run-checkpoint");
+    expect(notice.content).toContain(KEPT);
+    expect(notice.content).not.toContain('"9d57a207"');
+    expect((await ledger(sessionId)).turns[0]).toMatchObject({
+      checkpointRecords: 1,
+    });
+  });
+
+  it("the person's yes to 'Keep the run going' wakes a RUN turn: the run's declared tools and the stopped turn's checkpoint (review of backend#816)", async () => {
+    // Before: that answer went through `triggerAutoRespond` with no `run`
+    // (the universal catalogue again) and only a checkpoint COUNT was kept.
+    const { sessionId } = await seedRun();
+    const IDEA = "9d57a207-1c2b-4d3e-8f40-5a6b7c8d9e0f";
+    await completeRun(sessionId, {
+      ...STOPPED,
+      turnKey: "msg-yes-1",
+      checkpoint: {
+        records: [{ id: IDEA, tool: "propose_entity_graph" }],
+        left: "Left: move the ideas to Used.",
+      },
+    });
+    expect((await ledger(sessionId)).lastCheckpoint).toEqual({
+      records: [{ id: IDEA, tool: "propose_entity_graph" }],
+      left: "Left: move the ideas to Used.",
+    });
+    // A later turn that reports no checkpoint keeps the last one.
+    await completeRun(sessionId, { ...STOPPED, turnKey: "msg-yes-2" });
+    h.profiles.length = 0;
+
+    const yes = await runTurnForAnswer({
+      sessionId,
+      userId: OWNER,
+      slotLabel: RUN_CONTINUE_SLOT_LABEL,
+    });
+    expect(yes.run).toMatchObject({ verbs: ["postiz_schedule_post"] });
+    expect(h.profiles).toEqual([
+      expect.objectContaining({ userId: OWNER, sessionId }),
+    ]);
+    expect(yes.checkpointWords).toContain("```run-checkpoint");
+    expect(yes.checkpointWords).toContain(IDEA);
+
+    // Another answer in a live run's room is a run turn too, with no checkpoint.
+    const other = await runTurnForAnswer({
+      sessionId,
+      userId: OWNER,
+      slotLabel: "Findings",
+    });
+    expect(other.run).toBeDefined();
+    expect(other.checkpointWords).toBeUndefined();
+  });
+
+  it("an answer in a room with no live run wakes the normal agent (no run profile)", async () => {
+    const { sessionId, runId } = await seedRun();
+    await q(`update playbook_runs set status = 'completed' where id = $1`, [
+      runId,
+    ]);
+    expect(
+      await runTurnForAnswer({
+        sessionId,
+        userId: OWNER,
+        slotLabel: RUN_CONTINUE_SLOT_LABEL,
+      })
+    ).toEqual({});
+    expect(h.profiles).toHaveLength(0);
   });
 
   it("a malformed report is refused and changes nothing", async () => {

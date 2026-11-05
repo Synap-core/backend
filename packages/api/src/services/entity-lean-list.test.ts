@@ -20,6 +20,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
 
 const {
   ENTITY_STRING_CAP,
+  LEAN_LIST_ARRAY_CAP,
   LEAN_LIST_MAX_PROPERTIES,
   projectLeanEntityList,
   toLeanListRow,
@@ -167,6 +168,39 @@ describe("toLeanListRow — an idea-like kind", () => {
     expect(kept).toHaveLength(LEAN_LIST_MAX_PROPERTIES);
     expect(kept[0]).toBe("idea-pillar"); // a declared entity ref outranks plain numbers
     expect(out.omitted).toHaveLength(4);
+  });
+
+  it("a long list keeps only real items: its full count rides BESIDE it, never inside (review of backend#815)", () => {
+    // Before: a "…[truncated: N items total]" string was appended INSIDE the
+    // list, so a list of entity ids fed back into an update wrote a bogus id.
+    const row = ideaRow(4);
+    const ids = Array.from(
+      { length: LEAN_LIST_ARRAY_CAP + 5 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`
+    );
+    (row.properties as Record<string, unknown>)["idea-tags"] = ids;
+    const out = toLeanListRow(row, ideaShape);
+    expect((out.properties as Record<string, unknown>)["idea-tags"]).toEqual(
+      ids.slice(0, LEAN_LIST_ARRAY_CAP)
+    );
+    expect(out.truncated).toEqual({ "idea-tags": ids.length });
+    expect(toLeanListRow(ideaRow(4), ideaShape)).not.toHaveProperty(
+      "truncated"
+    );
+  });
+
+  it("names a document body or facets the row has but does not carry", () => {
+    const row = ideaRow(5);
+    row.documentId = "44444444-4444-4444-8444-444444444444";
+    row.facets = [{ slug: "client" }];
+    const out = toLeanListRow(row, ideaShape);
+    expect(out).not.toHaveProperty("documentId");
+    expect(out).not.toHaveProperty("facets");
+    expect(out.omitted).toEqual(["documentId", "facets", "layout"]);
+    // Named in fields, it comes back whole and is no longer "omitted".
+    const asked = toLeanListRow(row, ideaShape, { fields: ["documentId"] });
+    expect(asked.documentId).toBe(row.documentId);
+    expect(asked.omitted).toEqual(["facets", "layout"]);
   });
 
   it("keeps the lifecycle property when it disagrees with the status column", () => {

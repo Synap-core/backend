@@ -327,7 +327,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
               "`{ projection: 'lean', entities, note }` whose rows carry id, " +
               "title, kind, status (+ statusCategory/statusLabel) and the " +
               "kind's selected properties, with `omitted` naming the keys " +
-              "left out (the AI list door, finding 4a5b88a7)."
+              "left out and `truncated` the full count of a cut list."
           ),
         fields: z
           .string()
