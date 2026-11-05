@@ -175,6 +175,20 @@ describe("sessionWriteEcho", () => {
     expect(echo.criteria).toEqual(["tsc"]);
   });
 
+  it("a start from a staged session carries the stage keys in order; an unstaged one has no stages field", () => {
+    expect(sessionWriteEcho(fullRow(), { withKeys: true }).stages).toEqual([
+      "plan",
+      "build",
+    ]);
+    const unstaged = sessionWriteEcho(
+      { ...fullRow(), stages: [] },
+      { withKeys: true }
+    );
+    expect(unstaged).not.toHaveProperty("stages");
+    // update and complete echoes never carry the list
+    expect(sessionWriteEcho(fullRow())).not.toHaveProperty("stages");
+  });
+
   it("never invents a field the row does not carry", () => {
     expect(sessionWriteEcho({ id: SID })).toEqual({ id: SID });
   });

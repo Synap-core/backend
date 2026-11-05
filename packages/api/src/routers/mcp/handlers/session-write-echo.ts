@@ -12,9 +12,14 @@
  * Kept: the identity and state an agent continues from: the id, the room
  * (`channelId`, where it posts), status, step, progress, where the session is
  * filed (track, project, space), what it follows and is about. A start also
- * names the outcome and criterion KEYS: the pod derives a key from a label
- * and a playbook brings its own, so the start reply is where the agent learns
- * the keys `completeOutput` and `evaluate_session` take. What is still owed
+ * names the outcome and criterion KEYS and, for a session that has stages (a
+ * start from a staged playbook), the STAGE KEYS in order: the pod derives an
+ * outcome key from a label and a playbook brings its own, so the start reply
+ * is where the agent learns the keys `completeOutput`, `evaluate_session` and
+ * `currentStage` take. The method text renders only the current stage, so
+ * without `stages` the agent would guess the next key. An unstaged session
+ * carries no `stages` field. Update and complete echoes carry none of the
+ * three lists. What is still owed
  * rides `nudges`; the whole row is one `synap_get_session` away.
  *
  * Consumers checked (synap-bridge, synap-cli, synap-app, browser, relay-app,
@@ -24,6 +29,7 @@
  * another field of these replies.
  */
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
+import { deriveSlotKeys } from "../../../services/focus-sessions/slot-keys.js";
 
 /** The row fields every echo carries, in this order. */
 export const SESSION_ECHO_FIELDS = [
@@ -46,13 +52,15 @@ type EchoField = (typeof SESSION_ECHO_FIELDS)[number];
 export type SessionWriteEcho = Partial<Record<EchoField, unknown>> & {
   /** Start only: each outcome's key, label and status. */
   outcomes?: Array<{
-    key: string | undefined;
+    key: string | null;
     label: string;
     status: ExpectedOutput["status"];
     owner?: "human";
   }>;
   /** Start only: the criterion keys `evaluate_session` grades. */
   criteria?: string[];
+  /** Start only, staged sessions only: the stage keys, in order. */
+  stages?: string[];
 };
 
 /**
@@ -74,8 +82,9 @@ export function sessionWriteEcho(
       ? (session.expectedOutputs as ExpectedOutput[])
       : [];
     if (slots.length > 0) {
-      echo.outcomes = slots.map((s) => ({
-        key: s.key,
+      const keys = deriveSlotKeys(slots);
+      echo.outcomes = slots.map((s, i) => ({
+        key: keys[i] ?? null,
         label: s.label,
         status: s.status,
         ...(s.owner === "human" ? { owner: "human" as const } : {}),
@@ -85,6 +94,12 @@ export function sessionWriteEcho(
       ? (session.criteria as SessionCriterion[])
       : [];
     if (criteria.length > 0) echo.criteria = criteria.map((c) => c.key);
+    const stageKeys = Array.isArray(session.stages)
+      ? (session.stages as Array<{ key?: unknown }>)
+          .map((st) => st?.key)
+          .filter((k): k is string => typeof k === "string" && k !== "")
+      : [];
+    if (stageKeys.length > 0) echo.stages = stageKeys;
   }
   return echo;
 }
