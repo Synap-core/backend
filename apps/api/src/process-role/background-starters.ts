@@ -379,6 +379,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       // "Choose an agent" answered ⇒ the run that owed it is re-dispatched
       // through the same executor path, idempotently.
       api.registerAgentChoiceRedispatchReactor();
+      // The self-healing card's answer links each agent to its program (D10).
+      api.registerAgentTemplateAnswerReactor();
       // Same close event again: a session that ENDED with required criteria
       // still unmet is news the founder is told once, on the phone — it is the
       // one moment a course correction is cheap. Re-derives the verdict from
@@ -589,12 +591,16 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           reconcileChangedCapabilityTemplates,
           notifyCapabilityUpdatesAvailable,
           installOfficialAgentTemplates,
+          selfHealAgentTemplateLinks,
         } = await import("@synap/api");
         registerOfficialCatalogSyncedHandler(async () => {
           // The catalog installs every official agent template on every pod
-          // (founder decision D8). First, and it never throws, so a failed
-          // capability converge below cannot skip it.
+          // (founder decision D8), then links the agents whose program is
+          // clear and asks the person once for the rest (D10). First, and
+          // neither throws, so a failed capability converge below cannot
+          // skip them.
           await installOfficialAgentTemplates();
+          await selfHealAgentTemplateLinks();
           const report = await reconcileChangedCapabilityTemplates();
           if (report) await notifyCapabilityUpdatesAvailable(report);
         });
