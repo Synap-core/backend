@@ -307,6 +307,15 @@ const runsOf = async (id: string) =>
     )
   ).rows;
 
+/** Widening proposals filed for following CAP_PLAYBOOK on this session. */
+const wideningsFor = async (sessionId: string): Promise<number> =>
+  (
+    await q<{ n: number }>(
+      `select count(*)::int as n from proposals where data->>'sessionId' = $1 and data->>'followPlaybookId' = $2`,
+      [sessionId, CAP_PLAYBOOK]
+    )
+  ).rows[0]!.n;
+
 /** Depth-first: the first value under `key` anywhere in a reply. */
 function find(obj: unknown, key: string): unknown {
   if (!obj || typeof obj !== "object") return undefined;
@@ -718,6 +727,10 @@ describe("(g) a playbook that grants capabilities stays a proposal (real floor)"
     });
     const start = await rowOf(id);
     expect(start.playbook_id).toBeNull();
+    // Nobody asked for that bind, so no widening was filed for it either: the
+    // follow door would have filed one had the facts tried (the start's floor
+    // in `bindOnFacts`, not the follow door's own, keeps this at zero).
+    expect(await wideningsFor(id)).toBe(0);
 
     const out = await mcp("synap_update_session", {
       sessionId: id,
@@ -728,5 +741,7 @@ describe("(g) a playbook that grants capabilities stays a proposal (real floor)"
     );
     expect((await rowOf(id)).playbook_id).toBeNull();
     expect(await runsOf(id)).toEqual([]);
+    // The agent's own follow IS held for review: exactly one widening.
+    expect(await wideningsFor(id)).toBe(1);
   });
 });
