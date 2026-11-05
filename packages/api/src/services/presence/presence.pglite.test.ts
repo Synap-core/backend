@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   client: null as null | { exec: (sql: string) => Promise<unknown> },
   events: [] as Array<{ type: string; data: Record<string, unknown> }>,
   passkeys: [] as Array<Record<string, unknown>>,
+  notices: [] as Array<{ type: string; userId: string }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -56,6 +57,16 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: h.db, EventRepository };
 });
 
+// The mode change and factor notices: only who was told is read here.
+vi.mock("../../notifications/NotificationService.js", () => ({
+  NotificationService: {
+    create: async (n: { type: string; userId: string }) => {
+      h.notices.push({ type: n.type, userId: n.userId });
+    },
+  },
+}));
+vi.mock("../../utils/audit-log.js", () => ({ auditLog: () => undefined }));
+
 vi.mock("@synap/auth", () => ({
   kratosAdmin: {
     getIdentity: async () => ({
@@ -66,8 +77,15 @@ vi.mock("@synap/auth", () => ({
   },
 }));
 
-const { assertPresenceForApproval, assertPresenceForRequest } =
-  await import("./gate.js");
+const {
+  assertPresenceForAction,
+  assertPresenceForApproval,
+  assertPresenceForRequest,
+} = await import("./gate.js");
+const { invalidatePresenceMode, readPresenceMode } = await import("./mode.js");
+const { changePresenceMode } = await import("./mode-change.js");
+const { redeemPasskeyChangeGrant } = await import("./passkey-change.js");
+const { assertMayEnrollDeviceKey } = await import("./factors.js");
 const { issuePresenceChallenge, passkeyRpId } = await import("./proof.js");
 const { presenceMessage } = await import("@synap-core/types/presence");
 
@@ -222,7 +240,11 @@ describe("proof of presence: the gate", () => {
       create table presence_challenges (
         id uuid primary key default gen_random_uuid(), user_id text not null, subject text not null,
         nonce text not null, expires_at timestamptz not null, consumed_at timestamptz,
-        method text, device_key_id uuid, created_at timestamptz not null default now());
+        method text, device_key_id uuid, created_at timestamptz not null default now(),
+        redeemed_at timestamptz);
+      create table pod_settings (
+        id uuid primary key default gen_random_uuid(), settings jsonb not null default '{}'::jsonb,
+        created_at timestamptz not null default now(), updated_at timestamptz not null default now());
       create table presence_device_keys (
         id uuid primary key default gen_random_uuid(), user_id text not null, label text not null,
         public_key text not null, last_used_at timestamptz, revoked_at timestamptz,
@@ -526,5 +548,207 @@ describe("proof of presence: decisions that settle no proposal (slice 2)", () =>
       "accepted"
     );
     expect(h.events.map((e) => e.type)).toEqual(["presence.missing"]);
+  });
+});
+
+describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
+  beforeEach(() => {
+    process.env.PUBLIC_URL = POD;
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    h.events.length = 0;
+    h.notices.length = 0;
+    h.passkeys = [];
+    invalidatePresenceMode();
+  });
+  afterEach(() => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    invalidatePresenceMode();
+  });
+
+  const proofFor = async (subject: string) => {
+    const c = await challengeFor(subject);
+    return {
+      kind: "device_key",
+      challengeId: c.challengeId,
+      keyId: deviceKeyId,
+      signature: deviceSign(c.message),
+    };
+  };
+  const action = (path: string, input: unknown, proof?: unknown) =>
+    assertPresenceForAction({
+      userId: PERSON,
+      path,
+      input,
+      proof: (proof ?? null) as never,
+    });
+
+  it("GUARDRAIL: a sensitive action with no proof is refused (enforce); an everyday path asks nothing", async () => {
+    const input = { keyName: "ci", expiresInDays: 30 };
+    const { presenceActionDigest } = await import("@synap-core/types/presence");
+    const err = await action("apiKeys.create", input).catch(
+      (e: { cause?: { reasonCode?: string; proposalId?: string } }) => e.cause
+    );
+    expect(err).toMatchObject({
+      reasonCode: "PRESENCE_REQUIRED",
+      proposalId: `action:apiKeys.create:${await presenceActionDigest("apiKeys.create", input)}`,
+    });
+    expect(await action("shares.share", input)).toBeNull();
+  });
+
+  it("GUARDRAIL: a proof binds the path AND the input: it acts once, never on other input", async () => {
+    const { presenceActionDigest, presenceActionSubject } =
+      await import("@synap-core/types/presence");
+    const input = { keyName: "ci", expiresInDays: 30 };
+    const proof = await proofFor(
+      presenceActionSubject(
+        "apiKeys.create",
+        await presenceActionDigest("apiKeys.create", input)
+      )
+    );
+    expect(
+      await refusal(
+        action("apiKeys.create", { ...input, expiresInDays: 365 }, proof)
+      )
+    ).toBe("PRESENCE_INVALID");
+    expect(await refusal(action("apiKeys.rotate", input, proof))).toBe(
+      "PRESENCE_INVALID"
+    );
+    // The proof rides in the input it was made for: the digest ignores it.
+    expect(
+      await refusal(
+        action("apiKeys.create", { ...input, presence: proof }, proof)
+      )
+    ).toBe("accepted");
+    expect(await refusal(action("apiKeys.create", input, proof))).toBe(
+      "PRESENCE_USED"
+    );
+  });
+
+  it("GUARDRAIL: the pod setting drives the mode; ON is free, OFF needs a proof and tells the admins", async () => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    expect((await readPresenceMode()).mode).toBe("report");
+    expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe("accepted");
+    await changePresenceMode({ userId: PERSON, mode: "enforce" });
+    expect(await readPresenceMode()).toMatchObject({
+      mode: "enforce",
+      source: "setting",
+      changedBy: PERSON,
+    });
+    expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+    // Off: refused without a proof, then accepted with one, and recorded.
+    expect(
+      await refusal(changePresenceMode({ userId: PERSON, mode: "report" }))
+    ).toBe("PRESENCE_REQUIRED");
+    expect((await readPresenceMode()).mode).toBe("enforce");
+    const proof = await proofFor("presence_mode:report");
+    expect(
+      await refusal(
+        changePresenceMode({
+          userId: PERSON,
+          mode: "report",
+          proof: proof as never,
+        })
+      )
+    ).toBe("accepted");
+    expect((await readPresenceMode()).mode).toBe("report");
+    expect(h.events.map((e) => e.type)).toContain("presence.mode_changed");
+  });
+
+  it("the operator env floor forces enforce and cannot be switched off here", async () => {
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    expect(await readPresenceMode()).toMatchObject({
+      mode: "enforce",
+      source: "env",
+    });
+    const proof = await proofFor("presence_mode:report");
+    expect(
+      await refusal(
+        changePresenceMode({
+          userId: PERSON,
+          mode: "report",
+          proof: proof as never,
+        })
+      )
+    ).toMatch(/operator/);
+  });
+
+  it("GUARDRAIL: a second device key needs a proof from an existing factor; the first does not", async () => {
+    const { presenceKeyFingerprint } =
+      await import("@synap-core/types/presence");
+    const fresh = crypto.generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const freshPublic = b64u(
+      fresh.publicKey.export({ type: "spki", format: "der" })
+    );
+    // PERSON already holds a device key: refused without a proof.
+    expect(
+      await refusal(
+        assertMayEnrollDeviceKey({ userId: PERSON, publicKey: freshPublic })
+      )
+    ).toBe("PRESENCE_REQUIRED");
+    const proof = await proofFor(
+      `device_enroll:${await presenceKeyFingerprint(freshPublic)}`
+    );
+    expect(
+      await refusal(
+        assertMayEnrollDeviceKey({
+          userId: PERSON,
+          publicKey: freshPublic,
+          proof: proof as never,
+        })
+      )
+    ).toBe("accepted");
+    // OTHER holds no factor: their first key needs none.
+    expect(
+      await refusal(
+        assertMayEnrollDeviceKey({ userId: OTHER, publicKey: freshPublic })
+      )
+    ).toBe("accepted");
+  });
+
+  it("GUARDRAIL: one passkey-change proof is redeemed once, and only within 5 minutes", async () => {
+    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+    const proof = await proofFor(`passkey_change:${PERSON}`);
+    await assertPresenceForRequest({
+      userId: PERSON,
+      kind: "passkey_change",
+      id: PERSON,
+      proof: proof as never,
+      door: "test",
+    });
+    expect(await redeemPasskeyChangeGrant(OTHER)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(true);
+    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+    // An old grant does not redeem.
+    const old = await proofFor(`passkey_change:${PERSON}`);
+    await assertPresenceForRequest({
+      userId: PERSON,
+      kind: "passkey_change",
+      id: PERSON,
+      proof: old as never,
+      door: "test",
+    });
+    await h.client!.exec(
+      `update presence_challenges set consumed_at = now() - interval '6 minutes' where redeemed_at is null`
+    );
+    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+  });
+
+  it("the router enrols through assertMayEnrollDeviceKey BEFORE it spends the enrolment challenge", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(
+      join(__dirname, "../../routers/presence.ts"),
+      "utf8"
+    );
+    const enroll = src.slice(src.indexOf("    enroll: protectedProcedure"));
+    const gateAt = enroll.indexOf("assertMayEnrollDeviceKey(");
+    const spendAt = enroll.indexOf(".update(presenceChallenges)");
+    expect(gateAt).toBeGreaterThan(0);
+    expect(spendAt).toBeGreaterThan(gateAt);
+    expect(src).toMatch(/return changePresenceMode\(/);
   });
 });

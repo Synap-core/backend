@@ -1,4 +1,5 @@
 import { presenceProofSchema } from "@synap-core/types/presence";
+import { presenceInput } from "../utils/presence-input.js";
 import { assertPresenceForRequest } from "../services/presence/gate.js";
 import {
   router,
@@ -115,6 +116,7 @@ export const trustedIssuersRouter = router({
     }),
 
   adminRegister: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       z.object({

@@ -5730,6 +5730,10 @@ CREATE TABLE IF NOT EXISTS "presence_challenges" (
 CREATE INDEX IF NOT EXISTS "presence_challenges_user_subject_idx"
   ON "presence_challenges" ("user_id", "subject");
 
+-- 0401: a passkey-change grant redeemed by Kratos' settings guard — mirrors 0401_presence_redeemed.sql.
+ALTER TABLE "presence_challenges"
+  ADD COLUMN IF NOT EXISTS "redeemed_at" timestamptz;
+
 CREATE TABLE IF NOT EXISTS "presence_device_keys" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"      text        NOT NULL,

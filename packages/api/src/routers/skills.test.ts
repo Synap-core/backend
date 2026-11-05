@@ -23,6 +23,16 @@ const { mockCheckPermissionOrPropose, mockDbInsert, mockInsertedRow } =
 // The caller is the pod owner, who holds the skill authority (audit F6:
 // publishing or changing a pod-wide skill needs it). Who is refused is
 // pinned by skills.pod-skill-authority.test.ts; this file tests other things.
+// The proof-of-presence mode (W3 slice 3) is a pod setting read from the
+// database this file mocks: follow the env, as before the setting existed.
+vi.mock("../services/presence/mode.js", () => ({
+  readPresenceMode: async () => ({
+    mode: process.env.SYNAP_PRESENCE_PROOF === "enforce" ? "enforce" : "report",
+    source: "default",
+    changedBy: null,
+    changedAt: null,
+  }),
+}));
 vi.mock("../services/skills/skill-write-authority.js", () => ({
   holdsSkillAuthority: async () => true,
   assertMayChangeSkill: async () => undefined,

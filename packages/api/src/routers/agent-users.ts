@@ -5,6 +5,7 @@
  * Workspace owners/admins can create, list, update, and remove agent users.
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import {
   router,
@@ -390,6 +391,7 @@ export const agentUsersRouter = router({
    * Create an AI agent user and add it to a workspace
    */
   create: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         // Required for a workspace agent; omit for a pod-wide agent (no
@@ -812,6 +814,7 @@ export const agentUsersRouter = router({
    * Update an AI agent user
    */
   update: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -1034,6 +1037,7 @@ export const agentUsersRouter = router({
    * name. Per-space ask-first stays on `update({ askFirst })`.
    */
   setPosture: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         agentUserId: z.string().uuid(),

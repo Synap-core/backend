@@ -5,6 +5,8 @@
  * Wired in `generate_kratos_config` (`synap`), both with `can_interrupt: true`:
  *
  *   POST /settings/guard — `settings.after.{password,passkey,profile,oidc}`.
+ *     The passkey hook calls `?method=passkey`: a person who already holds a
+ *     proof factor changes passkeys only with a redeemed proof (W3 slice 3).
  *     Kratos v1.3.1 runs a can_interrupt settings web_hook PRE-PERSIST
  *     (selfservice/hook/web_hook.go ExecuteSettingsPrePersistHook), so a 403
  *     with `messages` aborts the change before the identity is written. The
@@ -27,6 +29,7 @@ import { Hono } from "hono";
 import {
   CLOUD_SESSION_CANNOT_CHANGE_CREDENTIALS,
   CLOUD_SIGN_IN_DISABLED,
+  PASSKEY_CHANGE_NEEDS_PRESENCE,
 } from "@synap-core/types/kratos-messages";
 import type { CloudTrustMode } from "@synap-core/types/account-recovery";
 import {
@@ -42,6 +45,18 @@ export interface CloudTrustHookDeps {
   resolveSession(cookieValue: string): Promise<KratosSessionLike | null>;
   /** Password / passkey in Kratos, or unused recovery codes. Throws on a failed read. */
   accountHasPodHeldFactor(identityId: string): Promise<boolean>;
+  /**
+   * A passkey change (`?method=passkey`, W3 slice 3, founder decision 2): a
+   * person who already holds a proof factor (a passkey, a Relay device key)
+   * changes passkeys only by redeeming a proof from one of them
+   * (`presence.authorizePasskeyChange`), once. Each read throws on failure.
+   */
+  passkeyChange: {
+    hasProofFactor(identityId: string): Promise<boolean>;
+    redeemGrant(identityId: string): Promise<boolean>;
+    /** Tell the person; never throws (the change is about to land). */
+    notify(identityId: string): Promise<void>;
+  };
   logger: {
     info(obj: Record<string, unknown>, msg?: string): void;
     error(obj: Record<string, unknown>, msg?: string): void;
@@ -97,6 +112,17 @@ export function createCloudTrustHookRouter(deps: CloudTrustHookDeps) {
           refusalBody(CLOUD_SESSION_CANNOT_CHANGE_CREDENTIALS),
           403
         );
+      }
+      if (c.req.query("method") === "passkey") {
+        const guarded = await deps.passkeyChange.hasProofFactor(identityId);
+        if (guarded && !(await deps.passkeyChange.redeemGrant(identityId))) {
+          deps.logger.info(
+            { identityId },
+            "[synap:auth] passkey change refused: no proof from an existing factor"
+          );
+          return c.json(refusalBody(PASSKEY_CHANGE_NEEDS_PRESENCE), 403);
+        }
+        await deps.passkeyChange.notify(identityId);
       }
       return c.body(null, 204);
     } catch (err) {

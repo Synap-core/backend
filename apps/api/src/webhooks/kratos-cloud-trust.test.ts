@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   CLOUD_SESSION_CANNOT_CHANGE_CREDENTIALS,
   CLOUD_SIGN_IN_DISABLED,
+  PASSKEY_CHANGE_NEEDS_PRESENCE,
 } from "@synap-core/types/kratos-messages";
 import type { CloudTrustMode } from "@synap-core/types/account-recovery";
 import {
@@ -40,7 +41,12 @@ function world(opts: {
   sessions?: Record<string, KratosSessionLike | null>;
   podHeld?: boolean;
   failRead?: boolean;
+  /** W3 slice 3: does the person hold a proof factor, and a grant to redeem? */
+  proofFactor?: boolean;
+  grants?: number;
+  notified?: string[];
 }) {
+  let grants = opts.grants ?? 0;
   const deps: CloudTrustHookDeps = {
     readCloudTrust: async () => {
       if (opts.failRead) throw new Error("db down");
@@ -48,6 +54,17 @@ function world(opts: {
     },
     resolveSession: async (cookie) => opts.sessions?.[cookie] ?? null,
     accountHasPodHeldFactor: async () => opts.podHeld ?? true,
+    passkeyChange: {
+      hasProofFactor: async () => opts.proofFactor ?? false,
+      redeemGrant: async () => {
+        if (grants <= 0) return false;
+        grants -= 1;
+        return true;
+      },
+      notify: async (identityId) => {
+        opts.notified?.push(identityId);
+      },
+    },
     logger: { info: () => undefined, error: () => undefined },
   };
   return createCloudTrustHookRouter(deps);
@@ -56,9 +73,10 @@ function world(opts: {
 function settings(
   router: ReturnType<typeof world>,
   body: unknown,
-  secret = SECRET
+  secret = SECRET,
+  path = "/settings/guard"
 ) {
-  return router.request("/settings/guard", {
+  return router.request(path, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret },
     body: JSON.stringify(body),
@@ -139,6 +157,52 @@ describe("POST /settings/guard", () => {
   it("rejects a wrong webhook secret", async () => {
     const res = await settings(world({}), { identity_id: ID }, "nope");
     expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /settings/guard?method=passkey (W3 slice 3, founder decision 2)", () => {
+  const passkey = (w: ReturnType<typeof world>) =>
+    settings(
+      w,
+      { identity_id: ID, session_cookie: "c1" },
+      SECRET,
+      "/settings/guard?method=passkey"
+    );
+
+  it("GUARDRAIL: a person who holds a proof factor cannot change passkeys without a proof", async () => {
+    const res = await passkey(
+      world({ sessions: { c1: passwordSession }, proofFactor: true })
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.messages[0].messages[0]).toMatchObject({
+      id: PASSKEY_CHANGE_NEEDS_PRESENCE.id,
+      type: "error",
+    });
+  });
+
+  it("one proof allows ONE change, and the person is told", async () => {
+    const notified: string[] = [];
+    const w = world({
+      sessions: { c1: passwordSession },
+      proofFactor: true,
+      grants: 1,
+      notified,
+    });
+    expect((await passkey(w)).status).toBe(204);
+    expect(notified).toEqual([ID]);
+    expect((await passkey(w)).status).toBe(403);
+  });
+
+  it("the first passkey needs no proof (no factor yet); other methods are not asked", async () => {
+    expect(
+      (await passkey(world({ sessions: { c1: passwordSession } }))).status
+    ).toBe(204);
+    const res = await settings(
+      world({ sessions: { c1: passwordSession }, proofFactor: true }),
+      { identity_id: ID, session_cookie: "c1" }
+    );
+    expect(res.status).toBe(204);
   });
 });
 

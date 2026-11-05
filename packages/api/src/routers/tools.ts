@@ -6,6 +6,7 @@
  * `get` also returns the skills that `require` this tool (the links graph),
  * so a tool detail page can show "the skills that use it".
  */
+import { proofCheckedByApproval } from "../utils/presence-input.js";
 import { presenceProofSchema } from "@synap-core/types/presence";
 import { assertPresenceForRequest } from "../services/presence/gate.js";
 import { z } from "zod";
@@ -411,8 +412,9 @@ export const toolsRouter = router({
       // Approval is the human step — refuse an acting agent first.
       refuseAgentApprover(ctx.agentUserId);
       const userId = requireUserId(ctx.userId);
-      // Turning OFF only takes power away; turning ON needs the person.
-      if (input.approved) {
+      // Turning OFF only takes power away; turning ON needs the person
+      // (unless the capability.enable executor calls: its approval checked).
+      if (input.approved && !proofCheckedByApproval(ctx)) {
         await assertPresenceForRequest({
           userId,
           kind: "tool",

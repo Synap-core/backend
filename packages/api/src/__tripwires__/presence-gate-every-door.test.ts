@@ -27,6 +27,7 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   PRESENCE_REQUEST_KINDS,
+  SENSITIVE_ACTIONS,
   SENSITIVE_APPROVALS,
   SENSITIVE_PROPOSAL_TYPE_PREFIXES,
 } from "@synap-core/types/presence";
@@ -246,7 +247,228 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     ]);
     expect(holders('presenceChecked: "applyProposalApproval",')).toEqual([
       "routers/proposals/executors/agent.ts",
+      "routers/proposals/executors/capability.ts",
       "routers/proposals/executors/skill.ts",
     ]);
+  });
+
+  // ── W3 slice 3: sensitive ACTIONS (founder decision 1, 4 Nov) ──────────────
+
+  /**
+   * Credential doors that need no proof of presence, and why. Keyed by tRPC
+   * path, or by `<file> <name>` for a procedure spread into a router from
+   * another file (no path the scan can name). Rows marked FOUNDER are a
+   * default the PR names for the founder to confirm.
+   */
+  const EVERYDAY_CREDENTIAL_DOORS: Record<string, string> = {
+    "apiKeys.getDeviceRequest": "a read of a pending device request",
+    "apiKeys.getKeyRequest": "a read of a pending key request",
+    "applicationConnections.redeemRequest":
+      "redeems a connection request already approved at applicationConnections.approveRequest (gated)",
+    "apps.create":
+      "registers an app with no reach; its reach comes from apps.requestAccess, an app/connect approval (gated)",
+    "apps.requestAccess":
+      "files an app/connect proposal; approving it is gated",
+    "apps.rename": "a label",
+    "apps.narrow": "only takes reach away",
+    "apps.revoke": "only takes power away",
+    "apps.remove": "only takes power away",
+    "apps.adminRevoke": "only takes power away",
+    "apps.adminRemove": "only takes power away",
+    "apps.adminRevokeClient": "only takes power away",
+    "machines.rename": "a label",
+    "machines.revoke": "only takes power away",
+    "govConfig.revoke": "only takes power away",
+    "focusSessions.grantCapability":
+      "a tool for ONE session room; an AI's grant routes to a proposal (checkPermissionOrPropose)",
+    "relations.exposeToAnchor":
+      "client-portal exposure on one anchor; the exposure floor scopes what it reads",
+    "relations.grantAnchorMembership":
+      "client-portal membership on one anchor; the exposure floor scopes what it reads",
+    "capabilities.install":
+      "FOUNDER: installs a catalog pack the person chose; the grants it writes take a step-up where written",
+    "capabilities.applyUpdates":
+      "FOUNDER: updates installed catalog packs; the grants it writes take a step-up where written",
+    "marketplace.install":
+      "FOUNDER: installs a catalog package the person chose",
+    "packageUpdates.applyUpdate": "FOUNDER: updates an installed package",
+    "forms.create": "FOUNDER: a form whose public link posts into the pod",
+    "forms.update": "FOUNDER: a form whose public link posts into the pod",
+    "shares.share":
+      "FOUNDER: shares the person's own content; revocable; no key or rule over the pod",
+    "shares.rotateLink": "replaces a share link (the old one stops)",
+    "shares.publish": "FOUNDER: publishes the person's own content; revocable",
+    "shares.configureSite": "FOUNDER: a public site of the person's content",
+    "shares.publishSite": "FOUNDER: a public site of the person's content",
+    "shares.rotateSiteToken": "replaces a site token (the old one stops)",
+    "shares.publishToSite":
+      "FOUNDER: publishes the person's content to their site",
+    "shares.publishChartsToSite":
+      "FOUNDER: publishes the person's charts to their site",
+    "integrations.create":
+      "FOUNDER: an outbound webhook delivers events the person chose",
+    "integrations.update":
+      "FOUNDER: an outbound webhook delivers events the person chose",
+    "integrations.createForWorkspace":
+      "FOUNDER: an outbound webhook delivers events the person chose",
+    "integrations.toggleForWorkspace": "FOUNDER: switches a workspace webhook",
+    "integrations.adminCreateForWorkspace":
+      "FOUNDER: an outbound webhook (pod admin)",
+    "integrations.adminToggleForWorkspace":
+      "FOUNDER: switches a workspace webhook (pod admin)",
+    "integrations.adminCreateInboundSource":
+      "FOUNDER: an inbound source posts INTO the pod with its own secret",
+    "integrations.adminRotateInboundSourceSecret":
+      "replaces an inbound source's secret (the old one stops)",
+    "routers/workspaces.ts installFromCatalog":
+      "FOUNDER: installs a workspace template the person chose",
+    "routers/workspaces.ts ensureTemplate":
+      "FOUNDER: installs a workspace template the person chose",
+    "routers/workspaces/definition-engine.ts createFromDefinition":
+      "FOUNDER: creates a workspace from a definition",
+    "routers/workspaces/definition-engine.ts reconcileFromDefinition":
+      "FOUNDER: reconciles a workspace with its definition",
+    "routers/workspaces/definition-engine.ts applyDefinition":
+      "FOUNDER: applies a workspace definition",
+    "routers/workspaces/invites.ts addMember":
+      "FOUNDER: adds a member who signs in with their own credentials",
+    "routers/workspaces/invites.ts updateMemberRole":
+      "FOUNDER: changes a member's role (can make someone an admin)",
+    "routers/workspaces/invites.ts createInvite":
+      "FOUNDER: an invitation the invitee redeems with their own sign-in",
+    "routers/workspaces/invites.ts regenerateInvite":
+      "replaces an invitation link (the old one stops)",
+  };
+
+  /**
+   * Every credential door: a router entry whose builder chain carries
+   * `credentialProcedure` or `requireFreshAuthentication`, with its tRPC path
+   * (the root mounts `<key>: <xRouter>`; the entry belongs to the nearest
+   * `export const <xRouter> = router({` above it).
+   */
+  function credentialDoors(): Array<{
+    key: string;
+    path: string | null;
+    body: string;
+  }> {
+    const root = FILES.find((f) => f.path === "root.ts")!.src;
+    const prefixOf = new Map<string, string>();
+    for (const m of root.matchAll(/^ {2}(\w+):\s*(\w+Router)\s*,?\s*$/gm)) {
+      prefixOf.set(m[2]!, m[1]!);
+    }
+    const out: Array<{ key: string; path: string | null; body: string }> = [];
+    for (const f of FILES.filter((x) => x.path.startsWith("routers/"))) {
+      const routers = [
+        ...f.src.matchAll(/export const (\w+)\s*(?::[^=]+)?=\s*router\(\{/g),
+      ].map((m) => ({ name: m[1]!, at: m.index! }));
+      const starts = [
+        ...f.src.matchAll(/^ {2}([A-Za-z]+):\s*([A-Za-z]+Procedure)\b/gm),
+      ];
+      starts.forEach((m, i) => {
+        const body = f.src.slice(m.index, starts[i + 1]?.index ?? undefined);
+        const head = body.split(/\.(?:mutation|query|subscription)\(/)[0]!;
+        if (!/\bcredentialProcedure\b|requireFreshAuthentication/.test(head)) {
+          return;
+        }
+        const owner = routers.filter((r) => r.at < m.index!).pop()?.name;
+        const prefix = owner ? prefixOf.get(owner) : undefined;
+        out.push({
+          key: `${f.path} ${m[1]}`,
+          path: prefix ? `${prefix}.${m[1]}` : null,
+          body,
+        });
+      });
+    }
+    return out;
+  }
+
+  /** A door that already asks for its own request's or approval's proof. */
+  const GATED_ITSELF =
+    /\bassertPresenceFor(?:Request|Approval)\(|\bapplyProposalApproval\(|\bdecideOAuthAuthorization\(|\bsetSkillApproved\(/;
+
+  it("every credential door is a sensitive action, gates its own request, or is listed as everyday", () => {
+    const doors = credentialDoors();
+    // Non-vacuity: the scan sees the doors the founder named, by path.
+    expect(doors.map((d) => d.path)).toEqual(
+      expect.arrayContaining([
+        "apiKeys.create",
+        "governanceRules.widenCell",
+        "apiKeys.setMachineDefaults",
+      ])
+    );
+    expect(doors.length).toBeGreaterThan(70);
+    const unclassified = doors
+      .filter(
+        (d) =>
+          !(d.path && d.path in SENSITIVE_ACTIONS) &&
+          !GATED_ITSELF.test(d.body) &&
+          !((d.path ?? d.key) in EVERYDAY_CREDENTIAL_DOORS)
+      )
+      .map((d) => d.path ?? d.key);
+    expect(
+      unclassified,
+      "Add the door to SENSITIVE_ACTIONS (@synap-core/types/presence) or to EVERYDAY_CREDENTIAL_DOORS with the reason"
+    ).toEqual([]);
+    // Both lists stay true: each names a real credential door.
+    const known = new Set(doors.map((d) => d.path ?? d.key));
+    expect(
+      Object.keys(SENSITIVE_ACTIONS).filter((p) => !known.has(p)),
+      "SENSITIVE_ACTIONS names a path that is no credential door (renamed? not credentialProcedure?)"
+    ).toEqual([]);
+    expect(
+      Object.keys(EVERYDAY_CREDENTIAL_DOORS).filter((k) => !known.has(k)),
+      "EVERYDAY_CREDENTIAL_DOORS names a door that no longer exists"
+    ).toEqual([]);
+  });
+
+  it("the ONE step-up middleware asks SENSITIVE_ACTIONS for a proof bound to the call", () => {
+    const trpc = FILES.find((f) => f.path === "trpc.ts")!.src;
+    const mw = trpc.slice(
+      trpc.indexOf("export const requireFreshAuthentication"),
+      trpc.indexOf("export const credentialProcedure")
+    );
+    expect(mw).toMatch(/sensitiveActionReason\(opts\.path\)/);
+    expect(mw).toMatch(/assertPresenceForAction\(/);
+    expect(mw).toMatch(/getRawInput\(\)/);
+  });
+
+  /** Writes that turn a skill, tool or MCP server ON with no gate, and why. */
+  const ON_WRITERS: Record<string, string> = {
+    "routers/intelligence.ts":
+      "provisions the pod's own Firecrawl MCP service for the workspace (intelligence.provisionMcpService)",
+    "routers/proposals/executors/workspace.ts":
+      "a workspace/template proposal's own tools and skills, applied on its (person's) approval",
+    "routers/proposals/executors/skill.ts":
+      "the skill/create executor: skill/create is a sensitive approval",
+    "routers/hub-protocol/rest/mcp-servers.ts":
+      "selects the column (a read: `columns: { approved: true }`), writes nothing",
+    "connectors/materialize-tools.ts":
+      "a connector's own tools, materialized when the person connects it",
+    "services/capabilities/ensure-system-skills.ts":
+      "boot seed: the pod's own system skills",
+    "services/capabilities/ensure-synap-core.ts":
+      "boot seed: the Synap core pack",
+  };
+
+  it("every write that turns a skill, tool or MCP server ON is gated or listed", () => {
+    const writers = FILES.filter((f) =>
+      /^\s+(?:\.set\(\{\s*)?approved: true\b(?!.*\/\/ read)/m.test(
+        f.src.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "")
+      )
+    ).map((f) => f.path);
+    expect(writers.length).toBeGreaterThan(3);
+    const unlisted = writers.filter(
+      (p) =>
+        !(p in ON_WRITERS) &&
+        !GATED_ITSELF.test(FILES.find((f) => f.path === p)!.src)
+    );
+    expect(
+      unlisted,
+      "Gate this write (assertPresenceForRequest) or list it in ON_WRITERS with the reason"
+    ).toEqual([]);
+    expect(
+      Object.keys(ON_WRITERS).filter((p) => !writers.includes(p)),
+      "ON_WRITERS names a file that no longer turns anything on"
+    ).toEqual([]);
   });
 });
