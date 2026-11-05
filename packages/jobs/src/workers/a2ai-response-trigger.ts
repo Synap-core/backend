@@ -41,7 +41,10 @@ import {
   requestHeadlessChatText,
   isRetryableHubError,
 } from "@synap/intelligence-client";
-import type { ISPartialFailure } from "@synap/intelligence-client";
+import type {
+  ISPartialFailure,
+  RunToolProfile,
+} from "@synap/intelligence-client";
 import {
   and,
   chatTurns,
@@ -73,6 +76,9 @@ export interface A2AIResponseTriggerData {
   /** Server-built per-turn context (e.g. a comment's resolved `anchor`),
    *  forwarded verbatim as the IS `turnContext`. */
   turnContext?: Record<string, unknown> | null;
+  /** Set when the turn works a playbook run: its declared tools, forwarded
+   *  verbatim as the IS `run` (see `RunToolProfile`). */
+  run?: RunToolProfile | null;
   /** Pre-resolved intelligence service URL */
   serviceUrl: string;
   /** Pre-resolved API key (decrypted) for the intelligence service */
@@ -287,6 +293,7 @@ async function callIntelligenceHub(
     focusSessionId?: string | null;
     agentUserId?: string;
     turnContext?: Record<string, unknown>;
+    run?: RunToolProfile;
     agentOverrides?: AgentTurnOverrides | null;
   }
 ): Promise<{
@@ -463,6 +470,7 @@ export async function handleA2AIResponseTrigger(
       focusSessionId: job.data.focusSessionId,
       agentUserId,
       ...(job.data.turnContext ? { turnContext: job.data.turnContext } : {}),
+      ...(job.data.run ? { run: job.data.run } : {}),
       ...(agentOverrides !== undefined ? { agentOverrides } : {}),
     });
     fullContent = result.text;
