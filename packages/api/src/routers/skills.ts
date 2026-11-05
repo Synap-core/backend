@@ -6,6 +6,7 @@
  * Skills are stored in the backend, executed in the Intelligence Service.
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -2187,7 +2188,14 @@ export const skillsRouter = router({
    * backend/IS executor and is not loaded as an agent tool.
    */
   setApproved: protectedProcedure
-    .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        approved: z.boolean(),
+        /** Proof of presence (W3): turning a verb ON is setup. */
+        presence: presenceProofSchema.optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // One door with `capabilities.setToolEnabled`: same gate, audit, resync.
       const skill = await setSkillApproved({
@@ -2195,6 +2203,8 @@ export const skillsRouter = router({
         skillId: input.id,
         approved: input.approved,
         agentUserId: ctx.agentUserId,
+        presence: input.presence ?? null,
+        door: "trpc.skills.setApproved",
       });
       return { skill };
     }),

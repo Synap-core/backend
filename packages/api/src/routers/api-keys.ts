@@ -5,6 +5,8 @@
  * SECURITY: Keys are displayed ONCE and never stored in plaintext.
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import {
   router,
   protectedProcedure,
@@ -944,11 +946,24 @@ export const apiKeysRouter = router({
           )
           .max(8)
           .nullish(),
+        /** Proof of presence (W3): connecting a computer is setup. */
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, APPROVE_COMPUTER_SIGNED_IN);
-      return decideDeviceRequest({ ...input, personId: ctx.userId });
+      const { presence, ...decision } = input;
+      if (decision.decision === "approve") {
+        await assertPresenceForRequest({
+          userId: ctx.userId,
+          kind: "device_request",
+          id: decision.requestId,
+          proof: presence ?? null,
+          door: "trpc.apiKeys.decideDeviceRequest",
+          requestedFrom: decision.computerName ?? null,
+        });
+      }
+      return decideDeviceRequest({ ...decision, personId: ctx.userId });
     }),
 
   /**
@@ -990,11 +1005,22 @@ export const apiKeysRouter = router({
             }),
           })
           .optional(),
+        /** Proof of presence (W3): a key that acts as the person is setup. */
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, APPROVE_KEY_REQUEST_SIGNED_IN);
       if (input.draft) assertGrantInput(input.draft.grant);
+      if (input.decision === "approve") {
+        await assertPresenceForRequest({
+          userId: ctx.userId,
+          kind: "key_request",
+          id: input.requestId,
+          proof: input.presence ?? null,
+          door: "trpc.apiKeys.decideKeyRequest",
+        });
+      }
       return decideKeyRequest({
         requestId: input.requestId,
         personUserId: ctx.userId,
@@ -1595,6 +1621,9 @@ export const apiKeysRouter = router({
         // "Sign in with Synap": the `appSignIn.fingerprint` the screen
         // rendered — an approval is only for exactly what was shown.
         appSignInFingerprint: z.string().max(128).optional(),
+        // Proof of presence (W3): connecting an app or an AI client is setup.
+        // The challenge names this authorization (`oauthConsent`).
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

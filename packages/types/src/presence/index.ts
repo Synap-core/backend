@@ -34,11 +34,20 @@ export const PRESENCE_INVALID = "PRESENCE_INVALID" as const;
 export const PRESENCE_EXPIRED = "PRESENCE_EXPIRED" as const;
 export const PRESENCE_USED = "PRESENCE_USED" as const;
 
-export type PresenceRefusalCode =
-  | typeof PRESENCE_REQUIRED
-  | typeof PRESENCE_INVALID
-  | typeof PRESENCE_EXPIRED
-  | typeof PRESENCE_USED;
+/** Every refusal code, so a client tells a presence refusal from any other. */
+export const PRESENCE_REFUSAL_CODES = [
+  PRESENCE_REQUIRED,
+  PRESENCE_INVALID,
+  PRESENCE_EXPIRED,
+  PRESENCE_USED,
+] as const;
+
+export type PresenceRefusalCode = (typeof PRESENCE_REFUSAL_CODES)[number];
+
+/** Is `code` (an error's `data.reasonCode`, a Hub `code`) a presence refusal? */
+export function isPresenceCode(code: unknown): code is PresenceRefusalCode {
+  return (PRESENCE_REFUSAL_CODES as readonly unknown[]).includes(code);
+}
 
 /** Why an approval is sensitive. */
 export type SensitiveReason = "setup" | "governance" | "deploy" | "deletion";
@@ -55,6 +64,10 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   "agent/updateCapabilities": "setup",
   "app/connect": "setup",
   "tool/create": "setup",
+  // A skill created or changed by approval may turn a verb ON (founder, 4 Nov:
+  // turning a tool or skill on is sensitive).
+  "skill/create": "setup",
+  "skill/update": "setup",
   "apiKey/create": "setup",
   "vault/grant": "setup",
   "vault/vault.request": "setup",
@@ -147,36 +160,6 @@ export function enrollmentSubject(challengeId: string): string {
   return `enroll:${challengeId}`;
 }
 
-/** A WebAuthn assertion as JSON, every byte field base64url. */
-export interface PasskeyAssertionJSON {
-  id: string;
-  rawId: string;
-  type: "public-key";
-  response: {
-    clientDataJSON: string;
-    authenticatorData: string;
-    signature: string;
-    userHandle?: string | null;
-  };
-  clientExtensionResults?: Record<string, unknown>;
-  authenticatorAttachment?: string | null;
-}
-
-/** What an approval carries to prove the person is there. */
-export type PresenceProof =
-  | {
-      kind: "device_key";
-      challengeId: string;
-      keyId: string;
-      /** DER ECDSA P-256 SHA-256 over `presenceMessage`, base64url. */
-      signature: string;
-    }
-  | {
-      kind: "passkey";
-      challengeId: string;
-      credential: PasskeyAssertionJSON;
-    };
-
 /** How the audit names the approver: "Antoine (approved with Face ID on iPhone, requested from MacBook-Pro)". */
 export function presenceActorLabel(parts: {
   person: string;
@@ -200,7 +183,7 @@ const b64urlString = z
   .max(8192)
   .regex(/^[A-Za-z0-9_-]+$/, "base64url");
 
-/** The wire shape of a `PresenceProof` (every door parses it with this). */
+/** The wire shape of a proof (every door parses it with this). */
 export const presenceProofSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("device_key"),
@@ -226,3 +209,84 @@ export const presenceProofSchema = z.discriminatedUnion("kind", [
     }),
   }),
 ]);
+
+/**
+ * What an approval carries to prove the person is there: the wire schema's
+ * own type, so the two can never drift. A device key signs `presenceMessage`
+ * (DER ECDSA P-256 SHA-256, base64url); a passkey answers the WebAuthn
+ * challenge.
+ */
+export type PresenceProof = z.infer<typeof presenceProofSchema>;
+
+/** A WebAuthn assertion as JSON, every byte field base64url. */
+export type PasskeyAssertionJSON = Extract<
+  PresenceProof,
+  { kind: "passkey" }
+>["credential"];
+
+/**
+ * The sensitive decisions that settle NO proposal (W3 slice 2): each door
+ * decides its own request, so the challenge names that request,
+ * `<kind>:<id>`. One row per door; the tripwire
+ * `presence-gate-every-door` derives the approve/decide procedures and fails
+ * when one is neither gated nor listed as everyday.
+ */
+export const PRESENCE_REQUEST_KINDS = {
+  /** apiKeys.decideKeyRequest: a key the CLI asked for, minted as the person. */
+  key_request: "setup",
+  /** apiKeys.decideDeviceRequest: a computer and its agents. */
+  device_request: "setup",
+  /** apiKeys.decideOAuthAuthorization: an app or MCP client connected by consent. */
+  oauth_consent: "setup",
+  /** applicationConnections.approveRequest: a federated application. */
+  app_connection_request: "setup",
+  /** mcpServers.setApproved: an MCP server's tools given to the AIs. */
+  mcp_server: "setup",
+  /** intelligenceRegistry.approveMcp: an AI service's MCP endpoint. */
+  intelligence_mcp: "setup",
+  /** skills.setApproved, capabilities.setToolEnabled, Hub /skills/:id/approve: a verb turned ON. */
+  skill: "setup",
+  /** tools.setApproved, Hub /tools/:id/approve: a tool turned ON. */
+  tool: "setup",
+  /** trustedIssuers.approve: what an outside issuer may do on the pod. */
+  trusted_issuer: "governance",
+  /** marketplace.approveKeyChange: trusting a catalog source's new signing key. */
+  marketplace_key: "governance",
+} as const satisfies Record<string, SensitiveReason>;
+
+export type PresenceRequestKind = keyof typeof PRESENCE_REQUEST_KINDS;
+
+/** The challenge subject of a request a door decides: `<kind>:<id>`. */
+export function presenceRequestSubject(
+  kind: PresenceRequestKind,
+  id: string
+): string {
+  return `${kind}:${id}`;
+}
+
+/**
+ * The id of one OAuth authorization (a consent screen): the parameters the
+ * person is shown, hashed. The consent page asks for a challenge with the same
+ * parameters, so the proof names THIS authorization. Async: Web Crypto, so the
+ * browser computes the same id as the pod.
+ */
+export async function oauthConsentId(params: {
+  clientId: string;
+  redirectUri: string;
+  codeChallenge?: string | null;
+  state?: string | null;
+}): Promise<string> {
+  const text = [
+    params.clientId,
+    params.redirectUri,
+    params.codeChallenge ?? "",
+    params.state ?? "",
+  ].join("\n");
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text)
+  );
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
