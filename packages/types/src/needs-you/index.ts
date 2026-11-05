@@ -743,4 +743,5 @@ export {
 
 /** THE needs-you rule and its folds (decision E) — see `./rule.ts`. */
 export * from "./rule.js";
+export * from "./set-aside.js";
 export * from "./priority.js";

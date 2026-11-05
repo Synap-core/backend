@@ -549,6 +549,9 @@ export const expectedOutputWireSchema = z.object({
   // The agent's pick-up receipt — stamped by `answer-pickup.ts` only. On the
   // wire for the same round-trip reason as `answer`.
   answerPickedUpAt: z.string().optional(),
+  // The person's "Later" on an owed ask — stamped by `ask-later.ts` only. On
+  // the wire for the same round-trip reason as `answerPickedUpAt`.
+  laterUntil: z.string().optional(),
   // A commitment's relayed answer awaiting the person's tap — stamped by the
   // relay door only. On the wire for the same round-trip reason as `answer`.
   pendingRelay: PendingRelayedAnswerSchema.optional(),
@@ -741,6 +744,10 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The agent's "Picked up" receipt (`answer-pickup.ts`). An agent that could
   // author it would tell the person it read an answer it never read.
   "answerPickedUpAt",
+  // The person's "Later" on an owed ask (`ask-later.ts`). An agent that could
+  // author it would push its own ask out of the person's headline, or pull a
+  // set-aside one back into it.
+  "laterUntil",
   // Prior answers (`answer-history.ts`). An agent that could author it would
   // rewrite what the person said before.
   "answerHistory",

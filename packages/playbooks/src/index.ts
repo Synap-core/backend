@@ -626,6 +626,15 @@ export interface ExpectedOutput {
    */
   answerPickedUpAt?: string;
   /**
+   * The person set this owed ask aside until then ("Later", founder decision
+   * 9bc9f75c): Review later for them until that instant, back on its own
+   * after it (`isSetAside`, `@synap-core/types/needs-you`). SERVER-STAMPED by
+   * the Later door only (api `ask-later.ts`), never by a client or an agent.
+   * ISO timestamp. Cleared by the door's Undo; an answer or a hand-back makes
+   * the slot no longer owed, so a stale one is read by nobody.
+   */
+  laterUntil?: string;
+  /**
    * A relayed answer to a `commitment` ask, waiting for the person's tap — see
    * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
    * slot stays owed (`owner: 'human'`) while it is here, and the person's

@@ -1107,6 +1107,8 @@ export interface FocusSessionExpectedOutput {
    * `answer` without it = answered, still waiting for the agent.
    */
   answerPickedUpAt?: string;
+  /** The person set this ask aside until then ("Later"; pod-stamped). */
+  laterUntil?: string;
   /**
    * A relayed answer to a `commitment` ask, waiting for the person's tap
    * (pod-stamped; the slot stays owed while it is here).

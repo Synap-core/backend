@@ -361,6 +361,42 @@ describe("review_later: a real ask owed more than 7 days", () => {
   });
 });
 
+describe("review_later: the person set the ask aside (Later, decision 9bc9f75c)", () => {
+  const until = (ms: number) => new Date(NOW + ms).toISOString();
+
+  it("folds until its time, and is back in the headline after it", () => {
+    expect(
+      classifyOwedAsk({ ...ask, laterUntil: until(3_600_000) }, live, NOW)
+    ).toBe("review_later");
+    expect(
+      classifyOwedAsk({ ...ask, laterUntil: until(-60_000) }, live, NOW)
+    ).toBe("needs_you");
+  });
+
+  it("wins over working and over an open PR: the person chose when to look", () => {
+    const aside = { ...ask, laterUntil: until(3_600_000) };
+    expect(classifyOwedAsk(aside, { ...live, turnInFlight: true }, NOW)).toBe(
+      "review_later"
+    );
+    expect(classifyOwedAsk(aside, { ...live, blocksOpenPr: true }, NOW)).toBe(
+      "review_later"
+    );
+  });
+
+  it("an unreadable stamp is no Later; a slot nobody owes stays in no list", () => {
+    expect(
+      classifyOwedAsk({ ...ask, laterUntil: "not a time" }, live, NOW)
+    ).toBe("needs_you");
+    expect(
+      classifyOwedAsk(
+        { ...ask, status: "done", laterUntil: until(3_600_000) },
+        live,
+        NOW
+      )
+    ).toBeNull();
+  });
+});
+
 describe("blocks an open PR: never aged into Review later, never Stopped", () => {
   const blocking: NeedsYouSessionFacts = { ...live, blocksOpenPr: true };
   const old: NeedsYouSlotFacts = { ...ask, owedSince: ago(9 * DAY) };
