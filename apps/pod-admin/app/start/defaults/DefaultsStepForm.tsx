@@ -46,17 +46,14 @@ import {
 
 const CATALOGS = { en, fr };
 
-async function recordDefaultsStep(): Promise<boolean> {
-  try {
-    const res = await fetch("/api/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "defaults" }),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+/** Record going past the step. Throws when the pod did not record it. */
+async function recordDefaultsStep(): Promise<void> {
+  const res = await fetch("/api/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "defaults" }),
+  });
+  if (!res.ok) throw new Error(`The pod answered ${res.status}.`);
 }
 
 export function DefaultsStepForm() {
@@ -155,13 +152,17 @@ export function DefaultsStepForm() {
   const onContinue = async () => {
     setPending(true);
     setRecordFailed(false);
-    if (await recordDefaultsStep()) {
-      // The SERVER sends the person to the step the pod now says is next.
-      window.location.assign("/start");
+    try {
+      await recordDefaultsStep();
+    } catch {
+      // A failed record is shown (the alert under the switches), never
+      // passed over: the step stays, with Continue to try again.
+      setRecordFailed(true);
+      setPending(false);
       return;
     }
-    setRecordFailed(true);
-    setPending(false);
+    // The SERVER sends the person to the step the pod now says is next.
+    window.location.assign("/start");
   };
 
   return (
