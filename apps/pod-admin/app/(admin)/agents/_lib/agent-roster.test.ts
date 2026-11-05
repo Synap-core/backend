@@ -257,3 +257,32 @@ describe("reachErrorSentence", () => {
     );
   });
 });
+
+describe("buildAgentRoster — a paused agent", () => {
+  it("reads Paused and says it takes no work", () => {
+    const v = only(
+      row({
+        activeKeys: 1,
+        lastSeenAt: "2026-10-11T12:00:00Z",
+        pausedAt: "2026-10-12T08:00:00Z",
+      })
+    );
+    expect(v.status).toEqual({ kind: "stale", label: "Paused" });
+    expect(v.sentence).toBe("Paused: it takes no work. Seen 1d ago.");
+  });
+
+  it("a waiting key still outranks the pause", () => {
+    const v = only(
+      row({ activeKeys: 1, pendingKeys: 1, pausedAt: "2026-10-12T08:00:00Z" })
+    );
+    expect(v.status.label).toBe("Needs approval");
+  });
+
+  it("null pausedAt is not paused", () => {
+    const v = only(
+      row({ activeKeys: 1, lastSeenAt: "2026-10-11T12:00:00Z", pausedAt: null })
+    );
+    expect(v.status.label).toBe("Active");
+    expect(v.sentence).not.toContain("Paused");
+  });
+});

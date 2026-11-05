@@ -18,6 +18,7 @@ import {
   type AgentMarkRowLike,
   type AgentReachRowLike,
 } from "@synap-core/types/agents";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { computerHref, navHref } from "../../../../lib/console-nav";
 import type { StatusKind } from "../../components/status-pill";
 import { AGENT_MARK_STATUS } from "../../components/status-tone";
@@ -43,6 +44,8 @@ export interface AgentRosterRowLike
   /** 0395: the OS user it runs as on that computer, and its job. */
   hostSeat?: string | null;
   agentRole?: string | null;
+  /** When its owner or a pod admin paused it (`agentUsers.setPaused`); null = not paused. */
+  pausedAt?: string | Date | null;
 }
 
 /** The slice of a `diagnose.agents` standing this page reads. */
@@ -90,6 +93,15 @@ const PILL_LABEL: Record<AgentMark["kind"], string> = {
  */
 export function viaSynapAccount(row: AgentRosterRowLike): boolean {
   return isSynapAccountSeat(row.hostSeat);
+}
+
+/** What a pause does, in one line: the fact a person needs before pausing. */
+export const AGENT_PAUSE_NOTE =
+  "A paused agent takes no work and is refused when named. Its keys keep working.";
+
+/** Paused by its owner or a pod admin: it takes no work until resumed. */
+export function isAgentPaused(row: Pick<AgentRosterRowLike, "pausedAt">) {
+  return row.pausedAt != null;
 }
 
 export function agentNeedsReview(row: AgentRosterRowLike): boolean {
@@ -188,21 +200,26 @@ export function buildAgentRoster<R extends AgentRosterRowLike>(
   const views = rows.map((row): AgentRowView<R> => {
     const mark = resolveAgentMark(row, now);
     const needsReview = agentNeedsReview(row);
+    const paused = isAgentPaused(row);
+    // A waiting key still outranks a pause: it is the row's one action.
     const status =
       needsReview && mark.kind !== "approve"
         ? { kind: "stale" as const, label: PILL_LABEL.approve }
-        : {
-            kind:
-              mark.kind === "stale" ? "stale" : AGENT_MARK_STATUS[mark.tone],
-            label: PILL_LABEL[mark.kind],
-          };
+        : paused
+          ? { kind: "stale" as const, label: resolveStatusLabel("paused") }
+          : {
+              kind:
+                mark.kind === "stale" ? "stale" : AGENT_MARK_STATUS[mark.tone],
+              label: PILL_LABEL[mark.kind],
+            };
+    const base = viaSynapAccount(row)
+      ? `${agentStatusSentence(row, mark, relative)} Through your Synap account.`
+      : agentStatusSentence(row, mark, relative);
     return {
       row,
       mark,
       status,
-      sentence: viaSynapAccount(row)
-        ? `${agentStatusSentence(row, mark, relative)} Through your Synap account.`
-        : agentStatusSentence(row, mark, relative),
+      sentence: paused ? `Paused: it takes no work. ${base}` : base,
       direction: agentDirectionOf(row),
       needsReview,
       ownedByViewer:
