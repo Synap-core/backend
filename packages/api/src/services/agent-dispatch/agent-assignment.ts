@@ -36,6 +36,7 @@ import { auditLog } from "../../utils/audit-log.js";
 import { createLink } from "../links/links-service.js";
 import { checkLinkEndpointVisible } from "../../routers/hub-protocol/rest/link-endpoint-visibility.js";
 import type { AssignmentTarget } from "./route.js";
+import { resolveAgentReachMany } from "./agent-binding.js";
 
 /**
  * Why an assign or pause was refused, on the error's `cause.reasonCode` — the
@@ -329,7 +330,13 @@ export const SYNAP_AI_AGENT_SLUG = "meta";
  * The person's remembered choice of who runs a playbook — the SAME edge an
  * assignment writes, one per person per playbook (unique index 0329):
  *   participant(agent) --assigned_to--> playbook   that agent;
- *   agent(IS registry) --assigned_to--> playbook   Synap AI.
+ *   agent(IS registry) --assigned_to--> playbook   Synap AI;
+ *   participant(a POD agent) --assigned_to-->      Synap AI too: an agent the
+ *                                                  pod runs itself is the IS,
+ *                                                  however the edge was written
+ *                                                  (Content Studio's Settings
+ *                                                  could assign one before
+ *                                                  choices were remembered).
  * `null` = never chosen (the launch asks). A failed read throws.
  */
 export async function readStoredRunChoice(p: {
@@ -350,7 +357,9 @@ export async function readStoredRunChoice(p: {
     )
     .limit(1);
   if (!row) return null;
-  return row.fromType === "agent"
+  if (row.fromType === "agent") return { executor: "is-agent" };
+  const reach = (await resolveAgentReachMany([row.fromId])).get(row.fromId);
+  return reach === "pod"
     ? { executor: "is-agent" }
     : { executor: "external-agent", agentUserId: row.fromId };
 }

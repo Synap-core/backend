@@ -18,6 +18,7 @@ import type {
 } from "@synap-core/types/agents";
 import {
   SYNAP_AI_LABEL,
+  resolveAgentWakeHowLabel,
   resolveAgentWakeRefusalLabel,
   resolveAgentWakeStateLabel,
 } from "@synap-core/types/vocabulary";
@@ -63,7 +64,8 @@ export async function readPlaybookRunChoice(p: {
           name: null,
           label: SYNAP_AI_LABEL,
           wake: null,
-          wakeLabel: null,
+          // Its line beside the agents' marks: the pod runs it itself.
+          wakeLabel: resolveAgentWakeHowLabel("built_in"),
           recommended: true,
         },
         ...agentOptions,

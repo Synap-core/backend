@@ -125,6 +125,8 @@ const RUNNING = randomUUID();
 const IDLE = randomUUID();
 /** The IS orchestrator registry row: what a Synap AI choice is stored from. */
 const SYNAP_AI_ROW = randomUUID();
+/** An agent the pod runs itself (an IS persona user, no key): `pod` reach. */
+const HOUSE = randomUUID();
 const WS = randomUUID();
 const PLAYBOOK = randomUUID();
 /** A playbook that runs only on agents (`external-agent`). */
@@ -186,8 +188,9 @@ beforeAll(async () => {
     `insert into users (id, email, name, user_type, agent_type, created_by_user_id) values
       ($1, 'a@x.test', 'Antoine', 'human', null, null),
       ($2, 'cc@x.test', 'Claude Code', 'agent', 'claude-code', $1),
-      ($3, 'cx@x.test', 'Codex', 'agent', 'codex', $1)`,
-    [USER, RUNNING, IDLE]
+      ($3, 'cx@x.test', 'Codex', 'agent', 'codex', $1),
+      ($4, 'meta@x.test', 'General Agent', 'agent', 'meta', $1)`,
+    [USER, RUNNING, IDLE, HOUSE]
   );
   await q(
     `insert into api_keys (id, user_id, key_type, is_active, linked_user_id, last_used_at, instance_label, worker_served_at, created_at) values
@@ -238,7 +241,7 @@ describe("nothing remembered yet", () => {
       name: null,
       label: "Synap AI",
       wake: null,
-      wakeLabel: null,
+      wakeLabel: "Runs in Synap",
       recommended: true,
     });
     expect(read.options.slice(1).map((o) => [o.choice, o.wake?.state])).toEqual(
@@ -351,6 +354,29 @@ describe("answer once with an agent, remembered", () => {
     const read = await asPerson().runChoice({ playbookId: PLAYBOOK });
     expect(read.ask).toBe(false);
     expect(read.next.via).toBe("fallback");
+  });
+});
+
+describe("an assignment written before choices were remembered", () => {
+  it("Settings' edge to an agent the pod runs itself reads as Synap AI, stored: no ask, Synap AI runs it", async () => {
+    // What Content Studio's Settings wrote (PUT /agent-users/:id/assignment)
+    // when the person picked the pod's own agent: a participant edge.
+    await q(
+      `insert into links (from_type, from_id, to_type, to_id, link_type, metadata) values ('participant', $1, 'playbook', $2, 'assigned_to', $3)`,
+      [HOUSE, PLAYBOOK, JSON.stringify({ ownerId: USER, assignedBy: USER })]
+    );
+    const read = await asPerson().runChoice({ playbookId: PLAYBOOK });
+    expect(read.stored).toEqual({ executor: "is-agent" });
+    expect(read.ask).toBe(false);
+    expect(read.next).toEqual({
+      executor: "is-agent",
+      agentUserId: null,
+      via: "stored",
+      passedOver: null,
+    });
+    await asPerson().run({ playbookId: PLAYBOOK });
+    expect(h.dispatched.map((d) => d.ref)).toEqual(["is-agent"]);
+    expect((await lastRun())?.run_on).toMatchObject({ via: "stored" });
   });
 });
 
