@@ -90,13 +90,14 @@ import {
   messagingSendGrantVerdict,
   successorChannel,
   planChannelSend,
-  refuseUnreachableAtFiling,
+  reachHoldAtFiling,
   recordChannelSend,
   resolveSendAccount,
   type DraftedBy,
   type SendChannel,
 } from "./channel-send.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
+import { heldSend, type HeldSend } from "../services/channels/held-sends.js";
 
 const logger = createLogger({ module: "external-dispatch" });
 
@@ -831,6 +832,11 @@ export interface SendExternalMessageResult {
   externalMessageId?: string | null;
   /** A channel send: it started the chat. */
   first?: boolean;
+  /**
+   * Filed but HELD: the person is not reachable yet (not a LinkedIn
+   * connection). The proposal keeps the text; it is sendable once they connect.
+   */
+  held?: HeldSend;
 }
 
 /**
@@ -984,33 +990,31 @@ export async function sendExternalMessage(
   const appSend = !!getRequestGrant()?.clientId;
   const mustPropose = !!input.mustPropose || beyondGrant;
   if ((input.agentUserId || appSend || mustPropose) && !input.alreadyApproved) {
-    // The reach check at FILING (CRM wave 2, S4a): a LinkedIn first message
-    // to someone who is not a connection is refused now, with the next step
-    // named, never filed as a draft that fails after approval. Same rule as
-    // at dispatch (`readChannelReach`); a failed read files as before. An
-    // ungated send skips it: the dispatch check runs straight after.
+    // The reach check at FILING (CRM Messages contract b4f8c2cd, B): a
+    // LinkedIn first message to someone who is not a connection is HELD, never
+    // refused: filed as a proposal with `data.held` and the next step named,
+    // so the draft is kept and shown, and becomes sendable once they connect
+    // (`services/channels/held-sends.ts`). Same rule as at dispatch
+    // (`readChannelReach`); a failed read files as before. An ungated send
+    // skips it: the dispatch check runs straight after.
+    let held: HeldSend | null = null;
     if (sendChannel) {
-      const unreachable = await refuseUnreachableAtFiling({
+      const unreachable = await reachHoldAtFiling({
         channel: sendChannel,
         connector,
         namedAccountId: input.accountId,
       });
-      if (unreachable) {
-        return {
-          success: false,
-          error: unreachable.error,
-          errorClass: unreachable.errorClass,
-          providerRef: unreachable.providerRef ?? provider,
-          channelId: sendChannel.id,
-        };
-      }
+      if (unreachable) held = heldSend(unreachable.error);
     }
     const gateResult = await gateMessagingSend({
       ...input,
-      mustPropose,
+      // A held send is filed, never dispatched (it would fail): a `run` the
+      // gate would allow becomes a review, like every other mustPropose.
+      mustPropose: mustPropose || !!held,
       threadId,
       provider,
       sendChannel,
+      held,
     });
     if (gateResult.kind === "deny") {
       // Say why nothing was sent (this used to return a bare `success: false`),
@@ -1028,6 +1032,8 @@ export async function sendExternalMessage(
         success: false,
         proposed: true,
         proposalId: gateResult.proposalId,
+        // Held is a SUCCESS of filing, not a failure: no errorClass.
+        ...(held && sendChannel ? { held, channelId: sendChannel.id } : {}),
       };
     }
     if (gateResult.kind === "dry-run") {
@@ -1353,6 +1359,8 @@ async function gateMessagingSend(
     threadId: string | null;
     provider?: string;
     sendChannel: SendChannel | null;
+    /** Not reachable yet: filed with `data.held` (held-sends.ts). */
+    held?: HeldSend | null;
   }
 ): Promise<MessagingGateResult> {
   const provider = input.provider ?? "unipile";
@@ -1492,6 +1500,7 @@ async function gateMessagingSend(
           : {}),
         ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
         ...(input.subject ? { subject: input.subject } : {}),
+        ...(input.held ? { held: input.held } : {}),
         capabilityKind: "tool",
         capabilityId,
         workspaceId: proposalWorkspaceId,

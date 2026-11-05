@@ -570,6 +570,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     /^\/channels\/[0-9a-fA-F-]{36}\/proposed-messages\/?$/,
     NARROWED("proposal", []),
   ],
+  // A space's conversations (`listSpaceConversations`, services/channels/
+  // space-conversations.ts, CRM Messages contract A): the people through
+  // `entityReadVisibleWhere` + `facetInWorkspaceLensWhere`, their channels
+  // through `channelVisibilityWhere`, their drafts through
+  // `proposalUserFloor`, each carrying the key's grant (a key without
+  // `proposal.read` sees no drafts). Admitted for `channel.read`; the route
+  // then requires it in the space asked about.
+  [/^\/channels\/conversations\/?$/, NARROWED("channel", [])],
 ];
 
 /**

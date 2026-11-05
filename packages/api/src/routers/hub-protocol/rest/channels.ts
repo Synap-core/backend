@@ -41,6 +41,7 @@ import {
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
 import { listProposedMessages } from "../../../services/channels/person-channels.js";
+import { registerChannelConversationsRoutes } from "./channel-conversations.js";
 import { sessionContextStampRefusal } from "../../../services/focus-sessions/session-context-stamp.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { sessionReadableWhere } from "../../../access/session-visibility.js";
@@ -145,6 +146,10 @@ async function resolveDiscordChannelForWrite(
 }
 
 export function registerChannelsRoutes(app: HubHono): void {
+  // A space's conversations and the person's own send (CRM Messages contract):
+  // GET /channels/conversations, POST /channels/:channelId/send.
+  registerChannelConversationsRoutes(app);
+
   // ── GET /channels ────────────────────────────────────────────────────────
   registerOpenApi(app, {
     method: "get",
@@ -1120,9 +1125,12 @@ export function registerChannelsRoutes(app: HubHono): void {
     summary: "List a channel's proposed messages",
     description:
       "The messages waiting for the person's approval before they go out in " +
-      "this channel, oldest first: each is a pending `messaging.external.send` " +
-      "proposal (its id, text, who drafted it and where to review it). 404 " +
-      "when the caller cannot read the channel.",
+      "this channel, oldest first: each is a `messaging.external.send` " +
+      "proposal (its id, text, who drafted it and where to review it). " +
+      "`state`: draft (waits for approval), held (waits, but cannot go out " +
+      "yet: not a connection, `reason` names the next step) or failed " +
+      "(approved and not sent, `reason` says why). 404 when the caller " +
+      "cannot read the channel.",
     request: { params: z.object({ channelId: uuidPathParam }) },
     responses: {
       200: {

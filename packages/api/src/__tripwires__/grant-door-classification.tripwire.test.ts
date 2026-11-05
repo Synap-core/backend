@@ -404,6 +404,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../connectors/external-dispatch.js"),
     why: "messaging.send checked by grantWriteDenial in the conversation's space",
   },
+  "POST /channels/:channelId/send": {
+    via: "sendExternalMessage",
+    load: () => import("../connectors/external-dispatch.js"),
+    why: "the person's send: filed through the send door (grant verdict, gate), then the approve door",
+  },
   "POST /proposals": {
     via: "fencedProposalVerdict",
     load: () => import("../access/fenced-proposal.js"),

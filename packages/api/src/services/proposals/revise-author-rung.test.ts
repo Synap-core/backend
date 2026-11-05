@@ -427,6 +427,71 @@ describe("A KEY LIMITED TO SPACES rewords its own proposal, never what it runs",
     expect(h.updates).toBe(1);
   });
 
+  // CRM Messages contract b4f8c2cd, D: the person edits a proposed message's
+  // words before sending it. The recipient stays pinned
+  // (PROTECTED_FIELDS_BY_TYPE), so the words cannot point it outside the grant.
+  it("a message's words (body, subject): revised; its recipient or its space: FORBIDDEN", async () => {
+    h.row = {
+      data: { body: "Hello", channelId: "ch-1", entityId: "e-1" },
+      status: ProposalStatus.PENDING,
+      workspaceId: "ws",
+      agentUserId: AGENT,
+      proposalType: "messaging.external.send",
+    };
+    await asKey(CRM_KEY, () =>
+      mergeProposalRevision({
+        proposalId: "p1",
+        patch: {
+          kind: "inner",
+          fields: { body: "Hello, edited", subject: "Hi" },
+        },
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    );
+    expect(h.updates).toBe(1);
+    for (const change of [
+      {
+        patch: {
+          kind: "inner" as const,
+          fields: { body: "x", channelId: "ch-2" },
+        },
+      },
+      { patch: { kind: "inner" as const, fields: { workspaceId: "brand" } } },
+      {
+        patch: { kind: "inner" as const, fields: { body: "x" } },
+        workspaceId: "brand",
+      },
+    ]) {
+      await expect(
+        asKey(CRM_KEY, () =>
+          mergeProposalRevision({
+            proposalId: "p1",
+            actorId: HUMAN,
+            actingAgentUserId: AGENT,
+            ...change,
+          })
+        ),
+        JSON.stringify(change)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(h.updates).toBe(1);
+  });
+
+  it("the words exception is the message's only: another type's `body` stays FORBIDDEN", async () => {
+    await expect(
+      asKey(CRM_KEY, () =>
+        mergeProposalRevision({
+          proposalId: "p1",
+          patch: { kind: "inner", fields: { body: "x" } },
+          actorId: HUMAN,
+          actingAgentUserId: AGENT,
+        })
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.updates).toBe(0);
+  });
+
   it("CONTROL — an unbounded `*` key amends the payload as before", async () => {
     await asKey(FULL_KEY, () =>
       mergeProposalRevision({

@@ -947,6 +947,17 @@ describe("a person's channel doors", () => {
       restDoorAllowed("GET", `/channels/${E}/proposed-messages`, DOC_ONLY)
     ).toBe(false);
   });
+  it("GET /channels/conversations: admitted with channel.read, refused without", () => {
+    expect(
+      restDoorAllowed("GET", "/channels/conversations", PINNED_CHANNEL)
+    ).toBe(true);
+    expect(restDoorAllowed("GET", "/channels/conversations", DOC_ONLY)).toBe(
+      false
+    );
+    expect(
+      restDoorAllowed("GET", "/channels/conversations", PINNED_PROPOSAL)
+    ).toBe(false);
+  });
   it("only a uuid id is admitted", () => {
     expect(
       restDoorAllowed("GET", "/entities/not-a-uuid/channels", PINNED_CHANNEL)

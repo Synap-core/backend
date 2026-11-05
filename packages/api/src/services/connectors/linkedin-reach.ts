@@ -20,6 +20,10 @@
  *
  * A failed read is never a fact: the callers write only what a provider
  * answer said; an error writes nothing.
+ *
+ * Recording `connected` releases the person's HELD sends (their pending
+ * messages that could not go out while they were not a connection,
+ * `services/channels/held-sends.ts`): they are sendable from then on.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -34,6 +38,7 @@ import {
 } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import type { MessagingProfile } from "../../connectors/MessagingConnector.js";
+import { releaseHeldSends } from "../channels/held-sends.js";
 
 const logger = createLogger({ module: "linkedin-reach" });
 
@@ -164,6 +169,7 @@ export async function recordLinkedinReach(
     stored.connection === next.connection &&
     stored.invitedAt === next.invitedAt
   ) {
+    if (next.connection === "connected") await releaseHeldSends(entityId);
     return stored;
   }
   const patch: Record<string, string> = {
@@ -180,5 +186,7 @@ export async function recordLinkedinReach(
     { entityId, from: stored?.connection ?? null, to: next.connection },
     "linkedin reach recorded"
   );
+  // Connected: the messages held for them are sendable now (held-sends.ts).
+  if (next.connection === "connected") await releaseHeldSends(entityId);
   return next;
 }

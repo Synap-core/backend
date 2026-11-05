@@ -3367,6 +3367,8 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
     // flow reads it as pending, not errored.
     ...(result.proposed ? { proposed: true } : {}),
     ...(result.proposalId ? { proposalId: result.proposalId } : {}),
+    // Filed but not sendable yet (not a connection): kept, never refused.
+    ...(result.held ? { held: result.held } : {}),
     ...(result.error ? { error: result.error } : {}),
     ...(result.errorClass ? { errorClass: result.errorClass } : {}),
     ...(result.enableProposal ? { enableProposal: result.enableProposal } : {}),

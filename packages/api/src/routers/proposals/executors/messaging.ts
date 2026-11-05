@@ -20,6 +20,11 @@ import {
   type ProposalExecutorArgs,
 } from "../execution-registry.js";
 import { reportApproved, dispatchExternalOnce } from "./shared.js";
+import { keepRowAsRecorded } from "../failure-classification.js";
+import {
+  heldSend,
+  holdPendingSend,
+} from "../../../services/channels/held-sends.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-messaging" });
 
@@ -356,51 +361,71 @@ async function executeChannelSend(args: {
   }
 
   let sent: Awaited<ReturnType<typeof sendExternalMessage>> | null = null;
-  await dispatchExternalOnce(input.proposalId, async () => {
-    const result = await sendExternalMessage({
-      channelId: args.channelId,
-      threadId: null,
-      accountId: typeof data.accountId === "string" ? data.accountId : "",
-      body,
-      userId,
-      workspaceId: proposal.workspaceId ?? null,
-      alreadyApproved: true,
-      sessionId: proposal.sessionId ?? null,
-      proposalId: input.proposalId,
-      subject: typeof data.subject === "string" ? data.subject : null,
-      draftedBy:
-        data.draftedBy && typeof data.draftedBy === "object"
-          ? (data.draftedBy as {
-              agentUserId: string | null;
-              appClientId: string | null;
-            })
-          : null,
-    });
-    if (!result.success) {
-      logger.warn(
-        {
-          proposalId: input.proposalId,
-          channelId: args.channelId,
+  // Not a connection yet (the reach is read live at every approval): the
+  // send is HELD, kept PENDING with its text, never APPROVAL_FAILED (CRM
+  // Messages contract b4f8c2cd, B). It becomes sendable once they connect.
+  let heldReason: string | null = null;
+  try {
+    await dispatchExternalOnce(input.proposalId, async () => {
+      const result = await sendExternalMessage({
+        channelId: args.channelId,
+        threadId: null,
+        accountId: typeof data.accountId === "string" ? data.accountId : "",
+        body,
+        userId,
+        workspaceId: proposal.workspaceId ?? null,
+        alreadyApproved: true,
+        sessionId: proposal.sessionId ?? null,
+        proposalId: input.proposalId,
+        subject: typeof data.subject === "string" ? data.subject : null,
+        draftedBy:
+          data.draftedBy && typeof data.draftedBy === "object"
+            ? (data.draftedBy as {
+                agentUserId: string | null;
+                appClientId: string | null;
+              })
+            : null,
+      });
+      if (!result.success) {
+        logger.warn(
+          {
+            proposalId: input.proposalId,
+            channelId: args.channelId,
+            errorClass: result.errorClass,
+          },
+          "messaging.external.send: not sent on the channel"
+        );
+        if (result.errorClass === "not_connected") {
+          heldReason = result.error ?? "Not a connection yet.";
+        }
+        return {
+          delivered: false,
+          reason: result.error,
           errorClass: result.errorClass,
-        },
-        "messaging.external.send: not sent on the channel"
-      );
-      return {
-        delivered: false,
-        reason: result.error,
-        errorClass: result.errorClass,
-        providerRef: result.providerRef,
-      };
-    }
-    sent = result;
-    return { delivered: true };
-  });
+          providerRef: result.providerRef,
+        };
+      }
+      sent = result;
+      return { delivered: true };
+    });
+  } catch (err) {
+    // Assigned in the closure above; TS cannot see it.
+    const hold = heldReason as string | null;
+    if (hold === null) throw err;
+    await holdPendingSend(input.proposalId, heldSend(hold));
+    throw keepRowAsRecorded(err);
+  }
   const done = sent as Awaited<ReturnType<typeof sendExternalMessage>> | null;
 
   // The message may have landed in the channel that already held the chat:
   // the proposal then points there.
+  // Sent: whatever held it is history.
+  const { held: _wasHeld, ...sentPayload } = payload as unknown as Record<
+    string,
+    unknown
+  >;
   const materializedPayload = {
-    ...payload,
+    ...sentPayload,
     ...(done?.channelId ? { channelId: done.channelId } : {}),
     ...(done?.chatId ? { threadId: done.chatId } : {}),
     sentResult: {
