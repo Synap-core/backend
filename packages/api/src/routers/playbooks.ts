@@ -136,9 +136,11 @@ import {
 } from "../services/playbooks/playbook-lifecycle.js";
 import {
   runPlaybook,
-  resolveRunHandOff,
+  resolveRunChoice,
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
+import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
+import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
@@ -2791,6 +2793,20 @@ export const playbooksRouter = router({
          * the proposal `data` so an approved run is handed too.
          */
         handToAgentId: z.string().uuid().optional(),
+        /**
+         * RUN CHOICE for this run: `"synap_ai"` = Synap AI runs it, whatever
+         * the person remembered (`RunPlaybookInput.runOn`). Never with
+         * `handToAgentId`.
+         */
+        runOn: z.enum(["synap_ai"]).optional(),
+        /**
+         * Remember this run's choice (`runOn` or `handToAgentId`) as the
+         * person's for this playbook, so the next launch does not ask
+         * (`setRunChoice`, the assignment edge). A PERSON's act: refused for
+         * an agent. Remembering is part of running this playbook, so the
+         * run's own grant (`playbook.run`) covers it.
+         */
+        remember: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2952,15 +2968,36 @@ export const playbooksRouter = router({
         }
       }
 
-      // HAND-OFF — refuse an agent nobody could hand this run to BEFORE a
-      // proposal is filed (same placement as FILING above), with exactly the
-      // arguments `runPlaybook` resolves it with again when the run starts.
-      if (input.handToAgentId) {
-        await resolveRunHandOff({
+      // RUN CHOICE — refuse a choice this run cannot take (an agent nobody
+      // could hand it to, Synap AI on a playbook that runs only on agents, or
+      // both at once) BEFORE a proposal is filed (same placement as FILING
+      // above), with exactly the arguments `runPlaybook` resolves it with
+      // again when the run starts.
+      if (input.handToAgentId || input.runOn) {
+        await resolveRunChoice({
           userId: ctx.userId,
           agentUserId: input.agentUserId,
           handToAgentId: input.handToAgentId,
+          runOn: input.runOn,
+          playbook,
         });
+      }
+      if (input.remember) {
+        if (input.agentUserId || ctx.agentUserId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only a person can choose who runs this from now on — an agent cannot.",
+            cause: { reasonCode: "PERSON_ONLY" },
+          });
+        }
+        if (!input.runOn && !input.handToAgentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
+          });
+        }
       }
 
       const perm = await checkPermissionOrPropose({
@@ -3021,10 +3058,23 @@ export const playbooksRouter = router({
           ...(input.handToAgentId
             ? { handToAgentId: input.handToAgentId }
             : {}),
+          ...(input.runOn ? { runOn: input.runOn } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      // The person's choice is remembered once the run is allowed, before it
+      // starts, so this run already follows it and the next launch does not
+      // ask (`readPlaybookRunChoice`).
+      if (input.remember) {
+        await setRunChoice({
+          callerId: ctx.userId,
+          playbookId: playbook.id,
+          choice: input.handToAgentId
+            ? { executor: "external-agent", agentUserId: input.handToAgentId }
+            : { executor: "is-agent" },
+        });
       }
       if ("proposalId" in perm) {
         return {
@@ -3069,6 +3119,7 @@ export const playbooksRouter = router({
           : {}),
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
+        ...(input.runOn ? { runOn: input.runOn } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
@@ -3127,6 +3178,86 @@ export const playbooksRouter = router({
    * playbook's name and goalTemplate. `automationId: null` signals the caller
    * that no automation exists yet (saveFlow will create one on first save).
    */
+  /**
+   * WHO RUNS IT, for the caller (slice 5a, plan v2 66d229dc): their
+   * remembered choice, whether a launch should ask first, the answers to
+   * offer (Synap AI first when the playbook allows it, then their agents
+   * with each one's wake mark) and what the next run would do, by the same
+   * rule the run uses (`readPlaybookRunChoice`).
+   */
+  runChoice: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      return readPlaybookRunChoice({ userId: ctx.userId, playbook });
+    }),
+
+  /**
+   * Choose who runs this playbook for the caller from now on: Synap AI, or one
+   * of their agents (`setRunChoice`, the assignment edge, one per person per
+   * playbook). HUMAN-ONLY. Returns the read the page draws next.
+   */
+  setRunChoice: protectedProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        choice: z.discriminatedUnion("executor", [
+          z.object({ executor: z.literal("is-agent") }),
+          z.object({
+            executor: z.literal("external-agent"),
+            agentUserId: z.string().uuid(),
+          }),
+        ]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only a person can choose who runs this — an agent key cannot.",
+          cause: { reasonCode: "PERSON_ONLY" },
+        });
+      }
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      if (
+        input.choice.executor === "is-agent" &&
+        playbook.executor === "external-agent"
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This process runs only on an agent, so Synap AI cannot run it: choose one of your agents.",
+        });
+      }
+      await setRunChoice({
+        callerId: ctx.userId,
+        playbookId: playbook.id,
+        choice: input.choice,
+      });
+      return readPlaybookRunChoice({ userId: ctx.userId, playbook });
+    }),
+
   getFlow: protectedProcedure
     .input(z.object({ playbookId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {

@@ -21,6 +21,7 @@ import {
 import {
   createPlaybookDoor,
   getPlaybookDoor,
+  getPlaybookRunChoiceDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
   type PlaybookDoorIdentity,
@@ -142,7 +143,25 @@ const RunPlaybookBodySchema = z.object({
     .describe(
       "Hand the run to this agent (an agent user id, as synap_list_agents returns it): it does the work and the playbook's own executor is not started. An unknown, paused or foreign agent is refused by name."
     ),
+  runOn: z
+    .enum(["synap_ai"])
+    .optional()
+    .describe(
+      "Run it on Synap AI this time, whatever was remembered. Never with handToAgentId; refused on a playbook that runs only on agents."
+    ),
+  remember: z
+    .boolean()
+    .optional()
+    .describe(
+      "Remember this run's choice (runOn or handToAgentId) as yours for this playbook, so the next launch does not ask (GET /playbooks/{id}/run-choice). A person's act: refused for an agent."
+    ),
 });
+
+const RunChoiceResultSchema = z
+  .record(z.string(), z.unknown())
+  .describe(
+    "PlaybookRunChoice (@synap-core/types/agents): stored, ask, synapAiAllowed, options[], next."
+  );
 
 const PlaybookResultSchema = z.record(z.string(), z.unknown());
 
@@ -273,6 +292,22 @@ export function registerPlaybooksRoutes(app: HubHono): void {
   });
 
   registerOpenApi(app, {
+    method: "get",
+    path: "/playbooks/{id}/run-choice",
+    tags: ["Playbooks"],
+    summary: "Who runs a playbook for you",
+    description:
+      "Your remembered choice for this playbook (Synap AI or one of your agents), whether a launch should ask first (`ask`), the answers to offer (Synap AI first when the playbook allows it, then your agents with their wake mark) and what the next run would do (`next`), by the same rule the run uses. Answer an ask with POST /playbooks/{id}/run `runOn` or `handToAgentId` plus `remember: true`.",
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: { description: "Who runs it", schema: RunChoiceResultSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Playbook not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
     method: "post",
     path: "/playbooks/{id}/run",
     tags: ["Playbooks"],
@@ -295,6 +330,37 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  /**
+   * GET /playbooks/:id/run-choice — who runs it for the caller: their
+   * remembered choice, whether to ask first, the answers to offer and what the
+   * next run would do (`playbooks.runChoice`). Before `/playbooks/:id`.
+   */
+  app.get("/playbooks/:id/run-choice", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
+    try {
+      const outcome = await getPlaybookRunChoiceDoor(
+        doorIdentity(c, c.get("agentUserId")),
+        id
+      );
+      if (outcome.kind !== "result") {
+        return c.json(
+          { error: "error" in outcome ? outcome.error : "Not found" },
+          404
+        );
+      }
+      return c.json(outcome.result);
+    } catch (err) {
+      return errorResponse(c, err, "playbooks.runChoice failed");
+    }
   });
 
   /**
@@ -556,6 +622,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           trackId: body.trackId,
           trackStage: body.trackStage,
           handToAgentId: body.handToAgentId,
+          runOn: body.runOn,
+          remember: body.remember,
           source: "hub-rest",
         }
       );

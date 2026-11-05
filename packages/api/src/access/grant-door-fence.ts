@@ -469,6 +469,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // they can see (`readAgentAssignment`), the read half of
   // PUT /agent-users/:id/assignment. Same subject, same PERSON door.
   [/^\/agent-users\/assignments\/?$/, PERSON("agent")],
+  // Who runs a playbook for the person (`playbooks.runChoice`, slice 5a): the
+  // playbook through `scopedDb` (its own grant ANDed, `playbook`), plus the
+  // person's remembered choice (their `assigned_to` row) and their agents
+  // with each one's wake mark — the roster GET /agent-users serves. Same
+  // subject, same PERSON door: an app that asks "who runs this" before a
+  // run asks for `agent.read`.
+  [route("/playbooks/:id/run-choice"), PERSON("agent")],
   // The person's spaces with their template health (`synap market update`,
   // `market installed`, `orient`): the spaces the person can open, each one's
   // live entity count and the pod-wide count (entities, through

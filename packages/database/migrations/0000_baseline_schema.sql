@@ -4509,6 +4509,7 @@ ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jsonb
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "external_agent" jsonb;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "stop_reason" text;  -- 0361 ('budget' = an unattended run ended at its limit)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "run_on" jsonb;  -- 0403 (who ran it and why: RunOn)
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
   ON "playbook_runs" ((("external_agent"->>'status')))
   WHERE "external_agent" IS NOT NULL;

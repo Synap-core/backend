@@ -244,6 +244,13 @@ export async function runPlaybookDoor(
      * by name by `playbooks.run` when nobody could take it; never a fallback.
      */
     handToAgentId?: string;
+    /** Synap AI for this run (`RunPlaybookInput.runOn`); never with handToAgentId. */
+    runOn?: "synap_ai";
+    /**
+     * Remember this run's choice as the person's for the playbook
+     * (`playbooks.run` `remember`). Refused for an agent.
+     */
+    remember?: boolean;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -358,6 +365,8 @@ export async function runPlaybookDoor(
       ? { trackStage: input.trackStage }
       : {}),
     ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
+    ...(input.runOn ? { runOn: input.runOn } : {}),
+    ...(input.remember ? { remember: true } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,
@@ -399,5 +408,24 @@ export async function getPlaybookDoor(
 
   const caller = await callerFor(identity, null);
   const result = await caller.get({ id: playbookId.trim() });
+  return { kind: "result", result };
+}
+
+/**
+ * "Who runs it" for the caller (`playbooks.runChoice`): the Hub door of the
+ * read a launch asks before it runs (slice 5a). Same floor as `get`.
+ */
+export async function getPlaybookRunChoiceDoor(
+  identity: PlaybookDoorIdentity,
+  playbookId: string
+): Promise<
+  PlaybookDoorOutcome<
+    Awaited<
+      ReturnType<ReturnType<typeof playbooksRouter.createCaller>["runChoice"]>
+    >
+  >
+> {
+  const caller = await callerFor(identity, null);
+  const result = await caller.runChoice({ playbookId: playbookId.trim() });
   return { kind: "result", result };
 }

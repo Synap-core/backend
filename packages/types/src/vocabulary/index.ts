@@ -3797,6 +3797,35 @@ export function resolveAgentWakeRefusalLabel(
 }
 
 /**
+ * The pod's own AI, as a person picks it from "who runs this" (a run choice of
+ * `is-agent`, `@synap-core/types/agents` run-choice). ONE name everywhere a
+ * surface offers it beside the person's agents.
+ */
+export const SYNAP_AI_LABEL = "Synap AI";
+
+/**
+ * How a run's runner was decided (`RunOn.via`): a mark beside who ran it.
+ * `agents/run-choice.ts` holds the floor that a new via ships with its words.
+ */
+export const RUN_CHOICE_VIA_LABELS = {
+  named: "Chosen for this run",
+  stored: "Your choice",
+  fallback: "Your agent couldn't take it",
+  default: "The process's default",
+} as const;
+
+/** A run-choice via's words; an unknown one humanizes rather than leaks. */
+export function resolveRunChoiceViaLabel(
+  via: string | null | undefined
+): string {
+  if (!via) return "";
+  return (
+    (RUN_CHOICE_VIA_LABELS as Readonly<Record<string, string>>)[via] ??
+    humanizeToken(via)
+  );
+}
+
+/**
  * What a COORDINATION POST says — one agent's typed message to another
  * session (`sessionPost.intent`, `@synap-core/types/agents` session-post).
  * A MARK, never a sentence: the change feed, the packet inbox and the room
