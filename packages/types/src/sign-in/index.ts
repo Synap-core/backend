@@ -48,6 +48,13 @@ export interface SignedInDeviceRow {
   clientId: string;
   /** What the app said about itself at sign-in ("Ada's MacBook"), or null. */
   label: string | null;
+  /**
+   * An app registered by its metadata document: its own name (shown as
+   * text). Absent or null for a built-in Synap app, named by the vocabulary.
+   */
+  clientName?: string | null;
+  /** Where such an app runs, as the pod read it from its redirects. */
+  runsOn?: SignedInAppKind | null;
   createdAt: string | Date;
   lastUsedAt: string | Date | null;
   /** The device making this request (only ever true inside an app). */
@@ -57,7 +64,7 @@ export interface SignedInDeviceRow {
 /** One row of a "Signed-in apps" list. */
 export interface SignedInDeviceView {
   id: string;
-  /** The app's name, from the vocabulary ("Synap Desktop"). */
+  /** The app's name: the vocabulary's ("Synap Desktop"), or its document's. */
   appName: string;
   kind: SignedInAppKind;
   /** The row's title: the device's own label, else the app's name. */
@@ -68,12 +75,13 @@ export interface SignedInDeviceView {
 }
 
 export function signedInDeviceView(row: SignedInDeviceRow): SignedInDeviceView {
-  const appName = resolveFirstPartyClientName(row.clientId);
+  const appName =
+    row.clientName?.trim() || resolveFirstPartyClientName(row.clientId);
   const label = row.label?.trim();
   return {
     id: row.id,
     appName,
-    kind: signedInAppKind(row.clientId),
+    kind: row.runsOn ?? signedInAppKind(row.clientId),
     title: label || appName,
     isThisDevice: row.current,
     lastActiveAt: new Date(row.lastUsedAt ?? row.createdAt),

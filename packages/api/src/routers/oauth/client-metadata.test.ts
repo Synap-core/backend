@@ -827,3 +827,99 @@ describe("synap_requests[].scope: a pod-wide READ of one kind, nothing else (dec
     ).toEqual(["entity.decision.read"]);
   });
 });
+
+// ─── `person`: a native app that signs a person in (founder, 2026-11-05) ────
+//
+// Each refused row names the wrong rule it rules out; the CONTROL rows are
+// the same redirects on a document WITHOUT `person`, where the old https-only
+// rule must still hold.
+
+describe("CIMD — a document declaring `person` (native sign-in)", () => {
+  const LOOPBACK = "http://127.0.0.1/oauth/callback";
+  const LOOPBACK_V6 = "http://[::1]/oauth/callback";
+  const SCHEME = "com.example.studio:/oauth/callback";
+  const person = (overrides: Record<string, unknown> = {}) =>
+    doc({
+      scope: "person",
+      synap_requests: undefined,
+      redirect_uris: [LOOPBACK, LOOPBACK_V6, SCHEME, CALLBACK],
+      ...overrides,
+    });
+
+  it("takes loopback (no port), a reverse-DNS scheme and its own https origin; its scopes are exactly person", () => {
+    const v = validateClientMetadataDocument(person(), CLIENT_ID);
+    expect(v.redirectUris).toEqual([LOOPBACK, LOOPBACK_V6, SCHEME, CALLBACK]);
+    expect(v.scopes).toEqual(["person"]);
+    expect(v.requestedPermissions).toEqual([]);
+  });
+
+  it("drops the mcp.* scopes it declared beside person: it is a person, nothing else", () => {
+    const v = validateClientMetadataDocument(
+      person({ scope: "mcp.read person mcp:write" }),
+      CLIENT_ID
+    );
+    expect(v.scopes).toEqual(["person"]);
+  });
+
+  const refused: Array<[string, Record<string, unknown>, RegExp]> = [
+    [
+      "person AND synap_requests (a pod app and a person at once)",
+      { synap_requests: [{ permission: "entity.post.read" }] },
+      /cannot also declare synap_requests/,
+    ],
+    [
+      "a loopback with a port (the app picks it when it listens)",
+      { redirect_uris: ["http://127.0.0.1:8080/oauth/callback"] },
+      /https/,
+    ],
+    [
+      "localhost (a name can resolve elsewhere, RFC 8252 §8.3)",
+      { redirect_uris: ["http://localhost/oauth/callback"] },
+      /https/,
+    ],
+    [
+      "a loopback with a query",
+      { redirect_uris: ["http://127.0.0.1/oauth/callback?x=1"] },
+      /https/,
+    ],
+    [
+      "a loopback dot-segment",
+      { redirect_uris: ["http://127.0.0.1/oauth/../callback"] },
+      /https/,
+    ],
+    [
+      "a scheme with no period (not reverse-DNS)",
+      { redirect_uris: ["synap:/oauth/callback"] },
+      /https/,
+    ],
+    [
+      "a scheme with an authority (scheme://host)",
+      { redirect_uris: ["com.example.studio://oauth/callback"] },
+      /https/,
+    ],
+    [
+      "plain http to another host",
+      { redirect_uris: ["http://10.0.0.5/oauth/callback"] },
+      /https/,
+    ],
+    [
+      "an https redirect on another origin (the same-origin rule stands)",
+      { redirect_uris: ["https://evil.example/cb"] },
+      /same origin/,
+    ],
+  ];
+  it.each(refused)("refuses %s", (_label, overrides, message) => {
+    expect(() =>
+      validateClientMetadataDocument(person(overrides), CLIENT_ID)
+    ).toThrow(message);
+  });
+
+  it.each([LOOPBACK, LOOPBACK_V6, SCHEME])(
+    "CONTROL — %s on a document WITHOUT person is refused (https only)",
+    (uri) => {
+      expect(() =>
+        validateClientMetadataDocument(doc({ redirect_uris: [uri] }), CLIENT_ID)
+      ).toThrow(/https/);
+    }
+  );
+});
