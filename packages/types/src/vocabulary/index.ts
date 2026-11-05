@@ -51,6 +51,7 @@ import {
 import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
+import type { ActionRunMode } from "../governance-rules/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
@@ -3555,6 +3556,27 @@ export const MATRIX_MARK_LABELS: Readonly<Record<MatrixMark, string>> = {
   off: "Off",
   mixed: "Mixed",
 };
+
+/**
+ * How one tool action runs (`@synap-core/types/governance-rules`
+ * `ActionRunMode`): the words of the choice on a tool's page and of "Approve
+ * always". Keyed by the mode, so a new mode is a BUILD error until it is named.
+ */
+export const ACTION_RUN_MODE_LABELS: Readonly<Record<ActionRunMode, string>> = {
+  auto: "Runs on its own",
+  ask: "Asks first",
+  never: "Never",
+};
+
+/** An action run mode's words; an unknown mode humanizes rather than leaks. */
+export function resolveActionRunModeLabel(
+  mode: ActionRunMode | (string & {})
+): string {
+  return (
+    (ACTION_RUN_MODE_LABELS as Readonly<Record<string, string>>)[mode] ??
+    humanizeToken(mode)
+  );
+}
 
 /** A matrix mark's words; an unknown mark humanizes rather than leaks. */
 export function resolveMatrixMarkLabel(

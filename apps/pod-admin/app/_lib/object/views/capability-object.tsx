@@ -29,9 +29,15 @@
  * switches are offered only to those (`mayTurnVerbsOn`); everyone else reads
  * the state and who can change it. Connecting an account stays in the app — the web has no Connect
  * flow — so that step is a "Connect in app" exit.
+ *
+ * Under each action that is on: how it runs when an AI asks for it — runs on
+ * its own, asks first, never (`governanceRules.actionModes` /
+ * `setActionMode`, founder 5 Nov 2026). One mode per action for every AI on
+ * the pod, so a pod admin sets it and everyone else reads it. A mode that
+ * could not be read says so; it never reads as "asks first".
  */
 
-import { addToast, Chip, Switch } from "@heroui/react";
+import { addToast, Chip, Select, SelectItem, Switch } from "@heroui/react";
 import { useState } from "react";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { trpc } from "../../../../lib/trpc";
@@ -59,6 +65,9 @@ import {
   capabilityFlows,
 } from "../../../(admin)/tools/_lib/tool-runs-model";
 import { mayTurnVerbsOn, whoTurnsVerbsOn } from "../capability-model";
+import { actionModeChoices, isActionRunMode } from "../action-mode-model";
+import { resolveActionRunModeLabel } from "@synap-core/types/vocabulary";
+import type { ActionRunMode } from "@synap-core/types/governance-rules";
 import { ToolRuns } from "./tool-runs";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -133,6 +142,32 @@ export function CapabilityObject({
       }));
     },
   });
+  // How each action runs (one mode per action, every AI, the whole pod).
+  const modeCard = (catalog.data ?? []).find((c) => c.id === id);
+  const actionNames = modeCard
+    ? (toolGroups([modeCard])[0]?.verbs ?? []).map((v) => v.verbId)
+    : [];
+  const modes = trpc.governanceRules.actionModes.useQuery(
+    { actions: actionNames },
+    { enabled: actionNames.length > 0, retry: false }
+  );
+  const [modeRefusals, setModeRefusals] = useState<Record<string, string>>({});
+  const setMode = trpc.governanceRules.setActionMode.useMutation({
+    onSuccess: (_res, input) => {
+      setModeRefusals(({ [input.action]: _dropped, ...rest }) => rest);
+      void utils.governanceRules.actionModes.invalidate();
+      void utils.governanceRules.list.invalidate();
+      void utils.governanceRules.listAll.invalidate();
+    },
+    onError: (err, input) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      setModeRefusals((r) => ({
+        ...r,
+        [input.action]:
+          readableError(err.message) ?? "The pod didn’t change how it runs.",
+      }));
+    },
+  });
   useReauthOnUnauthorized(container.error, catalog.error);
 
   if (container.isLoading) return frame.loading("Loading tool…");
@@ -193,6 +228,30 @@ export function CapabilityObject({
           onToggle={(enabled) =>
             v.skillId && setEnabled.mutate({ skillId: v.skillId, enabled })
           }
+          runMode={
+            modes.isError
+              ? { state: "failed" }
+              : modes.data
+                ? (() => {
+                    const row = modes.data.modes.find(
+                      (m) => m.action === v.verbId
+                    );
+                    return row
+                      ? {
+                          state: "ready",
+                          mode: row.mode,
+                          mayRunOnItsOwn: row.mayRunOnItsOwn,
+                        }
+                      : { state: "failed" };
+                  })()
+                : { state: "loading" }
+          }
+          canSetMode={viewerIsPodAdmin}
+          modePending={
+            setMode.isPending && setMode.variables?.action === v.verbId
+          }
+          modeRefusal={modeRefusals[v.verbId]}
+          onSetMode={(mode) => setMode.mutate({ action: v.verbId, mode })}
         />
       ))}
     </ul>
@@ -358,18 +417,35 @@ function AccessSection({
   );
 }
 
+/** An action's run mode as this page holds it: read, still loading, or not readable. */
+type RunModeState =
+  | { state: "loading" }
+  | { state: "failed" }
+  | { state: "ready"; mode: ActionRunMode; mayRunOnItsOwn: boolean };
+
 function VerbRow({
   verb,
   canToggle,
   isPending,
   refusal,
   onToggle,
+  runMode,
+  canSetMode,
+  modePending,
+  modeRefusal,
+  onSetMode,
 }: {
   verb: CardVerbLike;
   canToggle: boolean;
   isPending: boolean;
   refusal: string | undefined;
   onToggle: (enabled: boolean) => void;
+  runMode: RunModeState;
+  /** A pod admin: the mode holds for every AI on the pod. */
+  canSetMode: boolean;
+  modePending: boolean;
+  modeRefusal: string | undefined;
+  onSetMode: (mode: ActionRunMode) => void;
 }) {
   return (
     <li className="flex flex-col gap-1 border-b border-foreground/[0.05] px-2 py-2 last:border-b-0">
@@ -415,6 +491,91 @@ function VerbRow({
           {refusal}
         </p>
       )}
+      {verb.enabled && (
+        <RunModeLine
+          verb={verb}
+          runMode={runMode}
+          canSetMode={canSetMode}
+          isPending={modePending}
+          onSetMode={onSetMode}
+        />
+      )}
+      {modeRefusal && (
+        <p className="text-[12px] text-status-down" role="alert">
+          {modeRefusal}
+        </p>
+      )}
     </li>
+  );
+}
+
+/**
+ * How an action that is on runs: a pod admin picks it, everyone else reads
+ * it. Loading draws nothing yet; a failed read says so, never "asks first".
+ */
+function RunModeLine({
+  verb,
+  runMode,
+  canSetMode,
+  isPending,
+  onSetMode,
+}: {
+  verb: CardVerbLike;
+  runMode: RunModeState;
+  canSetMode: boolean;
+  isPending: boolean;
+  onSetMode: (mode: ActionRunMode) => void;
+}) {
+  if (runMode.state === "loading") return null;
+  if (runMode.state === "failed") {
+    return (
+      <p className="text-[12px] text-foreground/65">
+        How it runs couldn’t be read.
+      </p>
+    );
+  }
+  const choices = actionModeChoices({
+    type: verb.type,
+    mayRunOnItsOwn: runMode.mayRunOnItsOwn,
+  });
+  const current = choices.find((c) => c.mode === runMode.mode);
+  return (
+    <div
+      data-action-mode={runMode.mode}
+      className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"
+    >
+      <span className="text-[12px] text-foreground/65">When an AI uses it</span>
+      {canSetMode ? (
+        <Select
+          size="sm"
+          radius="md"
+          variant="bordered"
+          className="w-full max-w-[220px]"
+          aria-label={`How ${verb.label} runs`}
+          selectedKeys={[runMode.mode]}
+          disabledKeys={choices.filter((c) => c.disabled).map((c) => c.mode)}
+          isDisabled={isPending}
+          onSelectionChange={(keys) => {
+            const k = Array.from(keys as Set<string>)[0];
+            if (isActionRunMode(k) && k !== runMode.mode) onSetMode(k);
+          }}
+        >
+          {choices.map((c) => (
+            <SelectItem key={c.mode} description={c.line}>
+              {c.label}
+            </SelectItem>
+          ))}
+        </Select>
+      ) : (
+        <span className="text-[12px] text-foreground">
+          {resolveActionRunModeLabel(runMode.mode)}
+        </span>
+      )}
+      {current && (
+        <span className="w-full text-[11.5px] text-foreground/65">
+          {current.line}
+        </span>
+      )}
+    </div>
   );
 }

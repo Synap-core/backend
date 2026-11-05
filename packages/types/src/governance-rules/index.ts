@@ -57,6 +57,31 @@ export interface GovernanceRuleRowLike {
   sourceProposalId: string | null;
 }
 
+// ─── An action's run mode (one tool action, every AI, the whole pod) ─────
+
+/**
+ * How ONE action of a tool runs when an AI asks for it, as the person sets it
+ * on the tool's page or by "Approve always" on one of its requests:
+ *   - `auto`  — runs on its own (an active pod-wide `auto` capability rule);
+ *   - `ask`   — asks first (no such rule: the gate's default for a tool run);
+ *   - `never` — refused (an active pod-wide `deny` capability rule).
+ * Stored as ONE `governance_rules` row: principal `any`, scope `pod`, target
+ * `capability` naming the action (its stable name). Written only by the
+ * person door `governanceRules.setActionMode`; words:
+ * `resolveActionRunModeLabel` (vocabulary).
+ */
+export const ACTION_RUN_MODES = ["auto", "ask", "never"] as const;
+export type ActionRunMode = (typeof ACTION_RUN_MODES)[number];
+
+/** The mode a stored verdict means; no active rule asks first. */
+export function actionRunModeOf(
+  verdict: "auto" | "propose" | "deny" | null | undefined
+): ActionRunMode {
+  if (verdict === "auto") return "auto";
+  if (verdict === "deny") return "never";
+  return "ask";
+}
+
 // ─── The two class patterns and their words ─────────────────────────────
 
 /**
