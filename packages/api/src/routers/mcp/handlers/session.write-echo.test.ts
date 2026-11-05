@@ -251,8 +251,10 @@ describe("synap_start_session echoes, with the keys", () => {
       "draft-pr",
       "ask-scope",
     ]);
+    // Keys only, never the statements the agent sent.
     expect(r.session.criteria).toEqual(["tsc"]);
-    for (const f of LEFT_OUT) expect(r.session).not.toHaveProperty(f);
+    for (const f of LEFT_OUT.filter((f) => f !== "criteria"))
+      expect(r.session).not.toHaveProperty(f);
   });
 
   it("CONTROL — a deduped start hands back the existing row whole (work the agent did not write)", async () => {
