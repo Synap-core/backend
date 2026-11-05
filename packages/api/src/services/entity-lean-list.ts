@@ -309,7 +309,9 @@ export async function projectLeanEntityList(
   const lifecycles =
     profileIds.length > 0
       ? await source.getEffectiveLifecycles(profileIds)
-      : new Map();
+      : (new Map() as Awaited<
+          ReturnType<LeanShapeSource["getEffectiveLifecycles"]>
+        >);
   const shapes = new Map<string, Promise<LeanKindShape>>();
   const shapeOf = (row: Record<string, unknown>) => {
     const profileId = row.profileId;

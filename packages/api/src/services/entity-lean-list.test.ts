@@ -10,7 +10,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@synap/database", () => ({
+// PARTIAL (importOriginal): only the db handle and the resolver class are
+// replaced; a total mock is ratcheted (`database-mock-total-ratchet`).
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   db: {},
   ProfileResolutionService: class {},
 }));
