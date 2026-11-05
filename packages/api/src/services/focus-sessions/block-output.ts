@@ -37,7 +37,11 @@
  */
 
 import { db, focusSessions, and, eq } from "@synap/database";
-import { ASK_UNBLOCKS_DEFAULT } from "@synap-core/types/ask";
+import {
+  ASK_ANSWER_BY_PAST_MESSAGE,
+  ASK_UNBLOCKS_DEFAULT,
+  isAskAnswerByPast,
+} from "@synap-core/types/ask";
 import type {
   BlockedReason,
   ExpectedOutput,
@@ -143,6 +147,8 @@ export type BlockExpectedOutputResult =
    * would put an undoorable card on the board and believe otherwise.
    */
   | { status: "ref_unreachable"; reason: string }
+  /** The ask's `answerBy` is already past (`isAskAnswerByPast`): refused, nothing changed. */
+  | { status: "ask_refused"; reason: string }
   | {
       status: "blocked" | "unblocked";
       /** The DECLARED label (the slot's own casing), never the caller's. */
@@ -207,6 +213,12 @@ export async function blockExpectedOutput(
   );
   if (!loaded.ok) return loaded.result;
   const { slot } = loaded;
+
+  // A deadline already past is refused here as at every write door: "overdue"
+  // is P0, whose push breaks through Focus (review 5 Nov 2026).
+  if (isAskAnswerByPast(params.ask?.answerBy)) {
+    return { status: "ask_refused", reason: ASK_ANSWER_BY_PAST_MESSAGE };
+  }
 
   // ONE door for the ref floor — the same `isOutputRefVisible` the attach-output
   // doors apply. Checked BEFORE the lock: a refusal must change nothing.
@@ -424,6 +436,9 @@ export function stampBlocked(
     delete withRef.answerPickedUpAt;
     // A relay pre-filled the OLD ask; it must not confirm the new one.
     delete withRef.pendingRelay;
+    // The person set the OLD ask aside ("Later"); the new ask is a new
+    // question and lands in their headline, never in Review later.
+    delete withRef.laterUntil;
     return reconcileOwedSince(
       {
         ...withRef,

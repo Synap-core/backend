@@ -113,7 +113,7 @@ import {
   apiKeys,
 } from "@synap/database";
 import { askFingerprint, type Ask } from "@synap-core/types/ask";
-import type { PushQuickAnswer } from "@synap-core/types/push";
+import { PUSH_DAILY_CAP, type PushQuickAnswer } from "@synap-core/types/push";
 import { NotificationService } from "../NotificationService.js";
 import { writePushPrefs, readPushPrefs } from "../push-prefs.js";
 import { blockExpectedOutput } from "../../services/focus-sessions/block-output.js";
@@ -589,6 +589,52 @@ describe("W8 — a push is earned", () => {
       laterUntil: until.toISOString(),
     });
     expect(h.pushes).toHaveLength(2);
+  });
+
+  it("one agent breaks through Focus once a day: its next due-soon ask is a normal push (review 5 Nov 2026)", async () => {
+    const soon = () => new Date(Date.now() + 20 * 60_000).toISOString();
+    for (let i = 0; i < 2; i++) {
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+        answerBy: soon(),
+      } as Ask);
+    }
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[0]).toMatchObject({
+      interruptionLevel: "time-sensitive",
+      channelId: "breaks-focus",
+    });
+    // The same agent's second due-soon ask that day: a normal push.
+    expect(h.pushes[1]).toMatchObject({
+      interruptionLevel: "active",
+      channelId: "needs-you",
+    });
+  });
+
+  it("a due-soon ask past the budget is held back by the person's daily cap like any other push", async () => {
+    const soon = () => new Date(Date.now() + 20 * 60_000).toISOString();
+    for (let i = 0; i < PUSH_DAILY_CAP + 2; i++) {
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+        answerBy: soon(),
+      } as Ask);
+    }
+    // The first breaks through and is never capped; the rest are normal
+    // pushes, and the cap holds the ones past it.
+    expect(h.pushes).toHaveLength(PUSH_DAILY_CAP);
+  });
+
+  it("an answerBy already past is refused at write: nothing is asked, nothing rings", async () => {
+    const sessionId = await seedSession("active");
+    const result = await blockAsk(sessionId, {
+      mode: "confirm",
+      prompt: "Casual tone?",
+      answerBy: new Date(Date.now() - 60_000).toISOString(),
+    } as Ask);
+    expect(result).toMatchObject({ status: "ask_refused" });
+    expect(h.pushes).toHaveLength(0);
   });
 
   it("an agent has no push limit by default; the limit its person sets holds back its pushes past it", async () => {

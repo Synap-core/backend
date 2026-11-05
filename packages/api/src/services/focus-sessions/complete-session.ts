@@ -983,9 +983,17 @@ export async function completeFocusSession(
       );
     }
     for (const m of endMoves?.moves ?? []) {
+      const what = m.as === "subject" ? "its subject" : "a target";
       if (m.outcome.status === "failed") {
         warnings.push(
-          `The session's end did not move ${m.as === "subject" ? "its subject" : "a target"} (${m.entityId}) to "${endMoves!.value}": ${m.outcome.reason}`
+          `The session's end did not move ${what} (${m.entityId}) to "${endMoves!.value}": ${m.outcome.reason}`
+        );
+      } else if (
+        m.outcome.status === "skipped" &&
+        m.outcome.reason === "no_status_property"
+      ) {
+        warnings.push(
+          `The session's end did not move ${what} (${m.entityId}) to "${endMoves!.value}": its process names no statusProperty and its kind declares no lifecycle.`
         );
       }
     }

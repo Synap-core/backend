@@ -16573,6 +16573,10 @@
                                     },
                                     "required": ["toStage"],
                                     "additionalProperties": false
+                                  },
+                                  "tier": {
+                                    "type": "string",
+                                    "enum": ["deep", "standard", "quick"]
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -20023,6 +20027,10 @@
                                     },
                                     "required": ["toStage"],
                                     "additionalProperties": false
+                                  },
+                                  "tier": {
+                                    "type": "string",
+                                    "enum": ["deep", "standard", "quick"]
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -25510,6 +25518,10 @@
                           },
                           "required": ["toStage"],
                           "additionalProperties": false
+                        },
+                        "tier": {
+                          "type": "string",
+                          "enum": ["deep", "standard", "quick"]
                         }
                       },
                       "required": ["key", "name", "category"],
