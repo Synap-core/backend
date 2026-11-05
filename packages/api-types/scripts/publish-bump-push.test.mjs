@@ -12,7 +12,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const WORKFLOW = readFileSync(join(ROOT, ".github/workflows/publish-types.yml"), "utf8");
+const WORKFLOW = readFileSync(
+  join(ROOT, ".github/workflows/publish-types.yml"),
+  "utf8"
+);
 const HOOK = readFileSync(join(ROOT, ".husky/pre-push"), "utf8");
 
 /** The step's block: from its `- name:` line to the next step. */
