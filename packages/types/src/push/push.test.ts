@@ -28,6 +28,11 @@ import {
   PUSH_NEEDS_YOU_CATEGORIES,
   isSessionPushMuted,
   pushCapExemptTypes,
+  AGENT_PUSH_DAILY_LIMIT_MAX,
+  PUSH_ANDROID_CHANNELS,
+  PUSH_BREAKS_FOCUS_CATEGORIES,
+  normalizeAgentPushDailyLimit,
+  pushInterruptionLevel,
 } from "./index.js";
 
 const slot = { sessionId: "s-1", label: "Tone" };
@@ -237,12 +242,13 @@ describe("quickAnswerFor", () => {
 });
 
 describe("envelope", () => {
-  it("a blocking ask is time-sensitive, threaded and carries its OS category", () => {
+  it("a blocking ask is a NORMAL push (Focus may hold it), threaded and carries its OS category", () => {
     const q = quickAnswerFor(slot, ask({ mode: "confirm" }));
     expect(
       pushEnvelope("blocking-ask", { threadId: "s-1", quickAnswer: q })
     ).toEqual({
-      interruptionLevel: "time-sensitive",
+      interruptionLevel: "active",
+      channelId: "needs-you",
       sound: "default",
       threadId: "s-1",
       categoryId: "ask-confirm",
@@ -258,6 +264,7 @@ describe("envelope", () => {
     expect(classifyPush("ai.proactive.morning_briefing")).toBe("morning-brief");
     expect(pushEnvelope("morning-brief")).toEqual({
       interruptionLevel: "passive",
+      channelId: "quiet",
       sound: null,
     });
     expect(isPushCategoryEnabled({}, "morning-brief")).toBe(true);
@@ -493,6 +500,7 @@ describe("the delivered digest and the session mute (plan d679e92c C9)", () => {
     );
     expect(pushEnvelope("delivered-digest")).toEqual({
       interruptionLevel: "passive",
+      channelId: "quiet",
       sound: null,
     });
     expect(isPushCategoryEnabled({}, "delivered-digest")).toBe(true);
@@ -558,5 +566,59 @@ describe("the delivered digest and the session mute (plan d679e92c C9)", () => {
     expect(isSessionPushMuted({ mutedSessions: [A] }, null)).toBe(false);
     expect(isSessionPushMuted({}, A)).toBe(false);
     expect(isSessionPushMuted(null, A)).toBe(false);
+  });
+});
+
+describe("push levels (founder decision 9bc9f75c, 2026-11-04)", () => {
+  it("only something broke, or an ask due within the hour, breaks through Focus", () => {
+    const breaking = PUSH_CATEGORIES.filter(
+      (c) => pushInterruptionLevel(c) === "time-sensitive"
+    );
+    expect(breaking).toEqual(["work-broke"]);
+    expect(PUSH_BREAKS_FOCUS_CATEGORIES).toEqual(["work-broke"]);
+    expect(pushInterruptionLevel("blocking-ask")).toBe("active");
+    expect(pushInterruptionLevel("decision-blocking")).toBe("active");
+    expect(pushInterruptionLevel("blocking-ask", { dueSoon: true })).toBe(
+      "time-sensitive"
+    );
+    expect(pushInterruptionLevel("decision-blocking", { dueSoon: true })).toBe(
+      "time-sensitive"
+    );
+    // A deadline does not make news loud: dueSoon counts only for what waits
+    // on the person.
+    expect(pushInterruptionLevel("mention", { dueSoon: true })).toBe("active");
+    expect(pushInterruptionLevel("morning-brief", { dueSoon: true })).toBe(
+      "passive"
+    );
+  });
+
+  it("the envelope carries the level and its Android channel, one channel per level", () => {
+    expect(pushEnvelope("work-broke")).toMatchObject({
+      interruptionLevel: "time-sensitive",
+      channelId: "breaks-focus",
+      sound: "default",
+    });
+    expect(pushEnvelope("blocking-ask", { dueSoon: true })).toMatchObject({
+      interruptionLevel: "time-sensitive",
+      channelId: "breaks-focus",
+    });
+    for (const c of PUSH_CATEGORIES) {
+      const e = pushEnvelope(c);
+      expect(e.channelId).toBe(PUSH_ANDROID_CHANNELS[e.interruptionLevel]);
+    }
+    expect(new Set(Object.values(PUSH_ANDROID_CHANNELS)).size).toBe(3);
+  });
+
+  it("an agent has no push limit unless its person set one", () => {
+    expect(normalizeAgentPushDailyLimit(undefined)).toBeNull();
+    expect(normalizeAgentPushDailyLimit(null)).toBeNull();
+    expect(normalizeAgentPushDailyLimit(0)).toBe(0);
+    expect(normalizeAgentPushDailyLimit(2)).toBe(2);
+    expect(normalizeAgentPushDailyLimit(-1)).toBeNull();
+    expect(normalizeAgentPushDailyLimit(1.5)).toBeNull();
+    expect(normalizeAgentPushDailyLimit("2")).toBeNull();
+    expect(
+      normalizeAgentPushDailyLimit(AGENT_PUSH_DAILY_LIMIT_MAX + 1)
+    ).toBeNull();
   });
 });

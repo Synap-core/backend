@@ -66,6 +66,10 @@ import {
   agentKeyGrantPermissions,
   parsePermission,
 } from "@synap-core/types/grants";
+import {
+  AGENT_PUSH_DAILY_LIMIT_MAX,
+  normalizeAgentPushDailyLimit,
+} from "@synap-core/types/push";
 import { reapplyAgentKeyGrants } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import {
@@ -88,6 +92,7 @@ import {
   loadAgentAssignments,
   setAgentAssignment,
   setAgentPaused,
+  setAgentPushDailyLimit,
 } from "../services/agent-dispatch/agent-assignment.js";
 import { ASSIGNMENT_TARGETS } from "../services/agent-dispatch/route.js";
 import { createLogger } from "@synap-core/core";
@@ -685,6 +690,11 @@ export const agentUsersRouter = router({
           reach: dispatch.get(r.id)?.reach ?? ("pull" as const),
           binding: dispatch.get(r.id)?.binding ?? null,
           assignments: assignments.get(r.id) ?? [],
+          // The daily push limit the person set on this agent; null = none.
+          pushDailyLimit: normalizeAgentPushDailyLimit(
+            (r.agentMetadata as { pushDailyLimit?: unknown } | null)
+              ?.pushDailyLimit
+          ),
         };
       });
     }),
@@ -1374,6 +1384,40 @@ export const agentUsersRouter = router({
         callerId: ctx.userId,
         agentUserId: input.agentUserId,
         paused: input.paused,
+      });
+    }),
+
+  /**
+   * Set (or clear with `null`) how many pushes a day this agent's work may
+   * send the person (founder decision 9bc9f75c): no limit by default. Held
+   * back pushes still land in the bell and on Home. HUMAN-ONLY, owner or pod
+   * admin, like pausing.
+   */
+  setPushLimit: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().uuid(),
+        dailyLimit: z
+          .number()
+          .int()
+          .min(0)
+          .max(AGENT_PUSH_DAILY_LIMIT_MAX)
+          .nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only a person can limit an agent's pushes — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite({ subjectType: "agent", action: "update" });
+      return setAgentPushDailyLimit({
+        callerId: ctx.userId,
+        agentUserId: input.agentUserId,
+        dailyLimit: input.dailyLimit,
       });
     }),
 

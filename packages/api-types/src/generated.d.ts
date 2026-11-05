@@ -1063,6 +1063,13 @@ export interface AgentMetadata {
 	 * here so a re-enrolment (device flow) mints the new key with the same scope.
 	 */
 	runsScripts?: boolean;
+	/**
+	 * How many pushes a day this agent's work may send its person (founder
+	 * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
+	 * only by `agentUsers.setPushLimit`; read by the push producer
+	 * (`push-decision.ts` rule 4b).
+	 */
+	pushDailyLimit?: number;
 }
 /**
  * Shared provenance vocabulary for the uniform `created_by_kind` column added
@@ -13738,6 +13745,15 @@ export interface ExpectedOutput {
 	 */
 	answerPickedUpAt?: string;
 	/**
+	 * The person set this owed ask aside until then ("Later", founder decision
+	 * 9bc9f75c): Review later for them until that instant, back on its own
+	 * after it (`isSetAside`, `@synap-core/types/needs-you`). SERVER-STAMPED by
+	 * the Later door only (api `ask-later.ts`), never by a client or an agent.
+	 * ISO timestamp. Cleared by the door's Undo; an answer or a hand-back makes
+	 * the slot no longer owed, so a stale one is read by nobody.
+	 */
+	laterUntil?: string;
+	/**
 	 * A relayed answer to a `commitment` ask, waiting for the person's tap — see
 	 * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
 	 * slot stays owed (`owner: 'human'`) while it is here, and the person's
@@ -17255,6 +17271,11 @@ export interface OwedSlot {
 	 * says it ends with the session.
 	 */
 	keptOwedAt?: string;
+	/**
+	 * The person set it aside until then (`ExpectedOutput.laterUntil`): the
+	 * rule reads it as Review later until that instant (`isSetAside`).
+	 */
+	laterUntil?: string;
 	/**
 	 * A param slot's param (`ExpectedOutput.paramName`): what it asks the
 	 * person to set. Its cause is already on `askCause`; the name travels so a
@@ -21925,8 +21946,10 @@ declare const PUSH_CATEGORIES: readonly [
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
 /**
  * How hard a push interrupts.
- *   `interruptive` — sound, banner, breaks through Focus when time-sensitive.
+ *   `interruptive` — sound and banner.
  *   `passive`      — lands silently in the notification list.
+ * Whether it also breaks through Focus is the `interruptionLevel`
+ * ({@link pushInterruptionLevel}).
  */
 export type PushLevel = "interruptive" | "passive";
 /** The iOS `interruptionLevel` Expo forwards (Expo push message field). */
@@ -25339,6 +25362,8 @@ export interface OwedSlotSignalInput {
 	pendingRelay?: SlotPendingRelay;
 	/** Kept owed past its session, straight from `listOwedSlots`. */
 	keptOwedAt?: string;
+	/** The person's Later on it, straight from `listOwedSlots` (the class reads it). */
+	laterUntil?: string;
 	/** A param slot's param, straight from `listOwedSlots`. */
 	paramName?: string;
 	/** Who asked and their name, straight from `listOwedSlots`. */
@@ -26144,6 +26169,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				pausedAt: Date | null;
 				pendingKeys: number;
 				pendingProposalId: string | null;
+				pushDailyLimit: number | null;
 				reach: "dispatch" | "pod" | "pull";
 				revokedKeys: number;
 				role: string | null;
@@ -26261,6 +26287,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				posture: "ask-first" | "create-with-undo" | null;
 				status: "updated";
+			};
+		}>;
+		setPushLimit: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				dailyLimit: number | null;
+			};
+			meta: object;
+			output: {
+				agentUserId: string;
+				pushDailyLimit: number | null;
 			};
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -36450,6 +36487,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				triggered: boolean;
 			};
 		}>;
+		askLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				expectedLabel: string;
+				sessionId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				label: string;
+				laterUntil: Date;
+				sessionId: string;
+			};
+		}>;
 		attachAgent: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentId: string;
@@ -36783,6 +36833,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
 				warnings: string[];
+			};
+		}>;
+		clearAskLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				expectedLabel: string;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
 			};
 		}>;
 		close: import("@trpc/server").TRPCMutationProcedure<{
@@ -37145,6 +37205,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
@@ -38304,6 +38365,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
@@ -43408,6 +43470,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					icon: string | null;
 					id: string;
 					priority: "high" | "low" | "normal" | "urgent";
+					pushAgentId: string | null;
 					pushedAt: Date | null;
 					readAt: Date | null;
 					snoozedUntil: Date | null;

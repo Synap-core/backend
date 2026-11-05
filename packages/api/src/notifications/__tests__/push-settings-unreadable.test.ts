@@ -77,7 +77,7 @@ describe("push settings unreadable", () => {
     expect(id).toBe("row-1");
     expect(mockSendExpoPush).toHaveBeenCalledTimes(1);
     expect(mockSendExpoPush.mock.calls[0]![0]).toMatchObject({
-      interruptionLevel: "time-sensitive",
+      interruptionLevel: "active",
       data: { pushCategory: "blocking-ask" },
     });
   });

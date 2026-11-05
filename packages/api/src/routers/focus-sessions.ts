@@ -163,6 +163,10 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import {
+  clearAskLater,
+  setAskLater,
+} from "../services/focus-sessions/ask-later.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
 import { canUserSeeChannel } from "../utils/channel-visibility.js";
 import {
@@ -3119,6 +3123,63 @@ export const focusSessionsRouter = router({
         askFingerprint: input.askFingerprint,
       });
       return slotOwnershipResult(result, input);
+    }),
+
+  /**
+   * LATER — the person sets one owed ask aside until `until` (founder
+   * decision 9bc9f75c): Review later for them until then, back on its own
+   * after it. The same act and limits as a request's Later
+   * (`proposals.later`); the ask stays owed and the agent still waits.
+   * `expectedLabel` is the slot's key or label, as `answerOutput` takes it.
+   * The session's OWNER only, and never an agent key: an agent that could
+   * set an ask aside would move its own ask in the person's list.
+   */
+  askLater: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().trim().min(1),
+        until: z.coerce.date(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can put an ask off — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
+      return setAskLater({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+        until: input.until,
+      });
+    }),
+
+  /** Take back the person's Later on an owed ask (the receipt's Undo). */
+  clearAskLater: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().trim().min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person can take back a Later — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
+      return clearAskLater({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+      });
     }),
 
   /**

@@ -286,6 +286,7 @@ export async function blockExpectedOutput(
   await notifySessionNeedsYou({
     sessionId: params.sessionId,
     byAgent: !!params.agentUserId,
+    agentUserId: params.agentUserId,
     reason: {
       kind: "slots",
       before: [slot],
