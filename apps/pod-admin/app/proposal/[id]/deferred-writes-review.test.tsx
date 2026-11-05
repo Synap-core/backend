@@ -74,6 +74,16 @@ vi.mock("../../../lib/trpc", () => ({
           refetch() {},
         }),
       },
+      // A failed approval's repair card (the status-mark cases below).
+      repairOptions: {
+        useQuery: () => ({
+          data: { repairable: false, missingKind: "widget" },
+          isError: false,
+          isLoading: false,
+          refetch() {},
+        }),
+      },
+      repair: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
     profiles: {
       get: { useQuery: () => ({ data: undefined }) },
@@ -261,5 +271,72 @@ describe("a held-writes pack", () => {
     const seen = text(changeSection(render()));
     expect(seen).toContain('Create Task "Ship v2"');
     expect(seen).not.toMatch(/Applied|Refused/);
+  });
+});
+
+/**
+ * Every status mark on this page reads the one status door (`statusPillFor`,
+ * the units `STATUS_TONE` table through `getEnumTone`), so a status wears one
+ * colour here and on every other surface. The page used to keep two tables of
+ * its own: the header chip painted `rejected` red and `approval_failed` amber,
+ * and the deferred-write rows painted a `rejected` write red, where the units
+ * table reads a rejection calm (a person's decision) and a failed approval red.
+ */
+describe("the status marks read the one status door", () => {
+  /** StatusPill's text class for each kind (`status-pill.tsx`). */
+  const KIND_CLASS = {
+    healthy: "text-status-healthy",
+    stale: "text-status-stale",
+    down: "text-status-down",
+    unknown: "text-foreground/65",
+  } as const;
+  type Kind = keyof typeof KIND_CLASS;
+  /** The kind of each StatusPill (its `font-medium tabular` chip) in `html`. */
+  const pillKinds = (html: string): Kind[] =>
+    [...html.matchAll(/class="([^"]*font-medium tabular[^"]*)"/g)].map(
+      (m) =>
+        (Object.keys(KIND_CLASS) as Kind[]).find((k) =>
+          m[1]!.split(/\s+/).includes(KIND_CLASS[k])
+        ) ?? ("none" as Kind)
+    );
+
+  /** The header: after the heading, before the first write row. */
+  const header = (html: string) =>
+    html.slice(html.indexOf("</h1>"), html.indexOf("data-deferred-write="));
+
+  it.each([
+    ["approval_failed", "down"],
+    ["rejected", "unknown"],
+    ["approved", "healthy"],
+    ["pending", "stale"],
+  ] as const)("a %s proposal's header mark is %s", (status, kind) => {
+    state.proposal = heldWrites(4, status);
+    expect(pillKinds(header(render()))).toEqual([kind]);
+  });
+
+  it("a rejected write reads calm; a refused one stays red", () => {
+    const at = "2026-10-27T10:00:00.000Z";
+    const pack = heldWrites(4, "rejected");
+    const data = {
+      ...pack.data,
+      deferredOutcomes: {
+        [ref(1)]: { outcome: "rejected", at },
+        [ref(2)]: {
+          outcome: "refused",
+          reason: "The project is archived.",
+          at,
+        },
+      },
+    };
+    state.proposal = { ...pack, data, request: { ...pack.request, data } };
+    const html = changeSection(render());
+    const row = (n: number) => {
+      const start = html.indexOf(`data-deferred-write="${ref(n)}"`);
+      return html.slice(start, html.indexOf("</li>", start));
+    };
+    expect(text(row(1))).toContain("Rejected");
+    expect(pillKinds(row(1))).toEqual(["unknown"]);
+    expect(text(row(2))).toContain("Refused");
+    expect(pillKinds(row(2))).toEqual(["down"]);
   });
 });

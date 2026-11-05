@@ -13,8 +13,8 @@
  *
  * Moved down from app-bases. Each copy there still has importers: re-point
  * them here, then delete the copy. For `statusSemantics.ts` only the pure half
- * moved; its web-token wrappers (`ENUM_TONE_TOKEN`, `getEnumColor`, the web
- * `STATUS_PILL_MAP`) stay in app-bases.
+ * moved; its web-token wrappers (`ENUM_TONE_TOKEN`, `getEnumColor`) stay in
+ * app-bases (its unread `STATUS_PILL_MAP` went in Wave 1 step 4).
  *   hooks/src/profile-renderer/classify-property.ts      → ./classify-property
  *   headless/src/property-renderer/utils/propertyClassifier.ts → ./property-classifier
  *   headless/src/property-renderer/types.ts              → ./types (PropertyDef & co)

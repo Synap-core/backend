@@ -17,12 +17,10 @@
 
 import { useState } from "react";
 import { Button } from "@heroui/react";
-import {
-  DEFERRED_OUTCOME_TONE,
-  type DeferredWriteRow,
-  type DeferredWritesReview,
+import type {
+  DeferredWriteRow,
+  DeferredWritesReview,
 } from "@synap-core/types/proposals/deferred-writes";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
 import {
   rowHref,
@@ -31,7 +29,7 @@ import {
 } from "../../../lib/exit-link";
 import { kindIcon, kindLabel } from "../../_lib/object/kind-icon";
 import { StatusPill } from "../../(admin)/components/status-pill";
-import { statusKindForTone } from "../../(admin)/components/status-tone";
+import { statusPillFor } from "../../(admin)/components/status-tone";
 import { proposalPageT } from "./copy";
 
 /** Writes drawn before "Show all N writes". */
@@ -91,6 +89,8 @@ function WriteRow({ row }: { row: DeferredWriteRow }) {
      become (`skipped_by_reviewer`), so the mark does not change at approval. */
   const state =
     row.outcome?.outcome ?? (row.leftOut ? "skipped_by_reviewer" : null);
+  /* The one status door: the outcome word's tone and label, as every pill. */
+  const pill = statusPillFor(state);
   return (
     <li
       data-deferred-write={row.ref}
@@ -101,12 +101,7 @@ function WriteRow({ row }: { row: DeferredWriteRow }) {
         className="h-3.5 w-3.5 shrink-0 text-foreground/55"
       />
       <RowTitle title={row.title} exit={deferredWriteExit(row)} />
-      {state && (
-        <StatusPill
-          kind={statusKindForTone(DEFERRED_OUTCOME_TONE[state])}
-          label={resolveStatusLabel(state)}
-        />
-      )}
+      {pill && <StatusPill kind={pill.kind} label={pill.label} />}
       {row.outcome?.outcome === "refused" && row.outcome.reason && (
         <span className="basis-full pl-5 text-[12px] text-foreground/60">
           {row.outcome.reason}

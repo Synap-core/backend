@@ -132,6 +132,9 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   failed: "error",
   approval_failed: "error",
   fail: "error",
+  // A door said no to a write (a deferred write's replay, a curate or intake
+  // step). Not a person's verdict, so not `rejected`'s calm.
+  refused: "error",
   past_due: "error",
   lost: LIFECYCLE_CATEGORY_TONE.lost,
   unqualified: "error",
