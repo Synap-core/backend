@@ -241,6 +241,7 @@ export async function notifyRoomPost(p: {
       await notifySessionNeedsYou({
         sessionId: session.id,
         byAgent: true,
+        agentUserId: p.agentUserId,
         reason: { kind: "question", text: p.content, channelId: p.channelId },
       });
     }

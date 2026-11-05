@@ -23,6 +23,14 @@
  *      ask and is never held back, but it counts. The count is read only when
  *      the cap applies (`pushCapApplies`), so no exempt or forced push waits
  *      on it.
+ *      An ask due within the hour (`facts.dueSoon`) is never held back by
+ *      the budget either: it is one of the two pushes that break through
+ *      Focus (founder decision 9bc9f75c, 2026-11-04); it counts.
+ *   4b. the AGENT's own limit ({@link withinAgentPushLimit}): when the person
+ *      set one in that agent's settings (`agentMetadata.pushDailyLimit`;
+ *      none by default), an earned push about that agent's work past it is
+ *      held back. Same exemptions as the budget, minus `dueSoon`: a limit the
+ *      person set on one agent holds its urgent asks too.
  *   5. the person's SESSION MUTE ({@link withSessionMute}): a push about a
  *      session they muted is held back, except what needs them (an ask or a
  *      decision: needs-you always pushes, founder 2026-11-02) and what they
@@ -41,6 +49,7 @@ import {
   notifications,
   proposals,
   storedSessionSource,
+  users,
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
 import { loadAgentPresence } from "../services/agent-presence.js";
@@ -49,7 +58,9 @@ import {
   PUSH_CAP_EXEMPT_CATEGORIES,
   PUSH_DAILY_CAP,
   PUSH_MUTE_EXEMPT_CATEGORIES,
+  PUSH_NEEDS_YOU_CATEGORIES,
   classifyPush,
+  normalizeAgentPushDailyLimit,
   isPushCategoryEnabled,
   isSessionPushMuted,
   pushCapExemptTypes,
@@ -59,11 +70,22 @@ import {
 } from "@synap-core/types/push";
 
 export type PushDecision =
-  | { push: true; category: PushCategory | null; reason: "earned" | "forced" }
+  | {
+      push: true;
+      category: PushCategory | null;
+      reason: "earned" | "forced";
+      /** `facts.dueSoon` on a needs-you category: breaks Focus, never capped. */
+      dueSoon?: boolean;
+    }
   | {
       push: false;
       category: PushCategory | null;
-      reason: "unclassified" | "category_off" | "over_cap" | "session_muted";
+      reason:
+        | "unclassified"
+        | "category_off"
+        | "over_cap"
+        | "over_agent_limit"
+        | "session_muted";
     };
 
 /** Pure: rules 1-3 above, in order. */
@@ -81,17 +103,59 @@ export function decidePush(p: {
   if (!isPushCategoryEnabled(p.prefs, category)) {
     return { push: false, category, reason: "category_off" };
   }
-  return { push: true, category, reason: "earned" };
+  const dueSoon =
+    p.facts.dueSoon === true && PUSH_NEEDS_YOU_CATEGORIES.includes(category);
+  return {
+    push: true,
+    category,
+    reason: "earned",
+    ...(dueSoon ? { dueSoon: true } : {}),
+  };
 }
 
-/** Rule 4 applies only to an EARNED push in a counted category. Pure. */
-export function pushCapApplies(d: PushDecision): boolean {
+/**
+ * An EARNED push in a counted category — what a limit (the person's budget or
+ * an agent's own) may hold back. Pure.
+ */
+function countedEarnedPush(d: PushDecision): boolean {
   return (
     d.push &&
     d.reason === "earned" &&
     d.category !== null &&
     !PUSH_CAP_EXEMPT_CATEGORIES.includes(d.category)
   );
+}
+
+/**
+ * Rule 4 applies only to an EARNED push in a counted category, and never to
+ * an ask due within the hour (it breaks Focus; it counts). Pure.
+ */
+export function pushCapApplies(d: PushDecision): boolean {
+  return countedEarnedPush(d) && !(d.push && d.dueSoon === true);
+}
+
+/**
+ * Rule 4b applies to an EARNED push in a counted category about an agent's
+ * work, when that agent has a limit (`limit` = its normalized
+ * `pushDailyLimit`, `null` = unlimited, the default). Pure.
+ */
+export function agentPushLimitApplies(
+  d: PushDecision,
+  agentUserId: string | undefined,
+  limit: number | null
+): boolean {
+  return !!agentUserId && limit !== null && countedEarnedPush(d);
+}
+
+/** Rule 4b, pure: hold back an earned push once the agent used its limit today. */
+export function withinAgentPushLimit(
+  d: PushDecision,
+  limit: number | null,
+  agentPushedToday: number
+): PushDecision {
+  return limit !== null && countedEarnedPush(d) && agentPushedToday >= limit
+    ? { push: false, category: d.category, reason: "over_agent_limit" }
+    : d;
 }
 
 /**
@@ -218,12 +282,73 @@ export async function pushesCountedToday(
   return Number(row?.n ?? 0);
 }
 
-/** Record that a row's push went out — what {@link pushesCountedToday} counts. */
-export async function recordPush(notificationId: string): Promise<void> {
+/**
+ * The pushes `agentUserId`'s work got the person since the start of their day
+ * (rule 4b): rows pushed today stamped with that agent
+ * (`notifications.push_agent_id`, 0401), minus the exempt types — the same
+ * day and the same exemptions as {@link pushesCountedToday}. A failed read
+ * THROWS.
+ */
+export async function agentPushesCountedToday(
+  userId: string,
+  agentUserId: string,
+  timeZone: string
+): Promise<number> {
+  const exempt = pushCapExemptTypes();
+  const [row] = await db
+    .select({ n: drizzleSql<number>`cast(count(*) as integer)` })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.pushAgentId, agentUserId),
+        isNotNull(notifications.pushedAt),
+        drizzleSql`${notifications.pushedAt} >= (date_trunc('day', now() AT TIME ZONE ${timeZone}) AT TIME ZONE ${timeZone})`,
+        exempt.length
+          ? drizzleSql`${notifications.type} NOT IN (${drizzleSql.join(
+              exempt.map((t) => drizzleSql`${t}`),
+              drizzleSql`, `
+            )})`
+          : undefined
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
+/**
+ * The daily push limit the person set on this agent
+ * (`users.agent_metadata.pushDailyLimit`), or `null` = unlimited (the
+ * default, and any malformed value). A failed read THROWS.
+ */
+export async function readAgentPushDailyLimit(
+  agentUserId: string
+): Promise<number | null> {
+  const [row] = await db
+    .select({ metadata: users.agentMetadata })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  return normalizeAgentPushDailyLimit(
+    (row?.metadata as { pushDailyLimit?: unknown } | null)?.pushDailyLimit
+  );
+}
+
+/**
+ * Record that a row's push went out — what {@link pushesCountedToday} counts —
+ * and, when known, the agent whose work it was about (what
+ * {@link agentPushesCountedToday} counts).
+ */
+export async function recordPush(
+  notificationId: string,
+  agentUserId?: string
+): Promise<void> {
   // No Date bind (postgres.js 3.4.8 crashes on it on the pod image).
   await db
     .update(notifications)
-    .set({ pushedAt: drizzleSql`now()` })
+    .set({
+      pushedAt: drizzleSql`now()`,
+      ...(agentUserId ? { pushAgentId: agentUserId } : {}),
+    })
     .where(eq(notifications.id, notificationId));
 }
 
@@ -327,10 +452,16 @@ export async function derivePushFacts(input: {
     input.sourceType === "proposal" &&
     input.sourceId
   ) {
+    const [row] = await db
+      .select({ agentUserId: proposals.agentUserId })
+      .from(proposals)
+      .where(eq(proposals.id, input.sourceId))
+      .limit(1);
     return {
       proposalBlocksOpenSession: await proposalBlocksOpenSession(
         input.sourceId
       ),
+      ...(row?.agentUserId ? { agentUserId: row.agentUserId } : {}),
     };
   }
   return {};

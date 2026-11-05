@@ -2826,6 +2826,7 @@ export async function updateFocusSession(
   await notifySessionNeedsYou({
     sessionId,
     byAgent: !!agentUserId,
+    agentUserId,
     reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
 

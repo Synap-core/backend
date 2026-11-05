@@ -11,8 +11,9 @@
  *        `urgency: 'whenever'`.
  *   P3 — last: `stopped`, `review_later`, `from_system`.
  *
- * A RANK only, today: it orders the list and stamps the notification row's
- * level; no push decision reads it (push levels are a later change).
+ * It orders the list and stamps the notification row's level. One push
+ * decision reads it: a P0 ask's push breaks through Focus (`PushFacts.dueSoon`,
+ * `../push/index.ts`, founder decision 9bc9f75c).
  *
  * Same principle as a proposal's class (`proposal-class.ts` in the pod): an
  * agent that could pick its level would pick the loud one. So the level comes
@@ -93,7 +94,7 @@ export function needsYouPriority(
  * `notifications.priority` scale, low · normal · high · urgent — never a fifth
  * scale). P1 is `high`, the `session.needs_you` registry default, so an ask
  * with no deadline and no urgency is stamped exactly as before. Display only:
- * no push decision reads it.
+ * the push reads the P-level itself (`dueSoon`), never this stamp.
  */
 export const NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL: Readonly<
   Record<NeedsYouPriority, "urgent" | "high" | "normal" | "low">

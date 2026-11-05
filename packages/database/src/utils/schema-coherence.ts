@@ -154,6 +154,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "pushed_at",
     addedBy: "0375_notifications_pushed_at.sql",
   },
+  // notifications — the agent a push was about (0401). An agent's own push
+  // limit counts it; missing, that count throws and the push is skipped for
+  // an agent with a limit (the row is still written and the bell shows it).
+  {
+    table: "notifications",
+    column: "push_agent_id",
+    addedBy: "0401_notifications_push_agent.sql",
+  },
   // The status watcher's episode claims (0376). Absent, every watcher tick
   // fails at its claim and no signal is raised.
   {

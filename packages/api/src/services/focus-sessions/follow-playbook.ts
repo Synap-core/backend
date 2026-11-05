@@ -536,6 +536,7 @@ export async function followPlaybook(
   await notifySessionNeedsYou({
     sessionId,
     byAgent: !!agentUserId,
+    agentUserId,
     reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
 

@@ -49,14 +49,18 @@ import {
   type PushQuickAnswer,
 } from "@synap-core/types/push";
 import {
+  agentPushLimitApplies,
+  agentPushesCountedToday,
   decidePush,
   derivePushFacts,
   pushCapApplies,
   pushesCountedToday,
+  readAgentPushDailyLimit,
   pushAboutMutedSession,
   withSessionMute,
   readPodPushSettings,
   recordPush,
+  withinAgentPushLimit,
   withinPushCap,
 } from "./push-decision.js";
 import type {
@@ -864,6 +868,7 @@ export const NotificationService = {
       // row is already persisted and the bell already told, so a failed read
       // here costs the interruption (logged), never the notification.
       let pushCategory: PushPayloadExtras["pushCategory"] | null = null;
+      let pushDueSoon = false;
       if (channels.has("os")) {
         try {
           const facts = await (input.push?.facts ?? derivePushFacts(input));
@@ -929,6 +934,32 @@ export const NotificationService = {
               );
             }
           }
+          // The agent's OWN limit (rule 4b), when the person set one in that
+          // agent's settings — none by default (decision 9bc9f75c). A failed
+          // read skips the push, except a blocking ask (as above).
+          const agentUserId = facts.agentUserId;
+          if (decision.push && agentUserId) {
+            try {
+              const limit = await readAgentPushDailyLimit(agentUserId);
+              if (agentPushLimitApplies(decision, agentUserId, limit)) {
+                decision = withinAgentPushLimit(
+                  decision,
+                  limit,
+                  await agentPushesCountedToday(
+                    input.userId,
+                    agentUserId,
+                    await recipientTimezone(input.userId)
+                  )
+                );
+              }
+            } catch (err) {
+              if (decision.category !== "blocking-ask") throw err;
+              logger.warn(
+                { err, type: input.type, notificationId: row.id },
+                "Agent push limit unreadable — blocking ask pushed without it"
+              );
+            }
+          }
           if (!decision.push) {
             channels.delete("os");
             logger.debug(
@@ -937,9 +968,10 @@ export const NotificationService = {
             );
           } else {
             pushCategory = decision.category;
+            pushDueSoon = decision.dueSoon === true;
             // What the budget counts: recorded before the send, so a push is
             // never out without its record.
-            await recordPush(row.id);
+            await recordPush(row.id, agentUserId);
           }
         } catch (err) {
           channels.delete("os");
@@ -965,6 +997,7 @@ export const NotificationService = {
             ? pushEnvelope(pushCategory, {
                 threadId: input.push?.threadId,
                 quickAnswer,
+                dueSoon: pushDueSoon,
               })
             : {}),
           data: {
