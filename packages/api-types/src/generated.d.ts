@@ -796,19 +796,6 @@ export interface AgentConversationRef {
 	 */
 	resumeCommand: string;
 }
-/** Harnesses a person can start with a command (the registry's `launch`). */
-export type AgentLaunchHarness = Extract<(typeof AGENT_HARNESSES)[number], {
-	launch: unknown;
-}>["slug"];
-export interface AgentLaunchRef {
-	harness: AgentLaunchHarness;
-	/**
-	 * The shell command that opens a new conversation, on the agent's computer.
-	 * Rendered by the pod from the registry's template and validated values
-	 * only, so it is safe to show and copy as-is.
-	 */
-	command: string;
-}
 declare const MODEL_PROVIDERS: readonly [
 	{
 		readonly label: "Anthropic";
@@ -21389,77 +21376,6 @@ declare const ASSIGNMENT_TARGETS: readonly [
 	"workspace"
 ];
 export type AssignmentTarget = (typeof ASSIGNMENT_TARGETS)[number];
-/**
- * Why a NAMED agent cannot take the work:
- *   wrong_reach  the pod cannot hand it this work that way (an external agent
- *                named for an IS turn, a pull agent named for a dispatch run);
- *   not_owned    not the person's agent (dispatch / pod) or does not act for
- *                them (pull);
- *   not_member   the pool is a room and the agent is not in it;
- *   paused       a person paused it.
- */
-export type RouteRefusal = "not_member" | "not_owned" | "paused" | "wrong_reach";
-export interface HandoffComputer {
-	/** The computer's own principal; `null` when it is only a key label. */
-	agentUserId: string | null;
-	name: string;
-	/**
-	 * Whose computer it is (`users.computer_belongs_to`, 0388): `person`,
-	 * `agent` or `shared`. `null` when the computer is only a key label (no
-	 * principal holds the fact).
-	 */
-	belongsTo: ComputerBelongsTo | null;
-}
-/** What a hand-off from the calling agent would do right now. */
-export type HandOffPreview = "asks_you" | "blocked" | "direct";
-export interface HandoffAgent {
-	agentUserId: string;
-	name: string | null;
-	agentType: string | null;
-	computer: HandoffComputer | null;
-	reach: AgentReach;
-	/** What `route()` admits when a hand-off NAMES this agent for you. */
-	canTakeYourWork: boolean;
-	/** Why not, in `route()`'s words; `null` when it can. */
-	whyNot: RouteRefusal | null;
-	/**
-	 * pull: it called the pod within `PULL_LIVE_WINDOW_MS`; dispatch: its
-	 * binding resolves without an error; pod: the pod runs it itself.
-	 */
-	live: boolean;
-	paused: boolean;
-	lastSeenAt: string | null;
-	/**
-	 * The newest call a process RUNNING this agent made (`X-Synap-Runner`,
-	 * 0385); `null` = no runner ever said so. `live` does not read it yet.
-	 */
-	servedAt: string | null;
-	/**
-	 * A pull agent on a computer that nothing runs now: `true` = a runner served
-	 * it, but not within `PULL_LIVE_WINDOW_MS`; `false` = served within it;
-	 * `null` = not measured (no runner ever stamped any of its keys) or not
-	 * applicable (a dispatch or pod agent, or a pull agent on no computer):
-	 * `false` is never said of an agent nobody measured. A presence fact, never
-	 * a route refusal.
-	 */
-	nobodyRuns: boolean | null;
-	/**
-	 * The command that opens this agent on its `computer`, rendered by the pod
-	 * from its harness's launch template (`resolveAgentLaunch`); `null` when
-	 * its harness has none. Never a command an agent wrote.
-	 */
-	open: AgentLaunchRef | null;
-	/** direct = lands on the roster now; asks_you = the person approves first. */
-	handOff: HandOffPreview;
-	/** Why it asks or is blocked (the resolver's or the route's words). */
-	handOffReason: string | null;
-}
-export interface HandoffRoster {
-	agents: HandoffAgent[];
-	computers: Array<HandoffComputer & {
-		agents: number;
-	}>;
-}
 export interface SetAgentJobResult {
 	agentUserId: string;
 	role: string | null;
@@ -26074,11 +25990,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removedCount: number;
 				revokedKeyCount: number;
 			};
-		}>;
-		roster: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
-			meta: object;
-			output: HandoffRoster;
 		}>;
 		setAssignment: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
