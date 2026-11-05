@@ -144,6 +144,12 @@ export interface LensRow {
    * state keeps the tone. Absent = not a needs-you item row.
    */
   reasonKind?: string;
+  /**
+   * The kind of object a decision acts on (`Signal.subjectKind`: "tool", a
+   * profile slug), so a list of approvals tells its rows apart by the kind's
+   * own icon. Absent = the pod does not say (an older pod, or not a proposal).
+   */
+  subjectKind?: string;
   /** "and N more like it" when the row stands for N+1 identical things ("ran N times" for a rule), else null — `repeatLabel`. */
   repeat: string | null;
   /** Provenance. Pass through `visibleSource(row, scope)` before drawing it. */
@@ -262,6 +268,8 @@ function iso(at: string | Date | null | undefined): string | null {
 
 /** The fields of a needs-you `Signal` a lens row reads (structural). */
 export interface LensNeedsYouSignal extends GroupableSignal {
+  /** `proposal-cluster`: the kind of object the proposal acts on (the pod's `Signal.subjectKind`). */
+  subjectKind?: string | null;
   /** `owed-slot`: what the answer unblocks (`Signal.unblocks`). */
   unblocks?: string | null;
   title: string;
@@ -688,6 +696,7 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
         ? { unblocks: s.unblocks.trim() }
         : {}),
       reasonKind: needsYouReasonOf(s),
+      ...(s.subjectKind?.trim() ? { subjectKind: s.subjectKind.trim() } : {}),
       repeat: repeatLabel(s),
       source: row.session
         ? {
