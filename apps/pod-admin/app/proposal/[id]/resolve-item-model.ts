@@ -109,6 +109,9 @@ function choiceOf(o: Rec, t: T): ResolveChoice | null {
     case "retry":
       label = t("resolve.retry");
       break;
+    case "file_as_proposed":
+      label = t("resolve.fileAsProposed");
+      break;
     case "skip":
       label = t("resolve.skip");
       break;
@@ -214,4 +217,15 @@ export function resolvedToast(
         color: waiting > 0 ? "warning" : "success",
       };
   }
+}
+
+/**
+ * Is this stopped graph being finished item by item (an item resolved, or a
+ * resolution under way)? The pod then refuses approving it as a whole
+ * (`resolutionUnderway`, the same reading), so the page does not offer it.
+ */
+export function graphBeingResolved(data: unknown): boolean {
+  const m = rec(rec(data)?.materialized);
+  if (!m) return false;
+  return !!rec(m.resolving) || Object.keys(rec(m.resolutions) ?? {}).length > 0;
 }

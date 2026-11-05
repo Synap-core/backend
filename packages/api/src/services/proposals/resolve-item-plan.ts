@@ -34,6 +34,7 @@ import {
   type CompositeCreateRelationOp,
   type CompositeProposalOperation,
 } from "@synap-core/types/proposals";
+import { applyEntityEdits } from "../../routers/proposals/graph-dispositions.js";
 import {
   mergeMaterializedRecords,
   opKeys,
@@ -71,8 +72,19 @@ export interface ItemResolution {
 /** The record with the per-item resolutions this module adds. */
 export interface ResolvableRecord extends CompleteMaterializedRecord {
   resolutions?: Record<string, ItemResolution>;
-  /** A resolution in flight (claimed under a CAS; stale after a few minutes). */
-  resolving?: { key: string; by: string; at: string };
+  /**
+   * A resolution in flight, claimed under a compare-and-set. `token` names
+   * the run that owns it (every later write is conditioned on it); `at` is
+   * its heartbeat, renewed as each op settles; `unfinished` marks a run that
+   * filed rows but could not stamp them (only its person may finish it).
+   */
+  resolving?: {
+    key: string;
+    by: string;
+    token: string;
+    at: string;
+    unfinished?: boolean;
+  };
 }
 
 export interface WaitingItem extends MaterializedOpRef {
@@ -85,7 +97,11 @@ export interface WaitingItem extends MaterializedOpRef {
 
 export class ResolvePlanError extends Error {
   constructor(
-    readonly code: "not_waiting" | "unsupported_op" | "not_an_entity",
+    readonly code:
+      | "not_waiting"
+      | "unsupported_op"
+      | "not_an_entity"
+      | "uncertain_link",
     message: string
   ) {
     super(message);
@@ -115,6 +131,22 @@ export function waitingItems(record: ResolvableRecord): WaitingItem[] {
     );
   }
   return out;
+}
+
+/**
+ * Is a stopped graph being finished item by item? Then approving it as a
+ * whole would run every op again under the approval's own keys and file the
+ * resolved items twice: the approve door refuses (`applyProposalApproval`).
+ * True while an item was resolved (`resolutions`) or a resolution claim
+ * stands (`resolving`, live or crashed — a crashed one may have filed rows).
+ */
+export function resolutionUnderway(data: unknown): boolean {
+  const m = (data as { materialized?: ResolvableRecord } | null | undefined)
+    ?.materialized;
+  if (!m || typeof m !== "object") return false;
+  return (
+    !!m.resolving || Object.keys(m.resolutions ?? {}).length > 0
+  );
 }
 
 /** Is this a record of a run that stopped part-way? */
@@ -158,19 +190,64 @@ export function relationEnds(
   });
 }
 
-/** entity op index → the id it landed as, read from `byOp` (reverted: none). */
+/**
+ * entity op index → the id it landed as, read from `byOp` (reverted: none).
+ *
+ * By the entry's `opIndex` when it carries one (every record a stopped run
+ * or a resume stamps now). A record stamped before that keyed a ref-less
+ * entity by its RESULT ordinal, which differs from its op ordinal once an
+ * earlier entity left no result (a dropped twin, the relation-slug guard).
+ * A stopped run accounts for every op it did not land (`failedOp`, `notRun`,
+ * `skipped`), so the result ordinal is recomputed exactly from those; an op
+ * whose entry still cannot be found is `uncertain`, never guessed, so a link
+ * is never made to the wrong record.
+ */
+export function landedEntities(
+  operations: readonly LooseOp[],
+  record: CompleteMaterializedRecord
+): { ids: Map<number, string>; uncertain: Set<number> } {
+  const ids = new Map<number, string>();
+  const uncertain = new Set<number>();
+  const entries = Object.entries(record.byOp ?? {}).filter(
+    ([, e]) => e.op === "create_entity" && e.entityId && !e.revertedAt
+  );
+  for (const [, e] of entries) {
+    if (
+      typeof e.opIndex === "number" &&
+      operations[e.opIndex]?.op === "create_entity"
+    ) {
+      ids.set(e.opIndex, e.entityId!);
+    }
+  }
+  const legacy = new Map(
+    entries.filter(([, e]) => typeof e.opIndex !== "number")
+  );
+  if (legacy.size === 0) return { ids, uncertain };
+  const unlanded = new Set<number>([
+    ...(record.failedOp ? [record.failedOp.opIndex] : []),
+    ...(record.notRun ?? []).map((r) => r.opIndex),
+    ...(record.skipped ?? []).map((r) => r.opIndex),
+  ]);
+  let resultOrdinal = 0;
+  operations.forEach((op, i) => {
+    if (op.op !== "create_entity" || unlanded.has(i)) return;
+    const ref = typeof op.ref === "string" && op.ref ? op.ref : undefined;
+    const key = ref ?? `$op${resultOrdinal}`;
+    resultOrdinal++;
+    if (ids.has(i)) return;
+    const entry = legacy.get(key);
+    if (entry?.entityId) ids.set(i, entry.entityId);
+    else uncertain.add(i);
+  });
+  return { ids, uncertain };
+}
+
+/** entity op index → the id it landed as (see {@link landedEntities}). */
 export function landedEntityIds(
   operations: readonly LooseOp[],
   record: CompleteMaterializedRecord
 ): Map<number, string> {
-  const keys = opKeys(operations);
-  const out = new Map<number, string>();
-  operations.forEach((op, i) => {
-    if (op.op !== "create_entity") return;
-    const entry = record.byOp?.[keys[i]!];
-    if (entry?.entityId && !entry.revertedAt) out.set(i, entry.entityId);
-  });
-  return out;
+  return landedEntities(operations, record).ids;
 }
 
 /** What the person chose for the item, once the server has checked it. */
@@ -197,6 +274,7 @@ export interface ResolvePlan {
 }
 
 export const SKIPPED_BY_PERSON = "Skipped on review.";
+export const SKIPPED_REJECTED = "Rejected on review.";
 export const SKIPPED_NEEDS_SKIPPED =
   "Left out: it links to an item that was skipped.";
 export const SKIPPED_NEEDS_UNFILED =
@@ -213,6 +291,8 @@ export function planResolveRun(args: {
   record: ResolvableRecord;
   itemKey: string;
   disposition: ItemDisposition;
+  /** Op indexes a reviewer rejected (`data.dispositions`): never filed. */
+  rejected?: ReadonlySet<number>;
 }): ResolvePlan {
   const { operations, record, itemKey, disposition } = args;
   const waiting = waitingItems(record);
@@ -238,7 +318,16 @@ export function planResolveRun(args: {
   }
 
   const handles = entityHandles(operations);
-  const landed = landedEntityIds(operations, record);
+  const { ids: landed, uncertain } = landedEntities(operations, record);
+  // Refs of ops that are not entities (a session, a document, a project): a
+  // link to one cannot be resumed from here.
+  const otherRefs = new Set(
+    operations.flatMap((o) =>
+      o.op !== "create_entity" && typeof o.ref === "string" && o.ref
+        ? [o.ref]
+        : []
+    )
+  );
 
   // Items held for a review keep waiting, and so does every relation to one
   // (the item itself joins them when this choice holds it).
@@ -254,6 +343,13 @@ export function planResolveRun(args: {
   const skip: ResolvePlan["skip"] = [];
   if (disposition.kind === "skip") {
     skip.push({ opIndex: item.opIndex, reason: SKIPPED_BY_PERSON });
+  }
+  // A reviewer's earlier reject stands: the op is left out, never filed.
+  for (const i of args.rejected ?? []) {
+    if (i === item.opIndex && disposition.kind !== "skip") continue;
+    if (!waiting.some((w) => w.opIndex === i) || skipped.has(i)) continue;
+    skipped.add(i);
+    skip.push({ opIndex: i, reason: SKIPPED_REJECTED });
   }
   const keepWaiting: number[] = [];
   const run: number[] = [];
@@ -275,14 +371,36 @@ export function planResolveRun(args: {
       keepWaiting.push(i);
       continue;
     }
+    if (skipped.has(i)) continue;
     if (!RESUMABLE_OPS.has(o.op)) {
       throw new ResolvePlanError(
         "unsupported_op",
         `This graph's remaining steps include a "${o.op}", which can't be resumed from here yet. Ask the AI to file the rest again.`
       );
     }
+    if (o.op === "create_entity" && typeof o.projectRef === "string") {
+      throw new ResolvePlanError(
+        "unsupported_op",
+        "A record that waits files into a project this graph creates, which can't be resumed from here yet. Ask the AI to file the rest again."
+      );
+    }
     if (o.op === "create_relation") {
+      const named = [o.sourceRef, o.targetRef].filter(
+        (r): r is string => typeof r === "string"
+      );
+      if (named.some((r) => otherRefs.has(r) && !handles.has(r))) {
+        throw new ResolvePlanError(
+          "unsupported_op",
+          "A link that waits points at a step of this graph that is not a record (a session, a document or a project), which can't be resumed from here yet. Skip it, or ask the AI to file the rest again."
+        );
+      }
       const ends = relationEnds(o, handles);
+      if (ends.some((e) => uncertain.has(e))) {
+        throw new ResolvePlanError(
+          "uncertain_link",
+          "This graph was recorded before each record's position was kept, and a link that waits points at a record it can't tell apart. Skip that link, or ask the AI to file the rest again."
+        );
+      }
       if (ends.some((e) => skipped.has(e))) {
         skip.push({ opIndex: i, reason: SKIPPED_NEEDS_SKIPPED });
         continue;
@@ -346,6 +464,8 @@ export function buildResumeOps(args: {
   run: readonly number[];
   landed: Map<number, string>;
   overrides?: Map<number, { targetWorkspaceId?: string; profileSlug?: string }>;
+  /** A reviewer's earlier edits per op (`data.dispositions`), applied first. */
+  edits?: Map<number, Record<string, unknown>>;
 }): ResumeOps {
   const { operations, run, landed } = args;
   const handles = entityHandles(operations);
@@ -367,7 +487,9 @@ export function buildResumeOps(args: {
   for (const i of run) {
     const op = operations[i]!;
     if (op.op === "create_entity") {
-      const entity = op as unknown as CompositeCreateEntityOp;
+      const original = op as unknown as CompositeCreateEntityOp;
+      const edited = args.edits?.get(i);
+      const entity = edited ? applyEntityEdits(original, edited) : original;
       const next: CompositeCreateEntityOp = {
         ...entity,
         ...(args.overrides?.get(i) ?? {}),
@@ -420,7 +542,9 @@ export function remapRunRecord(
     out.byOp = Object.fromEntries(
       Object.entries(record.byOp).map(([k, v]) => [
         map.originalKey.get(k) ?? k,
-        v,
+        typeof v.opIndex === "number"
+          ? { ...v, opIndex: map.originalIndex[v.opIndex] ?? v.opIndex }
+          : v,
       ])
     );
   }
@@ -456,11 +580,12 @@ export function opRefAt(
 const byIndex = (a: MaterializedOpRef, b: MaterializedOpRef) =>
   a.opIndex - b.opIndex;
 
-function uniqueByKey<T extends MaterializedOpRef>(list: T[]): T[] {
-  const seen = new Set<string>();
+/** One entry per op (by index: a record stamped earlier may key it differently). */
+function uniqueByIndex<T extends MaterializedOpRef>(list: T[]): T[] {
+  const seen = new Set<number>();
   return list.filter((r) => {
-    if (seen.has(r.key)) return false;
-    seen.add(r.key);
+    if (seen.has(r.opIndex)) return false;
+    seen.add(r.opIndex);
     return true;
   });
 }
@@ -491,6 +616,18 @@ export function composeResolvedRecord(args: {
   const runFiled: CompleteMaterializedRecord = run
     ? { ...run, stampedAt: args.stampedAt }
     : { stampedAt: args.stampedAt };
+  // A resumed op never landed before, so an older entry under the same key
+  // is ANOTHER op's (an older record keyed ref-less entities by result
+  // ordinal): keep both, the resumed one under a key of its own.
+  if (runFiled.byOp && older.byOp) {
+    runFiled.byOp = Object.fromEntries(
+      Object.entries(runFiled.byOp).map(([k, v]) =>
+        older.byOp![k] && !older.byOp![k]!.revertedAt
+          ? [`${k}#${v.opIndex ?? "resumed"}`, v]
+          : [k, v]
+      )
+    );
+  }
   delete runFiled.opCount;
   delete runFiled.failedOp;
   delete runFiled.notRun;
@@ -505,7 +642,7 @@ export function composeResolvedRecord(args: {
         ...r,
         reason: "Left out when the rest was filed.",
       }));
-  const skipped = uniqueByKey([
+  const skipped = uniqueByIndex([
     ...(older.skipped ?? []),
     ...plan.skip.map((s) => ({
       ...opRefAt(operations, s.opIndex),
@@ -517,11 +654,11 @@ export function composeResolvedRecord(args: {
   const failedOp: MaterializedFailedOp | undefined = stopped
     ? run?.failedOp
     : undefined;
-  const notRun = uniqueByKey([
+  const notRun = uniqueByIndex([
     ...(stopped ? (run?.notRun ?? []) : []),
     ...plan.keepWaiting.map((i) => opRefAt(operations, i)),
   ])
-    .filter((r) => r.key !== failedOp?.key)
+    .filter((r) => r.opIndex !== failedOp?.opIndex)
     .sort(byIndex);
 
   merged.resolutions = {

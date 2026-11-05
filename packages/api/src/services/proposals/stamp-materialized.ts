@@ -213,6 +213,12 @@ export interface MaterializedOpRecord {
     | "create_link"
     | UpdateOpName;
   entityId?: string;
+  /**
+   * The op's index in the ops the run was given — stamped only where the
+   * builder was handed those ops (a stopped run, a resume), so the record
+   * maps an entry to its op EXACTLY, whatever the key (`landedEntityIds`).
+   */
+  opIndex?: number;
   linked?: boolean;
   relationId?: string;
   preExisting?: boolean;
@@ -301,7 +307,17 @@ function unique(ids: Iterable<string>): string[] {
  */
 export function buildMaterializedRecord(
   result: RecordSource,
-  extra?: { facetIds?: string[]; propertyDiffs?: EntityPropertyDiff[] }
+  extra?: {
+    facetIds?: string[];
+    propertyDiffs?: EntityPropertyDiff[];
+    /**
+     * The ops the run was given. With them a ref-less entity is keyed by its
+     * op ordinal (`opKeys`, the key `failedOp` / `notRun` use) and every
+     * entity entry carries its `opIndex`; without them, by its result ordinal
+     * (the historic key, see `buildByOp`).
+     */
+    operations?: readonly LooseOp[];
+  }
 ): CompleteMaterializedRecord {
   // A retry's link to a row THIS proposal created (lineage-checked by the
   // materializer) is the run's own creation — a crash before the stamp.
@@ -334,7 +350,7 @@ export function buildMaterializedRecord(
     ],
     ...rowPatchFields(result),
     ...planRecordFields(result),
-    byOp: buildByOp(result),
+    byOp: buildByOp(result, extra?.operations),
   };
   // A relation op that landed as THE dependency edge (`blocks` /
   // `depends_on` → links `blocked_by`) is a link this run created.
@@ -442,7 +458,11 @@ function planOnlyRecordFields(
   };
 }
 
-function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
+function buildByOp(
+  result: RecordSource,
+  operations?: readonly LooseOp[]
+): Record<string, MaterializedOpRecord> {
+  const keysOfOps = operations ? opKeys(operations) : undefined;
   const byOp: Record<string, MaterializedOpRecord> = {};
   // A ref-less entity is keyed by the CANONICAL positional ref — `opRef(n)` is
   // the Nth create_entity op, the id space dispositions and the scanner use —
@@ -454,12 +474,14 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   const entityKeyByIndex = new Map<number, string>();
   let entityOrdinal = 0;
   for (const e of [...result.entities].sort((a, b) => a.opIndex - b.opIndex)) {
-    const key = e.ref ?? opRef(entityOrdinal);
+    const key =
+      keysOfOps?.[e.opIndex] ?? e.ref ?? opRef(entityOrdinal);
     entityOrdinal++;
     entityKeyByIndex.set(e.opIndex, key);
     byOp[key] = {
       op: "create_entity",
       entityId: e.entityId,
+      ...(keysOfOps ? { opIndex: e.opIndex } : {}),
       linked: e.linked && !e.linkedByRetry,
     };
   }
@@ -838,7 +860,7 @@ export function buildStoppedRunRecord(
   });
 
   return {
-    ...buildMaterializedRecord(result),
+    ...buildMaterializedRecord(result, { operations }),
     opCount: operations.length,
     // The op being applied is unknown when the throw came between ops (the
     // index then names one that landed): no failedOp is better than a wrong one.

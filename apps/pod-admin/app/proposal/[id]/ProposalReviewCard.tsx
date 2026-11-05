@@ -101,6 +101,7 @@ import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
 import { proposalPageT, type OutcomeKey } from "./copy";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
+import { graphBeingResolved } from "./resolve-item-model";
 import {
   DuplicateUnchecked,
   ItemTwinChoice,
@@ -606,6 +607,7 @@ function DecisionButtons({
   onDecided,
   resume = false,
   stopTwins = null,
+  hideApprove = false,
 }: {
   proposal: ProposalReviewData;
   mode: DecisionMode;
@@ -618,6 +620,12 @@ function DecisionButtons({
    * stop on them again, so the verbs answer for every such record.
    */
   stopTwins?: readonly ApprovalRunTwin[] | null;
+  /**
+   * A stopped graph being finished item by item: approving it as a whole
+   * would file the resolved items twice (the pod refuses it), so only the
+   * card's own choices and Reject are offered.
+   */
+  hideApprove?: boolean;
 }) {
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
@@ -743,20 +751,23 @@ function DecisionButtons({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button
-        color="success"
-        className="min-h-10"
-        startContent={<Check size={16} />}
-        isLoading={decision.approving}
-        isDisabled={busy || waiting}
-        onPress={() => decision.approve(choice)}
-      >
-        {resolveActionLabel(resume ? "resume" : "approve")}
-      </Button>
+      {!hideApprove && (
+        <Button
+          color="success"
+          className="min-h-10"
+          startContent={<Check size={16} />}
+          isLoading={decision.approving}
+          isDisabled={busy || waiting}
+          onPress={() => decision.approve(choice)}
+        >
+          {resolveActionLabel(resume ? "resume" : "approve")}
+        </Button>
+      )}
       {rejectButton}
       {/* Never widen autonomy beside the approval of something that acts on
           its own: that moment is for reading it, not for "always". */}
       {mayRule &&
+        !hideApprove &&
         mode.kind === "plain" &&
         !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
           <AlwaysApproveMenu
@@ -1278,6 +1289,9 @@ export function ProposalReviewBody({
               onDecided={onDecided}
               resume={stopped}
               stopTwins={stoppedOnTwins(run) ? run.twins : null}
+              hideApprove={
+                status === "approval_failed" && graphBeingResolved(p.data)
+              }
             />
           </>
         ) : (

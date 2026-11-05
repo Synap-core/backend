@@ -21,7 +21,10 @@
  * kind names the space and where the kind exists), and what was never tried.
  * The item it waits on comes with the pod's choices (`ResolveItems`):
  * file it where its kind lives, make the kind available here, file it as
- * another kind, or skip it. Approve and Reject are unchanged.
+ * another kind, or skip it. Once an item was resolved (or one is being
+ * resolved) the graph is no longer approved as a whole: the page hides
+ * Approve (`graphBeingResolved`) and the pod refuses it, since that would
+ * file the resolved items twice. Reject is unchanged.
  */
 
 import { addToast, Button } from "@heroui/react";

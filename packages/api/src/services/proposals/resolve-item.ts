@@ -33,9 +33,11 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { randomUUID } from "node:crypto";
 import {
   and,
   db,
+  drizzleSql,
   eq,
   getWorkspaceMembership,
   inArray,
@@ -54,6 +56,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import {
   normalizeProposalSource,
   type CompositeProposalOperation,
+  type ProposalItemDisposition,
 } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
 import { WORK_CLOCK } from "@synap-core/types/work-clock";
@@ -78,6 +81,16 @@ import {
 import { redactForStorage } from "../../utils/redact-secrets.js";
 import { proposalUnchangedSince } from "./proposal-cas.js";
 import { validateWorkspaceAccess } from "../../utils/workspace-membership.js";
+import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import { twinsShownOnCard } from "../duplicates/find-duplicate-candidates.js";
+import { BACKGROUND_APPROVAL_MIN_OPERATIONS } from "./approval-runs.js";
+import {
+  announceCompositeApproved,
+  bindGraphChannels,
+  reconcileCompositeEntityOps,
+  recordProducedEntities,
+  withProposedIdentityResolutions,
+} from "../../routers/proposals/apply-approval.js";
 import { describeMissingKind } from "../profiles/kind-elsewhere.js";
 import type { KindMissingDetail } from "../../utils/kind-missing.js";
 import {
@@ -160,6 +173,11 @@ export type ResolveOption = OptionBase &
     | {
         /** File it again as it was proposed (a failure that was not its kind). */
         kind: "retry";
+        action: { type: "use_kind"; profileSlug: string };
+      }
+    | {
+        /** A record the run never reached (no step failed): file it as proposed. */
+        kind: "file_as_proposed";
         action: { type: "use_kind"; profileSlug: string };
       }
     | { kind: "skip"; action: { type: "skip" } }
@@ -304,7 +322,8 @@ async function kindOptions(args: {
     workspaceId: landing,
   });
   const kindName = detail.kindName ?? titleCase(slug);
-  const here = detail.workspaceName ?? (await workspaceName(landing));
+  // Named only when the caller can read it (`describeMissingKind`'s floor).
+  const here = detail.workspaceName;
   const options: ResolveOption[] = [];
 
   // The kind became available where it lands (its scope was widened since).
@@ -320,7 +339,9 @@ async function kindOptions(args: {
   }
 
   // D3: where the kind lives, first (recommended: same kind, nothing new).
+  // Only a space the caller may WRITE in: the record would be theirs there.
   for (const space of detail.foundIn) {
+    if (!(await mayWriteIn(userId, space.workspaceId))) continue;
     options.push({
       kind: "file_in_workspace",
       action: { type: "file_in_workspace", workspaceId: space.workspaceId },
@@ -333,7 +354,13 @@ async function kindOptions(args: {
 
   // Then: make the kind available here (a scope change, reviewed).
   const from = detail.foundIn[0];
-  if (from && landing && here && !nowHere) {
+  if (
+    from &&
+    landing &&
+    here &&
+    !nowHere &&
+    (await validateWorkspaceAccess(userId, [landing])).length > 0
+  ) {
     const [kind] = await db
       .select({ id: profiles.id })
       .from(profiles)
@@ -347,9 +374,8 @@ async function kindOptions(args: {
       )
       .limit(1);
     if (kind) {
-      const pending = args.record.resolutions?.[item.key];
       const waitingReview =
-        pending?.outcome === "held" && pending.action === "widen_kind_scope";
+        (await pendingWidenReview(args.record, item.key)) !== null;
       options.push({
         kind: "widen_kind_scope",
         action: { type: "widen_kind_scope", profileId: kind.id },
@@ -549,11 +575,72 @@ export async function describeResolveOptions(
           skipOption(),
         ],
       });
+    } else if (op.op === "create_entity" && !record.failedOp) {
+      // The run stopped between two steps: nothing failed, so a record it
+      // never reached is filed as proposed (and the rest resumes with it).
+      items.push({
+        ...base,
+        options: [
+          {
+            kind: "file_as_proposed",
+            action: { type: "use_kind", profileSlug: String(op.profileSlug) },
+            recommended: true,
+            available: true,
+          },
+          skipOption(),
+        ],
+      });
     } else {
       items.push({ ...base, options: [skipOption()] });
     }
   }
   return { resolvable: true, opCount: record.opCount, items };
+}
+
+
+/** May the caller write records in this space (editor+, or its owner)? */
+async function mayWriteIn(userId: string, workspaceId: string): Promise<boolean> {
+  try {
+    await assertWorkspaceWrite(db, userId, { workspaceId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Review statuses after which a scope change may be asked for again. */
+const REVIEW_CLOSED = new Set<string>([
+  ProposalStatus.REJECTED,
+  ProposalStatus.WITHDRAWN,
+  ProposalStatus.EXPIRED,
+  ProposalStatus.REVERTED,
+  ProposalStatus.APPROVAL_FAILED,
+]);
+
+/**
+ * The scope-change review a held item still waits on, re-read from the row:
+ * null when there is none, or it was refused / withdrawn / expired (the
+ * choice is then available again), or it was approved (the kind is here).
+ */
+async function pendingWidenReview(
+  record: ResolvableRecord,
+  key: string
+): Promise<string | null> {
+  const r = record.resolutions?.[key];
+  if (
+    r?.outcome !== "held" ||
+    r.action !== "widen_kind_scope" ||
+    !r.reviewProposalId
+  ) {
+    return null;
+  }
+  const review = await db.query.proposals.findFirst({
+    where: eq(proposals.id, r.reviewProposalId),
+    columns: { status: true },
+  });
+  if (!review || REVIEW_CLOSED.has(review.status)) return null;
+  if (review.status === ProposalStatus.APPROVED) return null;
+  return r.reviewProposalId;
 }
 
 export interface ResolveItemResult {
@@ -574,6 +661,69 @@ export interface ResolveItemResult {
 
 function bad(message: string): never {
   throw new TRPCError({ code: "BAD_REQUEST", message });
+}
+
+/** The key a reviewer's disposition uses for an op (`applyGraphDispositions`). */
+function dispositionRefs(operations: readonly LooseOp[]): string[] {
+  let relation = 0;
+  return operations.map((op, i) => {
+    if (op.op === "create_relation") return `$rel${relation++}`;
+    return typeof op.ref === "string" && op.ref ? op.ref : `$op${i}`;
+  });
+}
+
+/** A reviewer's earlier per-item decisions (`data.dispositions`), by op index. */
+function readDispositions(
+  data: Record<string, unknown>,
+  operations: readonly LooseOp[]
+): { rejected: Set<number>; edits: Map<number, Record<string, unknown>> } {
+  const map = (data.dispositions ?? {}) as Record<
+    string,
+    ProposalItemDisposition | undefined
+  >;
+  const rejected = new Set<number>();
+  const edits = new Map<number, Record<string, unknown>>();
+  dispositionRefs(operations).forEach((ref, i) => {
+    const d = map[ref];
+    if (d?.status === "reject") rejected.add(i);
+    else if (
+      d?.status === "edit" &&
+      d.edits &&
+      operations[i]?.op === "create_entity"
+    ) {
+      edits.set(i, d.edits);
+    }
+  });
+  return { rejected, edits };
+}
+
+/** The ctx the resume's entity and relation doors run under, or a refusal. */
+async function compositeCtxFor(proposal: ProposalRow, userId: string) {
+  let workspaceRole = "owner";
+  if (proposal.workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      proposal.workspaceId,
+      userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No workspace access",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+  return {
+    db,
+    authenticated: true as const,
+    userId,
+    workspaceId: proposal.workspaceId ?? null,
+    workspaceRole,
+    sessionId: proposal.sessionId ?? null,
+    governanceProposalId: proposal.id,
+    agentUserId: proposal.agentUserId ?? null,
+  };
 }
 
 /**
@@ -611,41 +761,42 @@ export async function resolveProposalItem(args: {
     bad("Only a record can be filed another way. A link can only be skipped.");
   }
   if (action.type === "create_kind") {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "Creating a new kind from here is not available yet. File it where the kind lives, as another kind, or skip it.",
-    });
+    bad(
+      "Creating a new kind from here is not available yet. File it where the kind lives, as another kind, or skip it."
+    );
   }
 
-  // Check the choice BEFORE anything is claimed or written.
-  let disposition: ItemDisposition | undefined;
+  // Every check that can refuse runs BEFORE anything is claimed or written,
+  // so a refusal never leaves a scope change (or a claim) behind.
+  let disposition: ItemDisposition;
   let widen: { profileId: string; home: string } | undefined;
   if (action.type === "skip") {
     disposition = { kind: "skip" };
   } else if (action.type === "file_in_workspace") {
-    const [readable] = await validateWorkspaceAccess(userId, [
-      action.workspaceId,
-    ]);
-    if (!readable) bad("You can't file into that space.");
+    if (!(await mayWriteIn(userId, action.workspaceId))) {
+      bad("You can't file records into that space.");
+    }
     if (!(await kindResolvesIn(slug, userId, action.workspaceId))) {
-      const name = (await workspaceName(action.workspaceId)) ?? "that space";
+      const [readable] = await validateWorkspaceAccess(userId, [
+        action.workspaceId,
+      ]);
+      const name =
+        (readable ? await workspaceName(readable) : undefined) ?? "that space";
       bad(`The kind "${slug}" isn't available in ${name} either.`);
     }
     disposition = { kind: "file", targetWorkspaceId: action.workspaceId };
   } else if (action.type === "use_kind") {
     const kind = await kindResolvesIn(action.profileSlug, userId, landing);
     if (!kind) {
-      const name = (await workspaceName(landing)) ?? "this space";
-      bad(`The kind "${action.profileSlug}" isn't available in ${name}.`);
+      bad(`The kind "${action.profileSlug}" isn't available where this item lands.`);
     }
     disposition =
       kind.slug === slug
         ? { kind: "file" }
         : { kind: "file", profileSlug: kind.slug };
   } else {
-    // widen_kind_scope: the kind must be the item's own slug, in a space the
-    // caller can read, and the item must land somewhere.
+    // widen_kind_scope: the item's own kind, in a space the caller can read,
+    // into a space the caller can read, and no review of it already open.
     const [kind] = await db
       .select({
         id: profiles.id,
@@ -655,27 +806,41 @@ export async function resolveProposalItem(args: {
       .from(profiles)
       .where(eq(profiles.id, action.profileId))
       .limit(1);
-    const readable = kind?.workspaceId
-      ? await validateWorkspaceAccess(userId, [kind.workspaceId])
-      : [];
-    if (!kind || kind.slug !== slug || readable.length === 0) {
+    const readable = await validateWorkspaceAccess(
+      userId,
+      [kind?.workspaceId, landing].filter((w): w is string => !!w)
+    );
+    if (
+      !kind?.workspaceId ||
+      kind.slug !== slug ||
+      !landing ||
+      !readable.includes(kind.workspaceId) ||
+      !readable.includes(landing)
+    ) {
       bad("That kind can't be made available for this item.");
     }
-    if (!landing) bad("This item has no space to make the kind available in.");
-    widen = { profileId: kind.id, home: kind.workspaceId! };
-  }
-
-  // Check the plan BEFORE claiming (a widen's plan is known only after it).
-  if (disposition) {
-    try {
-      planResolveRun({ operations, record, itemKey: itemRef, disposition });
-    } catch (err) {
-      if (err instanceof ResolvePlanError) bad(err.message);
-      throw err;
+    if (await pendingWidenReview(record, item.key)) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          "Making this kind available here already waits for a review. File it once that review is approved, or choose another way.",
+      });
     }
+    widen = { profileId: kind.id, home: kind.workspaceId };
+    disposition = { kind: "file" };
   }
 
-  await claimResolution(proposal, data, record, itemRef, userId);
+  // The plan (as a file, for a widen) and the doors' ctx, checked up front.
+  const planned = checkedPlan({ data, record, operations, item, disposition });
+  if (planned.run.length >= BACKGROUND_APPROVAL_MIN_OPERATIONS) {
+    bad(
+      `Resolving this item would file ${planned.run.length} steps at once, more than can be filed here. Ask the AI to file the rest again.`
+    );
+  }
+  const compositeCtx = await compositeCtxFor(proposal, userId);
+
+  const claim = await claimResolution(proposal, data, record, itemRef, userId);
+  let ran = false;
   try {
     if (widen) {
       const { changeKindScope } =
@@ -691,13 +856,8 @@ export async function resolveProposalItem(args: {
         }
       );
       if (outcome.status === "proposed") {
-        disposition = {
-          kind: "hold",
-          reviewProposalId: outcome.proposalId,
-        };
-      } else if (await kindResolvesIn(slug, userId, landing)) {
-        disposition = { kind: "file" };
-      } else {
+        disposition = { kind: "hold", reviewProposalId: outcome.proposalId };
+      } else if (!(await kindResolvesIn(slug, userId, landing))) {
         bad(
           "The kind's scope changed, but it still isn't available where this item lands."
         );
@@ -711,18 +871,62 @@ export async function resolveProposalItem(args: {
       item,
       userId,
       action,
-      disposition: disposition!,
+      disposition,
+      claim,
+      compositeCtx,
+      onRunStart: () => {
+        ran = true;
+      },
     });
   } catch (err) {
-    await releaseClaim(proposal.id, itemRef);
+    // A run that filed rows keeps its claim, marked unfinished: only its
+    // person may finish it (their keys link what it filed). Otherwise the
+    // claim is simply dropped.
+    if (ran) await markUnfinished(proposal.id, claim);
+    else await releaseClaim(proposal.id, claim);
     throw err;
   }
 }
 
+function checkedPlan(args: {
+  data: Record<string, unknown>;
+  record: ResolvableRecord;
+  operations: LooseOp[];
+  item: WaitingItem;
+  disposition: ItemDisposition;
+}) {
+  const { rejected } = readDispositions(args.data, args.operations);
+  try {
+    return planResolveRun({
+      operations: args.operations,
+      record: args.record,
+      itemKey: args.item.key,
+      disposition: args.disposition,
+      rejected,
+    });
+  } catch (err) {
+    if (err instanceof ResolvePlanError) bad(err.message);
+    throw err;
+  }
+}
+
+interface Claim {
+  token: string;
+  by: string;
+}
+
+/** The predicate "this run still owns the claim". */
+const ownsClaim = (claim: Claim) =>
+  drizzleSql`${proposals.data}->'materialized'->'resolving'->>'token' = ${claim.token}`;
+
 /**
  * Claim the resolution on the row (compare-and-set on `updated_at`), so two
- * presses cannot resume the same items at once. A claim older than
- * {@link RESOLVING_STALE_MS} is a crashed one and does not block.
+ * presses never resume the same items at once. A live claim refuses; a claim
+ * whose heartbeat stopped for {@link RESOLVING_STALE_MS}, or that is marked
+ * unfinished, may be taken over only by the person who made it — their
+ * per-item keys link what it filed (`approval-runs` `assertMayResume`: the
+ * lookup that dedups is floored on the person, so anyone else would file it
+ * all again).
  */
 async function claimResolution(
   proposal: ProposalRow,
@@ -730,17 +934,28 @@ async function claimResolution(
   record: ResolvableRecord,
   key: string,
   userId: string
-): Promise<void> {
-  const busy =
-    record.resolving &&
-    Date.now() - Date.parse(record.resolving.at) < RESOLVING_STALE_MS;
-  if (busy) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message:
-        "An item of this graph is being resolved right now. Reload in a moment.",
-    });
+): Promise<Claim> {
+  const prior = record.resolving;
+  if (prior) {
+    const live =
+      !prior.unfinished &&
+      Date.now() - Date.parse(prior.at) < RESOLVING_STALE_MS;
+    if (live) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          "An item of this graph is being resolved right now. Reload in a moment.",
+      });
+    }
+    if (prior.by !== userId) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          "Part of this graph was being filed by the person who started it. Only they can finish it without creating duplicates.",
+      });
+    }
   }
+  const claim: Claim = { token: randomUUID(), by: userId };
   const claimed = await db
     .update(proposals)
     .set({
@@ -748,7 +963,12 @@ async function claimResolution(
         ...data,
         materialized: {
           ...record,
-          resolving: { key, by: userId, at: new Date().toISOString() },
+          resolving: {
+            key,
+            by: userId,
+            token: claim.token,
+            at: new Date().toISOString(),
+          },
         },
       } as never,
       updatedAt: new Date(),
@@ -767,28 +987,59 @@ async function claimResolution(
       message: "This proposal changed since you opened it. Reload it.",
     });
   }
+  return claim;
 }
 
-/** Best-effort: drop a claim this request made, after it failed. */
-async function releaseClaim(proposalId: string, key: string): Promise<void> {
+/** Renew the claim's heartbeat; false when another run took it over. */
+async function heartbeat(proposalId: string, claim: Claim): Promise<boolean> {
+  const renewed = await db
+    .update(proposals)
+    .set({
+      data: drizzleSql`jsonb_set(${proposals.data}, '{materialized,resolving,at}', to_jsonb(${new Date().toISOString()}::text))`,
+    })
+    .where(and(eq(proposals.id, proposalId), ownsClaim(claim)))
+    .returning({ id: proposals.id });
+  return renewed.length > 0;
+}
+
+/** Best-effort: drop a claim this run owns, after it failed before filing. */
+async function releaseClaim(proposalId: string, claim: Claim): Promise<void> {
   try {
-    const row = await db.query.proposals.findFirst({
-      where: eq(proposals.id, proposalId),
-      columns: { data: true },
-    });
-    const data = (row?.data ?? {}) as Record<string, unknown>;
-    const m = data.materialized as ResolvableRecord | undefined;
-    if (!m?.resolving || m.resolving.key !== key) return;
-    const { resolving: _drop, ...rest } = m;
     await db
       .update(proposals)
-      .set({ data: { ...data, materialized: rest } as never })
-      .where(eq(proposals.id, proposalId));
+      .set({
+        data: drizzleSql`${proposals.data} #- '{materialized,resolving}'`,
+      })
+      .where(and(eq(proposals.id, proposalId), ownsClaim(claim)));
   } catch (err) {
     logger.warn(
       { err, proposalId },
       "resolveItem: the claim could not be released (it expires on its own)"
     );
+  }
+}
+
+/** Best-effort: mark a claim this run owns as filed-but-not-stamped. */
+async function markUnfinished(proposalId: string, claim: Claim): Promise<void> {
+  try {
+    await db
+      .update(proposals)
+      .set({
+        data: drizzleSql`jsonb_set(${proposals.data}, '{materialized,resolving,unfinished}', 'true'::jsonb)`,
+      })
+      .where(and(eq(proposals.id, proposalId), ownsClaim(claim)));
+  } catch (err) {
+    logger.warn(
+      { err, proposalId },
+      "resolveItem: the claim could not be marked unfinished"
+    );
+  }
+}
+
+class LostClaimError extends Error {
+  constructor() {
+    super("Another resolution of this graph took over; this one stopped.");
+    this.name = "LostClaimError";
   }
 }
 
@@ -801,26 +1052,19 @@ async function runResolution(args: {
   userId: string;
   action: ResolveActionInput;
   disposition: ItemDisposition;
+  claim: Claim;
+  compositeCtx: Awaited<ReturnType<typeof compositeCtxFor>>;
+  onRunStart: () => void;
 }): Promise<ResolveItemResult> {
   const { proposal, data, record, operations, item, userId, disposition } =
     args;
-  let plan;
-  try {
-    plan = planResolveRun({
-      operations,
-      record,
-      itemKey: item.key,
-      disposition,
-    });
-  } catch (err) {
-    if (err instanceof ResolvePlanError) bad(err.message);
-    throw err;
-  }
-
+  const plan = checkedPlan({ data, record, operations, item, disposition });
+  const { edits } = readDispositions(data, operations);
   const resume = buildResumeOps({
     operations,
     run: plan.run,
     landed: landedEntityIds(operations, record),
+    edits,
     ...(plan.overrides
       ? { overrides: new Map([[item.opIndex, plan.overrides]]) }
       : {}),
@@ -836,17 +1080,34 @@ async function runResolution(args: {
       }
     | undefined;
   if (resume.operations.length > 0) {
+    // Filed exactly as approving would have: knowledge properties completed
+    // and reconciled against the kind's fields.
+    const operationsToRun = await reconcileCompositeEntityOps(
+      resume.operations,
+      { userId, workspaceId: proposal.workspaceId ?? null }
+    );
+    args.onRunStart();
     const result = await materializeResume({
       proposal,
       data,
       userId,
-      operations: resume.operations,
+      operations: operationsToRun,
+      resume,
+      claim: args.claim,
+      compositeCtx: args.compositeCtx,
     });
+    if (!result.ok && result.error instanceof LostClaimError) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          "Another resolution of this graph took over while this one ran. Reload it.",
+      });
+    }
     if (result.ok) {
       runRecord = remapRunRecord(
         buildStoppedRunRecord(
           {
-            operations: resume.operations,
+            operations: operationsToRun,
             result: result.result,
             failedOpIndex: -1,
           },
@@ -900,7 +1161,8 @@ async function runResolution(args: {
   const now = new Date();
   // The resume stopped on the item itself (its new kind refused it, say): it
   // still waits, failed, and no resolution is recorded as if it had applied.
-  const itemStillFailed = stopped && runRecord?.failedOp?.key === item.key;
+  const itemStillFailed =
+    stopped && runRecord?.failedOp?.opIndex === item.opIndex;
   const { record: next, complete } = composeResolvedRecord({
     older: record,
     run: runRecord,
@@ -935,7 +1197,10 @@ async function runResolution(args: {
     materializationError: _oldError,
     ...rest
   } = data;
-  const nextData: Record<string, unknown> = complete
+  const waiting = (next.notRun?.length ?? 0) + (next.failedOp ? 1 : 0);
+  // A hold that left no failure behind: the old failure is no longer true.
+  const heldOnly = !complete && !failure && !next.failedOp;
+  const nextData: Record<string, unknown> = complete || heldOnly
     ? { ...rest, materialized: next }
     : failure
       ? {
@@ -956,14 +1221,19 @@ async function runResolution(args: {
         ? { rejectionReason: null, reviewedBy: userId, reviewedAt: now }
         : failure
           ? { rejectionReason: failure.sentence }
-          : {}),
+          : heldOnly
+            ? {
+                rejectionReason: `${waiting === 1 ? "1 item waits" : `${waiting} items wait`} for a review before ${waiting === 1 ? "it" : "they"} can be filed.`,
+              }
+            : {}),
     },
-    where: eq(proposals.id, proposal.id),
+    // Only the run that owns the claim may stamp what it did.
+    where: and(eq(proposals.id, proposal.id), ownsClaim(args.claim)),
   }).returning({ id: proposals.id });
   if (written.length === 0) {
     logger.error(
       { proposalId: proposal.id, item: item.key },
-      "resolveItem: the resume ran but the proposal moved meanwhile — its record was not updated"
+      "resolveItem: the resume ran but the proposal moved (or its claim was taken) meanwhile — its record was not updated"
     );
     throw new TRPCError({
       code: "CONFLICT",
@@ -972,8 +1242,17 @@ async function runResolution(args: {
     });
   }
 
+  await afterResolved({
+    proposal,
+    data,
+    operations,
+    userId,
+    created: runRecord?.entityIds ?? [],
+    complete,
+    record: next,
+  });
+
   const filedCount = Object.keys(runRecord?.byOp ?? {}).length;
-  const waiting = (next.notRun?.length ?? 0) + (next.failedOp ? 1 : 0);
   return {
     complete,
     status: complete ? "approved" : "approval_failed",
@@ -990,46 +1269,66 @@ async function runResolution(args: {
 }
 
 /**
+ * The approval tail, shared with the composite approval (apply-approval.ts):
+ * on every resume the entities it created get their `produced` links and
+ * project membership; once nothing waits, the graph's channel bindings and
+ * the approved signals (bell, waiting agents, wait-holds, automations, the
+ * IS outcome, a pod-wide connection sync). After the stamp landed, so a
+ * failure here is logged, never reported as a failed resolution.
+ */
+async function afterResolved(args: {
+  proposal: ProposalRow;
+  data: Record<string, unknown>;
+  operations: LooseOp[];
+  userId: string;
+  created: string[];
+  complete: boolean;
+  record: ResolvableRecord;
+}): Promise<void> {
+  const { proposal, userId } = args;
+  try {
+    await recordProducedEntities(proposal, args.created, userId);
+    if (!args.complete) return;
+    const ids = landedEntityIds(args.operations, args.record);
+    const refToRealId: Record<string, string> = {};
+    args.operations.forEach((op, i) => {
+      const id = ids.get(i);
+      if (!id) return;
+      refToRealId[`$op${i}`] = id;
+      if (typeof op.ref === "string" && op.ref) refToRealId[op.ref] = id;
+    });
+    await bindGraphChannels(args.data, refToRealId, proposal, userId);
+    await announceCompositeApproved(proposal, userId);
+  } catch (err) {
+    logger.error(
+      { err, proposalId: proposal.id },
+      "resolveItem: resolved, but a follow-up of the approval failed"
+    );
+  }
+}
+
+/**
  * Run the resumed ops through the SAME composite materializer and doors the
  * approval uses, as the resolving person, with the proposal as the authority
- * its rows carry (`governanceProposalId`) and its agent as their actor.
- * Keyed per item (`<user>:<proposal>:resolve` + the item's run name), so a
- * second press links what the first created.
+ * its rows carry (`governanceProposalId`) and its agent as their actor, and
+ * the approval's duplicate rules: a same-name record nobody reviewed refuses
+ * (it is never filed silently). Keyed per proposal + item
+ * (`<proposal>:resolve:@item<i>`), so a retry links what an earlier attempt
+ * filed. The claim's heartbeat is renewed as each op settles; a run whose
+ * claim was taken over stops at once.
  */
 async function materializeResume(args: {
   proposal: ProposalRow;
   data: Record<string, unknown>;
   userId: string;
   operations: CompositeProposalOperation[];
+  resume: ReturnType<typeof buildResumeOps>;
+  claim: Claim;
+  compositeCtx: Awaited<ReturnType<typeof compositeCtxFor>>;
 }): Promise<
   { ok: true; result: MaterializeResult } | { ok: false; error: unknown }
 > {
-  const { proposal, data, userId } = args;
-  let workspaceRole = "owner";
-  if (proposal.workspaceId) {
-    const membership = await getWorkspaceMembership(
-      db,
-      proposal.workspaceId,
-      userId
-    );
-    if (!membership) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "No workspace access",
-      });
-    }
-    workspaceRole = membership.role;
-  }
-  const compositeCtx = {
-    db,
-    authenticated: true as const,
-    userId,
-    workspaceId: proposal.workspaceId ?? null,
-    workspaceRole,
-    sessionId: proposal.sessionId ?? null,
-    governanceProposalId: proposal.id,
-    agentUserId: proposal.agentUserId ?? null,
-  };
+  const { proposal, data, userId, compositeCtx } = args;
   const { entitiesRouter } = await import("../../routers/entities.js");
   const { relationsRouter } = await import("../../routers/relations.js");
   const entityCaller = entitiesRouter.createCaller(
@@ -1040,6 +1339,16 @@ async function materializeResume(args: {
       typeof relationsRouter.createCaller
     >[0]
   );
+  // The disposition ref of each resumed entity (`op.ref ?? $op<i>` of the
+  // ORIGINAL op): the key the card's twins and identity choices use.
+  const refs = dispositionRefs(
+    (data.operations as LooseOp[] | undefined) ?? []
+  );
+  const dispositionRefOf = new Map<string, string>();
+  args.resume.originalIndex.forEach((orig, sub) => {
+    const r = args.resume.operations[sub] as { ref?: unknown };
+    if (typeof r.ref === "string") dispositionRefOf.set(r.ref, refs[orig]!);
+  });
   try {
     const result = await materializeCompositeGraph(
       args.operations,
@@ -1070,11 +1379,26 @@ async function materializeResume(args: {
           typeof data.source === "string" ? data.source : "system"
         ),
         idempotency: makeExternalLinkIdempotency(db, {
-          namespace: `${userId}:${proposal.id}:resolve`,
+          namespace: `${proposal.id}:resolve`,
           provider: approvalIdempotencyProvider(proposal.proposalType),
           userId,
           sourceProposalId: proposal.id,
         }),
+        askReviewerOnDuplicate: true,
+        reviewedTwinIdsByRef: twinsShownOnCard(data).byRef,
+        ...withProposedIdentityResolutions(
+          data.proposedIdentityResolutionByRef,
+          undefined
+        ),
+        entityRef: (op) =>
+          (typeof op.ref === "string" && dispositionRefOf.get(op.ref)) ||
+          op.ref ||
+          "",
+        onProgress: async () => {
+          if (!(await heartbeat(proposal.id, args.claim))) {
+            throw new LostClaimError();
+          }
+        },
       }
     );
     return { ok: true, result };

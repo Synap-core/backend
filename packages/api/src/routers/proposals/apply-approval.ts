@@ -114,6 +114,7 @@ import {
 } from "../../utils/materialize-composite.js";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { approvalIdempotency } from "../../services/proposals/approval-idempotency.js";
+import { resolutionUnderway } from "../../services/proposals/resolve-item-plan.js";
 import { handOffBackgroundApproval } from "../../services/proposals/approval-runs.js";
 import {
   buildMaterializedRecord,
@@ -200,6 +201,250 @@ async function stampProjectMembership(
       projectId: placement.projectId,
       userId,
       workspaceId: proposal.workspaceId ?? null,
+    });
+  }
+}
+
+/**
+ * Each create_entity op's properties as an approval files them: completed
+ * for a knowledge kind, then reconciled against the kind's fields (match →
+ * keep, close → remap, else a new field) with the reviewer's per-entity
+ * decisions. Shared with `resolve-item.ts`, so a resumed item is filed
+ * exactly as approving it would have.
+ */
+export async function reconcileCompositeEntityOps(
+  operations: CompositeProposalOperation[],
+  args: {
+    userId: string;
+    /** The proposal's space (an op's own pin wins). */
+    workspaceId: string | null;
+    /** The decisions for the n-th create_entity op of `operations`. */
+    decisionsAt?: (n: number) => PropertyDecisionMap | undefined;
+  }
+): Promise<CompositeProposalOperation[]> {
+  const { userId } = args;
+  if (!operations.some((op) => op.op === "create_entity")) return operations;
+  const profileService = new ProfileResolutionService(db);
+  const rebuilt: CompositeProposalOperation[] = [];
+  let survivingIdx = 0;
+  for (const op of operations) {
+    if (op.op !== "create_entity") {
+      rebuilt.push(op);
+      continue;
+    }
+    const entityOp = op as CompositeCreateEntityOp;
+    // Zip 1:1 with the surviving-entity slices (same order, rejects dropped
+    // identically) — this recovers the ref for ref-less ($opN) ops.
+    const decisions = args.decisionsAt?.(survivingIdx++);
+    const props = completeKnowledgeProposalProperties({
+      profileSlug: entityOp.profileSlug,
+      properties: entityOp.properties,
+      title: entityOp.title,
+      description: entityOp.description,
+      content: entityOp.content,
+    });
+    if (!props || Object.keys(props).length === 0) {
+      rebuilt.push({ ...entityOp, properties: props });
+      continue;
+    }
+    // Def-creation lens for this op: a per-op workspace pin, else the
+    // proposal's workspace (null ⇒ pod-wide → reconcile skips def creation
+    // and stores new fields verbatim, exactly like the single-entity path).
+    const opWorkspaceId = entityOp.targetWorkspaceId ?? args.workspaceId;
+    const profile = await profileService.resolveProfile(
+      entityOp.profileSlug,
+      userId,
+      opWorkspaceId
+    );
+    const reconciled = await reconcileApprovedProperties({
+      properties: props,
+      // A profile that did not resolve is NOT an id: pass null so the reconcile
+      // service refuses def creation and stores verbatim (a slug in `profileId`
+      // only failed later, by a uuid cast error).
+      profileId: profile?.id ?? null,
+      workspaceId: opWorkspaceId,
+      userId,
+      decisions,
+    });
+    rebuilt.push({ ...entityOp, properties: reconciled.properties });
+  }
+  return rebuilt;
+}
+
+/**
+ * What the approval of a graph records for the entities it created: the
+ * `session --produced--> entity` links and their project membership. Shared
+ * by the composite approval and the resolution of a stopped graph's items
+ * (`services/proposals/resolve-item.ts`), so the two cannot drift.
+ */
+export async function recordProducedEntities(
+  proposal: {
+    projectId: string | null;
+    sessionId: string | null;
+    workspaceId: string | null;
+    data?: unknown;
+  },
+  producedEntityIds: string[],
+  userId: string
+): Promise<void> {
+  // Provenance: record `session --produced--> entity` for every entity this
+  // session created (the composite/AI-capture path doesn't flow through the
+  // worker's materializeEntity hook). Together with that hook and the explicit
+  // BYOA capture-back, the session room's Deliverable surface populates by
+  // construction. Idempotent via the links unique-edge index.
+  if (proposal.sessionId && producedEntityIds.length > 0) {
+    await db
+      .insert(links)
+      .values(
+        producedEntityIds.map((entityId) => ({
+          workspaceId: proposal.workspaceId ?? null,
+          fromType: "session" as LinkEndpointType,
+          fromId: proposal.sessionId as string,
+          toType: "entity" as LinkEndpointType,
+          toId: entityId,
+          linkType: "produced" as LinkType,
+          metadata: {},
+        }))
+      )
+      .onConflictDoNothing();
+  }
+  // Membership: project lens (entity → belongs_to_project → project).
+  await stampProjectMembership(proposal, producedEntityIds, userId);
+}
+
+/** A graph's onboarding channel bindings, once its entities exist. */
+export async function bindGraphChannels(
+  payload: unknown,
+  refToRealId: Record<string, string>,
+  proposal: { workspaceId: string | null },
+  userId: string
+): Promise<void> {
+  // ONBOARDING bindings: a graph proposal from /capture/graph may carry
+  // `bindings` (Discord channel → entity ref + firewall role). Now that the
+  // entities are materialized, bind each channel to its real entity id and
+  // stamp its branchPurpose — so /whois + the firewall light up on accept.
+  // Additive: only onboarding graph proposals carry bindings; every other
+  // composite proposal skips this (no bindings) as a no-op.
+  const graphBindings = (
+    payload as {
+      bindings?: Array<{
+        externalChannelId: string;
+        entityRef: string;
+        branchPurpose?: string;
+        title?: string;
+      }>;
+    }
+  ).bindings;
+  if (
+    Array.isArray(graphBindings) &&
+    graphBindings.length > 0 &&
+    proposal.workspaceId
+  ) {
+    const { resolveOrCreateExternalChannel } =
+      await import("../../services/connectors/inbound-recorder.js");
+    for (const b of graphBindings) {
+      // Resolve the binding's entity ref to the materialized id. Skip (not
+      // fall back to the raw ref) if the entity didn't materialize — binding
+      // a channel to a non-id ref string would set a bogus contextObjectId.
+      const entityId = refToRealId[b.entityRef];
+      if (!b.externalChannelId || !entityId) continue;
+      try {
+        const { channelId } = await resolveOrCreateExternalChannel({
+          provider: "discord",
+          externalId: b.externalChannelId,
+          userId,
+          workspaceId: proposal.workspaceId,
+          requireExistingWorkspace: true,
+          title: b.title ?? b.externalChannelId,
+        });
+        await db
+          .update(channels)
+          .set({
+            contextObjectType: "entity",
+            contextObjectId: entityId,
+            updatedAt: new Date(),
+          })
+          .where(eq(channels.id, channelId));
+        // Firewall role goes through the ONE door (client-comms immutable).
+        if (b.branchPurpose) {
+          await setChannelBranchPurpose({
+            channelId,
+            branchPurpose: b.branchPurpose,
+          });
+        }
+      } catch (err) {
+        if (err instanceof ChannelFirewallImmutableError) {
+          // Fail-SAFE: the channel stays client-comms (the protected
+          // outcome). Surface it distinctly so it's not lost in generic
+          // bind noise — an onboarding binding tried to reclassify a
+          // client-comms channel and was refused.
+          logger.warn(
+            { channelId: err.channelId, binding: b },
+            "onboarding: refused to reclassify a client-comms channel (firewall) — left unchanged"
+          );
+        } else {
+          logger.warn(
+            { err, binding: b },
+            "onboarding: channel bind failed (entities kept)"
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * The signals of an approved graph: the IS outcome, the reviewed event (bell,
+ * waiting agents, wait-holds, `proposal.approved` automations) and a pod-wide
+ * connection sync's rule. Shared with `resolve-item.ts` (see above).
+ */
+export async function announceCompositeApproved(
+  proposal: {
+    id: string;
+    workspaceId: string | null;
+    sourceMessageId?: string | null;
+    agentUserId?: string | null;
+    targetType?: string | null;
+    proposalType?: string | null;
+    data?: unknown;
+  },
+  userId: string
+): Promise<void> {
+  // Report to IS telemetry (fire-and-forget — never blocks). This is the
+  // CAPTURE lane: `reportProposalOutcome`'s guard is explicitly widened to
+  // fire for capture proposals (no agentUserId) "so rejected captures also
+  // feed the IS learning sink" — but the approve side never called it, so
+  // the sink only ever saw captures the user REJECTED. That asymmetry
+  // taught the AI its failures and none of its successes.
+  reportProposalOutcome({
+    proposalId: proposal.id,
+    outcome: "approved",
+    sourceMessageId: proposal.sourceMessageId,
+    agentUserId: proposal.agentUserId,
+    targetType: proposal.targetType,
+    proposalType: proposal.proposalType,
+    source: (proposal.data as Record<string, unknown> | null)?.source as
+      string | undefined,
+  });
+
+  emitProposalReviewed(
+    proposal.id,
+    proposal.workspaceId,
+    "approved",
+    userId
+  );
+
+  // A POD-WIDE connection-sync import still earns its
+  // connection's auto rule. `emitProposalReviewed` fans out side effects only
+  // for a workspace-scoped proposal (where the connection-sync-approval reactor
+  // enqueues the job), so the workspace-less case enqueues the SAME job here.
+  // Narrow on purpose: widening the emit to every pod-wide approval would newly
+  // fire webhook delivery and other reactors. Awaited so a queue failure fails
+  // loudly; the job retries and the rule mint behind it is idempotent.
+  if (isPodWideConnectionSyncApproval(proposal)) {
+    await enqueueConnectionSyncApproval({
+      proposalId: proposal.id,
+      userId,
     });
   }
 }
@@ -626,6 +871,15 @@ export async function applyProposalApproval(args: {
   // Before it, approving a rejected, withdrawn, expired or reverted proposal
   // re-ran its executor and flipped it to approved.
   assertProposalMayBeApproved(args.proposal);
+  // A stopped graph being finished item by item (`proposals.resolveItem`) is
+  // never approved as a whole: that would file the resolved items twice.
+  if (resolutionUnderway(args.proposal.data)) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "Items of this graph are being resolved one by one. Resolve the waiting items instead of approving it again.",
+    });
+  }
 
   // A LARGE graph is applied by the background job — every gate above has
   // already run, here, in the request. A graph that is being applied right
@@ -1018,57 +1272,11 @@ async function applyProposalApprovalInner(
       input.propertyDecisionsByRef
     );
     let reconciledOperations: CompositeProposalOperation[] =
-      operationsToMaterialize;
-    if (operationsToMaterialize.some((op) => op.op === "create_entity")) {
-      const profileService = new ProfileResolutionService(db);
-      const rebuilt: CompositeProposalOperation[] = [];
-      let survivingIdx = 0;
-      for (const op of operationsToMaterialize) {
-        if (op.op !== "create_entity") {
-          rebuilt.push(op);
-          continue;
-        }
-        const entityOp = op as CompositeCreateEntityOp;
-        // Zip 1:1 with the surviving-entity slices (same order, rejects dropped
-        // identically) — this recovers the ref for ref-less ($opN) ops.
-        const { decisions } = decisionSlices[survivingIdx++] ?? {
-          decisions: undefined,
-        };
-        const props = completeKnowledgeProposalProperties({
-          profileSlug: entityOp.profileSlug,
-          properties: entityOp.properties,
-          title: entityOp.title,
-          description: entityOp.description,
-          content: entityOp.content,
-        });
-        if (!props || Object.keys(props).length === 0) {
-          rebuilt.push({ ...entityOp, properties: props });
-          continue;
-        }
-        // Def-creation lens for this op: a per-op workspace pin, else the
-        // proposal's workspace (null ⇒ pod-wide → reconcile skips def creation
-        // and stores new fields verbatim, exactly like the single-entity path).
-        const opWorkspaceId =
-          entityOp.targetWorkspaceId ?? compositeCtx.workspaceId;
-        const profile = await profileService.resolveProfile(
-          entityOp.profileSlug,
-          userId,
-          opWorkspaceId
-        );
-        const reconciled = await reconcileApprovedProperties({
-          properties: props,
-          // A profile that did not resolve is NOT an id: pass null so the reconcile
-          // service refuses def creation and stores verbatim (a slug in `profileId`
-          // only failed later, by a uuid cast error).
-          profileId: profile?.id ?? null,
-          workspaceId: opWorkspaceId,
-          userId,
-          decisions,
-        });
-        rebuilt.push({ ...entityOp, properties: reconciled.properties });
-      }
-      reconciledOperations = rebuilt;
-    }
+      await reconcileCompositeEntityOps(operationsToMaterialize, {
+        userId,
+        workspaceId: compositeCtx.workspaceId,
+        decisionsAt: (n) => decisionSlices[n]?.decisions,
+      });
 
     // Approve-time FACET channel (domain-agnostic) — attach the caller-NAMED
     // facets (`facetsByRef`, keyed by the SAME ref `dispositions`/
@@ -1335,103 +1543,10 @@ async function applyProposalApprovalInner(
     // state + the item-scoped flywheel).
     const compositeMaterialized = buildMaterializedRecord(materializeResult);
 
-    // Provenance: record `session --produced--> entity` for every entity this
-    // session created (the composite/AI-capture path doesn't flow through the
-    // worker's materializeEntity hook). Together with that hook and the explicit
-    // BYOA capture-back, the session room's Deliverable surface populates by
-    // construction. Idempotent via the links unique-edge index.
     const producedEntityIds = compositeMaterialized.entityIds ?? [];
-    if (proposal.sessionId && producedEntityIds.length > 0) {
-      await db
-        .insert(links)
-        .values(
-          producedEntityIds.map((entityId) => ({
-            workspaceId: proposal.workspaceId ?? null,
-            fromType: "session" as LinkEndpointType,
-            fromId: proposal.sessionId as string,
-            toType: "entity" as LinkEndpointType,
-            toId: entityId,
-            linkType: "produced" as LinkType,
-            metadata: {},
-          }))
-        )
-        .onConflictDoNothing();
-    }
-    // Membership: project lens (entity → belongs_to_project → project).
-    await stampProjectMembership(proposal, producedEntityIds, userId);
+    await recordProducedEntities(proposal, producedEntityIds, userId);
 
-    // ONBOARDING bindings: a graph proposal from /capture/graph may carry
-    // `bindings` (Discord channel → entity ref + firewall role). Now that the
-    // entities are materialized, bind each channel to its real entity id and
-    // stamp its branchPurpose — so /whois + the firewall light up on accept.
-    // Additive: only onboarding graph proposals carry bindings; every other
-    // composite proposal skips this (no bindings) as a no-op.
-    const graphBindings = (
-      payload as {
-        bindings?: Array<{
-          externalChannelId: string;
-          entityRef: string;
-          branchPurpose?: string;
-          title?: string;
-        }>;
-      }
-    ).bindings;
-    if (
-      Array.isArray(graphBindings) &&
-      graphBindings.length > 0 &&
-      proposal.workspaceId
-    ) {
-      const { resolveOrCreateExternalChannel } =
-        await import("../../services/connectors/inbound-recorder.js");
-      for (const b of graphBindings) {
-        // Resolve the binding's entity ref to the materialized id. Skip (not
-        // fall back to the raw ref) if the entity didn't materialize — binding
-        // a channel to a non-id ref string would set a bogus contextObjectId.
-        const entityId = refToRealId[b.entityRef];
-        if (!b.externalChannelId || !entityId) continue;
-        try {
-          const { channelId } = await resolveOrCreateExternalChannel({
-            provider: "discord",
-            externalId: b.externalChannelId,
-            userId,
-            workspaceId: proposal.workspaceId,
-            requireExistingWorkspace: true,
-            title: b.title ?? b.externalChannelId,
-          });
-          await db
-            .update(channels)
-            .set({
-              contextObjectType: "entity",
-              contextObjectId: entityId,
-              updatedAt: new Date(),
-            })
-            .where(eq(channels.id, channelId));
-          // Firewall role goes through the ONE door (client-comms immutable).
-          if (b.branchPurpose) {
-            await setChannelBranchPurpose({
-              channelId,
-              branchPurpose: b.branchPurpose,
-            });
-          }
-        } catch (err) {
-          if (err instanceof ChannelFirewallImmutableError) {
-            // Fail-SAFE: the channel stays client-comms (the protected
-            // outcome). Surface it distinctly so it's not lost in generic
-            // bind noise — an onboarding binding tried to reclassify a
-            // client-comms channel and was refused.
-            logger.warn(
-              { channelId: err.channelId, binding: b },
-              "onboarding: refused to reclassify a client-comms channel (firewall) — left unchanged"
-            );
-          } else {
-            logger.warn(
-              { err, binding: b },
-              "onboarding: channel bind failed (entities kept)"
-            );
-          }
-        }
-      }
-    }
+    await bindGraphChannels(payload, refToRealId, proposal, userId);
 
     // One statement: the status flip and the merged record land together.
     await stampMaterialized({
@@ -1451,43 +1566,7 @@ async function applyProposalApprovalInner(
       },
     });
 
-    // Report to IS telemetry (fire-and-forget — never blocks). This is the
-    // CAPTURE lane: `reportProposalOutcome`'s guard is explicitly widened to
-    // fire for capture proposals (no agentUserId) "so rejected captures also
-    // feed the IS learning sink" — but the approve side never called it, so
-    // the sink only ever saw captures the user REJECTED. That asymmetry
-    // taught the AI its failures and none of its successes.
-    reportProposalOutcome({
-      proposalId: input.proposalId,
-      outcome: "approved",
-      sourceMessageId: proposal.sourceMessageId,
-      agentUserId: proposal.agentUserId,
-      targetType: proposal.targetType,
-      proposalType: proposal.proposalType,
-      source: (proposal.data as Record<string, unknown> | null)?.source as
-        string | undefined,
-    });
-
-    emitProposalReviewed(
-      input.proposalId,
-      proposal.workspaceId,
-      "approved",
-      userId
-    );
-
-    // A POD-WIDE connection-sync import still earns its
-    // connection's auto rule. `emitProposalReviewed` fans out side effects only
-    // for a workspace-scoped proposal (where the connection-sync-approval reactor
-    // enqueues the job), so the workspace-less case enqueues the SAME job here.
-    // Narrow on purpose: widening the emit to every pod-wide approval would newly
-    // fire webhook delivery and other reactors. Awaited so a queue failure fails
-    // loudly; the job retries and the rule mint behind it is idempotent.
-    if (isPodWideConnectionSyncApproval(proposal)) {
-      await enqueueConnectionSyncApproval({
-        proposalId: input.proposalId,
-        userId,
-      });
-    }
+    await announceCompositeApproved(proposal, userId);
 
     // Per-item reasoned reject → flywheel, item-scoped (Phase 2, Gap 3).
     // For EACH item the reviewer rejected WITH a reason/reasonCode, emit an

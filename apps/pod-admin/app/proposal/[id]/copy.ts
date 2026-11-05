@@ -85,6 +85,7 @@ export const en = {
     "Lets this space use the kind; you may be asked to review it",
   "resolve.useKind": "File it as {kind}",
   "resolve.retry": "Try again",
+  "resolve.fileAsProposed": "File it as proposed",
   "resolve.skip": "Skip this item",
   "resolve.dependents":
     "{n, plural, one {Its link is filed with it.} other {Its # links are filed with it.}}",
@@ -187,6 +188,7 @@ export const fr: Catalog<typeof en> = {
     "Permet à cet espace d’utiliser ce type ; une validation peut vous être demandée",
   "resolve.useKind": "Le classer comme {kind}",
   "resolve.retry": "Réessayer",
+  "resolve.fileAsProposed": "Le classer tel que proposé",
   "resolve.skip": "Ignorer cet élément",
   "resolve.dependents":
     "{n, plural, one {Son lien est classé avec lui.} other {Ses # liens sont classés avec lui.}}",

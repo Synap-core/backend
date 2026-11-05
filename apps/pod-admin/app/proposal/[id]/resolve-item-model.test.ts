@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { proposalPageT } from "./copy";
-import { resolveRows, resolvedToast } from "./resolve-item-model";
+import {
+  graphBeingResolved,
+  resolveRows,
+  resolvedToast,
+} from "./resolve-item-model";
 
 /**
  * `proposals.resolveOptions` as the pod answers it for the live case of
@@ -210,5 +214,56 @@ describe("resolvedToast", () => {
     expect(
       resolvedToast({ complete: false, outcome: "failed", waiting: 4 }, t)
     ).toEqual({ title: "It still couldn’t be filed", color: "warning" });
+  });
+});
+
+describe("graphBeingResolved", () => {
+  it("is true once an item was resolved or a resolution is under way", () => {
+    expect(graphBeingResolved({ materialized: { opCount: 5 } })).toBe(false);
+    expect(
+      graphBeingResolved({
+        materialized: { opCount: 5, resolutions: { t: { outcome: "held" } } },
+      })
+    ).toBe(true);
+    expect(
+      graphBeingResolved({
+        materialized: {
+          opCount: 5,
+          resolving: { key: "t", by: "u", token: "x", at: "now" },
+        },
+      })
+    ).toBe(true);
+    expect(graphBeingResolved(null)).toBe(false);
+  });
+});
+
+describe("a run that stopped between two steps", () => {
+  it("offers to file the first record it never reached as proposed", () => {
+    const rows = resolveRows(
+      {
+        resolvable: true,
+        items: [
+          {
+            itemRef: "p3",
+            op: "create_entity",
+            state: "not_run",
+            options: [
+              {
+                kind: "file_as_proposed",
+                action: { type: "use_kind", profileSlug: "pain-point" },
+                recommended: true,
+                available: true,
+              },
+              { kind: "skip", action: { type: "skip" }, available: true },
+            ],
+          },
+        ],
+      },
+      proposalPageT()
+    );
+    expect(rows[0]!.choices.map((c) => c.label)).toEqual([
+      "File it as proposed",
+      "Skip this item",
+    ]);
   });
 });
