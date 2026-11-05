@@ -38,8 +38,9 @@
  *
  * WHAT IS RECORDED (`focus_sessions.metadata.runTurns`, server-owned): each
  * turn's end as the IS measured it — the budget ceiling, the input tokens
- * spent, and the FIRST provider call's size by part (system prompt, tools,
- * history, message). `firstTurn` keeps the run's first turn (the 11-second
+ * spent, the FIRST provider call's size by part (system prompt, tools,
+ * history, message), the model that served the turn's last call, and the
+ * prompt-cache tokens the provider reported (read, written). `firstTurn` keeps the run's first turn (the 11-second
  * stop's cause); `turns` the last {@link TURN_HISTORY_MAX}. Keyed by run id: a
  * later run on the same session starts from zero.
  *
@@ -129,6 +130,20 @@ export const completeRunBodySchema = z
             }),
           })
           .optional(),
+        /**
+         * The model id of the turn's last provider call (a fallback can serve
+         * a turn on another model than it started on). Lenient like
+         * `agentType`: an unusable value reads as absent, never a 400 that
+         * would drop the turn's outcome.
+         */
+        model: z.string().trim().min(1).max(200).optional().catch(undefined),
+        /**
+         * Prompt-cache tokens the provider REPORTED over the turn, both part
+         * of `spentInputTokens`: read from the cache, and written to it
+         * (Anthropic). Absent = not reported, never 0. Lenient like `model`.
+         */
+        cacheReadInputTokens: count.optional().catch(undefined),
+        cacheWriteInputTokens: count.optional().catch(undefined),
       })
       .optional(),
   })
@@ -171,6 +186,11 @@ export interface RunTurnRecord {
   ceiling?: number;
   spentInputTokens?: number;
   firstCall?: NonNullable<CompleteRunBody["turn"]>["firstCall"];
+  /** The model id of the turn's last provider call. */
+  model?: string;
+  /** Prompt-cache tokens the provider reported over the turn. */
+  cacheReadInputTokens?: number;
+  cacheWriteInputTokens?: number;
   /** What the pod decided for a stopped turn. */
   next?: "continue" | "ask";
 }
@@ -285,6 +305,13 @@ async function recordTurnEnd(
           }
         : {}),
       ...(body.turn?.firstCall ? { firstCall: body.turn.firstCall } : {}),
+      ...(body.turn?.model ? { model: body.turn.model } : {}),
+      ...(body.turn?.cacheReadInputTokens !== undefined
+        ? { cacheReadInputTokens: body.turn.cacheReadInputTokens }
+        : {}),
+      ...(body.turn?.cacheWriteInputTokens !== undefined
+        ? { cacheWriteInputTokens: body.turn.cacheWriteInputTokens }
+        : {}),
       ...(decision ? { next: decision.next } : {}),
     };
     const next: RunTurnsState = {
