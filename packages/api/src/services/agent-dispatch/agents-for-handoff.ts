@@ -13,7 +13,10 @@
  *                      binding as `error`, never as "not bound");
  *   - may it take it   `namedVerdicts` — `route()`'s selector rung, batched,
  *                      with `HAND_OFF_ACCEPT`. So `canTakeYourWork` is exactly
- *                      what a hand-off naming this agent would be told.
+ *                      what a hand-off naming this agent would be told;
+ *   - template + wake  `resolveAgentTemplate` (the one template seam, which
+ *                      the catalog's installed agent templates replace) and
+ *                      `deriveAgentWake` (THE wake rule) over the facts above.
  *
  * `handOff` previews what a hand-off FROM THE CALLING AGENT would do right now:
  * the route's answer first (`blocked` when it cannot take the work), then the
@@ -49,6 +52,8 @@ import {
   resolveAgentLaunch,
   type AgentLaunchRef,
   type AgentReach,
+  type AgentTemplateRef,
+  type AgentWake,
 } from "@synap-core/types/agents";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
 import { queryAgentUsers } from "../../routers/agent-users.js";
@@ -60,6 +65,7 @@ import {
 import { machineName } from "../machine-roster.js";
 import { actorComputer } from "../actor-computer.js";
 import { loadAgentDispatchSummaries } from "./agent-binding.js";
+import { deriveAgentWake, resolveAgentTemplate } from "./agent-wake.js";
 import {
   HAND_OFF_ACCEPT,
   namedVerdicts,
@@ -121,6 +127,18 @@ export interface HandoffAgent {
    * its harness has none. Never a command an agent wrote.
    */
   open: AgentLaunchRef | null;
+  /**
+   * The agent template it is an instance of (`resolveAgentTemplate`); `null`
+   * when its type names none. `version: null` = built in, not from the catalog.
+   */
+  template: AgentTemplateRef | null;
+  /**
+   * Can the pod get it working now (`deriveAgentWake`, THE wake rule): awake,
+   * can_wake (with `how`), or cant_wake with the one reason. Until computers
+   * can start agents (plan v2 slice 4) no computer is a waker, so a pull
+   * agent nothing runs reads `cant_wake: no_waker`, never `can_wake`.
+   */
+  wake: AgentWake;
   /** direct = lands on the roster now; asks_you = the person approves first. */
   handOff: HandOffPreview;
   /** Why it asks or is blocked (the resolver's or the route's words). */
@@ -263,6 +281,27 @@ export async function readAgentsForHandoff(
       now,
     });
     const whyNot = verdicts.get(r.id)?.refusal ?? null;
+    const resolved = resolveAgentTemplate(kindOf.get(r.id)?.agentType);
+    const template: AgentTemplateRef | null = resolved
+      ? {
+          slug: resolved.slug,
+          label: resolved.label,
+          version: resolved.version,
+        }
+      : null;
+    const paused = r.pausedAt != null;
+    const wake = deriveAgentWake({
+      reach,
+      paused,
+      // The same health `live` reads for a dispatch agent.
+      bindingBroken: reach === "dispatch" && !live,
+      nobodyRuns,
+      template: resolved,
+      onComputer: !!computer,
+      // No computer can start agents yet (plan v2 slice 4: the runner's
+      // `wake` lease and the "Wakes agents" switch). Said, never guessed.
+      waker: null,
+    });
     // An agent adding ITSELF is joining, not a hand-off: never gated.
     const preview: { handOff: HandOffPreview; handOffReason: string | null } =
       whyNot
@@ -284,11 +323,13 @@ export async function readAgentsForHandoff(
       canTakeYourWork: whyNot === null,
       whyNot,
       live,
-      paused: r.pausedAt != null,
+      paused,
       lastSeenAt,
       servedAt,
       nobodyRuns,
       open: resolveAgentLaunch({ agentType: kindOf.get(r.id)?.agentType }),
+      template,
+      wake,
       ...preview,
     };
   });
