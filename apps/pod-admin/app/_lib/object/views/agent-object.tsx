@@ -17,6 +17,10 @@
  *     shows, plus the per-space ask-first overrides the viewer can see; its
  *     creator or a pod admin sets it pod-wide here (`agentUsers.setPosture`:
  *     the choices of `AGENT_WRITE_MODE_CHOICES`, drawn by `WriteModeChoice`).
+ *   • Paused — `agentUsers.setPaused` (its owner or a pod admin, the pod's
+ *     gate served as `viewerCanDisconnect`): a paused agent takes no work and
+ *     is refused when named; its keys keep working. The desktop's agent page
+ *     offers the same switch.
  *   • Disconnect — `agentUsers.disconnect` revokes every live and pending key
  *     (offered when the pod says the viewer may: `viewerCanDisconnect`); the
  *     agent stays listed and `synap init` reconnects it.
@@ -30,13 +34,17 @@
  */
 
 import { Button, addToast } from "@heroui/react";
-import { Plug, Trash2 } from "lucide-react";
+import { Pause, Play, Plug, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   agentPostureOfWriteMode,
   resolveAgentReachMark,
 } from "@synap-core/types/agents";
+import {
+  resolveActionLabel,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
@@ -59,10 +67,12 @@ import { agentTrustDoor } from "./agent-trust-door";
 import { AgentJob } from "./agent-job";
 import { objectViewsT } from "./copy";
 import {
+  AGENT_PAUSE_NOTE,
   agentReviewHref,
   agentsByCreator,
   buildAgentRoster,
   hostComputerHref,
+  isAgentPaused,
   keyCountsLine,
   originLine,
   reachErrorSentence,
@@ -497,6 +507,84 @@ function AgentTrustDoorLine({ agentUserId }: { agentUserId: string }) {
   );
 }
 
+// ─── Paused ─────────────────────────────────────────────────────────
+
+/**
+ * Pause or resume it (`agentUsers.setPaused`). The state shows to anyone who
+ * can open the agent; the button only to its owner or a pod admin
+ * (`viewerCanDisconnect`, the pod's verdict). A pod that serves no `pausedAt`
+ * draws nothing, never a guessed "running".
+ */
+export function AgentPause({
+  row,
+}: {
+  row: {
+    id: string;
+    name?: string | null;
+    pausedAt?: string | Date | null;
+    viewerCanDisconnect?: boolean;
+  };
+}) {
+  const utils = trpc.useUtils();
+  const set = trpc.agentUsers.setPaused.useMutation({
+    onSuccess: async (res) => {
+      addToast({
+        title: res.pausedAt
+          ? `${row.name ?? "Agent"} paused`
+          : `${row.name ?? "Agent"} resumed`,
+        description: res.pausedAt
+          ? "It takes no work until you resume it."
+          : "It can be handed work again.",
+        color: "default",
+      });
+      await utils.agentUsers.list.invalidate();
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        title: "Couldn't change this",
+        description: err.message,
+        color: "danger",
+      });
+    },
+  });
+  if (row.pausedAt === undefined) return null;
+  const paused = isAgentPaused(row);
+  const mayChange = row.viewerCanDisconnect === true;
+  return (
+    <Section title={resolveStatusLabel("paused")}>
+      <p className="text-[12.5px] text-foreground/75">
+        {paused && row.pausedAt
+          ? `Paused ${formatRelative(row.pausedAt)}. ${AGENT_PAUSE_NOTE}`
+          : `Not paused. ${AGENT_PAUSE_NOTE}`}
+      </p>
+      {mayChange ? (
+        <Button
+          variant="flat"
+          size="sm"
+          radius="md"
+          startContent={
+            paused ? (
+              <Play className="h-3.5 w-3.5" />
+            ) : (
+              <Pause className="h-3.5 w-3.5" />
+            )
+          }
+          className="self-start text-[12.5px]"
+          isLoading={set.isPending}
+          onPress={() => set.mutate({ agentUserId: row.id, paused: !paused })}
+        >
+          {resolveActionLabel(paused ? "resume" : "pause", "imperative")}
+        </Button>
+      ) : (
+        <p className="text-[12px] text-foreground/65">
+          Only its owner or a pod admin can pause it.
+        </p>
+      )}
+    </Section>
+  );
+}
+
 // ─── Actions ────────────────────────────────────────────────────────
 
 export function AgentActions({
@@ -815,6 +903,7 @@ export function AgentObject({
             viewerIsPodAdmin,
           })}
         />
+        <AgentPause row={row} />
         {/* 0395: what it is FOR on its computer — its owner only. */}
         {row.hostComputer && view.ownedByViewer && (
           <AgentJob

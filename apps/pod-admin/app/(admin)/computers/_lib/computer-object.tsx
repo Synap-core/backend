@@ -6,7 +6,8 @@
  * route supplies the row (from `machines.adminList` or `machines.list`), the
  * frame, and what the viewer may follow (`links`); everything else is here.
  *
- * The acts — Rename, Change key lifetime, Revoke — go through `machines.*`,
+ * The acts — Rename, Change key lifetime, whose computer it is
+ * (`setBelongsTo`), Revoke — go through `machines.*`,
  * which let the computer's owner or a pod admin act (`loadManageableMachine`)
  * and refuse a key. Revoke is governed (`checkPermissionOrPropose`): a
  * `proposed` answer means it waits for review and NOTHING was revoked yet,
@@ -16,12 +17,12 @@
  * through the device flow, so the page hands over the one line to run there.
  */
 
-import { Button, addToast } from "@heroui/react";
+import { Button, Radio, RadioGroup, addToast } from "@heroui/react";
 import { ArrowRight, Bot, KeyRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { seenLine } from "@synap-core/types/computers";
+import { isComputerBelongsTo, seenLine } from "@synap-core/types/computers";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
@@ -56,6 +57,8 @@ import { en, fr } from "./copy";
 import {
   RECONNECT_COMMAND,
   activityLine,
+  belongsToChoices,
+  belongsToMark,
   computerSummary,
   days,
   keyLifetimeLine,
@@ -66,6 +69,7 @@ import {
   revokeImpact,
   revokeLine,
   scriptsOwnerWords,
+  seedsRevokedLine,
   type ComputerLike,
 } from "./computer-model";
 
@@ -139,6 +143,31 @@ export function ComputerObject({
       });
     },
   });
+  const belongsTo = trpc.machines.setBelongsTo.useMutation({
+    onSuccess: async (out) => {
+      addToast(
+        out.status === "proposed"
+          ? {
+              title: "Waiting for review — nothing changed yet",
+              color: "default",
+            }
+          : {
+              title: `${computer?.name ?? "This computer"}: ${belongsToMark(out) ?? ""}`,
+              description: seedsRevokedLine(out.seedsRevoked) ?? undefined,
+              color: "default",
+            }
+      );
+      await utils.machines.invalidate();
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        title: "Couldn't change this",
+        description: readableError(err.message) ?? "Try again.",
+        color: "danger",
+      });
+    },
+  });
   const revoke = trpc.machines.revoke.useMutation({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
@@ -170,6 +199,7 @@ export function ComputerObject({
   const revoking = revoke.isPending;
   const revoked = c.key?.state === "revoked";
   const keys = keysOnComputer(c);
+  const whose = belongsToMark(c);
 
   const danger: DangerAction[] = revoked
     ? []
@@ -284,6 +314,7 @@ export function ComputerObject({
                 },
               ]
             : []),
+          ...(whose ? [{ label: "Whose it is", value: whose }] : []),
           { label: "Created", value: formatDate(c.createdAt) },
           { label: "Key lifetime", value: keyLifetimeLine(c) },
         ],
@@ -360,6 +391,32 @@ export function ComputerObject({
                             : `Run ${words.whose} scripts here`}
                       </Button>
                     </div>
+                  </SectionCard>
+                )}
+                {/* 0388: set at approval, changed only here. A row from
+                    before it (no `belongsTo`) offers no guessed answer. */}
+                {!revoked && c.belongsTo && (
+                  <SectionCard title="Whose computer it is">
+                    <RadioGroup
+                      aria-label="Whose computer it is"
+                      size="sm"
+                      value={c.belongsTo}
+                      isDisabled={belongsTo.isPending}
+                      onValueChange={(v) => {
+                        if (isComputerBelongsTo(v) && v !== c.belongsTo)
+                          belongsTo.mutate({ machineId: c.id, belongsTo: v });
+                      }}
+                    >
+                      {belongsToChoices().map((choice) => (
+                        <Radio
+                          key={choice.value}
+                          value={choice.value}
+                          description={choice.line}
+                        >
+                          {choice.label}
+                        </Radio>
+                      ))}
+                    </RadioGroup>
                   </SectionCard>
                 )}
                 <SectionCard
