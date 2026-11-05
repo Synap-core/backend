@@ -109,7 +109,7 @@ function publishedSpec(): { paths: Record<string, Record<string, any>> } {
 const spec = publishedSpec();
 
 /** Today's sizes; lower one when an entry is deleted, never raise it. */
-const MISSING_CEILING = 180;
+const MISSING_CEILING = 176;
 const OPEN_CEILING = 7;
 
 describe("hub openapi coverage", () => {

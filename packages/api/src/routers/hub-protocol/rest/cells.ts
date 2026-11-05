@@ -39,7 +39,8 @@ import {
 import { canWrite, userPrincipal } from "../../../access/door.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
-import { uuidQueryParam } from "./_codecs/_openapi.js";
+import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 // deps validation now lives INSIDE the defineCell door (security review
@@ -53,7 +54,37 @@ const InstallBodySchema = z.object({
   workspaceId: uuidQueryParam.optional(),
 });
 
+/** One installed source cell, as `GET /cells` projects it. */
+const InstalledCellSchema = z.object({
+  typeKey: z.string(),
+  name: z.string(),
+  rendererType: z.enum(["frame", "iframe"]),
+  deps: z.record(z.string(), z.string()),
+  rendererSource: z.string(),
+  viewTypes: z.array(z.string()).nullable(),
+  contentKind: z.string().nullable(),
+  externalHosts: z.array(z.string()).nullable(),
+});
+
 export function registerCellsRoutes(app: HubHono): void {
+  registerOpenApi(app, {
+    method: "get",
+    path: "/cells",
+    tags: ["Cells"],
+    summary: "List installed source cells (frame and iframe)",
+    description:
+      "The active frame / iframe cells of one space (`workspaceId`, your membership checked) plus the pod-wide ones; with no `workspaceId`, the pod-wide ones only.",
+    request: { query: z.object({ workspaceId: uuidQueryParam.optional() }) },
+    responses: {
+      200: {
+        description: "Installed cells",
+        schema: z.array(InstalledCellSchema),
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
   /**
    * GET /cells?workspaceId=...
    * List installed source cells for a workspace — `frame` (an ES-module React
