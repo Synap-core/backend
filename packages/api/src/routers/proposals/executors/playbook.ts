@@ -772,6 +772,8 @@ export function registerPlaybookExecutors(): void {
           inner.handToAgentId.trim() !== ""
             ? { handToAgentId: inner.handToAgentId.trim() }
             : {}),
+          // Synap AI asked for this run stays Synap AI once approved.
+          ...(inner.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
         });
       let batch: BatchRunReceipt | undefined;
       // What this approval started — EVERY approval, not only a batch: the

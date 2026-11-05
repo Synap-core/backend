@@ -84,10 +84,11 @@ describe("deriveAgentWake — awake", () => {
       how: "runner",
       why: null,
     });
-    // Served by a runner, even with no template to wake it again.
+    // Served by a runner, even with no template to wake it again: the runner
+    // is what gets it working (review nit on #823).
     expect(wake({ nobodyRuns: false, template: null })).toEqual({
       state: "awake",
-      how: null,
+      how: "runner",
       why: null,
     });
   });

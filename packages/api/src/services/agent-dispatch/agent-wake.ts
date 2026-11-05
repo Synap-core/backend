@@ -11,6 +11,7 @@
 
 import { resolveHarness } from "@synap-core/types/agents";
 import type {
+  AgentHarnessSlug,
   AgentReach,
   AgentTemplateRef,
   AgentWake,
@@ -30,10 +31,8 @@ export interface ResolvedAgentTemplate extends AgentTemplateRef {
  * Claude Code `claude -p`, Codex `codex exec`). Hermes has no harness row yet:
  * it arrives as a catalog template.
  */
-const WAKEABLE_HARNESSES: ReadonlySet<string> = new Set([
-  "claude-code",
-  "codex",
-]);
+const WAKEABLE_HARNESSES: ReadonlySet<AgentHarnessSlug> =
+  new Set<AgentHarnessSlug>(["claude-code", "codex"]);
 
 /**
  * THE seam the catalog replaces. Until agent templates are a catalog kind
@@ -52,7 +51,7 @@ export function resolveAgentTemplate(
     slug: harness.slug,
     label: harness.label,
     version: null,
-    wakes: WAKEABLE_HARNESSES.has(harness.slug),
+    wakes: WAKEABLE_HARNESSES.has(harness.slug as AgentHarnessSlug),
   };
 }
 
@@ -118,7 +117,10 @@ export function deriveAgentWake(i: AgentWakeInput): AgentWake {
       ? cant("binding_broken")
       : { state: "awake", how, why: null };
   }
-  if (i.nobodyRuns === false) return { state: "awake", how, why: null };
+  // A runner serves it: that runner is what gets it working, template or not.
+  if (i.nobodyRuns === false) {
+    return { state: "awake", how: "runner", why: null };
+  }
   if (!i.template) return cant("no_template");
   if (!i.template.wakes) return cant("no_template_wake");
   if (!i.onComputer) return cant("no_computer");

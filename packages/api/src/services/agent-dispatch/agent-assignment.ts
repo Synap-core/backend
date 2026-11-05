@@ -16,8 +16,10 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import type { RunChoice } from "@synap-core/types/agents";
 import {
   db,
+  agents,
   and,
   drizzleSql,
   eq,
@@ -34,6 +36,7 @@ import { auditLog } from "../../utils/audit-log.js";
 import { createLink } from "../links/links-service.js";
 import { checkLinkEndpointVisible } from "../../routers/hub-protocol/rest/link-endpoint-visibility.js";
 import type { AssignmentTarget } from "./route.js";
+import { resolveAgentReachMany } from "./agent-binding.js";
 
 /**
  * Why an assign or pause was refused, on the error's `cause.reasonCode` — the
@@ -346,4 +349,164 @@ export async function loadAgentAssignments(
     out.set(r.fromId, list);
   }
   return out;
+}
+
+// ── Run choice: who runs a playbook for a person (slice 5a) ─────────────────
+
+/**
+ * The IS agent the Synap AI choice is stored from: the orchestrator, the same
+ * agent an `is-agent` run answers with when it names none
+ * (`triggerAutoRespond`'s default).
+ */
+export const SYNAP_AI_AGENT_SLUG = "meta";
+
+/**
+ * The person's remembered choice of who runs a playbook — the SAME edge an
+ * assignment writes, one per person per playbook (unique index 0329):
+ *   participant(agent) --assigned_to--> playbook   that agent;
+ *   agent(IS registry) --assigned_to--> playbook   Synap AI;
+ *   participant(a POD agent) --assigned_to-->      Synap AI too: an agent the
+ *                                                  pod runs itself is the IS,
+ *                                                  however the edge was written
+ *                                                  (Content Studio's Settings
+ *                                                  could assign one before
+ *                                                  choices were remembered).
+ * `null` = never chosen (the launch asks). A failed read throws.
+ */
+export async function readStoredRunChoice(p: {
+  ownerId: string;
+  playbookId: string;
+}): Promise<RunChoice | null> {
+  const [row] = await db
+    .select({ fromType: links.fromType, fromId: links.fromId })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, "assigned_to"),
+        eq(links.toType, "playbook"),
+        eq(links.toId, p.playbookId),
+        inArray(links.fromType, ["participant", "agent"]),
+        drizzleSql`${links.metadata}->>'ownerId' = ${p.ownerId}`
+      )
+    )
+    .limit(1);
+  if (!row) return null;
+  if (row.fromType === "agent") return { executor: "is-agent" };
+  const reach = (await resolveAgentReachMany([row.fromId])).get(row.fromId);
+  return reach === "pod"
+    ? { executor: "is-agent" }
+    : { executor: "external-agent", agentUserId: row.fromId };
+}
+
+/**
+ * Remember who runs a playbook for the caller. ONE writer for both answers:
+ * an agent goes through `setAgentAssignment` (its gates: the agent's owner or
+ * a pod admin); Synap AI replaces the caller's edge on the playbook with one
+ * from the IS registry row. Human-only, like every assignment: the callers
+ * (`playbooks.setRunChoice`, `playbooks.run` with `remember`) refuse an agent.
+ */
+export async function setRunChoice(p: {
+  callerId: string;
+  playbookId: string;
+  choice: RunChoice;
+  /** As `setAgentAssignment.authorize`: a key-auth door checks its grant. */
+  authorize?: (scope: {
+    workspaceId: string | null;
+    projectId: string | null;
+  }) => Promise<void>;
+}): Promise<RunChoice> {
+  const target = { type: "playbook" as const, id: p.playbookId };
+  if (p.choice.executor === "external-agent") {
+    await setAgentAssignment({
+      callerId: p.callerId,
+      agentUserId: p.choice.agentUserId,
+      target,
+      assigned: true,
+      ...(p.authorize ? { authorize: p.authorize } : {}),
+    });
+    return p.choice;
+  }
+
+  const refusal = await checkLinkEndpointVisible(
+    "playbook",
+    p.playbookId,
+    p.callerId,
+    null
+  );
+  if (refusal) {
+    throw new TRPCError({
+      code: refusal.status === 403 ? "FORBIDDEN" : "NOT_FOUND",
+      message: refusal.error,
+      cause: { reasonCode: ASSIGNMENT_REASON_CODES.targetNotFound },
+    });
+  }
+  if (p.authorize) {
+    await p.authorize({
+      workspaceId: await assignmentTargetWorkspaceId(target),
+      projectId: null,
+    });
+  }
+  const [synapAi] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(and(eq(agents.slug, SYNAP_AI_AGENT_SLUG), eq(agents.active, true)))
+    .limit(1);
+  if (!synapAi) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Synap AI is not connected to this pod yet, so it cannot be chosen to run this.",
+      cause: { reasonCode: "SYNAP_AI_MISSING" },
+    });
+  }
+  const replaced = await db
+    .transaction(async (tx) => {
+      const dropped = await tx
+        .delete(links)
+        .where(
+          and(
+            eq(links.linkType, "assigned_to"),
+            eq(links.toType, "playbook"),
+            eq(links.toId, p.playbookId),
+            drizzleSql`COALESCE(${links.metadata}->>'ownerId', '') = ${p.callerId}`
+          )
+        )
+        .returning({ fromId: links.fromId });
+      await createLink(
+        {
+          workspaceId: null,
+          fromType: "agent",
+          fromId: synapAi.id,
+          toType: "playbook",
+          toId: p.playbookId,
+          linkType: "assigned_to",
+          metadata: { assignedBy: p.callerId, ownerId: p.callerId },
+        },
+        tx
+      );
+      return dropped.map((d) => d.fromId).filter((id) => id !== synapAi.id);
+    })
+    .catch((err: unknown) => {
+      if (isUniqueViolation(err)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Someone chose this at the same time — try again",
+        });
+      }
+      throw err;
+    });
+  await auditLog({
+    subjectType: "link",
+    action: "create",
+    phase: "completed",
+    subjectId: p.playbookId,
+    userId: p.callerId,
+    data: {
+      linkType: "assigned_to",
+      runChoice: "is-agent",
+      target,
+      replacedAgentUserIds: replaced,
+    },
+  });
+  return p.choice;
 }
