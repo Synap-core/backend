@@ -552,6 +552,17 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         log.info("Registered proposal-approve handler (IoC)");
       }
 
+      // IoC: an owed ask back from the person's Later (founder D3). jobs owns
+      // the `ask-later-return` queue; the slot read and the one needs-you
+      // producer live in api, so the handler is filled here.
+      {
+        const { registerAskLaterReturnHandler } =
+          await import("@synap/jobs/workers/ask-later-return-worker.js");
+        const { runAskLaterReturn } = await import("@synap/api");
+        registerAskLaterReturnHandler((p) => runAskLaterReturn(p));
+        log.info("Registered ask-later-return handler (IoC)");
+      }
+
       // IoC: the Library light read (one item) and its hourly sweep. jobs
       // owns both queues; the readers, the IS client and the AI budget live
       // in api, so the handlers are filled here.

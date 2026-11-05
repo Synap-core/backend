@@ -118,6 +118,10 @@ import { NotificationService } from "../NotificationService.js";
 import { writePushPrefs, readPushPrefs } from "../push-prefs.js";
 import { blockExpectedOutput } from "../../services/focus-sessions/block-output.js";
 import {
+  runAskLaterReturn,
+  setAskLater,
+} from "../../services/focus-sessions/ask-later.js";
+import {
   answerSessionSlot,
   attestSessionSlot,
 } from "../../services/focus-sessions/session-answer.js";
@@ -551,6 +555,40 @@ describe("W8 — a push is earned", () => {
       interruptionLevel: "active",
       channelId: "needs-you",
     });
+  });
+
+  it("an ask back from Later is told again at its level, not swallowed by the session's earlier push (founder D3)", async () => {
+    const sessionId = await seedSession("active");
+    await blockAsk(sessionId, { mode: "confirm", prompt: "Casual tone?" });
+    expect(h.pushes).toHaveLength(1);
+    const until = new Date(Date.now() + 3 * 3_600_000);
+    await setAskLater({
+      sessionId,
+      userId: USER,
+      expectedLabel: "Tone",
+      until,
+      schedule: async () => undefined,
+    });
+    // The job runs at its time (pg-boss `startAfter`); here, directly.
+    expect(
+      await runAskLaterReturn({
+        sessionId,
+        label: "Tone",
+        laterUntil: until.toISOString(),
+      })
+    ).toEqual({ status: "told" });
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[1]).toMatchObject({
+      interruptionLevel: "active",
+      channelId: "needs-you",
+    });
+    // A second delivery of the same return is still one push.
+    await runAskLaterReturn({
+      sessionId,
+      label: "Tone",
+      laterUntil: until.toISOString(),
+    });
+    expect(h.pushes).toHaveLength(2);
   });
 
   it("an agent has no push limit by default; the limit its person sets holds back its pushes past it", async () => {
