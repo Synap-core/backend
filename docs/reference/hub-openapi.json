@@ -25702,6 +25702,60 @@
         }
       }
     },
+    "/playbooks/{id}/run-choice": {
+      "get": {
+        "tags": ["Playbooks"],
+        "summary": "Who runs a playbook for you",
+        "description": "Your remembered choice for this playbook (Synap AI or one of your agents), whether a launch should ask first (`ask`), the answers to offer (Synap AI first when the playbook allows it, then your agents with their wake mark) and what the next run would do (`next`), by the same rule the run uses. Answer an ask with POST /playbooks/{id}/run `runOn` or `handToAgentId` plus `remember: true`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Who runs it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "description": "PlaybookRunChoice (@synap-core/types/agents): stored, ask, synapAiAllowed, options[], next."
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Playbook not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/playbooks/{id}/run": {
       "post": {
         "tags": ["Playbooks"],
@@ -25755,6 +25809,15 @@
                     "type": "string",
                     "format": "uuid",
                     "description": "Hand the run to this agent (an agent user id, as synap_list_agents returns it): it does the work and the playbook's own executor is not started. An unknown, paused or foreign agent is refused by name."
+                  },
+                  "runOn": {
+                    "type": "string",
+                    "enum": ["synap_ai"],
+                    "description": "Run it on Synap AI this time, whatever was remembered. Never with handToAgentId; refused on a playbook that runs only on agents."
+                  },
+                  "remember": {
+                    "type": "boolean",
+                    "description": "Remember this run's choice (runOn or handToAgentId) as yours for this playbook, so the next launch does not ask (GET /playbooks/{id}/run-choice). A person's act: refused for an agent."
                   }
                 }
               }

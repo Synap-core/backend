@@ -909,6 +909,71 @@ export interface AgentTemplateRef {
 	label: string;
 	version: string | null;
 }
+/** What a person can choose: Synap AI, or one of their agents. */
+export type RunChoice = {
+	executor: "is-agent";
+} | {
+	agentUserId: string;
+	executor: "external-agent";
+};
+declare const RUN_CHOICE_VIAS: readonly [
+	"named",
+	"stored",
+	"fallback",
+	"default"
+];
+export type RunChoiceVia = (typeof RUN_CHOICE_VIAS)[number];
+/**
+ * What the pod decided for one run, recorded on it (`playbook_runs.run_on`).
+ * `agentUserId` is the agent that took it; `null` = Synap AI, or, for a
+ * playbook that only runs on agents, the executor's own pick.
+ */
+export interface RunOn {
+	executor: "external-agent" | "hybrid" | "is-agent";
+	agentUserId: string | null;
+	via: RunChoiceVia;
+	/** Only `fallback`: the remembered agent, and why it could not take it. */
+	passedOver: {
+		agentUserId: string;
+		name: string | null;
+		why: AgentWakeRefusal | "not_awake" | "refused";
+	} | null;
+}
+/** One answer the person can pick, in the order the pod offers them. */
+export interface RunChoiceOption {
+	choice: RunChoice;
+	/** The agent's name; `null` for Synap AI (the vocabulary says its name). */
+	name: string | null;
+	/**
+	 * The words a surface shows for it, drawn by the pod through the vocabulary
+	 * door (`SYNAP_AI_LABEL`, the agent's name), so an app with no copy of the
+	 * vocabulary never writes its own.
+	 */
+	label: string;
+	/** Its wake mark; `null` for Synap AI (always awake, the pod runs it). */
+	wake: AgentWake | null;
+	/** The mark's words ("Can't wake · Computer offline"); `null` with no mark. */
+	wakeLabel: string | null;
+	/** At most one: Synap AI when the playbook allows it, else none. */
+	recommended: boolean;
+}
+/** `playbooks.runChoice` / Hub `GET /playbooks/:id/run-choice`. */
+export interface PlaybookRunChoice {
+	playbookId: string;
+	/** The person's remembered choice; `null` = never chosen. */
+	stored: RunChoice | null;
+	/**
+	 * Ask before the run: nothing is stored AND the person has an agent that
+	 * could take it, so there is a real choice. A launch that asks passes its
+	 * answer with `remember: true`; headless runs never ask.
+	 */
+	ask: boolean;
+	/** Synap AI may run it (`executor` is `is-agent` or `hybrid`). */
+	synapAiAllowed: boolean;
+	options: RunChoiceOption[];
+	/** What the next run would do, by the same rule the run uses. */
+	next: RunOn;
+}
 export type AgentDirection = "external" | "house";
 /**
  * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
@@ -8130,18 +8195,6 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * and its sub-goals are listed as `children`.
  */
  | "serves";
-/**
- * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
- *
- * RUNTIME (not config, not entity DATA). A playbook_run is one execution of a
- * Playbook: created when `runPlaybook` dispatches a playbook to its executor
- * (`is-agent` | `external-agent` | `hybrid`). It links the config (`playbook_id`)
- * to the runtime (`session_id`) and records status/summary/error as the executor
- * reports back (capture-back via the Hub `POST /runs/:id/capture` route).
- *
- * Part of the Playbooks & Capability Substrate
- * (team/platform/playbooks-capability-substrate.mdx §4.3-4.4).
- */
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "hybrid" | "is-agent";
 /**
@@ -44652,6 +44705,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: unknown;
 				playbookId: string;
 				replayOf: string | null;
+				runOn: RunOn | null;
 				sessionId: string | null;
 				startedAt: Date;
 				status: PlaybookRunStatus;
@@ -45685,6 +45739,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string;
 				projectId?: string | undefined;
 				reasoning?: string | undefined;
+				remember?: boolean | undefined;
+				runOn?: "synap_ai" | undefined;
 				source?: string | undefined;
 				subjectId?: string | undefined;
 				trackId?: string | undefined;
@@ -45786,6 +45842,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					input: unknown;
 					playbookId: string;
 					replayOf: string | null;
+					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
 					status: PlaybookRunStatus;
@@ -45827,6 +45884,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			};
 		}>;
+		runChoice: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				playbookId: string;
+			};
+			meta: object;
+			output: PlaybookRunChoice;
+		}>;
 		saveFlow: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | undefined;
@@ -45862,6 +45926,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: PlaybookScorecard;
+		}>;
+		setRunChoice: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				choice: {
+					executor: "is-agent";
+				} | {
+					agentUserId: string;
+					executor: "external-agent";
+				};
+				playbookId: string;
+			};
+			meta: object;
+			output: PlaybookRunChoice;
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
