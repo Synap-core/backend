@@ -64,3 +64,46 @@ describe("computeRevisedEnvelope — a connect request's identity is not revisab
     }
   );
 });
+
+/**
+ * A request the CLI filed AS THE PERSON (W3): `asPerson` makes its approval
+ * need a proof of presence in every mode, and `instanceLabel` is the computer
+ * the audit names. Neither may be cleared or rewritten by a revise.
+ */
+const AS_PERSON = {
+  targetType: "agent",
+  changeType: "agent/connect",
+  data: {
+    ...AGENT_CONNECT.data,
+    asPerson: true,
+    instanceLabel: "MacBook-Pro",
+  },
+};
+
+describe("computeRevisedEnvelope — a request filed as the person stays so", () => {
+  it.each([
+    ["asPerson", false],
+    ["instanceLabel", "Someone-elses-PC"],
+  ] as const)("refuses a patch that rewrites %s", (field, value) => {
+    for (const patch of [
+      { kind: "envelope" as const, fields: { data: { [field]: value } } },
+      { kind: "inner" as const, fields: { [field]: value } },
+    ])
+      expect(() =>
+        computeRevisedEnvelope({ envelope: AS_PERSON, patch })
+      ).toThrow(new RegExp(field));
+  });
+
+  it("a wholesale data replacement cannot drop them: they are restored", () => {
+    const { merged } = computeRevisedEnvelope({
+      envelope: AS_PERSON,
+      patch: {
+        kind: "envelope",
+        fields: { data: { requests: [], asked: AGENT_CONNECT.data.asked } },
+      },
+    });
+    const data = merged.data as Record<string, unknown>;
+    expect(data.asPerson).toBe(true);
+    expect(data.instanceLabel).toBe("MacBook-Pro");
+  });
+});

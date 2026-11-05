@@ -334,6 +334,13 @@ export const PROTECTED_ENVELOPE_FIELDS = [
   // could add one would widen a scope the person never saw.
   "requiredToolIds",
   "requiredToolNames",
+  // `asPerson` / `instanceLabel` (W3): a request the CLI filed AS THE PERSON
+  // needs a proof of presence in every mode, and the audit names the computer
+  // it came from. A revise that could clear `asPerson` would drop that proof
+  // in report mode; one that could rewrite `instanceLabel` would put another
+  // computer's name on the approval.
+  "asPerson",
+  "instanceLabel",
 ] as const;
 
 /**
@@ -470,6 +477,10 @@ const PROTECTED_FIELD_REASON: Record<
     "it is the tool scope the person approves with the skill; propose the skill again to change it",
   requiredToolNames:
     "it names the tool scope the person approves with the skill; propose the skill again to change it",
+  asPerson:
+    "it records that the request was filed as the person, which requires a proof of presence to approve",
+  instanceLabel:
+    "it names the computer the request came from, stamped from that computer's own key",
 };
 
 export interface ComputeRevisedEnvelopeParams {

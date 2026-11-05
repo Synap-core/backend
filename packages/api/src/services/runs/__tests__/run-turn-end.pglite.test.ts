@@ -37,6 +37,8 @@ const h = vi.hoisted(() => ({
   settled: [] as Array<Record<string, unknown>>,
   /** When set, the ask's slot declaration fails (the ask does not land). */
   failDeclare: false,
+  /** Every run-tool-profile resolution (its own suite: run-tool-profile.test.ts). */
+  profiles: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -111,6 +113,17 @@ vi.mock("../../focus-sessions/delegate-output.js", async (importOriginal) => {
       h.failDeclare ? false : real(...a),
   };
 });
+vi.mock("../../playbooks/run-tool-profile.js", () => ({
+  resolveRunToolProfile: async (p: Record<string, unknown>) => {
+    h.profiles.push(p);
+    return {
+      playbookId: p.playbookId,
+      intents: ["publish_post"],
+      verbs: ["postiz_schedule_post"],
+      capabilitiesRead: "ok",
+    };
+  },
+}));
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
   triggerAutoRespond: async (p: Record<string, unknown>) => {
     h.triggers.push(p);
@@ -219,6 +232,9 @@ const STOPPED = {
     ceiling: 250_000,
     spentInputTokens: 131_072,
     firstCall: FIRST_CALL,
+    model: "claude-haiku-5-5",
+    cacheReadInputTokens: 100_000,
+    cacheWriteInputTokens: 20_000,
   },
 };
 
@@ -301,6 +317,7 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
   beforeEach(() => {
     h.triggers.length = 0;
     h.settled.length = 0;
+    h.profiles.length = 0;
     h.failDeclare = false;
   });
 
@@ -399,6 +416,10 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       budgetAction: "stop",
       ceiling: 250_000,
       firstCall: FIRST_CALL,
+      // Which model served the turn, and what its prompt cache did.
+      model: "claude-haiku-5-5",
+      cacheReadInputTokens: 100_000,
+      cacheWriteInputTokens: 20_000,
       next: "continue",
     });
     expect(l.turns.map((t) => t.next)).toEqual([
@@ -523,6 +544,63 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     });
   });
 
+  it("a stopped run turn's checkpoint rides in the continuation by FULL id, and the continuation is a run turn (lean run tools, 2026-11-05)", async () => {
+    // Before: the continuation said only "pick up from where it stopped"; the
+    // next turn had the last answer's 8-character id prefixes and re-resolved
+    // them (run 9d57a207: 170k more input tokens, finding 7726269d). And it
+    // was dispatched with no run profile, so it got every tool again.
+    const { sessionId, channelId, runId } = await seedRun();
+    const IDEA = "9d57a207-1c2b-4d3e-8f40-5a6b7c8d9e0f";
+    const r = await completeRun(sessionId, {
+      ...STOPPED,
+      turnKey: "msg-checkpoint-1",
+      checkpoint: {
+        records: [{ id: IDEA, tool: "propose_entity_graph" }],
+        left: "Left: move the 4 ideas that feed a post to Used.",
+      },
+    });
+    expect(r).toEqual({ code: 200, json: { status: "continued" } });
+    const notice = (await roomMessages(channelId)).find(
+      (m) => m.id === h.triggers[0]!.userMessageId
+    )!;
+    expect(notice.content).toContain("```run-checkpoint");
+    expect(notice.content).toContain(IDEA);
+    expect(notice.content).toContain(
+      "move the 4 ideas that feed a post to Used"
+    );
+    // The continuation carries the run's declared tools, like the kickoff.
+    const [{ playbook_id }] = (
+      await q<{ playbook_id: string }>(
+        `select playbook_id from playbook_runs where id = $1`,
+        [runId]
+      )
+    ).rows;
+    expect(h.profiles).toEqual([
+      expect.objectContaining({ playbookId: playbook_id, userId: OWNER }),
+    ]);
+    expect(h.triggers[0]!.run).toMatchObject({
+      playbookId: playbook_id,
+      verbs: ["postiz_schedule_post"],
+    });
+    expect((await ledger(sessionId)).turns[0]).toMatchObject({
+      checkpointRecords: 1,
+    });
+  });
+
+  it("an unusable checkpoint reads as absent: the turn still settles (never a 400)", async () => {
+    const { sessionId, channelId } = await seedRun();
+    const r = await completeRun(sessionId, {
+      ...STOPPED,
+      turnKey: "msg-checkpoint-bad",
+      checkpoint: { records: [{ id: "9d57a207", tool: "x" }], left: "" },
+    });
+    expect(r).toEqual({ code: 200, json: { status: "continued" } });
+    const notice = (await roomMessages(channelId)).find(
+      (m) => m.id === h.triggers[0]!.userMessageId
+    )!;
+    expect(notice.content).not.toContain("run-checkpoint");
+  });
+
   it("a malformed report is refused and changes nothing", async () => {
     const { sessionId, runId } = await seedRun();
     const r = await completeRun(sessionId, { outcome: "stopped" });
@@ -552,6 +630,27 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     });
     expect(done).toEqual({ code: 200, json: { status: "completed" } });
     expect((await runRow(runId)).status).toBe("completed");
+  });
+
+  it("an unusable model or cache count reads as absent, never a 400 that drops the turn", async () => {
+    const { sessionId, runId } = await seedRun();
+    const done = await completeRun(sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        model: "",
+        cacheReadInputTokens: -1,
+        cacheWriteInputTokens: "many",
+      },
+    });
+    expect(done).toEqual({ code: 200, json: { status: "completed" } });
+    expect((await runRow(runId)).status).toBe("completed");
+    const turn = (await ledger(sessionId)).firstTurn;
+    expect(turn).toMatchObject({ spentInputTokens: 9_000 });
+    expect(turn).not.toHaveProperty("model");
+    expect(turn).not.toHaveProperty("cacheReadInputTokens");
+    expect(turn).not.toHaveProperty("cacheWriteInputTokens");
   });
 
   it("a ledger left by an EARLIER run on the session does not count for this one", async () => {

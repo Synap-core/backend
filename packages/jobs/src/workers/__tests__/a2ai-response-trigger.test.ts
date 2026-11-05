@@ -237,6 +237,29 @@ describe("handleA2AIResponseTrigger", () => {
     );
   });
 
+  it("forwards a playbook run's tool profile to the IS (lean run tools, 2026-11-05)", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "ok",
+      error: null,
+      steps: [],
+    });
+    const run = {
+      playbookId: "pb-1",
+      intents: ["publish_post"],
+      verbs: ["postiz_schedule_post"],
+      capabilitiesRead: "ok" as const,
+    };
+
+    await handleA2AIResponseTrigger(baseJob({ run }));
+
+    expect(mocks.requestHeadlessChatText).toHaveBeenCalledWith(
+      "http://is.local",
+      "key",
+      expect.objectContaining({ run })
+    );
+  });
+
   it("forwards the turn's agent_configs row (model per agent) to the IS", async () => {
     mocks.insertReturning = [runningTurn()];
     mocks.requestHeadlessChatText.mockResolvedValue({

@@ -26,8 +26,29 @@ import type { Context } from "../context.js";
 import { workspacesRouter } from "./workspaces.js";
 import { entitiesRouter } from "./entities.js";
 
-/** How many saved links the websites arm reads (the Tools page's own window). */
-const YOUR_APPS_LINKS_WINDOW = 500;
+/** Rows per page of the websites arm (`entities.list`'s own maximum). */
+const SAVED_LINKS_PAGE = 1000;
+
+/**
+ * EVERY saved link the person can read (pod-wide bookmarks with their child
+ * kinds, the Tools page's own read), page by page until the door says there
+ * is no more: a tool past a window is never silently left out.
+ */
+async function readAllSavedLinks(ctx: Context) {
+  const entities = entitiesRouter.createCaller(ctx);
+  const rows = [];
+  for (let offset = 0; ; offset += SAVED_LINKS_PAGE) {
+    const page = await entities.list({
+      profileSlug: "bookmark",
+      includeDescendants: true,
+      workspaceId: null,
+      limit: SAVED_LINKS_PAGE,
+      offset,
+    });
+    rows.push(...page.items);
+    if (!page.pagination.hasMore) return rows;
+  }
+}
 
 /**
  * One write door for the rail pins; a full rail — or a week already holding
@@ -117,24 +138,12 @@ export const preferencesRouter = router({
    * arm fails the read: a partial list would read as "these are all".
    */
   yourApps: protectedProcedure.query(async ({ ctx }) => {
-    const caller = ctx as unknown as Context;
     const [pins, spaces, links] = await Promise.all([
       readRailPins(ctx.userId),
-      workspacesRouter.createCaller(caller).list(),
-      entitiesRouter.createCaller(caller).list({
-        profileSlug: "bookmark",
-        includeDescendants: true,
-        workspaceId: null,
-        limit: YOUR_APPS_LINKS_WINDOW,
-      }),
+      workspacesRouter.createCaller(ctx).list(),
+      readAllSavedLinks(ctx),
     ]);
-    return {
-      apps: yourApps({
-        pins,
-        spaces,
-        links: links.entities,
-      }),
-    };
+    return { apps: yourApps({ pins, spaces, links }) };
   }),
 
   /**

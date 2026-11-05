@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  isPresenceCode,
+  oauthConsentId,
+  PRESENCE_REFUSAL_CODES,
+  presenceRequestSubject,
   enrollmentSubject,
   presenceActorLabel,
   presenceMessage,
@@ -8,6 +12,19 @@ import {
 } from "./index.js";
 
 describe("proof of presence vocabulary", () => {
+  it("isPresenceCode tells the four presence refusals from any other code", () => {
+    expect(PRESENCE_REFUSAL_CODES).toEqual([
+      "PRESENCE_REQUIRED",
+      "PRESENCE_INVALID",
+      "PRESENCE_EXPIRED",
+      "PRESENCE_USED",
+    ]);
+    for (const code of PRESENCE_REFUSAL_CODES)
+      expect(isPresenceCode(code)).toBe(true);
+    for (const other of ["REVIEW_ON_ITS_PAGE", "FORBIDDEN", "", null, 1])
+      expect(isPresenceCode(other)).toBe(false);
+  });
+
   it("the sensitive set: setup, governance, deploys, deletions; everyday approvals are not in it", () => {
     expect(
       sensitiveApprovalReason({ targetType: "agent", proposalType: "connect" })
@@ -33,6 +50,10 @@ describe("proof of presence vocabulary", () => {
     expect(
       sensitiveApprovalReason({ targetType: "entity", proposalType: "delete" })
     ).toBe("deletion");
+    // Founder, 4 Nov: turning a skill or tool ON is sensitive.
+    expect(
+      sensitiveApprovalReason({ targetType: "skill", proposalType: "create" })
+    ).toBe("setup");
     for (const [targetType, proposalType] of [
       ["entity", "create"],
       ["entity", "update"],
@@ -89,5 +110,32 @@ describe("proof of presence vocabulary", () => {
         signature: "not base64url!",
       }).success
     ).toBe(false);
+  });
+
+  it("a request subject and an OAuth consent id are stable and distinct", async () => {
+    expect(presenceRequestSubject("key_request", "r1")).toBe("key_request:r1");
+    const a = await oauthConsentId({
+      clientId: "c",
+      redirectUri: "https://x/cb",
+      codeChallenge: "k",
+      state: "s",
+    });
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(
+      await oauthConsentId({
+        clientId: "c",
+        redirectUri: "https://x/cb",
+        codeChallenge: "k",
+        state: "s",
+      })
+    ).toBe(a);
+    expect(
+      await oauthConsentId({
+        clientId: "c",
+        redirectUri: "https://x/cb",
+        codeChallenge: "k2",
+        state: "s",
+      })
+    ).not.toBe(a);
   });
 });

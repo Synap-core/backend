@@ -17,6 +17,13 @@
  * repository, no shared package), so this is its own copy of the ceremony.
  */
 
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
+import {
+  PRESENCE_CHALLENGE_TTL_SECONDS,
+  type PasskeyAssertionJSON,
+} from "@synap-core/types/presence";
+
 /** base64url (no padding) → bytes, as Kratos' `__oryWebAuthnBufferDecode`. */
 export function base64UrlToBuffer(value: string): ArrayBuffer {
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -172,31 +179,12 @@ export async function createPasskey(
 // key's PIN, never a bare tap.
 
 /** `presence.challenge`'s `passkey` block: what `navigator.credentials.get` needs. */
-export interface PresencePasskeyRequest {
-  /** base64url: SHA-256 of the signed presence message. */
-  challenge: string;
-  /** The rp id this pod's passkeys are registered under (Kratos `rp.id`). */
-  rpId: string;
-  allowCredentials: Array<{ id: string; type: "public-key" }>;
-  userVerification: "required";
-}
-
-/** The assertion as the approve doors read it (every byte field base64url). */
-export interface PasskeyAssertion {
-  id: string;
-  rawId: string;
-  type: "public-key";
-  response: {
-    clientDataJSON: string;
-    authenticatorData: string;
-    signature: string;
-    userHandle: string | null;
-  };
-  clientExtensionResults: Record<string, unknown>;
-}
+export type PresencePasskeyRequest = NonNullable<
+  inferRouterOutputs<AppRouter>["presence"]["challenge"]["passkey"]
+>;
 
 /** How long the browser's prompt waits: the challenge's own lifetime. */
-export const PRESENCE_PROMPT_TIMEOUT_MS = 120_000;
+export const PRESENCE_PROMPT_TIMEOUT_MS = PRESENCE_CHALLENGE_TTL_SECONDS * 1000;
 
 /** This browser can sign with a passkey (`navigator.credentials.get`). */
 export function isPasskeyAssertionSupported(): boolean {
@@ -229,7 +217,7 @@ export function passkeyRequestOptions(
 /** A signed assertion → the `credential` of a `{kind: "passkey"}` proof. */
 export function encodeAssertion(
   credential: PublicKeyCredential
-): PasskeyAssertion {
+): PasskeyAssertionJSON {
   const response = credential.response as AuthenticatorAssertionResponse;
   return {
     id: credential.id,
@@ -259,7 +247,7 @@ export function encodeAssertion(
  */
 export async function getPasskeyAssertion(
   request: PresencePasskeyRequest
-): Promise<PasskeyAssertion> {
+): Promise<PasskeyAssertionJSON> {
   if (!isPasskeyAssertionSupported()) {
     throw new Error("This browser can't use a passkey.");
   }

@@ -37,9 +37,14 @@ import {
   ModalHeader,
 } from "@heroui/react";
 import { Fingerprint } from "lucide-react";
-import type {
-  PresenceProof,
-  PresenceRefusalCode,
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
+import {
+  PRESENCE_EXPIRED,
+  PRESENCE_INVALID,
+  PRESENCE_USED,
+  type PresenceProof,
+  type PresenceRefusalCode,
 } from "@synap-core/types/presence";
 import { trpc } from "../../../lib/trpc";
 import { isUuid } from "../../../lib/format";
@@ -47,10 +52,10 @@ import {
   PasskeyCancelled,
   getPasskeyAssertion,
   isPasskeyAssertionSupported,
-  type PresencePasskeyRequest,
 } from "../../../lib/passkey";
 import { proposalHeading } from "../../proposal/[id]/proposal-heading";
 import { presenceT } from "./copy";
+import { presenceDialogView } from "./dialog-model";
 import {
   PresenceDeclined,
   type PresenceProgress,
@@ -58,15 +63,8 @@ import {
   type ProvePresence,
 } from "./presence-model";
 
-/** `presence.challenge`'s answer, as far as the dialog reads it. */
-interface PresenceChallenge {
-  challengeId: string;
-  /** The proposal it names (a pending key's `agent/connect`). */
-  proposalId: string;
-  expiresAt: string;
-  passkey: PresencePasskeyRequest | null;
-  deviceKeys: Array<{ id: string; label: string }>;
-}
+/** `presence.challenge`'s answer: `proposalId` names the request it signs. */
+type PresenceChallenge = inferRouterOutputs<AppRouter>["presence"]["challenge"];
 
 /** A challenge this close to its end is read again before the prompt. */
 const CHALLENGE_MARGIN_MS = 15_000;
@@ -75,13 +73,22 @@ interface Ask {
   subject: PresenceSubject;
   refusal: PresenceRefusalCode;
   progress?: PresenceProgress;
-  resolve: (proof: PresenceProof) => void;
+  /**
+   * Asked before the first try (a sensitive request). The dialog opens only
+   * once the person can prove: no usable passkey, or an unreadable
+   * challenge, resolves null without showing it, and the pod decides.
+   */
+  upFront: boolean;
+  resolve: (proof: PresenceProof | null) => void;
   reject: (err: Error) => void;
 }
 
+type Outcome = { proof: PresenceProof | null } | { error: Error };
+
 type Phase =
   | { kind: "reading" }
-  | { kind: "read-failed"; message: string }
+  /** The pod's own words, shown small under the headline (never the headline). */
+  | { kind: "read-failed"; detail: string | null }
   | { kind: "ready"; challenge: PresenceChallenge; note: string | null }
   | { kind: "signing"; challenge: PresenceChallenge };
 
@@ -105,11 +112,11 @@ export function usePresence(): PresenceContextValue {
 function againNote(refusal: PresenceRefusalCode): string | null {
   const t = presenceT();
   switch (refusal) {
-    case "PRESENCE_INVALID":
+    case PRESENCE_INVALID:
       return t("again.invalid");
-    case "PRESENCE_EXPIRED":
+    case PRESENCE_EXPIRED:
       return t("again.expired");
-    case "PRESENCE_USED":
+    case PRESENCE_USED:
       return t("again.used");
     default:
       return null;
@@ -121,33 +128,40 @@ export function PresenceProvider({ children }: { children: ReactNode }) {
   // One ask at a time: a second waits for the first to settle.
   const queue = useRef<Promise<unknown>>(Promise.resolve());
 
-  const prove = useCallback<ProvePresence>((subject, refusal, progress) => {
-    const next = queue.current.then(
-      () =>
-        new Promise<PresenceProof>((resolve, reject) =>
-          setAsk({ subject, refusal, progress, resolve, reject })
-        )
-    );
-    queue.current = next.catch(() => undefined);
-    return next;
-  }, []);
+  const prove = useCallback<ProvePresence>(
+    (subject, refusal, progress, options) => {
+      const next = queue.current.then(
+        () =>
+          new Promise<PresenceProof | null>((resolve, reject) =>
+            setAsk({
+              subject,
+              refusal,
+              progress,
+              upFront: options?.upFront === true,
+              resolve,
+              reject,
+            })
+          )
+      );
+      queue.current = next.catch(() => undefined);
+      return next;
+    },
+    []
+  );
 
   const value = useMemo(() => ({ prove }), [prove]);
   // The open ask, read by `settle` (an effect-free updater would run twice
   // in StrictMode and settle the promise from inside a render).
   const open = useRef<Ask | null>(null);
   open.current = ask;
-  const settle = useCallback(
-    (outcome: { proof: PresenceProof } | { error: Error }) => {
-      const current = open.current;
-      if (!current) return;
-      open.current = null;
-      setAsk(null);
-      if ("proof" in outcome) current.resolve(outcome.proof);
-      else current.reject(outcome.error);
-    },
-    []
-  );
+  const settle = useCallback((outcome: Outcome) => {
+    const current = open.current;
+    if (!current) return;
+    open.current = null;
+    setAsk(null);
+    if ("proof" in outcome) current.resolve(outcome.proof);
+    else current.reject(outcome.error);
+  }, []);
 
   return (
     <PresenceContext.Provider value={value}>
@@ -162,51 +176,70 @@ function PresenceDialog({
   settle,
 }: {
   ask: Ask | null;
-  settle: (outcome: { proof: PresenceProof } | { error: Error }) => void;
+  settle: (outcome: Outcome) => void;
 }) {
   const t = presenceT();
   const challengeMutation = trpc.presence.challenge.useMutation();
   const readChallenge = challengeMutation.mutateAsync;
   // Each phase belongs to one ask: a new ask starts at "reading" from its
   // first render, never on the last ask's challenge.
-  const [state, setState] = useState<{ ask: Ask | null; phase: Phase }>({
-    ask: null,
-    phase: { kind: "reading" },
-  });
-  const phase: Phase = state.ask === ask ? state.phase : { kind: "reading" };
+  // `shown`: this ask has had something to show (an up-front ask stays
+  // hidden while its first challenge is read).
+  const [state, setState] = useState<{
+    ask: Ask | null;
+    phase: Phase;
+    shown: boolean;
+  }>({ ask: null, phase: { kind: "reading" }, shown: false });
+  const mine = state.ask === ask;
+  const phase: Phase = mine ? state.phase : { kind: "reading" };
+  const shown = mine && state.shown;
   // The ask the latest read belongs to: a late answer of a closed ask is dropped.
   const live = useRef<Ask | null>(null);
   const setPhase = (forAsk: Ask, next: Phase) => {
-    if (live.current === forAsk) setState({ ask: forAsk, phase: next });
+    if (live.current === forAsk)
+      setState((prev) => ({
+        ask: forAsk,
+        phase: next,
+        shown: (prev.ask === forAsk && prev.shown) || next.kind !== "reading",
+      }));
   };
 
   // Read a challenge for this ask. A ref, not an effect dependency: the
   // dialog reads once per ask, never again because a render made a new
   // function.
-  const read = useRef<(current: Ask, note: string | null) => Promise<void>>(
-    async () => undefined
-  );
-  read.current = async (current: Ask, note: string | null) => {
+  // `mayPass`: an up-front ask's first read, which hands back null (no
+  // proof, the pod decides) when the person cannot prove here.
+  const read = useRef<
+    (current: Ask, note: string | null, mayPass?: boolean) => Promise<void>
+  >(async () => undefined);
+  read.current = async (current: Ask, note: string | null, mayPass = false) => {
     setPhase(current, { kind: "reading" });
     try {
-      const challenge = (await readChallenge(
-        current.subject
-      )) as PresenceChallenge;
+      const challenge = await readChallenge(current.subject);
+      if (
+        mayPass &&
+        (challenge.passkey === null || !isPasskeyAssertionSupported())
+      ) {
+        if (live.current === current) settle({ proof: null });
+        return;
+      }
       setPhase(current, { kind: "ready", challenge, note });
     } catch (err) {
+      if (mayPass) {
+        if (live.current === current) settle({ proof: null });
+        return;
+      }
+      // A failed read is not "no passkey": it says so, and keeps Try again.
       setPhase(current, {
         kind: "read-failed",
-        message:
-          err instanceof Error && err.message
-            ? err.message
-            : presenceT()("readFailed"),
+        detail: err instanceof Error && err.message ? err.message : null,
       });
     }
   };
 
   useEffect(() => {
     live.current = ask;
-    if (ask) void read.current(ask, againNote(ask.refusal));
+    if (ask) void read.current(ask, againNote(ask.refusal), ask.upFront);
   }, [ask]);
 
   async function signWith(challenge: PresenceChallenge) {
@@ -242,12 +275,30 @@ function PresenceDialog({
   const decline = () => settle({ error: new PresenceDeclined(t("declined")) });
   const challenge =
     phase.kind === "ready" || phase.kind === "signing" ? phase.challenge : null;
-  const canSign = !!challenge?.passkey && isPasskeyAssertionSupported();
   const progress = ask?.progress;
+  const view = presenceDialogView({
+    phase:
+      phase.kind === "ready" || phase.kind === "signing"
+        ? {
+            kind: phase.kind,
+            passkey: phase.challenge.passkey !== null,
+            deviceKeys: phase.challenge.deviceKeys,
+            note: phase.kind === "ready" ? phase.note : null,
+          }
+        : phase,
+    passkeySupported: isPasskeyAssertionSupported(),
+    progress,
+  });
+  const reread = () => ask && void read.current(ask, null);
+  const status = !view.status
+    ? ""
+    : "word" in view.status
+      ? t(view.status.word)
+      : view.status.note;
 
   return (
     <Modal
-      isOpen={ask !== null}
+      isOpen={ask !== null && (!ask.upFront || shown)}
       onClose={decline}
       isDismissable={phase.kind !== "signing"}
       size="md"
@@ -270,24 +321,35 @@ function PresenceDialog({
             <p>{t("action.unnamed")}</p>
           )}
           <p className="text-foreground/65">{t("why")}</p>
-          {phase.kind === "reading" && (
-            <p className="text-foreground/55">{t("checking")}</p>
+          {view.notice && (
+            <div className="flex flex-col gap-1 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
+              {view.notice === "noPasskey" && (
+                <p className="font-medium">{t("noPasskey.title")}</p>
+              )}
+              <p>
+                {view.notice === "noPasskey"
+                  ? t("noPasskey.body")
+                  : t("unsupported.body")}
+              </p>
+            </div>
           )}
-          {phase.kind === "read-failed" && (
-            <p role="alert" className="text-danger">
-              {phase.message}
+          {/* ONE status line, always mounted, so a screen reader hears each
+              change of what the dialog is doing. */}
+          <p role="status" aria-live="polite" className={TONE[view.tone]}>
+            {status}
+          </p>
+          {view.detail && (
+            <p className="-mt-2 text-[12px] text-foreground/45">
+              {view.detail}
             </p>
           )}
-          {phase.kind === "ready" && phase.note && (
-            <p role="status" className="text-warning-600">
-              {phase.note}
+          {view.relayDevice !== null && (
+            <p className="text-foreground/55">
+              {view.relayDevice
+                ? t("relay.device", { device: view.relayDevice })
+                : t("relay.any")}
             </p>
           )}
-          {phase.kind === "signing" && (
-            <p className="text-foreground/55">{t("waiting")}</p>
-          )}
-          {challenge && !canSign && <NoPasskey challenge={challenge} />}
-          {challenge && canSign && <RelayInstead challenge={challenge} />}
         </ModalBody>
         <ModalFooter>
           <Button
@@ -295,20 +357,35 @@ function PresenceDialog({
             onPress={decline}
             isDisabled={phase.kind === "signing"}
           >
-            {t("notNow")}
+            {t(view.decline)}
           </Button>
-          {phase.kind === "read-failed" || (challenge && !canSign) ? (
-            <Button
-              color="primary"
-              variant="flat"
-              onPress={() => ask && void read.current(ask, null)}
-            >
+          {view.secondary === "tryAgain" && (
+            <Button variant="flat" onPress={reread}>
               {t("tryAgain")}
             </Button>
-          ) : (
+          )}
+          {view.primary === "tryAgain" && (
+            <Button color="primary" autoFocus onPress={reread}>
+              {t("tryAgain")}
+            </Button>
+          )}
+          {view.primary === "addPasskey" && (
+            <Button
+              as="a"
+              href="/settings/security#passkeys"
+              target="_blank"
+              rel="noopener"
+              color="primary"
+              autoFocus
+            >
+              {t("addPasskey")}
+            </Button>
+          )}
+          {view.primary === "confirm" && (
             <Button
               color="primary"
-              isLoading={phase.kind === "signing" || phase.kind === "reading"}
+              autoFocus
+              isLoading={view.busy}
               isDisabled={!challenge}
               onPress={() => challenge && void signWith(challenge)}
             >
@@ -320,6 +397,12 @@ function PresenceDialog({
     </Modal>
   );
 }
+
+const TONE = {
+  muted: "text-foreground/55",
+  warning: "text-warning-600",
+  danger: "text-danger",
+} as const;
 
 /** "To approve “<heading>”…": the request's heading, as its own page names it. */
 function ApprovingWhat({ proposalId }: { proposalId: string }) {
@@ -334,38 +417,4 @@ function ApprovingWhat({ proposalId }: { proposalId: string }) {
     (p as { request?: { data?: unknown } | null }).request?.data ?? p.data;
   const { heading } = proposalHeading(p, payload);
   return <p>{t("action", { action: heading })}</p>;
-}
-
-/** No passkey on this pod, or none this browser can use: the two other ways. */
-function NoPasskey({ challenge }: { challenge: PresenceChallenge }) {
-  const t = presenceT();
-  const unsupported = !!challenge.passkey && !isPasskeyAssertionSupported();
-  return (
-    <div className="flex flex-col gap-2 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
-      {!unsupported && <p className="font-medium">{t("noPasskey.title")}</p>}
-      <p>{unsupported ? t("unsupported.body") : t("noPasskey.body")}</p>
-      {!unsupported && (
-        <a
-          href="/settings/security#passkeys"
-          target="_blank"
-          rel="noopener"
-          className="self-start text-primary underline-offset-2 hover:underline"
-        >
-          {t("addPasskey")}
-        </a>
-      )}
-      <RelayInstead challenge={challenge} />
-    </div>
-  );
-}
-
-/** Relay with Face ID: on a device the person enrolled, else "your phone". */
-function RelayInstead({ challenge }: { challenge: PresenceChallenge }) {
-  const t = presenceT();
-  const device = challenge.deviceKeys[0]?.label?.trim();
-  return (
-    <p className="text-foreground/55">
-      {device ? t("relay.device", { device }) : t("relay.any")}
-    </p>
-  );
 }

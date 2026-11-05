@@ -14,6 +14,8 @@
  * reads both through `get`'s `requestIds`.
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { revokeAllPersonDevices } from "@synap/database/person-devices";
@@ -606,8 +608,20 @@ export const applicationConnectionsRouter = router({
 
   approveRequest: podAdminProcedure
     .use(requireFreshAuthentication)
-    .input(requestIdSchema)
+    .input(
+      requestIdSchema.extend({
+        /** Proof of presence (W3): connecting an application is setup. */
+        presence: presenceProofSchema.optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
+      await assertPresenceForRequest({
+        userId: ctx.userId,
+        kind: "app_connection_request",
+        id: input.requestId,
+        proof: input.presence ?? null,
+        door: "trpc.applicationConnections.approveRequest",
+      });
       let approved: Awaited<
         ReturnType<FederatedApplicationConnectionService["approve"]>
       >;

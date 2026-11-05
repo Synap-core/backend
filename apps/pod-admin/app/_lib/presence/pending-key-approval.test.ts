@@ -45,15 +45,18 @@ describe("approvePendingKey", () => {
         ? [200, { ok: true }]
         : [403, { error: "Confirm it is you", code: "PRESENCE_REQUIRED" }]
     );
+    // Up front the person could not prove (null): sent without, then asked.
     let n = 0;
-    const prove: ProvePresence = vi.fn(async () => proof(++n));
+    const prove: ProvePresence = vi.fn(async (_s, _r, _p, options) =>
+      options?.upFront ? null : proof(++n)
+    );
     await approvePendingKey({
       podUrl: POD,
       keyId: "key-1",
       body: { alsoDisconnect: ["x"] },
       prove,
     });
-    expect(prove).toHaveBeenCalledWith(
+    expect(prove).toHaveBeenLastCalledWith(
       { pendingKeyId: "key-1" },
       "PRESENCE_REQUIRED",
       undefined
@@ -69,13 +72,27 @@ describe("approvePendingKey", () => {
     });
   });
 
-  it("any other refusal is the page's error, nothing asked", async () => {
+  it("connecting an AI is proved UP FRONT: the first approve carries the proof", async () => {
+    const calls = stubFetch(() => [200, { ok: true }]);
+    const prove: ProvePresence = vi.fn(async () => proof(7));
+    await approvePendingKey({ podUrl: POD, keyId: "key-1", prove });
+    expect(prove).toHaveBeenCalledWith(
+      { pendingKeyId: "key-1" },
+      "PRESENCE_REQUIRED",
+      undefined,
+      { upFront: true }
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toEqual({ presence: proof(7) });
+  });
+
+  it("any other refusal is the page's error, nothing more asked", async () => {
     stubFetch(() => [409, { error: "A newer request is waiting" }]);
-    const prove: ProvePresence = vi.fn();
+    const prove: ProvePresence = vi.fn(async () => null);
     await expect(
       approvePendingKey({ podUrl: POD, keyId: "key-1", prove })
     ).rejects.toThrow("A newer request is waiting");
-    expect(prove).not.toHaveBeenCalled();
+    expect(prove).toHaveBeenCalledTimes(1); // the up-front ask only
   });
 });
 
@@ -100,12 +117,16 @@ describe("approvePendingKeys", () => {
         { approved: 1, results: [{ keyId: "b", outcome: "approved" }] },
       ];
     });
-    const prove: ProvePresence = vi.fn(async () => proof(1));
+    // Up front nothing could be proved; the refused key is then asked alone.
+    const prove: ProvePresence = vi.fn(async (_s, _r, _p, options) =>
+      options?.upFront ? null : proof(1)
+    );
     const out = await approvePendingKeys({
       podUrl: POD,
       keyIds: ["a", "b", "c"],
       prove,
     });
+    expect(calls[0]!.body).toEqual({ keyIds: ["a", "b", "c"] });
     expect(calls[1]!.body).toEqual({
       keyIds: ["b"],
       presenceByKey: { b: proof(1) },
@@ -117,6 +138,28 @@ describe("approvePendingKeys", () => {
         { keyId: "b", outcome: "approved" },
         { keyId: "c", outcome: "not_found" },
       ],
+    });
+  });
+});
+
+describe("approvePendingKeys up front", () => {
+  it("each key is proved before the batch, and the batch carries presenceByKey", async () => {
+    const calls = stubFetch(() => [
+      200,
+      { results: [{ keyId: "a", outcome: "approved" }] },
+    ]);
+    const prove: ProvePresence = vi.fn(async () => proof(2));
+    await approvePendingKeys({ podUrl: POD, keyIds: ["a"], prove });
+    expect(prove).toHaveBeenCalledWith(
+      { pendingKeyId: "a" },
+      "PRESENCE_REQUIRED",
+      { index: 1, total: 1 },
+      { upFront: true }
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toEqual({
+      keyIds: ["a"],
+      presenceByKey: { a: proof(2) },
     });
   });
 });

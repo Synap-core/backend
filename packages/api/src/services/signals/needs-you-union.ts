@@ -62,6 +62,8 @@ import {
   type NeedsYouConvertibleGoal,
   type NeedsYouConvertibleGoals,
   type NeedsYouInvite,
+  needsYouPriority,
+  type NeedsYouPriority,
 } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
@@ -401,6 +403,14 @@ export interface Signal {
    */
   needsYouClass?: NeedsYouClass;
   /**
+   * THE priority P0-P3 (`needsYouPriority`, `@synap-core/types/needs-you`),
+   * DERIVED by the pod from the rule's class and, on an `owed-slot`, its ask's
+   * `answerBy` (due within the hour = P0) and `urgency` (`whenever` only
+   * lowers it). An agent never nominates it. On an `owed-slot` and on a
+   * classified `proposal-cluster`; absent elsewhere.
+   */
+  priority?: NeedsYouPriority;
+  /**
    * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
    * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
    */
@@ -572,6 +582,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "reviewLater",
   "blocksOpenPr",
   "needsYouClass",
+  "priority",
   "unblocks",
   "source",
   "by",
@@ -902,7 +913,15 @@ export function signalFromCluster(
       ? "older"
       : ageBucketOf(cluster.latestAt, now),
     ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
-    ...(cluster.needsYouClass ? { needsYouClass: cluster.needsYouClass } : {}),
+    ...(cluster.needsYouClass
+      ? {
+          needsYouClass: cluster.needsYouClass,
+          priority: needsYouPriority(
+            { needsYouClass: cluster.needsYouClass },
+            now
+          ),
+        }
+      : {}),
     repeatCount: 1,
   };
 }
@@ -1371,6 +1390,7 @@ export function signalFromOwedSlot(
   now: Date = new Date()
 ): Signal {
   const occurredAt = owedInstant(row.owedSince);
+  const slotClass = owedSlotClassOf(row, now);
   return {
     id: `slot:${row.sessionId}:${normalizeExpectedLabel(row.label) ?? ""}`,
     kind: "owed-slot",
@@ -1425,7 +1445,17 @@ export function signalFromOwedSlot(
     // keeps its session key: a session is never split, so the slot folds with
     // its session's freshest row (`needsYouRows`).
     ageBucket: ageBucketOf(occurredAt, now),
-    ...outOfHeadline(owedSlotClassOf(row, now), !!row.needsYouClass),
+    ...outOfHeadline(slotClass, !!row.needsYouClass),
+    // The one derivation (`needsYouPriority`): the class this row lands in,
+    // plus the two facts its ask carries.
+    priority: needsYouPriority(
+      {
+        needsYouClass: slotClass,
+        urgency: row.ask?.urgency,
+        answerBy: row.ask?.answerBy,
+      },
+      now
+    ),
     ...(row.blocksOpenPr ? { blocksOpenPr: true as const } : {}),
     repeatCount: 1,
   };

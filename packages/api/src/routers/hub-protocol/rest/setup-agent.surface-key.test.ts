@@ -299,6 +299,30 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
     );
   });
 
+  it("W3: a request as the person names the computer from ITS key, never from the body", async () => {
+    callerKey(true);
+    // The computer's own key record, as `synap init` enrolled it.
+    validateApiKey.mockResolvedValue({
+      id: "caller-key",
+      userId: AGENT,
+      linkedUserId: HUMAN,
+      isActive: true,
+      scope: ["hub-protocol.read", "hub-protocol.write"],
+      instanceId: "inst-1",
+      instanceLabel: "Antoine's MacBook",
+    });
+    const res = await connect({
+      asPerson: true,
+      instanceLabel: "Someone else's PC",
+    });
+    expect(res.status).toBe(200);
+    expect(fileAgentConnectProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asPerson: { instanceLabel: "Antoine's MacBook" },
+      })
+    );
+  });
+
   it.each(["agent", "app"] as const)(
     "Q-D1: an AI's own key (%s) connects no other AI — 403, nothing provisioned",
     async (kind) => {

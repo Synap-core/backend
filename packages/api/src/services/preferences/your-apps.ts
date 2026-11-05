@@ -7,7 +7,8 @@
  *              are work, not apps, and stay out);
  *   spaces     the spaces they can open (`workspaces.list`, its floor);
  *   websites   the sites they keep as tools: pod `website` entities (or any
- *              bookmark kind) tagged {@link WEBSITE_TOOL_TAG}.
+ *              bookmark kind) the shared rule calls a tool (tagged `tool` and
+ *              an http(s) address: `@synap-core/types/website-tools`).
  *
  * Third-party apps that hold a key on the pod are NOT apps here: they stay in
  * Connected and pod admin (`apps.list`, D-B).
@@ -19,22 +20,10 @@
  */
 
 import { humanizeToken } from "@synap-core/types/vocabulary";
-
-/** The tag that makes a saved link one of the person's tools. */
-export const WEBSITE_TOOL_TAG = "tool";
-
-/** Does this entity's `tags` property carry the tool tag? Tags arrive as an array or a comma string. */
-export function hasToolTag(tags: unknown): boolean {
-  const list = Array.isArray(tags)
-    ? tags
-    : typeof tags === "string"
-      ? tags.split(",")
-      : [];
-  return list.some(
-    (tag) =>
-      typeof tag === "string" && tag.trim().toLowerCase() === WEBSITE_TOOL_TAG
-  );
-}
+import {
+  websiteToolOf,
+  type SavedLinkRow,
+} from "@synap-core/types/website-tools";
 
 export type YourApp =
   | {
@@ -87,34 +76,11 @@ export interface YourAppsSpaceRow {
   name: string;
 }
 
-/** An entity row as `entities.list` returns it (only the fields read here). */
-export interface YourAppsLinkRow {
-  id: string;
-  title: string | null;
-  properties: unknown;
-}
+/** A saved link as `entities.list` returns it: the shared rule's own row. */
+export type YourAppsLinkRow = SavedLinkRow;
 
 const byName = (a: { name: string }, b: { name: string }) =>
   a.name.localeCompare(b.name);
-
-function propsOf(row: YourAppsLinkRow): Record<string, unknown> {
-  return row.properties && typeof row.properties === "object"
-    ? (row.properties as Record<string, unknown>)
-    : {};
-}
-
-function urlOf(row: YourAppsLinkRow): string | null {
-  const url = propsOf(row).url;
-  return typeof url === "string" && url.trim() ? url.trim() : null;
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
 
 /**
  * A document or a kind's surface. A goal pin ("This week", `trackId`, no kind,
@@ -157,20 +123,22 @@ export function yourApps(input: {
       workspaceId: s.id,
     }))
     .sort(byName);
+  // A tool is tagged AND opens over http(s): the shared rule
+  // (`@synap-core/types/website-tools`), never a second one here.
   const websites: YourApp[] = input.links
-    .filter((row) => hasToolTag(propsOf(row).tags))
     .flatMap((row) => {
-      const url = urlOf(row);
-      if (!url) return [];
-      return [
-        {
-          key: `website:${row.id}`,
-          kind: "website" as const,
-          name: row.title?.trim() || hostOf(url),
-          entityId: row.id,
-          url,
-        },
-      ];
+      const tool = websiteToolOf(row);
+      return tool
+        ? [
+            {
+              key: `website:${tool.id}`,
+              kind: "website" as const,
+              name: tool.name,
+              entityId: tool.id,
+              url: tool.url,
+            },
+          ]
+        : [];
     })
     .sort(byName);
   return [...pinned, ...spaces, ...websites];

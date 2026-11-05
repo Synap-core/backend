@@ -21,6 +21,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
+  PRESENCE_REQUEST_KINDS,
+  oauthConsentId,
+  presenceRequestSubject,
+  type PresenceRequestKind,
   PRESENCE_ENROLL_FRESH_SECONDS,
   PRESENCE_EXPIRED,
   PRESENCE_INVALID,
@@ -88,14 +92,36 @@ function asTrpc(err: unknown): never {
 
 export const presenceRouter = router({
   /**
-   * A challenge for ONE approval. Name the proposal, or the pending agent key
-   * a connection page shows (its `agent/connect` proposal is the subject).
+   * A challenge for ONE approval. Name the proposal; or the pending agent key
+   * a connection page shows (its `agent/connect` proposal is the subject); or
+   * a request a door decides without a proposal (`request: {kind, id}`,
+   * `PRESENCE_REQUEST_KINDS`); or the OAuth authorization a consent screen
+   * shows (`oauthConsent`: the parameters it was opened with).
    */
   challenge: protectedProcedure
     .input(
       z.union([
         z.object({ proposalId: z.string().uuid() }),
         z.object({ pendingKeyId: z.string().uuid() }),
+        z.object({
+          request: z.object({
+            kind: z.enum(
+              Object.keys(PRESENCE_REQUEST_KINDS) as [
+                PresenceRequestKind,
+                ...PresenceRequestKind[],
+              ]
+            ),
+            id: z.string().min(1).max(200),
+          }),
+        }),
+        z.object({
+          oauthConsent: z.object({
+            clientId: z.string().min(1).max(512),
+            redirectUri: z.string().min(1).max(2048),
+            codeChallenge: z.string().max(256).nullish(),
+            state: z.string().max(2048).nullish(),
+          }),
+        }),
       ])
     )
     .mutation(async ({ ctx, input }) => {
@@ -104,16 +130,38 @@ export const presenceRouter = router({
       if ("proposalId" in input) {
         await assertProposalVisibleTo(input.proposalId, ctx.userId, { db });
         subject = input.proposalId;
-      } else {
+      } else if ("pendingKeyId" in input) {
         const proposal = await openAgentConnectProposal(input.pendingKeyId);
         subject = proposal?.id ?? input.pendingKeyId;
+      } else if ("request" in input) {
+        // The deciding door checks who may decide the request; a challenge
+        // only names it, and is this person's own.
+        subject = presenceRequestSubject(input.request.kind, input.request.id);
+      } else {
+        subject = presenceRequestSubject(
+          "oauth_consent",
+          await oauthConsentId(input.oauthConsent)
+        );
+      }
+      // A failed read of the person's passkeys is NOT "no passkey": it fails
+      // the call (before any challenge exists), so the client shows a failed
+      // read with Try again instead of hiding the passkey option.
+      let passkeys: Awaited<ReturnType<typeof readPasskeys>>;
+      try {
+        passkeys = await readPasskeys(ctx.userId);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Couldn't read your passkeys from the pod's sign-in service. Try again in a moment.",
+          cause: err,
+        });
       }
       const issued = await issuePresenceChallenge({
         userId: ctx.userId,
         subject,
       });
       const podOrigin = presencePodOrigin();
-      const passkeys = await readPasskeys(ctx.userId).catch(() => []);
       const devices = await db
         .select({ id: presenceDeviceKeys.id, label: presenceDeviceKeys.label })
         .from(presenceDeviceKeys)
@@ -125,7 +173,9 @@ export const presenceRouter = router({
         );
       return {
         challengeId: issued.challengeId,
+        /** What the message names on line 4: a proposal id, or `<kind>:<id>`. */
         proposalId: subject,
+        subject,
         nonce: issued.nonce,
         message: issued.message,
         expiresAt: issued.expiresAt.toISOString(),

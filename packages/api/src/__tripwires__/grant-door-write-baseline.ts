@@ -23,7 +23,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "DELETE /apps/:id",
   "DELETE /capabilities/containers/:id",
   "DELETE /keys/requested/:keyId",
-  "DELETE /messaging/channels/:channelId",
   "DELETE /skills/:id",
   "DELETE /tools/:id",
   "DELETE /tools/:id/credentials/:linkId",
@@ -179,4 +178,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 160;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 159;

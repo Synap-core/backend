@@ -20,6 +20,7 @@ export {
   UPDATABLE_SESSION_STATUSES,
   isTerminalSessionStatus,
   closedRunRefusal,
+  isCancelledRunReopen,
 } from "@synap-core/types/focus-sessions";
 export type {
   OpenSessionStatus,

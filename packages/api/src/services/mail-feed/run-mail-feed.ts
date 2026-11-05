@@ -240,7 +240,7 @@ export async function runMailFeed(): Promise<RunMailFeedResult> {
       connectorKey: "google",
       connectorName: "Google Workspace",
       reconnectHint:
-        "Reconnect it in the app (Settings → Connectors) or run `/connect provider:google` in Discord.",
+        "Sign in again in the app (Settings → Connectors) or run `/connect provider:google` in Discord.",
       userId: owner,
       workspaceId,
       watermarkToolId: discordTool.id,

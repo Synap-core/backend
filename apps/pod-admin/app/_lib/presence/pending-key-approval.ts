@@ -15,6 +15,7 @@ import {
   approveEachWithPresence,
   approveWithPresence,
   asPresenceCode,
+  proveEachUpFront,
   type ProvePresence,
 } from "./presence-model";
 
@@ -52,6 +53,8 @@ export function approvePendingKey(args: {
   return approveWithPresence({
     subject: { pendingKeyId: args.keyId },
     prove: args.prove,
+    // Connecting an AI (`agent/connect`) is always sensitive: proved up front.
+    upFront: true,
     attempt: (presence) =>
       post(url, presence ? { ...(args.body ?? {}), presence } : args.body),
   });
@@ -76,7 +79,16 @@ export async function approvePendingKeys(args: {
   prove: ProvePresence;
 }): Promise<{ approved: number; results: PendingKeyResult[] }> {
   const url = `${args.podUrl}/api/hub/setup/agent/pending/approve-batch`;
-  const first = (await post(url, { keyIds: args.keyIds })) as {
+  // Every key is an `agent/connect`, always sensitive: proved up front.
+  const presenceByKey = await proveEachUpFront({
+    ids: args.keyIds,
+    subjectOf: (keyId) => ({ pendingKeyId: keyId }),
+    prove: args.prove,
+  });
+  const first = (await post(url, {
+    keyIds: args.keyIds,
+    ...(Object.keys(presenceByKey).length > 0 ? { presenceByKey } : {}),
+  })) as {
     results: PendingKeyResult[];
   };
   const results = await approveEachWithPresence<PendingKeyResult>({

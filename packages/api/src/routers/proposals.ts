@@ -13,10 +13,7 @@
  */
 
 import {
-  PRESENCE_EXPIRED,
-  PRESENCE_INVALID,
-  PRESENCE_REQUIRED,
-  PRESENCE_USED,
+  isPresenceCode,
   presenceProofSchema,
   type PresenceRefusalCode,
 } from "@synap-core/types/presence";
@@ -404,13 +401,6 @@ function notSessionBookkeepingWhere() {
   )!;
 }
 
-const PRESENCE_REASON_CODES: ReadonlySet<string> = new Set([
-  PRESENCE_REQUIRED,
-  PRESENCE_INVALID,
-  PRESENCE_EXPIRED,
-  PRESENCE_USED,
-]);
-
 /**
  * `batchApprove`'s typed refusals, read off the error it threw: the page-only
  * one, and a proof of presence missing or refused (W3) so the client asks for
@@ -425,9 +415,7 @@ function pageOnlyFailureFields(error: unknown): {
   if (code === PAGE_ONLY_REASON_CODE) {
     return { reasonCode: PAGE_ONLY_REASON_CODE };
   }
-  return typeof code === "string" && PRESENCE_REASON_CODES.has(code)
-    ? { reasonCode: code as PresenceRefusalCode }
-    : {};
+  return isPresenceCode(code) ? { reasonCode: code } : {};
 }
 
 /** Rows a `package` filter on `list` scans (the `groups` default scan). */

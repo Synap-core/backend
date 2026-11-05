@@ -1,11 +1,12 @@
 /**
  * YOUR APPS (founder D-B, plan c727854c W5): the one list of what the person
  * opens. Pinned first in rail order (goals left out), then spaces by name,
- * then websites tagged as tools by name; nothing without a name or an address.
+ * then websites tagged as tools by name; nothing without a name or an http(s)
+ * address.
  */
 
 import { describe, expect, it } from "vitest";
-import { hasToolTag, yourApps, type YourAppsPinRow } from "./your-apps.js";
+import { yourApps, type YourAppsPinRow } from "./your-apps.js";
 
 const pin = (p: Partial<YourAppsPinRow> & { key: string }): YourAppsPinRow => ({
   profileSlug: null,
@@ -117,6 +118,31 @@ describe("yourApps", () => {
     ]);
   });
 
+  it("never lists a tagged link that does not open over http(s)", () => {
+    const apps = yourApps({
+      pins: [],
+      spaces: [],
+      links: [
+        {
+          id: "e1",
+          title: "Bad",
+          properties: { url: "javascript:alert(1)", tags: ["tool"] },
+        },
+        {
+          id: "e2",
+          title: "Local",
+          properties: { url: "file:///etc/passwd", tags: ["tool"] },
+        },
+        {
+          id: "e3",
+          title: "Ok",
+          properties: { url: "https://ok.dev", tags: ["tool"] },
+        },
+      ],
+    });
+    expect(apps.map((a) => a.key)).toEqual(["website:e3"]);
+  });
+
   it("prefers the name the person gave a pin", () => {
     const apps = yourApps({
       pins: [
@@ -145,14 +171,5 @@ describe("yourApps", () => {
         links: [],
       })
     ).toEqual([]);
-  });
-});
-
-describe("hasToolTag", () => {
-  it("reads an array or a comma string, case and space blind", () => {
-    expect(hasToolTag(["a", " TOOL "])).toBe(true);
-    expect(hasToolTag("a, tool")).toBe(true);
-    expect(hasToolTag("toolbox")).toBe(false);
-    expect(hasToolTag(undefined)).toBe(false);
   });
 });
