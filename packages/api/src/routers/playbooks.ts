@@ -64,6 +64,7 @@ import {
   links,
   loadFacetSlugsBatch,
   isUniqueViolation,
+  canonicalLifecycleOptionKey,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -72,6 +73,7 @@ import type {
   Automation,
 } from "@synap/database/schema";
 import {
+  readSubjectLifecycle,
   resolveStageCategory,
   type PlaybookStageCategory,
 } from "@synap/playbooks";
@@ -1261,6 +1263,68 @@ async function assertSubjectProfileResolves(
 }
 
 /**
+ * `subjectProfile.onEnd` names statuses of the subject's lifecycle: each value
+ * must be an OPTION of the lifecycle its profile declares (the status door's
+ * own normaliser: case and separator only), or the write is refused with the
+ * options — a value no move could reach would only fail at every close.
+ * Refused too: an `onEnd` with no subject kind, and one on a kind that
+ * declares no lifecycle and names no `statusProperty` (nothing to move). A
+ * kind with no declared lifecycle but a `statusProperty` keeps the legacy
+ * plain-property path, whose values no declaration lists: not checked.
+ *
+ * On an update, only an `onEnd` this write CHANGES is checked (`previousOnEnd`
+ * = the stored one): a patch that carries the stored one over unchanged is not
+ * refused for a value it did not introduce.
+ */
+async function assertOnEndOptionsDeclared(
+  subjectProfile: unknown,
+  workspaceId: string | null,
+  previousOnEnd: unknown
+): Promise<void> {
+  if (!subjectProfile || typeof subjectProfile !== "object") return;
+  const { onEnd, profileSlug, statusProperty } =
+    readSubjectLifecycle(subjectProfile);
+  const values = Object.entries(onEnd);
+  if (values.length === 0) return;
+  if (
+    previousOnEnd !== undefined &&
+    JSON.stringify(readSubjectLifecycle({ onEnd: previousOnEnd }).onEnd) ===
+      JSON.stringify(onEnd)
+  ) {
+    return;
+  }
+  if (!profileSlug) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "subjectProfile.onEnd needs subjectProfile.profileSlug — an end move moves the subject's status",
+    });
+  }
+  const { readSubjectProfile } =
+    await import("../services/playbooks/playbook-activators.js");
+  const subject = await readSubjectProfile(profileSlug, workspaceId);
+  if (!subject.lifecycleOptions) {
+    if (statusProperty) return;
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `subjectProfile.onEnd: ${profileSlug} declares no lifecycle — declare one (or name the statusProperty the process moves) before saying what a session end moves it to`,
+    });
+  }
+  const options = subject.lifecycleOptions;
+  const decl = { options: options.map((key) => ({ key })) } as Parameters<
+    typeof canonicalLifecycleOptionKey
+  >[0];
+  for (const [status, value] of values) {
+    if (!options.includes(canonicalLifecycleOptionKey(decl, value))) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `subjectProfile.onEnd.${status}: "${value}" is not a status of ${profileSlug} (${options.join(", ")})`,
+      });
+    }
+  }
+}
+
+/**
  * The ONE definition check a playbook write gets BEFORE the governance gate,
  * shared by `create`, `update` (every door: browser, MCP `synap_create_playbook`
  * / `synap_update_playbook`, Hub `POST`/`PATCH /playbooks`) and a revision of a
@@ -1275,11 +1339,30 @@ async function assertSubjectProfileResolves(
  */
 export async function assertPlaybookDefinitionWritable(
   database: Parameters<typeof assertKnownProfileSlug>[0],
-  write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
-  previous?: { goalTemplate: unknown; params: unknown }
+  write: {
+    goalTemplate?: unknown;
+    params?: unknown;
+    subjectProfile?: unknown;
+    /** The space the playbook lives in (picks its profile of a slug). */
+    workspaceId?: string | null;
+  },
+  previous?: {
+    goalTemplate: unknown;
+    params: unknown;
+    subjectProfile?: unknown;
+    workspaceId?: string | null;
+  }
 ): Promise<void> {
   if (write.subjectProfile !== undefined) {
     await assertSubjectProfileResolves(database, write.subjectProfile);
+    await assertOnEndOptionsDeclared(
+      write.subjectProfile,
+      write.workspaceId ?? previous?.workspaceId ?? null,
+      previous
+        ? ((previous.subjectProfile as { onEnd?: unknown } | null)?.onEnd ??
+            null)
+        : undefined
+    );
   }
   if (!previous) {
     assertGoalPlaceholdersDeclared({
@@ -1899,6 +1982,7 @@ export const playbooksRouter = router({
         goalTemplate: input.goalTemplate,
         params: input.params,
         subjectProfile: input.subjectProfile,
+        workspaceId: ctx.workspaceId ?? null,
       });
       // The id this playbook lands under, minted BEFORE the gate and handed to
       // it as `data.id`, so a proposal's `targetId` IS the playbook's id once it

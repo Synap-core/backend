@@ -434,6 +434,11 @@ export interface SubjectLifecycle {
   profileKind: "kind" | "role";
   /** The property the profile's lifecycle is declared on; null = none. */
   lifecycleProperty: string | null;
+  /**
+   * The declared lifecycle's option keys (absent when none is declared) —
+   * what a process may name as a status (`subjectProfile.onEnd`).
+   */
+  lifecycleOptions?: string[];
 }
 
 /**
@@ -470,6 +475,9 @@ export async function readSubjectProfile(
   return {
     profileKind: row.profileKind === "role" ? "role" : "kind",
     lifecycleProperty: lifecycle?.propertySlug ?? null,
+    ...(lifecycle
+      ? { lifecycleOptions: lifecycle.options.map((o) => o.key) }
+      : {}),
   };
 }
 

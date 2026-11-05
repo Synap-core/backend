@@ -24,7 +24,11 @@ import {
   desc,
   liveRunStatusWhere,
 } from "@synap/database";
-import { readSubjectLifecycle, type PlaybookStage } from "@synap/playbooks";
+import {
+  readSubjectLifecycle,
+  type PlaybookOnEnd,
+  type PlaybookStage,
+} from "@synap/playbooks";
 
 export interface SessionProcess {
   stages: PlaybookStage[];
@@ -35,6 +39,12 @@ export interface SessionProcess {
   profileSlug: string | null;
   statusProperty: string | null;
   humanOnlyStatuses: string[];
+  /**
+   * What each session END moves the subject (and every target still open)
+   * to — `subjectProfile.onEnd`, frozen with the rest of the process. Read by
+   * the one close door BEFORE it settles the run, so it is the snapshot's.
+   */
+  onEnd: PlaybookOnEnd;
 }
 
 export async function loadSessionProcess(input: {
@@ -75,7 +85,7 @@ export async function loadSessionProcess(input: {
     }
   }
   if (!stages) return null;
-  const { profileSlug, statusProperty, humanOnlyStatuses } =
+  const { profileSlug, statusProperty, humanOnlyStatuses, onEnd } =
     readSubjectLifecycle(subjectProfile);
-  return { stages, profileSlug, statusProperty, humanOnlyStatuses };
+  return { stages, profileSlug, statusProperty, humanOnlyStatuses, onEnd };
 }

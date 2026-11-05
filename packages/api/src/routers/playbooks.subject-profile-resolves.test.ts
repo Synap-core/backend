@@ -169,6 +169,23 @@ vi.mock("../utils/audit-log.js", () => ({
   auditLog: vi.fn(),
 }));
 
+// The ONE kind-or-role reader: what lifecycle the subject kind declares.
+const subjectRead = vi.hoisted(() => ({
+  read: vi.fn(async (_slug: string, _ws: string | null) => ({
+    profileKind: "kind" as const,
+    lifecycleProperty: "status" as string | null,
+    lifecycleOptions: ["open", "fixing", "fixed", "wont_fix"] as
+      string[] | undefined,
+  })),
+}));
+vi.mock(
+  "../services/playbooks/playbook-activators.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    readSubjectProfile: subjectRead.read,
+  })
+);
+
 import { playbooksRouter } from "./playbooks.js";
 
 const WS = "00000000-0000-4000-8000-000000000010";
@@ -253,5 +270,80 @@ describe("playbooks.create refuses a dangling subjectProfile", () => {
       .create({ ...base, subjectProfile: { note: "freeform" } } as never);
     expect(res.status).toBe("created");
     expect(profilesFindMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `subjectProfile.onEnd` names statuses of the subject's lifecycle: a value
+ * that is not one of its options is refused at the write door, before the
+ * gate — a value no move could reach would only fail at every close.
+ */
+describe("playbooks.create checks subjectProfile.onEnd against the lifecycle", () => {
+  const withOnEnd = (sp: Record<string, unknown>) =>
+    playbooksRouter
+      .createCaller(callerCtx())
+      .create({ ...base, subjectProfile: sp } as never);
+
+  beforeEach(() => {
+    subjectRead.read.mockClear();
+    subjectRead.read.mockResolvedValue({
+      profileKind: "kind",
+      lifecycleProperty: "status",
+      lifecycleOptions: ["open", "fixing", "fixed", "wont_fix"],
+    });
+  });
+
+  it("NON-VACUITY: options of the lifecycle are accepted (case/separator as the status door reads them)", async () => {
+    slugResolves();
+    const res = await withOnEnd({
+      profileSlug: "finding",
+      onEnd: { cancelled: "open", failed: "Open", closed: "wont-fix" },
+    });
+    expect(res.status).toBe("created");
+    expect(subjectRead.read).toHaveBeenCalledWith("finding", WS);
+  });
+
+  it("a value that is not an option is REFUSED, naming the options, before the gate", async () => {
+    slugResolves();
+    await expect(
+      withOnEnd({ profileSlug: "finding", onEnd: { cancelled: "reopened" } })
+    ).rejects.toThrow(
+      /onEnd\.cancelled: "reopened" is not a status of finding \(open, fixing, fixed, wont_fix\)/
+    );
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(insertReturning).not.toHaveBeenCalled();
+  });
+
+  it("an onEnd with no subject kind is refused", async () => {
+    await expect(withOnEnd({ onEnd: { failed: "open" } })).rejects.toThrow(
+      /onEnd needs subjectProfile\.profileSlug/
+    );
+    expect(insertReturning).not.toHaveBeenCalled();
+  });
+
+  it("a kind with no lifecycle and no statusProperty is refused; with a statusProperty it is the legacy path", async () => {
+    slugResolves();
+    subjectRead.read.mockResolvedValue({
+      profileKind: "kind",
+      lifecycleProperty: null,
+      lifecycleOptions: undefined,
+    });
+    await expect(
+      withOnEnd({ profileSlug: "finding", onEnd: { failed: "open" } })
+    ).rejects.toThrow(/declares no lifecycle/);
+    const res = await withOnEnd({
+      profileSlug: "finding",
+      statusProperty: "state",
+      onEnd: { failed: "open" },
+    });
+    expect(res.status).toBe("created");
+  });
+
+  it("an unknown terminal status key is refused by the schema", async () => {
+    slugResolves();
+    await expect(
+      withOnEnd({ profileSlug: "finding", onEnd: { stale: "open" } })
+    ).rejects.toThrow();
+    expect(insertReturning).not.toHaveBeenCalled();
   });
 });

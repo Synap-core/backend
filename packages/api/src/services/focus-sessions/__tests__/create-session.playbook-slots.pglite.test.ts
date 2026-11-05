@@ -254,6 +254,50 @@ describe("start_session with templateId — the playbook's deliverables are slot
   });
 });
 
+/**
+ * The run's frozen definition is THE shared snapshot (`buildDefinitionSnapshot`,
+ * run-playbook.ts): a hand-written copy at this door froze no `subjectProfile`
+ * (so a run started here followed the LIVE lifecycle and end moves of a
+ * playbook edited since), no criteria and no requiredIntents.
+ */
+describe("start_session with templateId — the run freezes the whole definition", () => {
+  it("the run snapshot carries subjectProfile, criteria and requiredIntents", async () => {
+    const processed = randomUUID();
+    // No profileSlug: this door asks nothing of the kind; the snapshot is
+    // what is under test.
+    const subjectProfile = {
+      statusProperty: "status",
+      onEnd: { cancelled: "open", failed: "open" },
+    };
+    await q(
+      `insert into playbooks
+         (id, workspace_id, created_by, name, goal_template, executor, stages, criteria, expected_outputs, params, subject_profile, required_intents, version, status, created_at, updated_at)
+       values ($1, null, $2, 'Fix a finding', 'Fix it', 'is-agent',
+               '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $3::jsonb, $4::jsonb, 3, 'active', now(), now())`,
+      [
+        processed,
+        USER,
+        JSON.stringify(subjectProfile),
+        JSON.stringify(["research.web"]),
+      ]
+    );
+    const res = await start({ templateId: processed });
+    if (res.status !== "created") throw new Error(res.status);
+    const [run] = (
+      await q<{ definition_snapshot: Record<string, unknown> }>(
+        `select definition_snapshot from playbook_runs where session_id = $1`,
+        [res.session.id]
+      )
+    ).rows;
+    expect(run?.definition_snapshot).toMatchObject({
+      version: 3,
+      subjectProfile,
+      criteria: [],
+      requiredIntents: ["research.web"],
+    });
+  });
+});
+
 describe("the method a binding door returns", () => {
   it("renders the approved context skill and the session's current stage", async () => {
     const res = await start();
