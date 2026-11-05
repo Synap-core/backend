@@ -218,6 +218,7 @@ const RunChoiceResultSchema = z
           label: z.string(),
           count: z.number().int(),
           names: z.array(z.string()),
+          agentUserIds: z.array(z.string().uuid()),
         })
       )
       .describe("Your agents that cannot run it now, grouped by reason."),

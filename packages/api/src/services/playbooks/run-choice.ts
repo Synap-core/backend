@@ -143,6 +143,7 @@ export async function readPlaybookRunChoice(p: {
       .filter((a) => !canRun(a))
       .map((a) => ({
         why: a.wake.why ?? "paused",
+        agentUserId: a.agentUserId,
         name: labels.get(a.agentUserId) ?? (a.name?.trim() || "Agent"),
       }))
   );
@@ -194,20 +195,29 @@ export async function readPlaybookRunChoice(p: {
 
 /** Hidden agents by reason, largest group first, then roster order. */
 function groupHidden(
-  agents: readonly { why: AgentWakeRefusal; name: string }[]
+  agents: readonly {
+    why: AgentWakeRefusal;
+    agentUserId: string;
+    name: string;
+  }[]
 ): RunChoiceHidden[] {
-  const groups = new Map<AgentWakeRefusal, string[]>();
+  const groups = new Map<
+    AgentWakeRefusal,
+    { names: string[]; agentUserIds: string[] }
+  >();
   for (const a of agents) {
-    const names = groups.get(a.why) ?? [];
-    names.push(a.name);
-    groups.set(a.why, names);
+    const group = groups.get(a.why) ?? { names: [], agentUserIds: [] };
+    group.names.push(a.name);
+    group.agentUserIds.push(a.agentUserId);
+    groups.set(a.why, group);
   }
   return [...groups.entries()]
-    .map(([why, names]) => ({
+    .map(([why, group]) => ({
       why,
       label: resolveAgentWakeRefusalLabel(why),
-      count: names.length,
-      names,
+      count: group.names.length,
+      names: group.names,
+      agentUserIds: group.agentUserIds,
     }))
     .sort((a, b) => b.count - a.count);
 }

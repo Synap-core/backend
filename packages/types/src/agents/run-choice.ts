@@ -116,6 +116,8 @@ export interface RunChoiceHidden {
   count: number;
   /** Their labels, as the options would show them. */
   names: string[];
+  /** Their agent user ids, in the order of `names`. */
+  agentUserIds: string[];
 }
 
 /** `playbooks.runChoice` / Hub `GET /playbooks/:id/run-choice`. */

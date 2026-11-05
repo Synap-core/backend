@@ -521,6 +521,7 @@ describe("only agents that can run it are offered; the others are hidden with wh
         label: "Nothing can start it yet",
         count: 1,
         names: ["Codex"],
+        agentUserIds: [IDLE],
       },
     ]);
     expect(read.hiddenLabel).toBe("1 more can't run now");
