@@ -366,6 +366,8 @@ export const SENSITIVE_ACTIONS = {
   "governanceRules.proposeNextRung": "governance",
   "governanceRules.setReversibleDefault": "governance",
   "governanceRules.setOwnOrganiseDefault": "governance",
+  // How a tool action runs for every AI (on its own / asks first / never).
+  "governanceRules.setActionMode": "governance",
   "govConfig.set": "governance",
 } as const satisfies Record<string, SensitiveReason>;
 
