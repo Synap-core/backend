@@ -47,6 +47,7 @@ import {
   UNCLASSIFIED_STATUS,
 } from "@synap-core/types/lifecycle";
 import { WAIT_KINDS } from "@synap-core/types/units";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   resolveBoardLens,
   resolveProfileLifecycle,
@@ -356,6 +357,34 @@ const movingWire = z.object({
       workspaceId: z.string().nullable(),
     })
   ),
+  /**
+   * Things LEFT BEHIND: a session that worked on it (subject or target) ended
+   * while it stayed open or active, and no work is on it now. Newest-ended
+   * first, capped (`LEFT_BEHIND_CAP`); `total` is the whole population.
+   * null = the read failed, never an empty list. See
+   * `services/lifecycle/left-behind.ts`.
+   */
+  leftBehind: z
+    .object({
+      total: z.number().int(),
+      items: z.array(
+        z.object({
+          entityId: z.string(),
+          title: z.string().nullable(),
+          profileSlug: z.string().nullable(),
+          workspaceId: z.string().nullable(),
+          status: z.string().nullable(),
+          category: z.enum(["open", "active"]),
+          endedSession: z.object({
+            id: z.string(),
+            label: z.string(),
+            status: z.enum(TERMINAL_SESSION_STATUSES),
+            closedAt: z.string(),
+          }),
+        })
+      ),
+    })
+    .nullable(),
 });
 
 export type LifecycleWire = z.infer<typeof lifecycleWire>;
