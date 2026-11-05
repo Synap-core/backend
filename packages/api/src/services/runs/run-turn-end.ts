@@ -76,6 +76,13 @@ import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.j
 import { blockExpectedOutput } from "../focus-sessions/block-output.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
 import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
+import {
+  TURN_CONTEXT_MAX_ARRAY_ITEMS,
+  TURN_CONTEXT_MAX_STRING_LENGTH,
+  type TurnContext,
+} from "../../routers/channels/helpers.js";
+
+type TurnContextEntry = NonNullable<TurnContext["entries"]>[number];
 
 const logger = createLogger({ module: "run-turn-end" });
 
@@ -259,9 +266,9 @@ export interface RunTurnsState {
   firstTurn?: RunTurnRecord;
   turns: RunTurnRecord[];
   /**
-   * The latest checkpoint a turn of this run reported: what an approved
-   * continuation (the person's yes to "Keep the run going") hands the next
-   * turn, as the automatic continuation's notice does.
+   * The last STOPPED turn's checkpoint (a stop that reports none clears it):
+   * what an approved continuation (the person's yes to "Keep the run going")
+   * hands the next turn, as the automatic continuation's notice does.
    */
   lastCheckpoint?: NonNullable<CompleteRunBody["checkpoint"]>;
 }
@@ -380,6 +387,9 @@ async function recordTurnEnd(
         ? { checkpointRecords: body.checkpoint.records.length }
         : {}),
     };
+    // The LAST stopped turn's checkpoint: a stop that reports none clears it
+    // (an older one names records the run may have moved past).
+    const lastCheckpoint = stopped ? body.checkpoint : state.lastCheckpoint;
     const next: RunTurnsState = {
       runId,
       stops: state.stops + (stopped ? 1 : 0),
@@ -393,9 +403,7 @@ async function recordTurnEnd(
           : state.autoContinues,
       firstTurn: state.firstTurn ?? record,
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
-      ...((body.checkpoint ?? state.lastCheckpoint)
-        ? { lastCheckpoint: body.checkpoint ?? state.lastCheckpoint }
-        : {}),
+      ...(lastCheckpoint ? { lastCheckpoint } : {}),
     };
     await tx
       .update(focusSessions)
@@ -533,39 +541,86 @@ export function continuationNotice(p: {
     `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
     `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
     "Pick up from where it stopped; do not start over.";
-  return p.checkpoint ? `${head} ${checkpointWords(p.checkpoint)}` : head;
-}
-
-/** The checkpoint as the next turn reads it: a fenced `run-checkpoint` block. */
-function checkpointWords(
-  checkpoint: NonNullable<CompleteRunBody["checkpoint"]>
-): string {
+  if (!p.checkpoint) return head;
   return (
-    "Its checkpoint follows: the records it already touched, by full " +
+    `${head} Its checkpoint follows: the records it already touched, by full ` +
     "id (use these ids as they are; never search for them again), and what it " +
     "said was left.\n\n```run-checkpoint\n" +
-    JSON.stringify(checkpoint, null, 2) +
+    JSON.stringify(p.checkpoint, null, 2) +
     "\n```"
   );
 }
 
 /**
+ * The checkpoint as TURN CONTEXT entries (the bounded bag the IS shows the
+ * agent as reference data, never as anyone's words): the records' full ids,
+ * 12 per entry, and what was left, cut to one entry. PURE. Bounded by
+ * construction: at most `CHECKPOINT_MAX_RECORDS` uuids (5 entries) and one
+ * 400-char string, inside `TurnContextSchema`'s 20 entries and 8,000 chars.
+ */
+export function checkpointTurnEntries(
+  checkpoint: NonNullable<CompleteRunBody["checkpoint"]>
+): TurnContextEntry[] {
+  const entries: TurnContextEntry[] = [
+    {
+      key: "run.continue",
+      value:
+        "The person approved continuing this run. Pick up where the stopped " +
+        "turn left off: the records it already touched are listed by full id " +
+        "(use them as they are; never search for them again).",
+    },
+  ];
+  const ids = checkpoint.records.map((r) => r.id);
+  for (let i = 0; i < ids.length; i += TURN_CONTEXT_MAX_ARRAY_ITEMS) {
+    entries.push({
+      key: `run.checkpoint.ids.${i / TURN_CONTEXT_MAX_ARRAY_ITEMS + 1}`,
+      value: ids.slice(i, i + TURN_CONTEXT_MAX_ARRAY_ITEMS),
+    });
+  }
+  if (checkpoint.left) {
+    entries.push({
+      key: "run.checkpoint.left",
+      value: checkpoint.left.slice(0, TURN_CONTEXT_MAX_STRING_LENGTH),
+    });
+    if (checkpoint.left.length > TURN_CONTEXT_MAX_STRING_LENGTH) {
+      entries.push({ key: "run.checkpoint.leftTruncated", value: true });
+    }
+  }
+  return entries;
+}
+
+/**
+ * What a person's answer in a session room wakes. `none`: no live run, the
+ * normal agent. `failed`: the live-run lookup failed (logged); the wake still
+ * happens, with no run profile. `found`: a run turn, with the run's declared
+ * tools and, for a YES to "Keep the run going", the checkpoint as turn context.
+ */
+export type RunTurnForAnswer =
+  | { liveRun: "none" | "failed" }
+  | {
+      liveRun: "found";
+      run: RunToolProfile;
+      turnContext?: { entries: TurnContextEntry[] };
+    };
+
+/**
  * The run turn a person's answer starts in a LIVE run's room
- * (`session-answer.ts` wake): the run's declared tools, the same resolver as
- * the kickoff and the automatic continuation, and, for the answer to "Keep the
- * run going", the stopped turn's checkpoint. Before, that yes woke the agent
- * with the universal catalogue and no ids (review of backend#816).
- *
- * `{}` = no live run: the answer wakes the normal agent, as before. A failed
- * lookup is logged and reads the same way: the wake must still happen.
+ * (`session-answer.ts` wake): the run's declared tools, from the same resolver
+ * as the kickoff and the automatic continuation, and, when the answer is YES to
+ * "Keep the run going", the last stopped turn's checkpoint. The checkpoint is
+ * model-written text: it travels as turn context, never inside the person's
+ * message.
  */
 export async function runTurnForAnswer(p: {
   sessionId: string;
   userId: string;
   slotLabel?: string | null;
-}): Promise<{ run?: RunToolProfile; checkpointWords?: string }> {
+  /** The answer was a confirmed YES (a `confirm` value with `confirmed: true`). */
+  approved: boolean;
+}): Promise<RunTurnForAnswer> {
+  let live: { id: string; playbookId: string; workspaceId: string | null };
   try {
-    const [live] = await db
+    const [row] = await db
       .select({
         id: playbookRuns.id,
         playbookId: playbookRuns.playbookId,
@@ -580,38 +635,51 @@ export async function runTurnForAnswer(p: {
       )
       .orderBy(desc(playbookRuns.startedAt))
       .limit(1);
-    if (!live) return {};
-    const run = await resolveRunToolProfile({
-      playbookId: live.playbookId,
-      workspaceId: live.workspaceId ?? null,
-      userId: p.userId,
-      sessionId: p.sessionId,
-    });
-    if (
-      normalizeExpectedLabel(p.slotLabel) !==
-      normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL)
-    ) {
-      return { run };
-    }
+    if (!row) return { liveRun: "none" };
+    live = row;
+  } catch (err) {
+    logger.error(
+      { err, sessionId: p.sessionId },
+      "run-turn-end: the session's live run could not be read — the answer wakes the agent with no run profile"
+    );
+    return { liveRun: "failed" };
+  }
+  const run = await resolveRunToolProfile({
+    playbookId: live.playbookId,
+    workspaceId: live.workspaceId ?? null,
+    userId: p.userId,
+    sessionId: p.sessionId,
+  });
+  const continues =
+    p.approved &&
+    normalizeExpectedLabel(p.slotLabel) ===
+      normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
+  if (!continues) return { liveRun: "found", run };
+  try {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, p.sessionId),
       columns: { metadata: true },
     });
     const checkpoint = readRunTurns(session?.metadata, live.id).lastCheckpoint;
     return {
+      liveRun: "found",
       run,
       ...(checkpoint
-        ? {
-            checkpointWords: `The run's last stopped turn left a checkpoint. ${checkpointWords(checkpoint)}`,
-          }
+        ? { turnContext: { entries: checkpointTurnEntries(checkpoint) } }
         : {}),
     };
   } catch (err) {
     logger.error(
-      { err, sessionId: p.sessionId },
-      "run-turn-end: could not read the session's live run — the answer wakes the normal agent"
+      { err, sessionId: p.sessionId, runId: live.id },
+      "run-turn-end: the run's checkpoint could not be read — the run turn goes on without it, and the agent is told"
     );
-    return {};
+    return {
+      liveRun: "found",
+      run,
+      turnContext: {
+        entries: [{ key: "run.checkpoint.read", value: "failed" }],
+      },
+    };
   }
 }
 

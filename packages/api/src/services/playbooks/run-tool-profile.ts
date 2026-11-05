@@ -47,18 +47,40 @@ const logger = createLogger({ module: "run-tool-profile" });
  * A profile past one of them would 400 the WHOLE turn, so the pod never sends
  * one: lists are capped, an over-long item is dropped (a cut slug names
  * nothing), the name is cut.
+ * They mirror the IS by hand, with no tripwire: the two repos cannot import each other.
  */
 export const RUN_PROFILE_MAX_VERBS = 100;
 export const RUN_PROFILE_MAX_INTENTS = 50;
-const MAX_INTENT_CHARS = 100;
-const MAX_VERB_CHARS = 200;
-const MAX_PLAYBOOK_NAME_CHARS = 300;
+const RUN_PROFILE_MAX_INTENT_CHARS = 100;
+const RUN_PROFILE_MAX_VERB_CHARS = 200;
+const RUN_PROFILE_MAX_NAME_CHARS = 300;
 
-/** What the registry says about one granted capability: its id, name, verbs. */
+/** What the registry says about one granted capability: its kind, id, name, verbs. */
 export interface GrantableCapability {
+  kind?: string;
   id: string;
   name: string;
   verbs?: ReadonlyArray<{ id: string }>;
+}
+
+/**
+ * The registry kinds a grant of each kind names. A `tools` row is listed as
+ * `tool`, `builtin-tool` or `source-provider` (`toolKindToCapabilityKind`).
+ */
+const REGISTRY_KINDS_OF_GRANT: Record<
+  CapabilityRef["kind"],
+  readonly string[]
+> = {
+  tool: ["tool", "builtin-tool", "source-provider"],
+  skill: ["skill"],
+  command: ["command"],
+};
+
+/** A grant names this capability: same id or name, and, when both say, same kind. */
+function grantNames(grant: CapabilityRef, cap: GrantableCapability): boolean {
+  if (cap.id !== grant.id && cap.name !== grant.id) return false;
+  const kinds = grant.kind ? REGISTRY_KINDS_OF_GRANT[grant.kind] : undefined;
+  return !kinds || !cap.kind || kinds.includes(cap.kind);
 }
 
 export interface RunToolProfileDeps {
@@ -137,7 +159,7 @@ const defaultDeps: RunToolProfileDeps = {
  * The active stage's `grants`, read tolerantly off the playbook's stages bag
  * (a stage whose grants are not a list grants nothing).
  */
-export function readStageGrants(
+function activeStageGrants(
   stages: unknown,
   currentStage: string | null
 ): CapabilityRef[] {
@@ -160,18 +182,18 @@ export function readStageGrants(
 
 /**
  * The verbs of granted capabilities. PURE. A grant names its capability by
- * row id (a `grants` link) or by name (a stage grant may carry either), so
- * both match; every verb of a matched capability is offered. A grant the
- * run's lens cannot see offers nothing.
+ * row id (a `grants` link) or by name (a stage grant may carry either), and by
+ * its kind (a skill and a tool may share a name); every verb of a matched
+ * capability is offered. A grant the run's lens cannot see offers nothing.
  */
-export function grantedVerbs(
+function grantedVerbs(
   grants: readonly CapabilityRef[],
   capabilities: readonly GrantableCapability[]
 ): string[] {
   const verbs: string[] = [];
   for (const grant of grants) {
     for (const cap of capabilities) {
-      if (cap.id !== grant.id && cap.name !== grant.id) continue;
+      if (!grantNames(grant, cap)) continue;
       for (const v of cap.verbs ?? []) verbs.push(v.id);
     }
   }
@@ -181,13 +203,13 @@ export function grantedVerbs(
 /**
  * The run's verbs, bounded to what the IS accepts. PURE: granted verbs first,
  * then the verbs serving each intent in the intents' order; each verb once;
- * an over-long id dropped; capped.
+ * an over-long id dropped; capped. `dropped` counts the verbs the cap left out.
  */
 export function foldRunVerbs(
   granted: readonly string[],
   intents: readonly string[],
   index: ReadonlyMap<string, readonly IntentVerbMatch[]>
-): string[] {
+): { verbs: string[]; dropped: number } {
   const candidates = [
     ...granted,
     ...intents.flatMap((intent) =>
@@ -196,19 +218,21 @@ export function foldRunVerbs(
   ];
   const verbs: string[] = [];
   const seen = new Set<string>();
+  let dropped = 0;
   for (const verbId of candidates) {
-    if (verbs.length >= RUN_PROFILE_MAX_VERBS) break;
-    if (seen.has(verbId) || verbId.length > MAX_VERB_CHARS) continue;
+    if (seen.has(verbId) || verbId.length > RUN_PROFILE_MAX_VERB_CHARS)
+      continue;
     seen.add(verbId);
-    verbs.push(verbId);
+    if (verbs.length < RUN_PROFILE_MAX_VERBS) verbs.push(verbId);
+    else dropped++;
   }
-  return verbs;
+  return { verbs, dropped };
 }
 
 /** The declared intents, deduplicated and bounded to what the IS accepts. */
 function boundIntents(intents: readonly string[]): string[] {
   return [...new Set(intents)]
-    .filter((i) => i.trim() !== "" && i.length <= MAX_INTENT_CHARS)
+    .filter((i) => i.trim() !== "" && i.length <= RUN_PROFILE_MAX_INTENT_CHARS)
     .slice(0, RUN_PROFILE_MAX_INTENTS);
 }
 
@@ -238,7 +262,7 @@ export async function resolveRunToolProfile(
     if (!playbook) {
       throw new Error(`no playbook ${input.playbookId}`);
     }
-    playbookName = playbook.name.slice(0, MAX_PLAYBOOK_NAME_CHARS);
+    playbookName = playbook.name.slice(0, RUN_PROFILE_MAX_NAME_CHARS);
     const spaceId = playbook.workspaceId ?? input.workspaceId;
     const [taskIntents, grants, currentStage] = await Promise.all([
       spaceId ? deps.readTaskIntents(spaceId) : [],
@@ -248,7 +272,7 @@ export async function resolveRunToolProfile(
     intents = boundIntents([...readRequiredIntents(playbook), ...taskIntents]);
     const allGrants = [
       ...grants,
-      ...readStageGrants(playbook.stages, currentStage),
+      ...activeStageGrants(playbook.stages, currentStage),
     ];
     let verbs: string[] = [];
     if (intents.length > 0 || allGrants.length > 0) {
@@ -256,11 +280,22 @@ export async function resolveRunToolProfile(
         workspaceId: input.workspaceId,
         userId: input.userId,
       });
-      verbs = foldRunVerbs(
+      const folded = foldRunVerbs(
         grantedVerbs(allGrants, registry.capabilities),
         intents,
         registry.index
       );
+      verbs = folded.verbs;
+      if (folded.dropped > 0) {
+        logger.warn(
+          {
+            playbookId: input.playbookId,
+            dropped: folded.dropped,
+            cap: RUN_PROFILE_MAX_VERBS,
+          },
+          "run-tool-profile: the run declares more verbs than the IS accepts — granted verbs come first, the rest (intent verbs first) are not offered"
+        );
+      }
     }
     return {
       playbookId: input.playbookId,
