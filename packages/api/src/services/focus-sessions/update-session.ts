@@ -44,12 +44,14 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { openLink } from "../../utils/deep-links.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
+  ASK_ANSWER_BY_PAST_MESSAGE,
   ASK_LIMITS,
   ASK_LOOKED_AT_KINDS,
   AnswerProvenanceSchema,
   AskAnswerValueSchema,
   AskCauseSchema,
   AskSchema,
+  isAskAnswerByPast,
   AskSnapshotSchema,
   PendingRelayedAnswerSchema,
   askFingerprint,
@@ -1003,6 +1005,40 @@ export function personsSlotsHandedAway(
       );
     })
     .map((item) => item.label);
+}
+
+/**
+ * The labels of incoming slots whose ask names an `answerBy` already past
+ * ({@link isAskAnswerByPast}) — refused at write, by every door that declares
+ * a slot. Round-tripping the stored ask's own `answerBy` unchanged is fine:
+ * only a value the caller is WRITING now is judged. Pure.
+ */
+export function pastAnswerByLabels(
+  current: OutputItem[],
+  incoming: readonly (OutputItem | undefined)[],
+  now: Date | number = Date.now()
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item): item is OutputItem => {
+      const answerBy = (item?.ask as { answerBy?: unknown } | null | undefined)
+        ?.answerBy;
+      if (!isAskAnswerByPast(answerBy, now)) return false;
+      const stored = (
+        twinOf(item)?.ask as { answerBy?: unknown } | null | undefined
+      )?.answerBy;
+      return stored !== answerBy;
+    })
+    .map((item) => item.label);
+}
+
+/** The refusal of {@link pastAnswerByLabels}. */
+export function pastAnswerByError(labels: string[]): string {
+  const named = labels
+    .slice(0, 5)
+    .map((l) => `"${l}"`)
+    .join(", ");
+  return `Refused: ${named}: ${ASK_ANSWER_BY_PAST_MESSAGE} Nothing was changed.`;
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
@@ -2002,6 +2038,25 @@ export async function updateFocusSession(
           status: "denied",
           reason: unreachableOutputRefError(unreachable),
         };
+      }
+    }
+  }
+
+  // A DEADLINE ALREADY PAST, refused to the caller who wrote it (review
+  // 5 Nov 2026): "overdue" is P0, whose push breaks through Focus, so a past
+  // `answerBy` would be a way around the person's push budget.
+  {
+    const declared = [
+      ...(params.expectedOutputs ?? []),
+      ...(params.addOutput ? [params.addOutput] : []),
+    ];
+    if (declared.length > 0) {
+      const stored: OutputItem[] = Array.isArray(existing.expectedOutputs)
+        ? (existing.expectedOutputs as OutputItem[])
+        : [];
+      const past = pastAnswerByLabels(stored, declared as OutputItem[]);
+      if (past.length > 0) {
+        return { status: "denied", reason: pastAnswerByError(past) };
       }
     }
   }

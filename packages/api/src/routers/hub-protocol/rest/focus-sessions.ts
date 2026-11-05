@@ -3813,6 +3813,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               400
             );
           case "ref_unreachable":
+          case "ask_refused":
             // Named, never defaulted: the `default` below is the SUCCESS arm,
             // so an unhandled refusal would answer 200 with no label at all.
             return c.json({ error: result.reason }, 400);
