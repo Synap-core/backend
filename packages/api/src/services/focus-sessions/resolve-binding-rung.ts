@@ -6,8 +6,10 @@
  *   d01 the server binds on facts only: an explicit id, the subject entity's
  *       kind, the parent session's playbook, a `main red:` title. A TEXT match
  *       (`matchSessionTemplate`) stays an offer and never binds;
- *   d02 it binds at start and once more when a subject or goal first arrives,
- *       through the existing follow door (`follow-playbook.ts`);
+ *   d02 it binds at start and once more when a subject first arrives,
+ *       through the existing follow door (`follow-playbook.ts`). The decision
+ *       also names a goal or a parent stage arriving; no rung reads a goal
+ *       today, so only a subject re-runs the ladder;
  *   d03 nothing matches ⇒ no binding: no default playbook.
  *
  * PURE: the caller loads the facts (`bind-on-facts.ts`) and applies the
@@ -21,9 +23,10 @@
  *                   (`subjectProfile.profileSlug`), keeping only those whose
  *                   subject filter passes and, when the playbook maps stages
  *                   to the subject's status, whose stages cover the subject's
- *                   current status. Playbooks of the session's space are
- *                   tried before pod-wide ones; exactly ONE binds, several
- *                   are an offer.
+ *                   current status. A finished subject (lifecycle category
+ *                   done or lost) never binds here. Playbooks of the
+ *                   session's space are tried before pod-wide ones; exactly
+ *                   ONE binds, several are an offer.
  *   3 `parent`    — the parent session follows an active playbook: the child
  *                   (a lane of that work) follows it too.
  *   4 `main-red`  — the title starts with `main red:` (the grammar
@@ -46,6 +49,7 @@ import {
   stageForSubjectStatus,
   readPlaybookParams,
 } from "@synap/playbooks";
+import { isTerminalLifecycleCategory } from "@synap-core/types/lifecycle";
 import { evaluateSubjectFilter } from "../playbooks/subject-filter.js";
 import { isPinnedStrategy } from "../playbooks/pinned-subject.js";
 
@@ -77,6 +81,12 @@ export interface BindingSituation {
     /** The subject's kind (profile slug). */
     kind: string | null;
     properties: Record<string, unknown>;
+    /**
+     * The category of the subject's status in its kind's declared lifecycle
+     * (`entities.status_category`). A `done` or `lost` subject is finished
+     * work: no playbook binds on it by its kind (rung 2).
+     */
+    statusCategory?: string | null;
   } | null;
   /** The parent session, when this one has one the caller owns. */
   parent?: {
@@ -205,7 +215,15 @@ export function resolveBindingRung(
   // Rung 2 — the subject's kind.
   let restrictTo: Set<string> | null = null;
   let subjectOffer: Extract<BindingDecision, { kind: "offer" }> | null = null;
-  if (subject?.kind) {
+  // A finished subject (its kind's lifecycle puts its status in `done` or
+  // `lost`) never binds by its kind, whether or not the playbook maps stages
+  // to statuses: rung 2 is skipped, rungs 3 and 4 may still decide.
+  const subjectFinished = isTerminalLifecycleCategory(
+    (subject?.statusCategory ?? null) as Parameters<
+      typeof isTerminalLifecycleCategory
+    >[0]
+  );
+  if (subject?.kind && !subjectFinished) {
     const fit = live.filter((p) => coversSubject(p, subject));
     const ownSpace = fit.filter((p) => ws != null && p.workspaceId === ws);
     const tier = ownSpace.length > 0 ? ownSpace : fit;
@@ -320,7 +338,7 @@ export function bindingLine(outcome: BindingLineOutcome): string {
   const render = (withReason: boolean): string => {
     switch (outcome.kind) {
       case "bound":
-        return `Follows "${clip(outcome.playbookName)}" (${outcome.playbookId})${withReason ? `: ${outcome.reason}` : ""}. Release: update_session followPlaybookId: null.`;
+        return `Follows "${clip(outcome.playbookName)}" (${outcome.playbookId})${withReason ? `: ${outcome.reason}` : ""}. To stop following it: update_session followPlaybookId: null (the criteria and slots it added stay).`;
       case "offer":
         return `No playbook bound${withReason ? `: ${outcome.reason}` : ""}. To follow one: update_session followPlaybookId: ${outcome.candidates
           .slice(0, OFFER_IDS_MAX)

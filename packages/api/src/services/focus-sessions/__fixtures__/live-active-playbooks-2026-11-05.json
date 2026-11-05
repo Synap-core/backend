@@ -1,0 +1,2521 @@
+{
+  "_source": "GET /api/hub/playbooks?status=active on pod antoinesrvt, 2026-11-05 (lane binding-resolver, session 11f8d2aa). Every ACTIVE playbook, with only the fields the facts ladder reads.",
+  "playbooks": [
+    {
+      "id": "00a74671-b957-4683-bf34-5e61b59a1d97",
+      "name": "Landing page",
+      "status": "active",
+      "scope": "project",
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "positioning",
+          "name": "Positioning"
+        },
+        {
+          "key": "narrative",
+          "name": "Narrative"
+        },
+        {
+          "key": "design",
+          "name": "Design"
+        },
+        {
+          "key": "build",
+          "name": "Build"
+        },
+        {
+          "key": "verify-ship",
+          "name": "Verify and ship"
+        }
+      ],
+      "params": [
+        {
+          "name": "site",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "054ff14a-7942-4141-9a46-53c998fe27d3",
+      "name": "Package ideas",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "08a4929c-54c9-40ed-af28-ba14f3b15453",
+      "name": "Dogfood a change",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "change",
+          "type": "text"
+        },
+        {
+          "name": "where",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "0b0efb4b-c09e-4632-83c4-2735b351b7b5",
+      "name": "Approve an expense",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "38f3053c-11de-4e1d-95d6-9ef38506ff43",
+      "workspaceName": "Finance",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "expense",
+        "statusProperty": "status",
+        "humanOnlyStatuses": [
+          "reimbursed",
+          "rejected"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "review",
+          "name": "Review",
+          "subjectStatus": "pending"
+        },
+        {
+          "key": "approve",
+          "name": "Approve",
+          "subjectStatus": "approved"
+        },
+        {
+          "key": "pay",
+          "name": "Pay",
+          "subjectStatus": "paid"
+        }
+      ],
+      "params": [
+        {
+          "name": "expense",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "11b3acd8-837f-42ed-b705-fe97938542de",
+      "name": "Evaluate Feature",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "profileSlug": "devplane_feature"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "feature",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "14ffb26b-9cf1-4052-845d-443874d9808c",
+      "name": "[dogfood 2026-09-12] Stage Gate Probe",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "intake",
+          "name": "Intake"
+        },
+        {
+          "key": "plan",
+          "name": "Plan"
+        }
+      ],
+      "params": []
+    },
+    {
+      "id": "18abd1ea-290e-4bd7-b9e6-97cb5a82477b",
+      "name": "Fix a finding",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "onEnd": {
+          "failed": "open",
+          "cancelled": "open"
+        },
+        "profileSlug": "finding"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "fix",
+          "name": "Fix it",
+          "subjectStatus": "fixing"
+        },
+        {
+          "key": "merged",
+          "name": "Fix merged",
+          "subjectStatus": "fixed"
+        },
+        {
+          "key": "verified",
+          "name": "Live and verified",
+          "subjectStatus": "verified"
+        }
+      ],
+      "params": []
+    },
+    {
+      "id": "1c96e9fb-76db-4958-b103-83d6e4a330c2",
+      "name": "Enrich Lead/Company",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "profileSlug": "lead"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "target",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "2802e46a-9aa4-41c6-99b3-4d3cf8b73be0",
+      "name": "Design to implementation",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "ui-design",
+        "statusProperty": "design-status",
+        "humanOnlyStatuses": [
+          "approved",
+          "archived"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "generate",
+          "name": "Generate",
+          "subjectStatus": "draft"
+        },
+        {
+          "key": "critique",
+          "name": "Critique"
+        },
+        {
+          "key": "review",
+          "name": "Review",
+          "subjectStatus": "in-review"
+        },
+        {
+          "key": "implement",
+          "name": "Implement",
+          "subjectStatus": "implementing"
+        },
+        {
+          "key": "verify",
+          "name": "Verify"
+        },
+        {
+          "key": "done",
+          "name": "Done",
+          "subjectStatus": "implemented"
+        }
+      ],
+      "params": [
+        {
+          "name": "design",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "surface",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "2929cca4-1775-4a9b-badc-64f9bf68ee9e",
+      "name": "Run a campaign",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "b2409ae5-3c37-4757-a014-42d63d1c8728",
+      "workspaceName": null,
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "campaign",
+        "statusProperty": "campaign-status",
+        "humanOnlyStatuses": [
+          "paused",
+          "cancelled"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "brief",
+          "name": "Brief",
+          "subjectStatus": "planning"
+        },
+        {
+          "key": "plan",
+          "name": "Plan"
+        },
+        {
+          "key": "make",
+          "name": "Make"
+        },
+        {
+          "key": "launch",
+          "name": "Launch",
+          "subjectStatus": "active"
+        },
+        {
+          "key": "report",
+          "name": "Report",
+          "subjectStatus": "completed"
+        }
+      ],
+      "params": [
+        {
+          "name": "campaign",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "2c5aa553-c4c3-4695-bfce-80336e147ade",
+      "name": "Ship a change",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "enters_status",
+            "mode": "propose",
+            "status": "spec",
+            "maxPendingApprovals": 5
+          },
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "devplane_feature",
+        "statusProperty": "featureStatus",
+        "humanOnlyStatuses": [
+          "backlog",
+          "cancelled"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "shape",
+          "name": "Shaped",
+          "subjectStatus": "spec"
+        },
+        {
+          "key": "build",
+          "name": "Building",
+          "subjectStatus": "in_progress"
+        },
+        {
+          "key": "pr-opened",
+          "name": "PR opened",
+          "subjectStatus": "in_review"
+        },
+        {
+          "key": "checks",
+          "name": "Checks green"
+        },
+        {
+          "key": "merge",
+          "name": "Merged"
+        },
+        {
+          "key": "deploy",
+          "name": "Deployed to lab"
+        },
+        {
+          "key": "dogfood",
+          "name": "Dogfooded"
+        },
+        {
+          "key": "verify",
+          "name": "Criteria verified",
+          "subjectStatus": "done"
+        }
+      ],
+      "params": [
+        {
+          "name": "feature",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "32d1f2ac-3963-466b-a740-b41134c252cd",
+      "name": "Draft a first message",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "lead"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "draft",
+          "name": "Draft the first message"
+        },
+        {
+          "key": "send",
+          "name": "Person sends"
+        }
+      ],
+      "params": [
+        {
+          "name": "lead",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "campaign",
+          "type": "entity"
+        },
+        {
+          "name": "channel",
+          "type": "choice"
+        }
+      ]
+    },
+    {
+      "id": "35ca3b20-4727-4df6-81ee-2f290841bcc9",
+      "name": "Personalized Outreach",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "campaign",
+        "statusProperty": "campaign-status",
+        "humanOnlyStatuses": [
+          "paused",
+          "cancelled"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "prepare",
+          "name": "Prepare",
+          "subjectStatus": "planning"
+        },
+        {
+          "key": "start",
+          "name": "Person approves the list",
+          "subjectStatus": "active"
+        },
+        {
+          "key": "finish",
+          "name": "Finish",
+          "subjectStatus": "completed"
+        }
+      ],
+      "params": [
+        {
+          "name": "campaign",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "channel",
+          "type": "choice"
+        }
+      ]
+    },
+    {
+      "id": "368aae92-1562-4862-9d51-897918d98117",
+      "name": "Produce Content",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "enters_status",
+            "mode": "propose",
+            "status": "Briefed"
+          }
+        ],
+        "profileSlug": "post",
+        "statusProperty": "post-status",
+        "humanOnlyStatuses": [
+          "Idea",
+          "Archived"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "pinned"
+      },
+      "stages": [
+        {
+          "key": "brief",
+          "name": "Brief",
+          "subjectStatus": "Briefed"
+        },
+        {
+          "key": "script",
+          "name": "Script",
+          "subjectStatus": "Scripted"
+        },
+        {
+          "key": "draft",
+          "name": "Draft",
+          "subjectStatus": "In Draft"
+        },
+        {
+          "key": "review",
+          "name": "Review",
+          "subjectStatus": "Review"
+        },
+        {
+          "key": "schedule",
+          "name": "Schedule",
+          "subjectStatus": "Scheduled"
+        },
+        {
+          "key": "publish",
+          "name": "Publish",
+          "subjectStatus": "Published"
+        }
+      ],
+      "params": [
+        {
+          "name": "post",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "platform",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "format",
+          "type": "text"
+        },
+        {
+          "name": "takes",
+          "type": "text"
+        },
+        {
+          "name": "look",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "38a9463a-bec9-4193-bf4b-2924bcc10e13",
+      "name": "Render on the devbox",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+      "workspaceName": "Brand",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "look",
+          "name": "Look before you queue"
+        },
+        {
+          "key": "sync",
+          "name": "Sync the code"
+        },
+        {
+          "key": "queue",
+          "name": "Queue one job"
+        },
+        {
+          "key": "read",
+          "name": "Read the result"
+        },
+        {
+          "key": "collect",
+          "name": "Look and compare"
+        },
+        {
+          "key": "file",
+          "name": "File and review"
+        }
+      ],
+      "params": [
+        {
+          "name": "what",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "scenes",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "3bff3cbd-7a19-460e-a6ba-91e19fdca357",
+      "name": "Evaluate tools as integration candidates",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "85185cd8-39a1-4078-82fe-efe4b26ac751",
+      "workspaceName": "Ecosystem",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "recall",
+          "name": "Check the pod"
+        },
+        {
+          "key": "research",
+          "name": "Research primary sources"
+        },
+        {
+          "key": "judge",
+          "name": "Judge and verify"
+        },
+        {
+          "key": "store",
+          "name": "Store under the convention"
+        }
+      ],
+      "params": [
+        {
+          "name": "urls",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "job",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "418e862a-db53-4ecd-8574-78643a55a07f",
+      "name": "Research a Question",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "86a87213-9df5-445f-b2fa-3675b15ff4c5",
+      "workspaceName": "Research",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "question",
+        "statusProperty": "questionStatus",
+        "humanOnlyStatuses": [
+          "abandoned"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "frame",
+          "name": "Frame",
+          "subjectStatus": "open"
+        },
+        {
+          "key": "gather",
+          "name": "Gather",
+          "subjectStatus": "exploring"
+        },
+        {
+          "key": "weigh",
+          "name": "Weigh"
+        },
+        {
+          "key": "answer",
+          "name": "Answer",
+          "subjectStatus": "answered"
+        }
+      ],
+      "params": [
+        {
+          "name": "question",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "4545e13f-82a0-4d71-bb48-14123b682853",
+      "name": "Repurpose",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "enters_status",
+            "mode": "propose",
+            "status": "Published",
+            "unless": {
+              "present": true,
+              "property": "post-copy-of"
+            }
+          }
+        ],
+        "profileSlug": "post",
+        "statusProperty": "post-status"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "post",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "46fc71e1-5645-49c6-816b-8b1b7007930f",
+      "name": "Agent Health Check",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "6eb9e938-8a0b-44bb-b4f1-f37b0296308b",
+      "workspaceName": null,
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "482c919f-6ecb-45b2-8c32-63fd271c44ea",
+      "name": "Research Competitor",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "85185cd8-39a1-4078-82fe-efe4b26ac751",
+      "workspaceName": "Ecosystem",
+      "subjectProfile": {
+        "profileSlug": "competitor"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "competitor",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "focus",
+          "type": "text"
+        },
+        {
+          "name": "companyContext",
+          "type": "text"
+        },
+        {
+          "name": "outputTypes",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "48e6878a-ce91-41cd-aa59-4e3bcc45b8c3",
+      "name": "Build a prospect list from our foundation",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "audience"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "read",
+          "name": "Read the foundation"
+        },
+        {
+          "key": "search",
+          "name": "Search public sources"
+        },
+        {
+          "key": "choose",
+          "name": "Person picks the accounts"
+        },
+        {
+          "key": "create",
+          "name": "Create the leads"
+        }
+      ],
+      "params": [
+        {
+          "name": "audience",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "count",
+          "type": "number",
+          "required": false
+        },
+        {
+          "name": "market",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "4d4638aa-ecdc-448c-b659-30fb54833329",
+      "name": "Get a contract signed",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "708edb59-2299-42d4-9f7b-4c8424aed5c6",
+      "workspaceName": "Operations",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "contract",
+        "statusProperty": "contract-status",
+        "humanOnlyStatuses": [
+          "expired",
+          "terminated"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "draft",
+          "name": "Draft",
+          "subjectStatus": "draft"
+        },
+        {
+          "key": "send",
+          "name": "Send",
+          "subjectStatus": "sent"
+        },
+        {
+          "key": "signed",
+          "name": "Signed",
+          "subjectStatus": "signed"
+        },
+        {
+          "key": "active",
+          "name": "Active",
+          "subjectStatus": "active"
+        }
+      ],
+      "params": [
+        {
+          "name": "contract",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "59fba877-1f06-49fd-a409-5a2e701ea5af",
+      "name": "Write the brand voice",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+      "workspaceName": "Brand",
+      "subjectProfile": {
+        "profileSlug": "brand-voice-guide",
+        "statusProperty": "voice-status",
+        "humanOnlyStatuses": [
+          "deprecated"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "draft",
+          "name": "Draft",
+          "subjectStatus": "draft"
+        },
+        {
+          "key": "approve",
+          "name": "Approve",
+          "subjectStatus": "approved"
+        }
+      ],
+      "params": [
+        {
+          "name": "guide",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "5ae5b408-5eec-4244-8bde-e547bf0c5621",
+      "name": "Newsletter issue",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": {
+        "profileSlug": "newsletter",
+        "statusProperty": "newsletter-status",
+        "humanOnlyStatuses": [
+          "Archived"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "idea",
+          "name": "Idea",
+          "subjectStatus": "Idea"
+        },
+        {
+          "key": "drafting",
+          "name": "Drafting",
+          "subjectStatus": "Drafting"
+        },
+        {
+          "key": "editing",
+          "name": "Editing",
+          "subjectStatus": "Editing"
+        },
+        {
+          "key": "scheduled",
+          "name": "Scheduled",
+          "subjectStatus": "Scheduled"
+        },
+        {
+          "key": "sent",
+          "name": "Sent",
+          "subjectStatus": "Sent"
+        }
+      ],
+      "params": [
+        {
+          "name": "newsletter",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "5cc89b06-3046-4425-becb-23837d3b5082",
+      "name": "Security Audit",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "6eb9e938-8a0b-44bb-b4f1-f37b0296308b",
+      "workspaceName": null,
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "5d35b25f-193c-4129-bc11-09e90f0f6907",
+      "name": "Lead Outreach",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "leadName",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "62823a0b-697b-476b-b3be-58d6a2f2783d",
+      "name": "Night shift: design a task",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "filter": "{\"properties.night-shift-run\": \"design\"}",
+        "profileSlug": "task"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "63552bed-c436-467f-8f21-0cd5476e6771",
+      "name": "Quick change",
+      "status": "active",
+      "scope": "project",
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "build",
+          "name": "Build"
+        },
+        {
+          "key": "review",
+          "name": "Review"
+        },
+        {
+          "key": "done",
+          "name": "Done"
+        }
+      ],
+      "params": [
+        {
+          "name": "change",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "66fd574b-3d6b-4987-8277-9d83a572c6aa",
+      "name": "Close the month",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "38f3053c-11de-4e1d-95d6-9ef38506ff43",
+      "workspaceName": "Finance",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "reconcile",
+          "name": "Reconcile"
+        },
+        {
+          "key": "receivables",
+          "name": "Receivables"
+        },
+        {
+          "key": "payables",
+          "name": "Payables"
+        },
+        {
+          "key": "metrics",
+          "name": "Metrics"
+        },
+        {
+          "key": "review",
+          "name": "Review"
+        }
+      ],
+      "params": []
+    },
+    {
+      "id": "6dcfeffc-abb3-4c57-8036-1e5adfb1d965",
+      "name": "Dogfood Idempotency Probe",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "6dde57ee-8b24-494a-9bc3-1dbb320e0060",
+      "name": "Deliver a deliverable",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "708edb59-2299-42d4-9f7b-4c8424aed5c6",
+      "workspaceName": "Operations",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "enters_status",
+            "mode": "propose",
+            "status": "in-progress"
+          }
+        ],
+        "profileSlug": "deliverable",
+        "statusProperty": "deliverable-status",
+        "humanOnlyStatuses": [
+          "not-started",
+          "cancelled"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "plan",
+          "name": "Plan"
+        },
+        {
+          "key": "produce",
+          "name": "Produce",
+          "subjectStatus": "in-progress"
+        },
+        {
+          "key": "review",
+          "name": "Internal review",
+          "subjectStatus": "in-review"
+        },
+        {
+          "key": "send",
+          "name": "Send to client",
+          "subjectStatus": "delivered"
+        },
+        {
+          "key": "accepted",
+          "name": "Accepted",
+          "subjectStatus": "accepted"
+        }
+      ],
+      "params": [
+        {
+          "name": "deliverable",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "79b27b24-e75c-49b5-988e-129f5f44861a",
+      "name": "Score a list",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "audience"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "read",
+          "name": "Read the list"
+        },
+        {
+          "key": "score",
+          "name": "Score each lead"
+        },
+        {
+          "key": "summary",
+          "name": "Sum up the list"
+        }
+      ],
+      "params": [
+        {
+          "name": "audience",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "type": "number"
+        },
+        {
+          "name": "rescoreAfterDays",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "id": "7a1e3c5b-b068-4aaf-b6f5-908f22694f4d",
+      "name": "Client Onboarding",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "clientName",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "817f28d4-553b-46fc-8a1b-3b4585c46fa3",
+      "name": "Follow up on leads in outreach",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "schedule",
+            "cron": "0 7 * * 1-5",
+            "mode": "propose",
+            "status": "outreach"
+          },
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "lead"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "draft",
+          "name": "Draft due follow-ups"
+        },
+        {
+          "key": "send",
+          "name": "Person sends"
+        }
+      ],
+      "params": []
+    },
+    {
+      "id": "846af53e-e3d7-473c-b6de-b67c740a7ed0",
+      "name": "Write the weekly client update",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "708edb59-2299-42d4-9f7b-4c8424aed5c6",
+      "workspaceName": "Operations",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "schedule",
+            "cron": "0 7 * * 1",
+            "mode": "propose",
+            "status": "active"
+          },
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "engagement"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "draft",
+          "name": "Draft the updates"
+        },
+        {
+          "key": "send",
+          "name": "Person edits and sends"
+        }
+      ],
+      "params": []
+    },
+    {
+      "id": "85fc149a-b781-426b-9663-bb8de6952174",
+      "name": "Founder interview (Monday questions on camera)",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "prepare",
+          "name": "Prepare questions"
+        },
+        {
+          "key": "ask",
+          "name": "Antoine answers on camera"
+        },
+        {
+          "key": "transcribe",
+          "name": "Transcribe answers"
+        },
+        {
+          "key": "extract",
+          "name": "Propose ideas from answers"
+        },
+        {
+          "key": "review",
+          "name": "Antoine reviews ideas"
+        },
+        {
+          "key": "done",
+          "name": "Ideas in the bank"
+        }
+      ],
+      "params": [
+        {
+          "name": "takes",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "8c335e2e-e8f6-4bd9-882f-cf1a9246aa9c",
+      "name": "Bugfix",
+      "status": "active",
+      "scope": "project",
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "reproduce",
+          "name": "Reproduce"
+        },
+        {
+          "key": "fix",
+          "name": "Fix"
+        },
+        {
+          "key": "review",
+          "name": "Review"
+        },
+        {
+          "key": "ship",
+          "name": "Ship"
+        },
+        {
+          "key": "done",
+          "name": "Done"
+        }
+      ],
+      "params": [
+        {
+          "name": "bug",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "984e1b7b-8a5b-48da-a077-f353a563f09d",
+      "name": "Write a content guideline",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+      "workspaceName": "Brand",
+      "subjectProfile": {
+        "profileSlug": "content-guideline",
+        "statusProperty": "guideline-status",
+        "humanOnlyStatuses": [
+          "deprecated"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "draft",
+          "name": "Draft",
+          "subjectStatus": "draft"
+        },
+        {
+          "key": "approve",
+          "name": "Approve",
+          "subjectStatus": "approved"
+        }
+      ],
+      "params": [
+        {
+          "name": "guideline",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "9fc1ca68-c299-42d5-8950-16e7e47216b3",
+      "name": "Bill a client",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "38f3053c-11de-4e1d-95d6-9ef38506ff43",
+      "workspaceName": "Finance",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "invoice",
+        "statusProperty": "status",
+        "humanOnlyStatuses": [
+          "void"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "prepare",
+          "name": "Prepare",
+          "subjectStatus": "draft"
+        },
+        {
+          "key": "send",
+          "name": "Send",
+          "subjectStatus": "sent"
+        },
+        {
+          "key": "due",
+          "name": "Awaiting payment"
+        },
+        {
+          "key": "paid",
+          "name": "Paid",
+          "subjectStatus": "paid"
+        },
+        {
+          "key": "chase",
+          "name": "Chase",
+          "subjectStatus": "overdue"
+        }
+      ],
+      "params": [
+        {
+          "name": "invoice",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "a42eb6b2-7a96-461b-8a27-aa939559a9f2",
+      "name": "Turn a finding into content",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "86a87213-9df5-445f-b2fa-3675b15ff4c5",
+      "workspaceName": "Research",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "enters_status",
+            "mode": "propose",
+            "status": "validated"
+          }
+        ],
+        "profileSlug": "finding",
+        "statusProperty": "status"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "finding",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "b4bf9625-e447-4049-b7bd-a9c1681dec1c",
+      "name": "Make a carousel",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+      "workspaceName": "Brand",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "outline",
+          "name": "Outline"
+        },
+        {
+          "key": "build",
+          "name": "Build"
+        },
+        {
+          "key": "review",
+          "name": "Founder review"
+        },
+        {
+          "key": "file",
+          "name": "File"
+        }
+      ],
+      "params": [
+        {
+          "name": "name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "brief",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "b51b88f9-8a1d-448a-9c1c-15561803214c",
+      "name": "Audit d'un compte",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "85185cd8-39a1-4078-82fe-efe4b26ac751",
+      "workspaceName": "Ecosystem",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "fetch-and-score",
+          "name": "Récupérer et scorer"
+        },
+        {
+          "key": "summarize",
+          "name": "Résumé lisible"
+        }
+      ],
+      "params": [
+        {
+          "name": "handle",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "watch",
+          "type": "boolean",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "bb8aa897-7f17-4c3b-8ad1-e92c882da504",
+      "name": "Advance a commercial proposal",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "profileSlug": "deal"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "deal",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "bde1f2d5-90f2-4c58-b10e-dcd9af349eb3",
+      "name": "Build an app (App Factory)",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "devplane_app"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "intake",
+          "name": "Intake"
+        },
+        {
+          "key": "research",
+          "name": "Research"
+        },
+        {
+          "key": "decisions",
+          "name": "Decisions"
+        },
+        {
+          "key": "design",
+          "name": "Design"
+        },
+        {
+          "key": "review",
+          "name": "Review"
+        },
+        {
+          "key": "consolidate",
+          "name": "Consolidate"
+        },
+        {
+          "key": "design-approval",
+          "name": "Design approval"
+        },
+        {
+          "key": "infra",
+          "name": "Infra"
+        },
+        {
+          "key": "first-slice",
+          "name": "Slice 1 and first look"
+        },
+        {
+          "key": "slices",
+          "name": "Next slices"
+        },
+        {
+          "key": "dogfood",
+          "name": "Dogfood"
+        }
+      ],
+      "params": [
+        {
+          "name": "name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "idea",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "choice"
+        },
+        {
+          "name": "app",
+          "type": "entity"
+        }
+      ]
+    },
+    {
+      "id": "bf46e77f-b68c-4f14-a85d-ec81ba582546",
+      "name": "Work a take",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": {
+        "profileSlug": "content-asset"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "transcribe",
+          "name": "Transcribe"
+        },
+        {
+          "key": "analyse",
+          "name": "Analyse"
+        },
+        {
+          "key": "keep",
+          "name": "Keep pieces"
+        },
+        {
+          "key": "cut",
+          "name": "Cut"
+        },
+        {
+          "key": "posts",
+          "name": "Make the posts"
+        }
+      ],
+      "params": [
+        {
+          "name": "take",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "c101dd75-1421-40bb-8974-103e9edd9e50",
+      "name": "Night shift: build an issue",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "filter": "{\"properties.night-shift-run\": \"build\"}",
+        "profileSlug": "issue"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "c2a566fd-f07a-4ffe-ba5f-196a6fd34fec",
+      "name": "Discover Competitors",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "85185cd8-39a1-4078-82fe-efe4b26ac751",
+      "workspaceName": "Ecosystem",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "ourSpace",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "c8741146-157c-43cd-8f4c-e90b37d763a3",
+      "name": "AI Dev Session",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "brainstorming",
+          "name": "Brainstorming"
+        },
+        {
+          "key": "validating",
+          "name": "Validating"
+        },
+        {
+          "key": "planning",
+          "name": "Planning"
+        },
+        {
+          "key": "in-work",
+          "name": "In work"
+        },
+        {
+          "key": "verifying",
+          "name": "Verifying"
+        },
+        {
+          "key": "finishing",
+          "name": "Finishing"
+        }
+      ],
+      "params": []
+    },
+    {
+      "id": "cc0c1b52-6f22-4e81-8db1-007af28a38a6",
+      "name": "Night shift: build a task",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "filter": "{\"properties.night-shift-run\": \"build\"}",
+        "profileSlug": "task"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "cc56c19f-6973-4ea0-bd99-7d30c1bc4b9e",
+      "name": "Bill a recurring fee",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "38f3053c-11de-4e1d-95d6-9ef38506ff43",
+      "workspaceName": "Finance",
+      "subjectProfile": {
+        "filter": "{\"properties.status\":\"active\",\"properties.billing-cadence\":\"monthly\"}",
+        "profileSlug": "revenue-stream"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "stream",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "d2ae3728-bb88-430d-90d2-ce6d4f5ac402",
+      "name": "Qualify a lead",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "lead",
+        "statusProperty": "leadStage",
+        "humanOnlyStatuses": [
+          "new",
+          "outreach",
+          "engaged",
+          "nurturing",
+          "converted",
+          "disqualified"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "research",
+          "name": "Research",
+          "subjectStatus": "researching"
+        },
+        {
+          "key": "score",
+          "name": "Score"
+        },
+        {
+          "key": "decide",
+          "name": "Decide"
+        },
+        {
+          "key": "pursue",
+          "name": "Pursue",
+          "subjectStatus": "qualified"
+        }
+      ],
+      "params": [
+        {
+          "name": "lead",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "d59d9e0f-c286-4512-8618-a713997e8421",
+      "name": "Make a scene",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+      "workspaceName": "Brand",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "brief",
+          "name": "Brief"
+        },
+        {
+          "key": "concept",
+          "name": "Concept"
+        },
+        {
+          "key": "build",
+          "name": "Build and gate"
+        },
+        {
+          "key": "style-frames",
+          "name": "Style frames"
+        },
+        {
+          "key": "final",
+          "name": "Final motion"
+        },
+        {
+          "key": "catalogue",
+          "name": "Catalogue"
+        }
+      ],
+      "params": [
+        {
+          "name": "scene",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "brief",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "d638802d-6510-430c-a16a-6380548ccc42",
+      "name": "Write the caption",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": {
+        "profileSlug": "post"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "post",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "d66ddefa-036f-43e2-9bdb-a14ef564fa35",
+      "name": "Night shift: morning brief",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "dcbdbb10-958d-4d81-a9ef-2d7958dc2f09",
+      "name": "Qualify a CRM lead",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "profileSlug": "crm-lead"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": [
+        {
+          "name": "lead",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "e4aba21f-0bc1-4a55-b254-802f33f9efcc",
+      "name": "Plan Next Content",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "9f93c23b-4774-48ec-83b0-aaa570f5441d",
+      "workspaceName": "Content OS",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "schedule",
+            "cron": "0 9 * * 1",
+            "mode": "propose"
+          },
+          {
+            "on": "manual",
+            "mode": "propose",
+            "size": "per_moment"
+          }
+        ],
+        "profileSlug": "post"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "e6314d06-3e18-497c-b4d9-4574d5b6d520",
+      "name": "Prepare a pre-sale estimate",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "manual",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "lead"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "research",
+          "name": "Research",
+          "subjectStatus": "researching"
+        },
+        {
+          "key": "draft",
+          "name": "Draft the estimate"
+        },
+        {
+          "key": "approve",
+          "name": "Antoine approves"
+        }
+      ],
+      "params": [
+        {
+          "name": "lead",
+          "type": "entity",
+          "required": true
+        },
+        {
+          "name": "formAnswers",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "e7773ad2-091d-4828-a6df-d086c174f34e",
+      "name": "Read the reply to an outreach message",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "enters_status",
+            "mode": "run",
+            "status": "sent"
+          }
+        ],
+        "profileSlug": "outreach-touch",
+        "statusProperty": "status",
+        "humanOnlyStatuses": [
+          "drafted",
+          "sent",
+          "opened"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "wait",
+          "name": "Waiting for a reply"
+        },
+        {
+          "key": "replied",
+          "name": "Replied",
+          "subjectStatus": "replied"
+        },
+        {
+          "key": "bounced",
+          "name": "Bounced",
+          "subjectStatus": "bounced"
+        },
+        {
+          "key": "no-response",
+          "name": "No response",
+          "subjectStatus": "no_response"
+        }
+      ],
+      "params": [
+        {
+          "name": "touch",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "eaaf9f83-dcd5-4a1f-addb-a2c70724ff1c",
+      "name": "Make a brand asset",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01",
+      "workspaceName": "Brand",
+      "subjectProfile": {
+        "profileSlug": "brand-asset",
+        "statusProperty": "asset-status",
+        "humanOnlyStatuses": [
+          "deprecated"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "draft",
+          "name": "Draft",
+          "subjectStatus": "draft"
+        },
+        {
+          "key": "approve",
+          "name": "Approve",
+          "subjectStatus": "approved"
+        }
+      ],
+      "params": [
+        {
+          "name": "asset",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "eed292cc-f553-4877-9f7a-e527fdb8853f",
+      "name": "Slide Sequence Builder",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "research",
+          "name": "Research"
+        },
+        {
+          "key": "structure",
+          "name": "Structure"
+        },
+        {
+          "key": "write",
+          "name": "Write"
+        },
+        {
+          "key": "validate",
+          "name": "Validate"
+        }
+      ],
+      "params": []
+    },
+    {
+      "id": "f042c3cf-7c93-4cd9-814c-fe988af3c7f5",
+      "name": "Win a deal",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "f73f40f0-c023-4f2e-b55a-10d3f7539b1f",
+      "workspaceName": "CRM",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "deal",
+        "statusProperty": "commercialStage",
+        "humanOnlyStatuses": [
+          "lost"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "qualify",
+          "name": "Qualify",
+          "subjectStatus": "draft"
+        },
+        {
+          "key": "write",
+          "name": "Write proposal"
+        },
+        {
+          "key": "send",
+          "name": "Send proposal",
+          "subjectStatus": "proposed"
+        },
+        {
+          "key": "await-answer",
+          "name": "Awaiting the answer"
+        },
+        {
+          "key": "negotiate",
+          "name": "Negotiate",
+          "subjectStatus": "negotiating"
+        },
+        {
+          "key": "won",
+          "name": "Won",
+          "subjectStatus": "won"
+        }
+      ],
+      "params": [
+        {
+          "name": "deal",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "f071e2b2-cf47-4f7a-8549-a3e0d43a792d",
+      "name": "Deliver a client engagement",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "708edb59-2299-42d4-9f7b-4c8424aed5c6",
+      "workspaceName": "Operations",
+      "subjectProfile": {
+        "activators": [
+          {
+            "on": "created",
+            "mode": "propose"
+          }
+        ],
+        "profileSlug": "engagement",
+        "statusProperty": "engagement-status",
+        "humanOnlyStatuses": [
+          "on-hold",
+          "cancelled"
+        ]
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "kickoff",
+          "name": "Kick-off",
+          "subjectStatus": "proposed"
+        },
+        {
+          "key": "start",
+          "name": "Start",
+          "subjectStatus": "active"
+        },
+        {
+          "key": "deliver",
+          "name": "Deliver"
+        },
+        {
+          "key": "close",
+          "name": "Close",
+          "subjectStatus": "completed"
+        }
+      ],
+      "params": [
+        {
+          "name": "engagement",
+          "type": "entity",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "f8047c00-0a5e-48ab-af15-2838ae427630",
+      "name": "Build a website (Website Factory)",
+      "status": "active",
+      "scope": "session",
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "intake",
+          "name": "Intake"
+        },
+        {
+          "key": "plan",
+          "name": "Plan"
+        },
+        {
+          "key": "build",
+          "name": "Build"
+        },
+        {
+          "key": "verify",
+          "name": "Verify"
+        },
+        {
+          "key": "preview",
+          "name": "Preview"
+        },
+        {
+          "key": "production",
+          "name": "Production"
+        }
+      ],
+      "params": [
+        {
+          "name": "brief",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "path",
+          "type": "choice"
+        }
+      ]
+    },
+    {
+      "id": "fbc0a5aa-e41f-441d-a06d-1fd01ddbe91b",
+      "name": "Night shift: design an issue",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": {
+        "filter": "{\"properties.night-shift-run\": \"design\"}",
+        "profileSlug": "issue"
+      },
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [],
+      "params": []
+    },
+    {
+      "id": "fd063448-b00e-4116-b7b3-9205b5b72b41",
+      "name": "Decide with Jev",
+      "status": "active",
+      "scope": null,
+      "workspaceId": "808939d1-86b3-4c52-a153-ae06ece2c54e",
+      "workspaceName": "Builder",
+      "subjectProfile": null,
+      "inputStrategy": {
+        "kind": "none"
+      },
+      "stages": [
+        {
+          "key": "frame",
+          "name": "Frame"
+        },
+        {
+          "key": "ask-jev",
+          "name": "Ask Jev"
+        },
+        {
+          "key": "record",
+          "name": "Record"
+        }
+      ],
+      "params": [
+        {
+          "name": "question",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "options",
+          "type": "text",
+          "required": true
+        },
+        {
+          "name": "levels",
+          "type": "text",
+          "required": false
+        },
+        {
+          "name": "minConfidence",
+          "type": "text",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

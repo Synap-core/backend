@@ -172,6 +172,26 @@ describe("rung 2: the subject's kind", () => {
     }
   });
 
+  it("a FINISHED subject (its kind's lifecycle: done or lost) never binds by its kind, mapped stages or not", () => {
+    // No statusProperty: before, this bound a finding at ANY status.
+    const fix = pb({ subjectProfile: { profileSlug: "issue" } });
+    for (const statusCategory of ["done", "lost"]) {
+      expect(
+        resolveBindingRung(at({ subject: { ...issue(), statusCategory } }), [
+          fix,
+        ])
+      ).toEqual({ kind: "none" });
+    }
+    // Open, active, paused or undeclared: still binds (the row is not vacuous).
+    for (const statusCategory of ["open", "active", "paused", null]) {
+      expect(
+        resolveBindingRung(at({ subject: { ...issue(), statusCategory } }), [
+          fix,
+        ])
+      ).toMatchObject({ kind: "bind", playbookId: fix.id });
+    }
+  });
+
   it("no subject, or a subject whose kind no playbook runs on: no rung-2 bind", () => {
     const fix = pb({ subjectProfile: { profileSlug: "issue" } });
     expect(resolveBindingRung(at(), [fix])).toEqual({ kind: "none" });
@@ -433,7 +453,7 @@ describe("the reply line stays one lean line", () => {
         reason: "the subject's kind is issue",
       })
     ).toBe(
-      `Follows "Fix a bug" (${ids[0]}): the subject's kind is issue. Release: update_session followPlaybookId: null.`
+      `Follows "Fix a bug" (${ids[0]}): the subject's kind is issue. To stop following it: update_session followPlaybookId: null (the criteria and slots it added stay).`
     );
   });
 });

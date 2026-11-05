@@ -2,10 +2,15 @@
  * BIND ON FACTS — load the facts, run the ladder (`resolve-binding-rung.ts`),
  * and apply its decision through the ONE follow door (`follow-playbook.ts`).
  *
- * Two callers, both AI doors (founder decision d02, 2026-11-05):
- *   - the START (`create-session.ts`), once the session row exists;
- *   - ONE late re-resolve (`update-session.ts`), the first time a subject or a
- *     goal (`trackId`) arrives on a session that still follows nothing.
+ * Two callers, both AI doors only (founder decision d02, 2026-11-05):
+ *   - the START (`create-session.ts` `bindOnFacts`), once the session row
+ *     exists;
+ *   - ONE late re-resolve (`rebindOnSubjectArrival`, from `update-session.ts`
+ *     `bindOnFirstSubject` and the Hub REST PATCH), the first time the
+ *     caller's own `subjectEntityId` lands on a session that still follows
+ *     nothing. A subject set by another path (a person's capture naming the
+ *     subject of their session) never binds. d02 also names a goal or a parent
+ *     stage arriving; no rung reads a goal today, so only a subject re-runs.
  *
  * Going through `followPlaybook` keeps every rule of a follow: criteria and
  * deliverables MERGE (nothing is overwritten), no stage is seeded mid-flight,
@@ -16,7 +21,10 @@
  *     follow would file a widening proposal the agent never asked for); the
  *     reply says it fits and how to follow it;
  *   - a session that released a playbook (`unfollowedAt`) or already follows
- *     one is never bound again by the server.
+ *     one is never bound again by the server;
+ *   - a finished session (closed, cancelled, failed) is never bound;
+ *   - rung 2 never binds a second open session to the same playbook on the
+ *     same subject (the run funnel's own rule, `findInFlightSubjectSession`).
  *
  * Every server bind is recorded on `metadata.boundBy` ({rung, reason,
  * playbookId, phase, at}) and said back in ONE reply line (`bindingLine`).
@@ -29,11 +37,17 @@ import {
   profiles,
   eq,
   and,
+  notInArray,
   drizzleSql,
   getParentSessionId,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { readPlaybookParams } from "@synap/playbooks";
 import { isUuid } from "@synap-core/types/property-render";
+import {
+  TERMINAL_SESSION_STATUSES,
+  isTerminalSessionStatus,
+} from "@synap-core/types/focus-sessions";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
   getLinksFor,
@@ -41,6 +55,7 @@ import {
 } from "../links/links-service.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
 import { UNFOLLOWED_AT_METADATA_KEY } from "./follow-playbook.js";
+import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import {
   bindingLine,
   resolveBindingRung,
@@ -90,7 +105,12 @@ export async function loadBindingFacts(input: {
   title: string | null;
   subjectEntityId: string | null;
   parentSessionId: string | null;
-}): Promise<{ situation: BindingSituation; pool: BindingPlaybook[] }> {
+}): Promise<{
+  situation: BindingSituation;
+  pool: BindingPlaybook[];
+  /** The parent's param answers (rung 3 carries them to the lane). */
+  parentParams: Record<string, unknown>;
+}> {
   // The pool the follow door can see (`userVisibleWhere`, its own floor), so
   // a decision is always one the door can apply. Active only: a draft never
   // binds.
@@ -116,13 +136,12 @@ export async function loadBindingFacts(input: {
 
   // The subject was floored by the door that set it (`isOutputRefVisible`).
   let subject: BindingSituation["subject"] = null;
-  let subjectWorkspaceId: string | null = null;
   if (input.subjectEntityId && isUuid(input.subjectEntityId)) {
     const [row] = await db
       .select({
         kind: profiles.slug,
-        workspaceId: entities.workspaceId,
         properties: entities.properties,
+        statusCategory: entities.statusCategory,
       })
       .from(entities)
       .leftJoin(profiles, eq(profiles.id, entities.profileId))
@@ -132,18 +151,20 @@ export async function loadBindingFacts(input: {
       subject = {
         kind: row.kind ?? null,
         properties: (row.properties as Record<string, unknown> | null) ?? {},
+        statusCategory: row.statusCategory ?? null,
       };
-      subjectWorkspaceId = row.workspaceId ?? null;
     }
   }
 
   let parent: BindingSituation["parent"] = null;
+  let parentParams: Record<string, unknown> = {};
   if (input.parentSessionId && isUuid(input.parentSessionId)) {
     const [row] = await db
       .select({
         id: focusSessions.id,
         playbookId: focusSessions.playbookId,
         currentStage: focusSessions.currentStage,
+        metadata: focusSessions.metadata,
       })
       .from(focusSessions)
       .where(
@@ -153,19 +174,33 @@ export async function loadBindingFacts(input: {
         )
       )
       .limit(1);
-    parent = row ?? null;
+    if (row) {
+      parent = {
+        id: row.id,
+        playbookId: row.playbookId,
+        currentStage: row.currentStage,
+      };
+      const answers = (row.metadata as Record<string, unknown> | null)?.[
+        RUN_PARAMS_METADATA_KEY
+      ];
+      if (answers && typeof answers === "object" && !Array.isArray(answers)) {
+        parentParams = answers as Record<string, unknown>;
+      }
+    }
   }
 
   return {
     situation: {
       title: input.title,
-      // A project session has no space of its own: its subject's space is
-      // where its playbooks live.
-      workspaceId: input.workspaceId ?? subjectWorkspaceId,
+      // The SESSION's space only. A session in no space (a project session)
+      // binds pod-wide playbooks only: a space's playbook is never bound to a
+      // session that is not in that space, whatever space its subject is in.
+      workspaceId: input.workspaceId,
       subject,
       parent,
     },
     pool,
+    parentParams,
   };
 }
 
@@ -201,7 +236,7 @@ export async function stampBoundBy(
 export async function bindOnFacts(
   input: BindOnFactsInput
 ): Promise<BindOnFactsResult> {
-  const { situation, pool } = await loadBindingFacts(input);
+  const { situation, pool, parentParams } = await loadBindingFacts(input);
   const decision = resolveBindingRung(situation, pool);
   if (decision.kind === "none") return { decision: "none" };
   if (decision.kind === "offer") {
@@ -232,13 +267,52 @@ export async function bindOnFacts(
     );
   }
 
+  // ONE open session per playbook per subject: the run funnel's own rule
+  // (`findInFlightSubjectSession`), so two sessions about one finding never
+  // both run "Fix a finding". Rung 2 only: a lane (rung 3) shares its parent's
+  // work on purpose.
+  if (decision.rung === "subject" && input.subjectEntityId) {
+    const { findInFlightSubjectSession } =
+      await import("../playbooks/run-playbook.js");
+    const twin = await findInFlightSubjectSession(
+      decision.playbookId,
+      input.subjectEntityId
+    );
+    if (twin && twin.id !== input.sessionId) {
+      return notBound(
+        `${decision.reason}, but session ${twin.id} already follows it on this subject`
+      );
+    }
+  }
+
+  // The answers the facts give, in this order (a later one never overrides
+  // an earlier one's answer):
+  //   - a lane (rung 3) carries its parent's answers: same playbook, same work,
+  //     so each lane does not owe the person the same questions again;
+  //   - the session's subject answers the playbook's ONE entity param (the run
+  //     funnel's own rule, `subjectAnswersEntityParam`): without it, a
+  //     playbook asking "which UI design?" about the design it is bound to
+  //     would file that question as a slot owed by the person. Two entity
+  //     params are not guessed.
+  const bound = pool.find((p) => p.id === decision.playbookId);
+  const { subjectAnswersEntityParam } =
+    await import("../playbooks/playbook-lifecycle.js");
+  const params = subjectAnswersEntityParam(
+    readPlaybookParams(bound?.params),
+    {
+      ...(decision.rung === "parent" ? parentParams : {}),
+      ...decision.params,
+    },
+    situation.subject ? input.subjectEntityId : null
+  );
   const { followPlaybook } = await import("./follow-playbook.js");
   const followed = await followPlaybook({
     sessionId: input.sessionId,
     userId: input.userId,
     agentUserId: input.agentUserId,
     followPlaybookId: decision.playbookId,
-    ...(decision.params ? { params: decision.params } : {}),
+    ...(Object.keys(params).length > 0 ? { params } : {}),
+    requireOpen: true,
   });
   if (followed.status !== "ok") {
     const why =
@@ -273,9 +347,9 @@ export async function bindOnFacts(
 }
 
 /**
- * The late re-resolve (d02): ONCE per session, the first time a subject or a
- * goal arrives on a session that follows nothing and never released one. The
- * claim is atomic (only the call that flips the key runs it), so two
+ * The late re-resolve (d02): ONCE per session, the first time a subject
+ * arrives on a session that follows nothing, never released one and has not
+ * ended. The claim is atomic (only the call that flips the key runs it), so two
  * concurrent updates never both bind.
  */
 export async function rebindOnFirstFact(input: {
@@ -283,6 +357,7 @@ export async function rebindOnFirstFact(input: {
     id: string;
     playbookId: string | null;
     origin?: string | null;
+    status?: string | null;
     title: string | null;
     workspaceId: string | null;
     subjectEntityId: string | null;
@@ -293,6 +368,7 @@ export async function rebindOnFirstFact(input: {
 }): Promise<BindOnFactsResult | undefined> {
   const { session } = input;
   if (session.playbookId || session.origin === "playbook") return undefined;
+  if (isTerminalSessionStatus(session.status)) return undefined;
   const meta = (session.metadata ?? {}) as Record<string, unknown>;
   if (meta[UNFOLLOWED_AT_METADATA_KEY] !== undefined) return undefined;
   if (meta[BIND_RECHECKED_AT_METADATA_KEY] !== undefined) return undefined;
@@ -309,6 +385,9 @@ export async function rebindOnFirstFact(input: {
         eq(focusSessions.id, session.id),
         eq(focusSessions.userId, input.userId),
         drizzleSql`${focusSessions.playbookId} IS NULL`,
+        // A finished session is never bound: no running playbook run, no
+        // merged criteria, no owed slots on a closed run.
+        notInArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES]),
         drizzleSql`NOT (coalesce(${focusSessions.metadata}, '{}'::jsonb) ? ${BIND_RECHECKED_AT_METADATA_KEY})`,
         drizzleSql`NOT (coalesce(${focusSessions.metadata}, '{}'::jsonb) ? ${UNFOLLOWED_AT_METADATA_KEY})`
       )
@@ -339,4 +418,40 @@ export async function rebindOnFirstFact(input: {
       line: "No playbook bound: the pod could not read the facts to decide.",
     };
   }
+}
+
+/**
+ * WHEN an update re-runs the facts (d02), for every update door that offers it
+ * (`update-session.ts`, the Hub REST PATCH): ONE rule, so the doors cannot
+ * drift.
+ *   - the door is an AI door that asked for it (`enabled`);
+ *   - the subject came from THIS call's own `subjectEntityId` (a string) and
+ *     the session had none before: a subject another path set (a person's
+ *     capture naming their session's subject) never binds;
+ *   - the call did not follow or release a playbook itself (its own choice
+ *     wins) and the session follows none after the write.
+ * Then `rebindOnFirstFact` applies its own once-only claim.
+ */
+export async function rebindOnSubjectArrival(input: {
+  enabled: boolean | undefined;
+  /** The call's own `subjectEntityId` argument, as sent. */
+  subjectParam: string | null | undefined;
+  /** The call's own `followPlaybookId` argument, as sent. */
+  followParam: string | null | undefined;
+  before: { subjectEntityId: string | null };
+  after: Parameters<typeof rebindOnFirstFact>[0]["session"];
+  userId: string;
+  agentUserId?: string;
+}): Promise<BindOnFactsResult | undefined> {
+  if (!input.enabled) return undefined;
+  if (typeof input.subjectParam !== "string") return undefined;
+  if (input.followParam !== undefined) return undefined;
+  if (input.before.subjectEntityId) return undefined;
+  if (input.after.subjectEntityId !== input.subjectParam) return undefined;
+  if (input.after.playbookId) return undefined;
+  return rebindOnFirstFact({
+    session: input.after,
+    userId: input.userId,
+    agentUserId: input.agentUserId,
+  });
 }

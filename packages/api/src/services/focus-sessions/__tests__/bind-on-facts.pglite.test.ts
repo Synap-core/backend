@@ -1,8 +1,9 @@
 /**
  * BIND ON FACTS through the real doors, on PGlite (founder decisions d01–d03,
  * 2026-11-05): `createFocusSession { bindOnFacts }` binds the playbook a FACT
- * names, and `updateFocusSession` re-runs the facts ONCE when a subject first
- * arrives. Every bind goes through the real follow door (`followPlaybook`):
+ * names, and `updateFocusSession { bindOnFirstSubject }` re-runs the facts
+ * ONCE when the caller's own subject first arrives. The MCP, Hub REST and
+ * capture doors: `bind-on-facts.doors.pglite.test.ts`. Every bind goes through the real follow door (`followPlaybook`):
  * `playbookId`, a `playbook_runs` row, `metadata.boundBy`.
  *
  * Real: `createFocusSession`, `updateFocusSession`, `followPlaybook`,
@@ -338,6 +339,7 @@ describe("later: the first subject re-runs the facts, once", () => {
     const up = await updateFocusSession({
       sessionId: res.session.id,
       userId: USER,
+      bindOnFirstSubject: true,
       subjectEntityId: await entityOf(ISSUE_PROFILE),
     });
     if (up.status !== "updated") throw new Error(up.status);
@@ -355,6 +357,7 @@ describe("later: the first subject re-runs the facts, once", () => {
     const first = await updateFocusSession({
       sessionId: res.session.id,
       userId: USER,
+      bindOnFirstSubject: true,
       subjectEntityId: await entityOf(NOTE_PROFILE),
     });
     if (first.status !== "updated") throw new Error(first.status);
@@ -363,11 +366,13 @@ describe("later: the first subject re-runs the facts, once", () => {
     await updateFocusSession({
       sessionId: res.session.id,
       userId: USER,
+      bindOnFirstSubject: true,
       subjectEntityId: null,
     });
     const again = await updateFocusSession({
       sessionId: res.session.id,
       userId: USER,
+      bindOnFirstSubject: true,
       subjectEntityId: await entityOf(ISSUE_PROFILE),
     });
     if (again.status !== "updated") throw new Error(again.status);
@@ -394,6 +399,7 @@ describe("later: the first subject re-runs the facts, once", () => {
     const back = await updateFocusSession({
       sessionId: res.session.id,
       userId: USER,
+      bindOnFirstSubject: true,
       subjectEntityId: await entityOf(ISSUE_PROFILE),
     });
     if (back.status !== "updated") throw new Error(back.status);
@@ -406,6 +412,7 @@ describe("later: the first subject re-runs the facts, once", () => {
     const up = await updateFocusSession({
       sessionId: res.session.id,
       userId: USER,
+      bindOnFirstSubject: true,
       subjectEntityId: await entityOf(ISSUE_PROFILE),
       followPlaybookId: OTHER,
     });

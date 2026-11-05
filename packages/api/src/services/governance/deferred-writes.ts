@@ -188,6 +188,8 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
         trackStage: str(d.trackStage),
         params: (d.params ?? d.trackParams) as
           Record<string, unknown> | undefined,
+        // The original AI start asked to bind on facts: the replay does too.
+        bindOnFacts: d.bindOnFacts === true ? true : undefined,
       }),
     });
   },

@@ -1025,6 +1025,10 @@ export async function createFocusSession(
       // The goal whose loop proposed it — counted by the loop, ignored by
       // the approval replay.
       ...(params.goalLoopOf ? { goalLoopOf: params.goalLoopOf } : {}),
+      // An AI door's start binds on facts (d01–d03): the replay of a held
+      // start (`deferred-writes.ts`) and the approval executor bind it the
+      // same way once the row exists, or a proposed start would never bind.
+      ...(params.bindOnFacts ? { bindOnFacts: true } : {}),
     },
   });
 

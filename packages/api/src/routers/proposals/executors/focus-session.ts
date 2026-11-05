@@ -673,6 +673,38 @@ export function registerFocusSessionExecutors(): void {
         });
       }
 
+      // BIND ON FACTS (d01–d03): the start an AI door held asked for it
+      // (`data.bindOnFacts`), so the approved row binds exactly as a direct
+      // start would, through the same function. A courtesy, never a gate: a
+      // failure leaves the approved session unbound.
+      if (created && innerData.bindOnFacts === true && !created.playbookId) {
+        try {
+          const { bindOnFacts } =
+            await import("../../../services/focus-sessions/bind-on-facts.js");
+          const parentSessionId =
+            typeof innerData.parentSessionId === "string"
+              ? innerData.parentSessionId
+              : null;
+          await bindOnFacts({
+            sessionId: created.id,
+            userId: created.userId,
+            ...(proposal.agentUserId
+              ? { agentUserId: proposal.agentUserId }
+              : {}),
+            phase: "start",
+            title: created.title ?? null,
+            workspaceId: created.workspaceId ?? null,
+            subjectEntityId: created.subjectEntityId ?? null,
+            parentSessionId,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, sessionId: created.id },
+            "bind on facts after approval failed — the session stays unbound"
+          );
+        }
+      }
+
       await transitionProposal(db, {
         to: ProposalStatus.APPROVED,
         set: {

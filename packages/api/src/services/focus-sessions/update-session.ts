@@ -231,6 +231,15 @@ export interface UpdateFocusSessionParams {
    */
   subjectEntityId?: string | null;
   /**
+   * BIND ON THE FIRST SUBJECT (founder decision d02, `bind-on-facts.ts`): when
+   * THIS call's `subjectEntityId` is the session's first subject, re-run the
+   * facts ladder once. Set by the AI update doors only (MCP
+   * `synap_update_session`, the Hub REST PATCH for an agent key); a person's
+   * write, a capture naming its session's subject, and every internal caller
+   * leave it unset and bind nothing.
+   */
+  bindOnFirstSubject?: boolean;
+  /**
    * ADD things this session works on as a batch (`session-targets.ts`): entity
    * ids the caller can see, while the session is in flight. ADD-ONLY and
    * idempotent (a target's end is its result, never an unlink); the same
@@ -365,10 +374,10 @@ export type UpdateFocusSessionResult =
       followRefusal?: string;
       /**
        * The late re-resolve (founder decision d02, `bind-on-facts.ts`): the
-       * FIRST time a subject or a goal arrives on a session that follows no
-       * playbook, the pod runs the facts ladder once. ONE line: what it bound
-       * and why, or the fact-based offer. Absent when it did not run or
-       * found nothing.
+       * FIRST time the caller's own subject arrives on a session that follows
+       * no playbook (`bindOnFirstSubject`), the pod runs the facts ladder
+       * once. ONE line: what it bound and why, or the fact-based offer.
+       * Absent when it did not run or found nothing.
        */
       binding?: string;
       /**
@@ -2819,24 +2828,21 @@ export async function updateFocusSession(
     }
   }
 
-  // ── BIND ON THE FIRST FACT (d02) ────────────────────────────────────────────
-  // A subject or a goal that arrived WITH this patch (it is on the row now and
-  // was not before) re-runs the facts ladder ONCE per session, through the
-  // follow door. Never when this patch itself followed or released a playbook:
-  // the caller's own choice wins, and a released playbook is never re-bound.
+  // ── BIND ON THE FIRST SUBJECT (d02) ─────────────────────────────────────────
+  // An AI door's own subject, the session's first, re-runs the facts ladder
+  // ONCE per session through the follow door. The rule (which door, whose
+  // subject, never over the caller's own follow or release) is ONE function
+  // shared with the Hub REST PATCH.
   let binding: string | undefined;
   let reboundSession: typeof updated | undefined;
-  const latest = followedSession ?? updated;
-  const subjectArrived = !existing.subjectEntityId && !!latest.subjectEntityId;
-  const goalArrived = !existing.trackId && !!latest.trackId;
-  if (
-    params.followPlaybookId === undefined &&
-    !latest.playbookId &&
-    (subjectArrived || goalArrived)
-  ) {
-    const { rebindOnFirstFact } = await import("./bind-on-facts.js");
-    const rebound = await rebindOnFirstFact({
-      session: latest,
+  if (params.bindOnFirstSubject) {
+    const { rebindOnSubjectArrival } = await import("./bind-on-facts.js");
+    const rebound = await rebindOnSubjectArrival({
+      enabled: params.bindOnFirstSubject,
+      subjectParam: params.subjectEntityId,
+      followParam: params.followPlaybookId,
+      before: existing,
+      after: followedSession ?? updated,
       userId,
       agentUserId,
     });

@@ -78,7 +78,10 @@ import {
   type PlaybookStage,
   type SessionCriterion,
 } from "@synap/playbooks";
-import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
+import {
+  CHECK_GATE_METADATA_KEY,
+  isTerminalSessionStatus,
+} from "@synap-core/types/focus-sessions";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -197,6 +200,13 @@ export interface FollowPlaybookParams {
    * by the gap. A MISTYPED value IS refused — that is a malformed call.
    */
   params?: Record<string, unknown>;
+  /**
+   * Refuse a session that has ended (closed, cancelled, failed). Set by the
+   * facts binder (`bind-on-facts.ts`): nobody asked for that bind, and a
+   * finished run must never grow a running playbook run, merged criteria or
+   * owed slots.
+   */
+  requireOpen?: boolean;
 }
 
 function stageKeysOf(playbook: { stages: unknown }): string[] {
@@ -266,6 +276,12 @@ export async function followPlaybook(
     ),
   });
   if (!session) return { status: "not_found" };
+  if (params.requireOpen && isTerminalSessionStatus(session.status)) {
+    return {
+      status: "refused",
+      reason: `this session is ${session.status}, and a finished session is never bound to a playbook`,
+    };
+  }
 
   if (followPlaybookId === null) {
     return releasePlaybook(session);

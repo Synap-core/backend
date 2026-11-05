@@ -1978,8 +1978,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // own agent, not the capture-path remap above: a person's start (or a
         // capture they made) is never re-shaped by a guessed template.
         matchTemplate: !!ctxAgentUserId,
-        // Facts bind for an agent's start, as on the MCP door (d01–d03).
-        bindOnFacts: !!ctxAgentUserId,
+        // Facts bind for an agent's start, as on the MCP door (d01–d03). Not
+        // on the capture path (X-Capture: 1): that is a person capturing
+        // through a key, and a person's start is never bound for them.
+        bindOnFacts: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
         // The same start offers the MCP door hands back (goals, near sessions,
         // and `homes` for a start that landed in no project) — suggestions
         // only, for an agent's start, so the CLI sees what MCP sees (S5).
@@ -2045,6 +2047,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // The pod's playbooks ranked against this session's words (suggestions
         // only — nothing applied), and the auto-opened session adopted.
         ...(result.playbooks ? { playbooks: result.playbooks } : {}),
+        // The ONE line on the playbook the FACTS bound (or offered), as on
+        // the MCP door; when a fact bound, `playbooks` above is dropped.
+        ...(result.binding ? { binding: result.binding } : {}),
         // Start offers (goals, near sessions, homes): suggestions, nothing applied.
         ...(result.offers ? { offers: result.offers } : {}),
         ...(result.adopted ? { adopted: true } : {}),
@@ -2752,6 +2757,32 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         follow = result.follow;
       }
 
+      // ── BIND ON THE FIRST SUBJECT (d02) ───────────────────────────────────
+      // The same once-only rule as the MCP door (`rebindOnSubjectArrival`,
+      // one function): an agent key's own first subject re-runs the facts.
+      // Never on the capture path (a person capturing through a key).
+      let binding: string | undefined;
+      if (updated) {
+        const { rebindOnSubjectArrival } =
+          await import("../../../services/focus-sessions/bind-on-facts.js");
+        const rebound = await rebindOnSubjectArrival({
+          enabled: !!keyAgentUserId && c.req.header("x-capture") !== "1",
+          subjectParam: patch.subjectEntityId,
+          followParam: patch.followPlaybookId,
+          before: existing,
+          after: updated,
+          userId,
+          agentUserId,
+        });
+        binding = rebound?.line;
+        if (rebound?.decision === "bind") {
+          const reloaded = await db.query.focusSessions.findFirst({
+            where: eq(focusSessions.id, id),
+          });
+          if (reloaded) updated = reloaded as typeof updated;
+        }
+      }
+
       // The safety net every block door carries (`block-guidelines.ts`): the
       // IS appends a slot through THIS wholesale array, so a guideline covering
       // the block it just declared must ride back on this response.
@@ -2832,6 +2863,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // structure merged. Without it the caller must infer an attach from a
         // `playbookId` that appeared, and can never see a release's note.
         ...(follow ? { follow } : {}),
+        // The facts re-run once on the first subject (d02): ONE line.
+        ...(binding ? { binding } : {}),
         // Which track/step it landed in; `domainNote` = filed, not moved.
         ...(trackFiling
           ? {

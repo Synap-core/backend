@@ -536,6 +536,36 @@ export const IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES = [
 ] as const;
 
 /**
+ * The session already IN FLIGHT for this playbook on this subject, newest
+ * first, or undefined: the subject idempotency rule. Shared by the run funnel
+ * (`idempotentBySubject`) and the facts binder (`bind-on-facts.ts`, which
+ * never binds a second session to the same playbook on the same subject).
+ */
+export async function findInFlightSubjectSession(
+  playbookId: string,
+  subjectId: string
+) {
+  const db = await getDb();
+  return db.query.focusSessions.findFirst({
+    where: and(
+      eq(focusSessions.playbookId, playbookId),
+      eq(focusSessions.subjectEntityId, subjectId),
+      // Reuse any IN-FLIGHT session (active/paused/stale/forming), not just
+      // 'active': a stuck subject whose session the focus-session reaper aged
+      // active→'stale' must NOT re-spawn a fresh run on the next daily cron.
+      // Once the playbook-run reaper force-fails the run and closes the
+      // session (→ closed|failed|cancelled), a new run is allowed again. A
+      // `scheduled` appointment is never reused: it has executed nothing, so
+      // it must not stand in for a run.
+      notInArray(focusSessions.status, [
+        ...IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES,
+      ])
+    ),
+    orderBy: [desc(focusSessions.startedAt)],
+  });
+}
+
+/**
  * Max runs a single `static`/`query` fan-out may spawn. Each run is an agent
  * kickoff, so this IS the per-trigger AI dispatch cap — read from the ONE
  * guardrails config, never restated here.
@@ -1365,23 +1395,10 @@ async function executeSingleRun(
   // subject the reaper aged active→'stale' is not re-dispatched daily. Opt-in;
   // manual runs leave `idempotentBySubject` false so each click starts fresh.
   if (input.idempotentBySubject && input.subjectId) {
-    const existing = await db.query.focusSessions.findFirst({
-      where: and(
-        eq(focusSessions.playbookId, playbook.id),
-        eq(focusSessions.subjectEntityId, input.subjectId),
-        // Reuse any IN-FLIGHT session (active/paused/stale/forming), not just
-        // 'active': a stuck subject whose session the focus-session reaper aged
-        // active→'stale' must NOT re-spawn a fresh run on the next daily cron.
-        // Once the playbook-run reaper force-fails the run and closes the
-        // session (→ closed|failed|cancelled), a new run is allowed again. A
-        // `scheduled` appointment is never reused: it has executed nothing, so
-        // it must not stand in for a run.
-        notInArray(focusSessions.status, [
-          ...IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES,
-        ])
-      ),
-      orderBy: [desc(focusSessions.startedAt)],
-    });
+    const existing = await findInFlightSubjectSession(
+      playbook.id,
+      input.subjectId
+    );
     if (existing) {
       return { run: null, session: existing as FocusSession, reused: true };
     }

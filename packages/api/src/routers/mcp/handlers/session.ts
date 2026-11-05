@@ -1710,6 +1710,9 @@ export const sessionHandlers: McpHandlerMap = {
         : typeof args.subjectEntityId === "string"
           ? { subjectEntityId: args.subjectEntityId }
           : {}),
+      // An AI door: the session's FIRST subject, sent by this call, re-runs
+      // the facts once and may bind a playbook (d02, `bind-on-facts.ts`).
+      bindOnFirstSubject: true,
       // Validated above (entity UUIDs); the floors are the service's.
       ...(updateTargets ? { targets: updateTargets } : {}),
       // NARROWED like the subject: `null` unfiles, a string files, anything
@@ -1864,8 +1867,8 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.followRefusal
             ? { followRefusal: result.followRefusal }
             : {}),
-          // The facts ladder ran once because a subject or a goal just
-          // arrived (d02): ONE line, what it bound and why, or the offer.
+          // The facts ladder ran once because this call set the session's
+          // first subject (d02): ONE line, what it bound and why, or the offer.
           ...(result.binding ? { binding: result.binding } : {}),
           // Which track/step it landed in, and — when the step names another
           // domain — that the session was filed where it is, not moved.
