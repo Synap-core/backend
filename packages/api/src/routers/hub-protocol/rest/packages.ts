@@ -33,8 +33,11 @@ import {
 } from "../../../services/template-apply/index.js";
 import {
   admitTemplateApply,
+  expandCatalogReference,
   proposeTemplateApply,
   resolvePackageContents,
+  routeNamedInstall,
+  type NamedInstallRoute,
 } from "../../../services/template-apply/propose.js";
 import { packagePreflightReadable } from "../../../access/grant-door-fence.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
@@ -555,6 +558,34 @@ async function readPackageBody(c: Parameters<typeof readJsonBody>[0]): Promise<
   };
 }
 
+/**
+ * The body an install reached only through `package.install` works on: for a
+ * `catalog` route, the catalog's own definition (`expandCatalogReference`),
+ * parsed as any apply body; otherwise the request's own. null = the catalog
+ * definition does not parse (a catalog fault, never the caller's).
+ */
+function namedInstallBody(
+  read: {
+    raw: Record<string, unknown>;
+    body: z.infer<typeof PackageApplySchema>;
+  },
+  route: NamedInstallRoute
+): {
+  raw: Record<string, unknown>;
+  body: z.infer<typeof PackageApplySchema>;
+} | null {
+  if (route.kind !== "catalog") return read;
+  const raw = expandCatalogReference(read.raw, route);
+  const parsed = PackageApplySchema.safeParse(raw);
+  return parsed.success ? { raw, body: parsed.data } : null;
+}
+
+const CATALOG_DEFINITION_UNREADABLE = {
+  code: "CATALOG_DEFINITION_UNREADABLE" as const,
+  error:
+    "The catalog's definition of this package could not be read, so nothing was installed.",
+};
+
 /** The wire shape of the 409 a refused apply answers. */
 function dataChangesNeedConsentBody(
   pending: TemplateDataChange[],
@@ -625,9 +656,15 @@ export function registerPackagesRoutes(app: HubHono): void {
     // "Add to my pod"): what the package itself brings (no pod read, no
     // connection state), and the pod's parts said withheld, never empty.
     if (!packagePreflightReadable(getRequestGrant())) {
+      // A catalog reference previews the catalog's own definition, the one
+      // `/apply` would install (`routeNamedInstall`).
+      const namedRoute = await routeNamedInstall({ userId, raw, body });
+      const named = namedInstallBody({ raw, body }, namedRoute);
+      if (!named) return c.json(CATALOG_DEFINITION_UNREADABLE, 502);
       return c.json(
         {
-          contents: await resolvePackageContents(body),
+          contents: await resolvePackageContents(named.body),
+          source: namedRoute.kind === "catalog" ? "catalog" : "request",
           pod: {
             status: "withheld",
             reason:
@@ -695,7 +732,17 @@ export function registerPackagesRoutes(app: HubHono): void {
     const userId = c.get("userId");
     const read = await readPackageBody(c);
     if (!read.ok) return read.res;
-    const { raw, body } = read;
+    // "Add to my pod" (L7): an install the key reaches only through
+    // `package.install` applies a catalog package as the catalog fixes it, or
+    // is reviewed (`routeNamedInstall`); every other install is unchanged.
+    const namedRoute = await routeNamedInstall({
+      userId,
+      raw: read.raw,
+      body: read.body,
+    });
+    const named = namedInstallBody(read, namedRoute);
+    if (!named) return c.json(CATALOG_DEFINITION_UNREADABLE, 502);
+    const { raw, body } = named;
     // The pod never trusts a caller's version LABEL: a caller that asks for a
     // stamp gets the version of the definition it actually sent (the CP's own
     // rule, over the RAW body — zod would strip fields the CP hashed). Set on
@@ -820,7 +867,11 @@ export function registerPackagesRoutes(app: HubHono): void {
     }
     if (pendingDataChanges && pendingDataChanges.length > 0) {
       consent = dataChangeConsent(pendingDataChanges, body.acceptDataChanges);
-      const agentMustAsk = !!agentUserId && consent.toRun.length > 0;
+      // An install reached only through `package.install` never runs a data
+      // change either: that is the person's call in their own pod.
+      const agentMustAsk =
+        (!!agentUserId || namedRoute.kind !== "unchanged") &&
+        consent.toRun.length > 0;
       if (agentMustAsk || !consent.ok) {
         return c.json(
           dataChangesNeedConsentBody(pendingDataChanges, consent, agentMustAsk),
@@ -849,7 +900,12 @@ export function registerPackagesRoutes(app: HubHono): void {
     // `targetWorkspaceId` as an update of THAT space so RBAC checks the
     // caller's role on it. `composeOntoBaseWorkspace` (reached below) still
     // re-gates via `assertWorkspaceWrite` as defense in depth.
-    const filed = await proposeTemplateApply({ userId, agentUserId, body });
+    const filed = await proposeTemplateApply({
+      userId,
+      agentUserId,
+      body,
+      catalogFixed: namedRoute.kind === "catalog",
+    });
     if (filed.kind === "denied") return c.json({ error: filed.reason }, 403);
     if (filed.kind === "proposed")
       return jsonGoverned(c, {

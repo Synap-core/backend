@@ -127,6 +127,31 @@ vi.mock(
   })
 );
 
+// "Add to my pod" routing (`routeNamedInstall`) reads which space holds a
+// slug and the official catalog; both are proven on PGlite
+// (propose.beyond-grant.pglite.test.ts). Here: no space holds a slug, and the
+// catalog holds `creator-pack`.
+const catalogPack = vi.hoisted(() => ({
+  _meta: { slug: "creator-pack", version: "creator-pack-2" },
+  workspaceName: "Creator pack",
+  profiles: [{ slug: "client", displayName: "Client", profileKind: "kind" }],
+}));
+vi.mock("../../../services/installed-template-space.js", () => ({
+  installedTemplateSpace: async () => null,
+}));
+vi.mock("../../../services/capabilities/resolve-workspace-template.js", () => ({
+  resolveWorkspaceTemplate: async (slug: string) =>
+    slug === "creator-pack"
+      ? {
+          source: "cache",
+          version: "creator-pack-2",
+          dependencies: [],
+          packageDefinition: catalogPack,
+          workspaceDefinition: catalogPack,
+        }
+      : null,
+}));
+
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerPackagesRoutes } from "./packages.js";
 import type { HubHono, HubVariables } from "./_shared.js";
@@ -427,5 +452,58 @@ describe("POST /packages/apply — an app's install meets one space per domain f
     expect(await res.json()).toMatchObject(existing);
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockMaterialize).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * L7, review finding 6: what a person-acting app (no agent) holding only
+ * `package.install` hands the gate. A catalog reference reaches it as the
+ * CATALOG's definition with no untrusted issuer (the person's click may
+ * apply it); content the app wrote reaches it with an untrusted issuer, so
+ * the gate files one proposal (its rung 4b, proven on PGlite).
+ */
+describe("POST /packages/apply — a person-acting app's install is fixed by the catalog", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const appGrant = async () =>
+    (await import("@synap/database")).grantOfScope({
+      permissions: ["entity.read", "package.install"],
+      workspaceIds: ["w1"],
+    });
+
+  async function applyAsApp(body: Record<string, unknown>) {
+    mockPreflight.mockResolvedValue(okReport);
+    mockCheckPermission.mockResolvedValue({ proposalId: "p-1" });
+    const { runWithGrant } = await import("@synap/database");
+    return runWithGrant(await appGrant(), () => apply(buildApp(), body));
+  }
+  const gateCall = () =>
+    mockCheckPermission.mock.calls[0]![0] as {
+      issuer?: { trusted: boolean };
+      data: { definition: Record<string, unknown> };
+    };
+
+  it("a catalog reference reaches the gate as the catalog's own definition", async () => {
+    const res = await applyAsApp({
+      _meta: { slug: "creator-pack", version: "creator-pack-2" },
+    });
+    expect(res.status).toBe(202);
+    const call = gateCall();
+    expect(call.issuer).toBeUndefined();
+    expect(call.data.definition).toMatchObject({
+      workspaceName: "Creator pack",
+      profiles: catalogPack.profiles,
+    });
+  });
+
+  it("content the app wrote reaches the gate as an untrusted issuer (one proposal)", async () => {
+    const res = await applyAsApp({
+      _meta: { slug: "creator-pack" },
+      workspaceName: "Mine now",
+      profiles: [{ slug: "lead", displayName: "Lead", profileKind: "kind" }],
+    });
+    expect(res.status).toBe(202);
+    const call = gateCall();
+    expect(call.issuer).toEqual({ kind: "connector", trusted: false });
+    expect(call.data.definition).toMatchObject({ workspaceName: "Mine now" });
   });
 });

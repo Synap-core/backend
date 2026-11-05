@@ -23,13 +23,20 @@
  *    the person's approval runs the template update and marks it approved;
  *  - an APP's key holding the named permission `package.install` (pinned to
  *    a space, as every app grant is) is permitted the install at rung 0, then
- *    governed as its token acts (`podAppActsAs`): as the app's AGENT, ONE
- *    pending `workspace/create` proposal and no space (rules out "Add to my
- *    pod" refused, or applied without the person); as the PERSON (a Synap
- *    app, no agent), granted: the person's own click applies (rules out the
- *    person-acting app getting nothing from it). The space pin still holds
- *    for an UPDATE of a space it does not name, and a bare `*` pinned to a
- *    space is not the ask.
+ *    governed as its token acts (`podAppActsAs`), and ONLY a package the
+ *    catalog fixes may apply directly:
+ *    - as the app's AGENT: ONE pending `workspace/create` proposal and no
+ *      space (rules out "Add to my pod" refused, or applied without the
+ *      person);
+ *    - as the PERSON (a Synap app, no agent), a CATALOG REFERENCE routes to
+ *      the catalog's own definition and is granted (rules out the
+ *      person-acting app getting nothing from it);
+ *    - as the PERSON, content the app wrote, a slug no catalog holds or
+ *      another version is ONE pending proposal, never applied (rules out the
+ *      consent becoming a blank cheque for any payload, review finding 6);
+ *    - a key whose grant reaches the install by itself is unchanged; the
+ *      space pin still holds for an UPDATE of a space it does not name; a
+ *      bare `*` pinned to a space is not the ask.
  *
  * Faked (their own suites pin them): layer-1 reconcile and preflight, layer 2
  * (`applyPackagePostWorkspace`), the catalog resolve, delivery side effects.
@@ -186,8 +193,10 @@ import {
 import { registerWorkspaceExecutors } from "../../routers/proposals/executors/workspace.js";
 import { refuseAgentProposalApprover } from "../../routers/proposals/review-authority.js";
 import {
+  expandCatalogReference,
   PACKAGE_INSTALL_PERMISSION,
   proposeTemplateApply,
+  routeNamedInstall,
   type PackageApplyBody,
 } from "./propose.js";
 
@@ -368,9 +377,10 @@ describe("a template update beyond the key's grant is filed for the person's app
   });
 });
 
-describe("an app holding package.install may install a template (Add to my pod)", () => {
+describe("an app holding package.install may install a package (Add to my pod)", () => {
   const APP_AGENT = randomUUID();
   const PACK = "creator-pack";
+  const PACK_VERSION = "creator-pack-2";
   /** An app's grant: pinned to the space the person gave, plus the ask. */
   const appGrant = (workspaceIds: string[]) =>
     grantOfScope({
@@ -382,12 +392,38 @@ describe("an app holding package.install may install a template (Add to my pod)"
     agentUserId: string | undefined,
     fn: () => Promise<T>
   ) => runWithGrant(grant, () => runWithActingAgent(agentUserId, fn));
+  /** What a "Add to my pod" button sends: which package, no content. */
+  const reference = (version?: string) =>
+    ({
+      _meta: { slug: PACK, ...(version ? { version } : {}) },
+    }) as Record<string, unknown>;
+  const route = (raw: Record<string, unknown>) =>
+    routeNamedInstall({
+      userId: OWNER,
+      raw,
+      body: raw as unknown as PackageApplyBody,
+    });
+  const spacesOf = async (slug: string) =>
+    (
+      await q<{ id: string }>(
+        `select id from workspaces where package_slug = $1`,
+        [slug]
+      )
+    ).rows;
 
   beforeAll(async () => {
     await q(
       `insert into users (id, email, user_type, created_by_user_id) values ($1, $2, 'agent', $3)`,
       [APP_AGENT, "creator-site@x.test", OWNER]
     );
+    const def = body(PACK);
+    h.catalog.set(PACK, {
+      source: "cache",
+      version: PACK_VERSION,
+      dependencies: [],
+      packageDefinition: def,
+      workspaceDefinition: def,
+    });
   });
 
   it("as the app's agent: ONE pending workspace/create proposal, and no space yet", async () => {
@@ -411,18 +447,81 @@ describe("an app holding package.install may install a template (Add to my pod)"
       packageSlug: PACK,
       source: "packages.apply",
     });
-    const { rows } = await q<{ id: string }>(
-      `select id from workspaces where package_slug = $1`,
-      [PACK]
-    );
-    expect(rows).toEqual([]);
+    expect(await spacesOf(PACK)).toEqual([]);
   });
 
-  it("as the person (a Synap app, no agent): granted, the person's own click applies", async () => {
+  it("as the person, a catalog reference installs the catalog's own definition, directly", async () => {
+    const r = await asApp(appGrant([SPACE]), undefined, () =>
+      route(reference(PACK_VERSION))
+    );
+    expect(r).toEqual({
+      kind: "catalog",
+      definition: body(PACK),
+      version: PACK_VERSION,
+    });
+    const expanded = expandCatalogReference(
+      { ...reference(PACK_VERSION), projectId: "p-1" },
+      r as Extract<typeof r, { kind: "catalog" }>
+    );
+    expect(expanded).toMatchObject({
+      workspaceName: "Brand library",
+      projectId: "p-1",
+      _meta: { slug: PACK, version: PACK_VERSION },
+    });
     const filed = await asApp(appGrant([SPACE]), undefined, () =>
-      proposeTemplateApply({ userId: OWNER, body: body(PACK) })
+      proposeTemplateApply({
+        userId: OWNER,
+        body: expanded as unknown as PackageApplyBody,
+        catalogFixed: true,
+      })
     );
     expect(filed).toEqual({ kind: "granted" });
+  });
+
+  it("as the person, content the app wrote is ONE pending proposal, never applied", async () => {
+    const written = {
+      ...body(PACK),
+      profiles: [{ slug: "lead", displayName: "Lead", profileKind: "kind" }],
+    } as unknown as Record<string, unknown>;
+    expect(
+      await asApp(appGrant([SPACE]), undefined, () => route(written))
+    ).toEqual({ kind: "review" });
+    const filed = await asApp(appGrant([SPACE]), undefined, () =>
+      proposeTemplateApply({
+        userId: OWNER,
+        body: written as unknown as PackageApplyBody,
+      })
+    );
+    expect(filed.kind).toBe("proposed");
+    const row = await proposalRow((filed as { proposalId: string }).proposalId);
+    expect(row).toMatchObject({
+      status: "pending",
+      agent_user_id: null,
+      target_type: "workspace",
+      proposal_type: "create",
+    });
+    expect(await spacesOf(PACK)).toEqual([]);
+  });
+
+  it("as the person, a slug no catalog holds or another version is reviewed", async () => {
+    const asPerson = (raw: Record<string, unknown>) =>
+      asApp(appGrant([SPACE]), undefined, () => route(raw));
+    expect(await asPerson({ _meta: { slug: "not-in-any-catalog" } })).toEqual({
+      kind: "review",
+    });
+    expect(await asPerson(reference("creator-pack-1"))).toEqual({
+      kind: "review",
+    });
+  });
+
+  it("a key whose grant reaches the install by itself is unchanged", async () => {
+    const r = await runWithGrant(
+      grantOfScope({
+        permissions: ["workspace.create", PACKAGE_INSTALL_PERMISSION],
+      }),
+      () => route(reference())
+    );
+    expect(r).toEqual({ kind: "unchanged" });
   });
 
   it("the space pin still holds for an update of a space it does not name", async () => {

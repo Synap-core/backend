@@ -192,14 +192,15 @@ export async function grantRequestForWrite(
 }
 
 /**
- * null when the write may proceed (no grant, or the grant permits it); a
- * denial reason otherwise. `grant` defaults to the request's ambient grant.
+ * The first request key the grant does not permit for this write, or null
+ * when it permits every one (the named permission, then each request). Pure:
+ * it records nothing, so a door may ASK before it decides (`grantWriteDenial`
+ * is the one that refuses).
  */
-export async function grantWriteDenial(
+export async function grantDeniedKey(
   input: GrantWriteInput,
-  grant: KeyGrant | undefined = getRequestGrant()
-): Promise<string | null> {
-  if (!grant) return null;
+  grant: KeyGrant
+): Promise<{ key: string; workspaceId: string | null } | null> {
   if (
     input.namedPermission &&
     namedPermissionPermits(grant, input.namedPermission)
@@ -219,14 +220,28 @@ export async function grantWriteDenial(
       )
     )
       continue;
-    const key = [req.subject, req.qualifier, req.action]
-      .filter(Boolean)
-      .join(".");
-    const message = `This key's grant does not allow "${key}"${
-      req.workspaceId ? ` in workspace ${req.workspaceId}` : ""
-    }.`;
-    recordGrantDenial(message, key);
-    return message;
+    return {
+      key: [req.subject, req.qualifier, req.action].filter(Boolean).join("."),
+      workspaceId: req.workspaceId ?? null,
+    };
   }
   return null;
+}
+
+/**
+ * null when the write may proceed (no grant, or the grant permits it); a
+ * denial reason otherwise. `grant` defaults to the request's ambient grant.
+ */
+export async function grantWriteDenial(
+  input: GrantWriteInput,
+  grant: KeyGrant | undefined = getRequestGrant()
+): Promise<string | null> {
+  if (!grant) return null;
+  const denied = await grantDeniedKey(input, grant);
+  if (!denied) return null;
+  const message = `This key's grant does not allow "${denied.key}"${
+    denied.workspaceId ? ` in workspace ${denied.workspaceId}` : ""
+  }.`;
+  recordGrantDenial(message, denied.key);
+  return message;
 }
