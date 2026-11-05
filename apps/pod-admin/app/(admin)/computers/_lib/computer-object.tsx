@@ -44,7 +44,10 @@ import {
   type FailureWording,
 } from "../../../_lib/object/load-failure";
 import { SubjectActivity } from "../../../_lib/object/subject-activity";
-import { useSetMachineRunsScripts } from "../../../_lib/presence/use-sensitive-actions";
+import {
+  useSetMachineBelongsTo,
+  useSetMachineRunsScripts,
+} from "../../../_lib/presence/use-sensitive-actions";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
 import { ResourceRow, ResourceRowEmpty } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
@@ -145,7 +148,7 @@ export function ComputerObject({
       });
     },
   });
-  const belongsTo = trpc.machines.setBelongsTo.useMutation({
+  const belongsTo = useSetMachineBelongsTo({
     onSuccess: async (out) => {
       addToast(
         out.status === "proposed"
