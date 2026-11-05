@@ -13,7 +13,10 @@
  * (`resolveRunChoiceViaLabel`, `SYNAP_AI_LABEL`); none re-derives them.
  */
 
-import type { RUN_CHOICE_VIA_LABELS } from "../vocabulary/index.js";
+import type {
+  RUN_CHOICE_PROVIDER_KEY_LABELS,
+  RUN_CHOICE_VIA_LABELS,
+} from "../vocabulary/index.js";
 import type { AgentWake, AgentWakeRefusal } from "./wake.js";
 
 /** What a person can choose: Synap AI, or one of their agents. */
@@ -73,6 +76,46 @@ export interface RunChoiceOption {
   wakeLabel: string | null;
   /** At most one: Synap AI when the playbook allows it, else none. */
   recommended: boolean;
+  /**
+   * Only on Synap AI: the AI provider it runs on, ONE global choice per pod
+   * (founder, run choice v3, 2026-11-05: the provider replaces the IS default
+   * AI, it is never chosen per playbook). `null` for an agent.
+   */
+  provider: RunChoiceProvider | null;
+}
+
+/**
+ * Whose key Synap AI runs on: the person's own, their space's, the pod's
+ * (`ai_providers`), or none of theirs, so it runs on Synap credits.
+ */
+export const RUN_CHOICE_PROVIDER_KEYS = [
+  "person",
+  "space",
+  "pod",
+  "synap",
+] as const;
+export type RunChoiceProviderKey = (typeof RUN_CHOICE_PROVIDER_KEYS)[number];
+
+/** The provider Synap AI uses now, read by the IS default's own rule. */
+export interface RunChoiceProvider {
+  /** `ai_providers.provider_id`; `null` = Synap credits. */
+  providerId: string | null;
+  /** The provider's name ("Anthropic"), or the Synap credits words. */
+  name: string;
+  key: RunChoiceProviderKey;
+}
+
+/**
+ * Agents the person has that cannot run it now, grouped by the one reason
+ * (decision D3: an option that cannot apply is absent, and the ask says why).
+ */
+export interface RunChoiceHidden {
+  why: AgentWakeRefusal;
+  /** The reason's words (`resolveAgentWakeRefusalLabel`). */
+  label: string;
+  count: number;
+  /** Their labels, as the options would show them. */
+  names: string[];
 }
 
 /** `playbooks.runChoice` / Hub `GET /playbooks/:id/run-choice`. */
@@ -81,14 +124,21 @@ export interface PlaybookRunChoice {
   /** The person's remembered choice; `null` = never chosen. */
   stored: RunChoice | null;
   /**
-   * Ask before the run: nothing is stored AND the person has an agent that
-   * could take it, so there is a real choice. A launch that asks passes its
-   * answer with `remember: true`; headless runs never ask.
+   * Ask before the run: nothing is stored and something can run it (decision
+   * D4, "never a silent default": even with one option, even with no agent).
+   * A launch that asks passes its answer with `remember: true`. A headless run
+   * (an automation, a schedule) never asks: it takes the playbook's default
+   * and records `via: "default"` on the run.
    */
   ask: boolean;
   /** Synap AI may run it (`executor` is `is-agent` or `hybrid`). */
   synapAiAllowed: boolean;
+  /** Synap AI (when allowed), then the agents that are awake or can wake. */
   options: RunChoiceOption[];
+  /** The person's agents that cannot run it now, largest group first. */
+  hidden: RunChoiceHidden[];
+  /** "2 more can't run now"; `null` when nothing is hidden. */
+  hiddenLabel: string | null;
   /** What the next run would do, by the same rule the run uses. */
   next: RunOn;
 }
@@ -103,3 +153,19 @@ type _ViaWords =
     : never;
 const _viaWords: _ViaWords = true;
 void _viaWords;
+
+// The same floor for whose key Synap AI runs on.
+type _ProviderKeyWords =
+  Exclude<
+    RunChoiceProviderKey,
+    keyof typeof RUN_CHOICE_PROVIDER_KEY_LABELS
+  > extends never
+    ? Exclude<
+        keyof typeof RUN_CHOICE_PROVIDER_KEY_LABELS,
+        RunChoiceProviderKey
+      > extends never
+      ? true
+      : never
+    : never;
+const _providerKeyWords: _ProviderKeyWords = true;
+void _providerKeyWords;

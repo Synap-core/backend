@@ -23,6 +23,7 @@ import {
   getPlaybookDoor,
   getPlaybookRunChoiceDoor,
   listPlaybooksDoor,
+  playbookDoorContext,
   runPlaybookDoor,
   type PlaybookDoorIdentity,
   type PlaybookDoorOutcome,
@@ -44,6 +45,7 @@ import {
   requireUuidParam,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { setPlaybookRunChoiceGoverned } from "../../../services/playbooks/set-run-choice.js";
 
 type HubContext = Context<{ Variables: HubVariables }>;
 
@@ -157,11 +159,92 @@ const RunPlaybookBodySchema = z.object({
     ),
 });
 
+// PlaybookRunChoice (@synap-core/types/agents), spelled out so the generated
+// client types it (run choice v3; lane C's run button draws it).
+const RunChoiceSchema = z.discriminatedUnion("executor", [
+  z.object({ executor: z.literal("is-agent") }),
+  z.object({
+    executor: z.literal("external-agent"),
+    agentUserId: z.string().uuid(),
+  }),
+]);
+const AgentWakeSchema = z.object({
+  state: z.enum(["awake", "can_wake", "cant_wake"]),
+  how: z.enum(["built_in", "binding", "runner"]).nullable(),
+  why: z.string().nullable(),
+});
 const RunChoiceResultSchema = z
-  .record(z.string(), z.unknown())
-  .describe(
-    "PlaybookRunChoice (@synap-core/types/agents): stored, ask, synapAiAllowed, options[], next."
-  );
+  .object({
+    playbookId: z.string().uuid(),
+    stored: RunChoiceSchema.nullable(),
+    ask: z
+      .boolean()
+      .describe(
+        "Ask before a launch the person starts: nothing is stored and something can run it (even one option). Headless runs never ask."
+      ),
+    synapAiAllowed: z.boolean(),
+    options: z
+      .array(
+        z.object({
+          choice: RunChoiceSchema,
+          name: z.string().nullable(),
+          label: z
+            .string()
+            .describe(
+              'What to show: "Synap AI · using Anthropic (your key)", "Claude Code · MacBook".'
+            ),
+          wake: AgentWakeSchema.nullable(),
+          wakeLabel: z.string().nullable(),
+          recommended: z.boolean(),
+          provider: z
+            .object({
+              providerId: z.string().nullable(),
+              name: z.string(),
+              key: z.enum(["person", "space", "pod", "synap"]),
+            })
+            .nullable()
+            .describe(
+              "Only on Synap AI: the pod's AI provider it runs on now (one global choice); providerId null = Synap credits."
+            ),
+        })
+      )
+      .describe(
+        "Synap AI first when the playbook allows it, then only your agents that are awake or can wake."
+      ),
+    hidden: z
+      .array(
+        z.object({
+          why: z.string(),
+          label: z.string(),
+          count: z.number().int(),
+          names: z.array(z.string()),
+        })
+      )
+      .describe("Your agents that cannot run it now, grouped by reason."),
+    hiddenLabel: z.string().nullable(),
+    next: z
+      .record(z.string(), z.unknown())
+      .describe("RunOn: what the next run would do, by the rule the run uses."),
+  })
+  .passthrough();
+
+const SetRunChoiceBodySchema = z.object({
+  choice: RunChoiceSchema,
+  reasoning: z
+    .string()
+    .max(2000)
+    .optional()
+    .describe(
+      "Why an agent or app asks for this choice (shown on its proposal)."
+    ),
+});
+
+const SetRunChoiceResultSchema = z.object({
+  status: z.enum(["applied", "proposed"]),
+  proposalId: z.string().nullable(),
+  message: z.string().nullable(),
+  runChoice: RunChoiceResultSchema.nullable(),
+});
 
 const PlaybookResultSchema = z.record(z.string(), z.unknown());
 
@@ -297,10 +380,36 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     tags: ["Playbooks"],
     summary: "Who runs a playbook for you",
     description:
-      "Your remembered choice for this playbook (Synap AI or one of your agents), whether a launch should ask first (`ask`), the answers to offer (Synap AI first when the playbook allows it, then your agents with their wake mark) and what the next run would do (`next`), by the same rule the run uses. Answer an ask with POST /playbooks/{id}/run `runOn` or `handToAgentId` plus `remember: true`.",
+      "Your remembered choice for this playbook (Synap AI or one of your agents), whether a launch should ask first (`ask`: whenever nothing is stored), the answers to offer (Synap AI first when the playbook allows it, labelled with the AI provider it uses now, then only your agents that are awake or can wake), the agents that cannot run it now grouped by reason (`hidden`), and what the next run would do (`next`), by the same rule the run uses. Answer an ask with POST /playbooks/{id}/run `runOn` or `handToAgentId` plus `remember: true`, or save it alone with PUT /playbooks/{id}/run-choice.",
     request: { params: z.object({ id: z.string().uuid() }) },
     responses: {
       200: { description: "Who runs it", schema: RunChoiceResultSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Playbook not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "put",
+    path: "/playbooks/{id}/run-choice",
+    tags: ["Playbooks"],
+    summary: "Remember who runs a playbook for you",
+    description:
+      "Saves your choice for this playbook: Synap AI (`{executor: 'is-agent'}`) or one of your agents (`{executor: 'external-agent', agentUserId}`). A person's key applies it (200, `status: 'applied'`, with the new read). An agent or third-party app key files a proposal the person approves once (202, `status: 'proposed'`).",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: {
+        content: { "application/json": { schema: SetRunChoiceBodySchema } },
+      },
+    },
+    responses: {
+      200: { description: "Saved", schema: SetRunChoiceResultSchema },
+      202: {
+        description: "Proposed for the person's approval",
+        schema: SetRunChoiceResultSchema,
+      },
+      400: { description: "Invalid choice", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Playbook not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
@@ -360,6 +469,37 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       return c.json(outcome.result);
     } catch (err) {
       return errorResponse(c, err, "playbooks.runChoice failed");
+    }
+  });
+
+  /**
+   * PUT /playbooks/:id/run-choice — remember who runs it for the caller
+   * (`setPlaybookRunChoiceGoverned`, the one write tRPC `setRunChoice` uses):
+   * a person's choice applies; an agent's or app's is a proposal (D7).
+   */
+  app.put("/playbooks/:id/run-choice", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = SetRunChoiceBodySchema.safeParse(jsonRead.body);
+    if (!parsed.success) return c.json({ error: zodError(parsed.error) }, 400);
+    try {
+      const ctx = await playbookDoorContext(
+        doorIdentity(c, c.get("agentUserId")),
+        null
+      );
+      const result = await setPlaybookRunChoiceGoverned(ctx, {
+        playbookId: id,
+        choice: parsed.data.choice,
+        reasoning: parsed.data.reasoning,
+      });
+      return jsonGoverned(c, result);
+    } catch (err) {
+      return errorResponse(c, err, "playbooks.setRunChoice failed");
     }
   });
 
