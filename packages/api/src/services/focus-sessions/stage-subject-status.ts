@@ -12,8 +12,14 @@
  *
  * Skips, each reported (never thrown — the stage already stands, and a status
  * write that could not happen must not un-advance the run):
- *  - no subject, no `statusProperty`, or the stage declares no `subjectStatus`;
+ *  - no subject, or the stage declares no `subjectStatus`;
+ *  - no status property: the process names none AND its subject kind (or
+ *    role) declares no lifecycle. A process that names none follows the
+ *    declared lifecycle — `loadSessionProcess` resolves it, once, for every
+ *    reader (finding bfae3b84);
  *  - the subject ALREADY holds the value (`already_set`).
+ * A caller's reply carries the outcome as `subjectMove`
+ * ({@link reportedSubjectMove}) whenever the stage asked for a move.
  *
  * NOT called (by the advance door) when:
  *  - the advance FOLLOWS the subject (`skipSubjectWrite`, `@synap/jobs`
@@ -89,6 +95,31 @@ export type StageSubjectStatusOutcome =
   | { status: "failed"; reason: string };
 
 /**
+ * What an advance's reply says about the subject move (`subjectMove` on the
+ * update doors): the outcome whenever the entered stage ASKED for one —
+ * written, proposed, failed, or skipped with why (`no_status_property`,
+ * `already_set`, `subject_not_found`). Absent when there was nothing to move:
+ * no subject, no process, a stage the process does not declare, a stage with
+ * no `subjectStatus`. So a move that did not happen is never silent, and a
+ * stage that asks for none adds nothing to the reply.
+ */
+export function reportedSubjectMove(
+  outcome: StageSubjectStatusOutcome | undefined
+): StageSubjectStatusOutcome | undefined {
+  if (!outcome) return undefined;
+  if (outcome.status === "skipped" && NOTHING_TO_MOVE.has(outcome.reason))
+    return undefined;
+  return outcome;
+}
+
+const NOTHING_TO_MOVE: ReadonlySet<string> = new Set([
+  "no_subject",
+  "no_process",
+  "stage_not_found",
+  "stage_has_no_subject_status",
+]);
+
+/**
  * Write the entered stage's `subjectStatus` onto the session's subject, through
  * the governed entity-update door. See the header for every skip.
  */
@@ -114,8 +145,6 @@ export async function writeStageSubjectStatus(input: {
       playbookId: session.playbookId,
     });
     if (!proc) return { status: "skipped", reason: "no_process" };
-    if (!proc.statusProperty)
-      return { status: "skipped", reason: "no_status_property" };
     const stage = proc.stages.find((s) => s?.key === input.toStage);
     if (!stage) return { status: "skipped", reason: "stage_not_found" };
     const value =
@@ -124,6 +153,11 @@ export async function writeStageSubjectStatus(input: {
         : null;
     if (!value)
       return { status: "skipped", reason: "stage_has_no_subject_status" };
+    // The stage asks for a value, but the process names no status property
+    // and its subject kind declares no lifecycle (`loadSessionProcess`
+    // resolves the declared one): nothing to write it on.
+    if (!proc.statusProperty)
+      return { status: "skipped", reason: "no_status_property" };
 
     const reasoning = `The process entered stage "${stage.name ?? stage.key}", which is "${value}".`;
     return await writeSubjectStatusValue({
