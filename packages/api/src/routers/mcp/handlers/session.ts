@@ -31,6 +31,7 @@ import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
+import { sessionWriteEcho } from "./session-write-echo.js";
 import {
   waitForConversationChanges,
   waitForSessionAnswers,
@@ -737,6 +738,11 @@ export const sessionHandlers: McpHandlerMap = {
     // where to read it, instead of the agent concluding nothing exists.
     return ok({
       ...result,
+      // The echo, never the whole row (`session-write-echo.ts`): the id, the
+      // room and the outcome / criterion keys the agent continues with.
+      ...(result.status === "created"
+        ? { session: sessionWriteEcho(result.session, { withKeys: true }) }
+        : {}),
       ...(method ? { method } : {}),
       ...(subjectCandidates.length > 0
         ? {
@@ -852,7 +858,8 @@ export const sessionHandlers: McpHandlerMap = {
       // terminalStatus reachable, a literal here would report every cancel and
       // every failure as a successful close.
       status: result.session.status,
-      session: result.session,
+      // The echo, never the whole closed row (`session-write-echo.ts`).
+      session: sessionWriteEcho(result.session),
       pendingProposals: result.pendingProposals,
       counts: result.counts,
       warnings: result.warnings,
@@ -1779,7 +1786,9 @@ export const sessionHandlers: McpHandlerMap = {
         return reply({
           ...(await applyBlockerEdits()),
           status: "updated",
-          session: result.session,
+          // The echo, never the whole row (`session-write-echo.ts`): what
+          // changed reads off it, what is still owed rides `nudges`.
+          session: sessionWriteEcho(result.session),
           ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
           ...(result.completeOutput
             ? { completeOutput: result.completeOutput }

@@ -123,7 +123,8 @@ async function createEntity(args: Record<string, unknown>) {
     sessionId: string | null;
     projectId: string | null;
     derivedSessionId: string | null;
-    attribution: { session: string };
+    /** Absent on an explicit call that filed nothing new (`attributionCarriesNews`). */
+    attribution?: { session: string };
   };
 }
 
@@ -138,7 +139,7 @@ describe("A1 — a non-capture MCP hub door never takes a project from a guessed
 
     const out = await createEntity({});
 
-    expect(out.attribution.session).toBe("derived");
+    expect(out.attribution?.session).toBe("derived");
     expect(out.sessionId).toBe(S_NEWEST);
     expect(out.derivedSessionId).toBe(S_NEWEST);
     expect(out.projectId).toBeNull();
@@ -150,7 +151,9 @@ describe("A1 — a non-capture MCP hub door never takes a project from a guessed
 
     const out = await createEntity({ sessionId: S_EXPLICIT });
 
-    expect(out.attribution.session).toBe("explicit");
+    // Explicit and nothing filed elsewhere: the reply carries no attribution
+    // block (it would only repeat the caller's own sessionId).
+    expect(out.attribution).toBeUndefined();
     expect(out.derivedSessionId).toBeNull();
     expect(out.projectId).toBe(P_SESSION);
   });
@@ -161,7 +164,9 @@ describe("A1 — a non-capture MCP hub door never takes a project from a guessed
 
     const out = await createEntity({ sessionId: S_NEWEST });
 
-    expect(out.attribution.session).toBe("explicit");
+    // Explicit and nothing filed elsewhere: the reply carries no attribution
+    // block (it would only repeat the caller's own sessionId).
+    expect(out.attribution).toBeUndefined();
     expect(out.derivedSessionId).toBeNull();
     expect(out.projectId).toBe(P_SESSION);
   });
