@@ -12,7 +12,8 @@
  * Every read carries the caller's floor AND the key's grant, through the
  * existing doors:
  *   - the people: `entityReadVisibleWhere` + `facetInWorkspaceLensWhere`
- *     (a facet in THIS space, and the caller a member of it);
+ *     (a facet in THIS space, and the caller a member of it), and the
+ *     listing rule (`listableEntityWhere`: no probe or demo row);
  *   - their channels: `channelVisibilityWhere` (a channel follows its person);
  *   - their sends: `proposalUserFloor` (floor + `proposal` grant): a key that
  *     cannot read proposals sees no drafts, never someone else's;
@@ -32,6 +33,7 @@ import {
   isNull,
   or,
   drizzleSql,
+  listableEntityWhere,
   ProposalStatus,
 } from "@synap/database";
 import {
@@ -211,6 +213,8 @@ export async function listSpaceConversations(
         isNull(entities.deletedAt),
         facetInWorkspaceLensWhere(entities.id, userId, workspaceId),
         entityReadVisibleWhere(userId),
+        // THE LISTING RULE (FB1020 B5): no probe-key row, no demo row.
+        listableEntityWhere(),
         or(
           inArray(entities.id, withChannel),
           drizzleSql`${entities.id}::text IN (${withSend})`

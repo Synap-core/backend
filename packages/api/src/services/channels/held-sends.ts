@@ -36,6 +36,7 @@ import {
 } from "@synap/database";
 import { proposals, ProposalStatus } from "@synap/database/schema";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
+import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 
 const logger = createLogger({ module: "held-sends" });
 
@@ -204,7 +205,28 @@ export async function withdrawDraftsSentOutside(args: {
       isNull(proposals.externalDispatchedAt),
       lte(proposals.createdAt, args.sentAt)
     ),
-  }).returning({ id: proposals.id });
+  }).returning({ id: proposals.id, data: proposals.data });
+  // WITHDRAWN is terminal: a staged source blob is discarded here or never
+  // (the terminal-discard tripwire). A send carries none in practice; the
+  // call is the door every terminal writer makes. No acting human (the
+  // provider reported the message), so the row's own owner deletes it, as
+  // the expiry scanners do.
+  // A failed cleanup is logged, never thrown: the withdrawal already stands
+  // and the inbound message is still to be recorded.
+  for (const r of rows) {
+    try {
+      await discardProposalSourceBlob({
+        database: db,
+        userId: null,
+        proposalData: r.data,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, proposalId: r.id },
+        "withdrawn draft: staged source blob not discarded"
+      );
+    }
+  }
   const ids = rows.map((r) => r.id);
   if (ids.length > 0) {
     markProposalNotificationsActioned(ids);
