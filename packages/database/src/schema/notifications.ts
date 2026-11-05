@@ -123,7 +123,7 @@ export const notifications = pgTable(
     // When this row's push was SENT (migration 0375); NULL = never pushed.
     // The daily push cap (plan Q4.1, `push-decision.ts`) counts these.
     pushedAt: timestamp("pushed_at", { withTimezone: true }),
-    // The AGENT whose work a pushed row was about (migration 0401); NULL =
+    // The AGENT whose work a pushed row was about (migration 0402); NULL =
     // not pushed or no agent known. An agent's own push limit counts these.
     pushAgentId: text("push_agent_id"),
 
@@ -157,7 +157,7 @@ export const notifications = pgTable(
     idxUserPushed: index("notifs_user_pushed_idx")
       .on(t.userId, t.pushedAt)
       .where(sql`${t.pushedAt} IS NOT NULL`),
-    // An agent's own push limit's count (migration 0401).
+    // An agent's own push limit's count (migration 0402).
     idxUserPushAgent: index("notifs_user_push_agent_idx")
       .on(t.userId, t.pushAgentId, t.pushedAt)
       .where(sql`${t.pushAgentId} IS NOT NULL`),

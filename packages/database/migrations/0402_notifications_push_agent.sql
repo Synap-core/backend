@@ -1,4 +1,4 @@
--- 0401: which AGENT a pushed notification was about (push levels, founder
+-- 0402: which AGENT a pushed notification was about (push levels, founder
 -- decision 9bc9f75c, 2026-11-04).
 --
 -- A person may set a daily push limit on one agent, in that agent's settings

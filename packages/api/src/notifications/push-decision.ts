@@ -285,7 +285,7 @@ export async function pushesCountedToday(
 /**
  * The pushes `agentUserId`'s work got the person since the start of their day
  * (rule 4b): rows pushed today stamped with that agent
- * (`notifications.push_agent_id`, 0401), minus the exempt types — the same
+ * (`notifications.push_agent_id`, 0402), minus the exempt types — the same
  * day and the same exemptions as {@link pushesCountedToday}. A failed read
  * THROWS.
  */
