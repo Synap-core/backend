@@ -58,8 +58,10 @@ vi.mock("../../../../lib/trpc", () => {
       },
       tools: {
         setApproved: {
+          // Reached through the presence door (`useSetToolApproved`).
           useMutation: () => ({
             mutate: (input: unknown) => h.approveCalls.push(input),
+            mutateAsync: async (input: unknown) => h.approveCalls.push(input),
             isPending: false,
           }),
         },
@@ -158,13 +160,15 @@ describe("a capability whose access to the service is off", () => {
     expect(page).toContain("every run is refused");
   });
 
-  it("its switch turns the access on: tools.setApproved with that row's id", () => {
+  it("its switch turns the access on: tools.setApproved with that row's id", async () => {
     h.card = hetzner([{ id: TOOL, name: "hetzner_cloud" }]);
     render();
     const turnOn = h.switches.get("Turn on access to Hetzner cloud");
     expect(turnOn, "the access switch was rendered").toBeTypeOf("function");
     turnOn!(true);
-    expect(h.approveCalls).toEqual([{ id: TOOL, approved: true }]);
+    await vi.waitFor(() =>
+      expect(h.approveCalls).toEqual([{ id: TOOL, approved: true }])
+    );
   });
 
   it("someone who cannot change it reads who can, and gets no switch", () => {

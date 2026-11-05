@@ -32,11 +32,13 @@ import {
 import Link from "next/link";
 import {
   FIRST_PARTY_CLIENT_NAMES,
+  buildObjectActionTitle,
   resolveOAuthScopeLabel,
 } from "@synap-core/types/vocabulary";
 import { SIGNED_IN_APPS_COPY } from "@synap-core/types/sign-in";
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
+import { useDecideOAuthAuthorization } from "../../_lib/presence/use-request-doors";
 import {
   allowBlockedReason,
   allowNewAsks,
@@ -180,7 +182,19 @@ export function ConsentForm({
     refetchOnWindowFocus: false,
   });
 
-  const decide = trpc.apiKeys.decideOAuthAuthorization.useMutation();
+  // With the proof of presence: connecting an app or an AI client is setup
+  // (W3). "Sign in with Synap" (an `app` client: no AI, no key) is the one
+  // consent the pod does not gate.
+  const decide = useDecideOAuthAuthorization({
+    needsProof: !!context.data && context.data.clientKind !== "app",
+    label: context.data?.clientName
+      ? buildObjectActionTitle({
+          action: "connect",
+          objectKind: "app",
+          objectName: context.data.clientName,
+        })
+      : null,
+  });
 
   // `prompt=login` / `max_age` and the current sign-in is too old: sign in
   // again before anything is shown to decide on.

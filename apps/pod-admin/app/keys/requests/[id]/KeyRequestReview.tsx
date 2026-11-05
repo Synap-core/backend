@@ -34,6 +34,7 @@ import {
   resolveActionLabel,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { useDecideKeyRequest } from "../../../_lib/presence/use-request-doors";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
 import { ReceiverShell } from "../../../_lib/receiver-shell";
@@ -68,7 +69,16 @@ export function KeyRequestReview({
     staleTime: 60_000,
   });
   const utils = trpc.useUtils();
-  const decide = trpc.apiKeys.decideKeyRequest.useMutation();
+  // With the proof of presence: a key that acts as the person is setup (W3).
+  const decide = useDecideKeyRequest(
+    request.data
+      ? buildObjectActionTitle({
+          action: "create",
+          objectKind: "api_key",
+          objectName: request.data.draft.name,
+        })
+      : null
+  );
 
   useEffect(() => {
     if (request.error) redirectToLoginIfUnauthorized(request.error);

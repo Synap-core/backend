@@ -34,8 +34,12 @@ import Link from "next/link";
 import { ArrowRight, Ban, Lock, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { useApproveIssuer } from "../../../_lib/presence/use-request-doors";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { pendingIssuerHref } from "../../../../lib/console-nav";
 import {
@@ -119,31 +123,49 @@ export function IssuersSection() {
   const utils = trpc.useUtils();
   const queryClient = useQueryClient();
 
-  const approve = trpc.trustedIssuers.approve.useMutation({
-    onSuccess: () => {
-      void utils.trustedIssuers.list.invalidate();
-      void queryClient.invalidateQueries({ queryKey: BROKER_TRUST_QUERY_KEY });
-      addToast({ title: "Issuer approved", color: "success" });
+  // With the proof of presence: an issuer's reach on the pod is governance
+  // (W3). The dialog names the issuer the call approves.
+  const approve = useApproveIssuer(
+    (input) => {
+      const issuer = (list.data as IssuerLike[] | undefined)?.find(
+        (i) => i.id === input.id
+      );
+      return issuer
+        ? buildObjectActionTitle({
+            action: "approve",
+            objectKind: "trusted_issuer",
+            objectName: issuer.displayName,
+          })
+        : null;
     },
-    onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err)) return;
-      if (err.data?.code === "CONFLICT") {
-        // Someone decided this issuer since the list loaded: show the truth.
+    {
+      onSuccess: () => {
         void utils.trustedIssuers.list.invalidate();
-        addToast({
-          title: "This issuer changed meanwhile",
-          description: "The list is refreshed. Check it and try again.",
-          color: "warning",
+        void queryClient.invalidateQueries({
+          queryKey: BROKER_TRUST_QUERY_KEY,
         });
-        return;
-      }
-      addToast({
-        title: "Approval failed",
-        description: err.message,
-        color: "danger",
-      });
-    },
-  });
+        addToast({ title: "Issuer approved", color: "success" });
+      },
+      onError: (err) => {
+        if (redirectToLoginIfUnauthorized(err)) return;
+        if (err.data?.code === "CONFLICT") {
+          // Someone decided this issuer since the list loaded: show the truth.
+          void utils.trustedIssuers.list.invalidate();
+          addToast({
+            title: "This issuer changed meanwhile",
+            description: "The list is refreshed. Check it and try again.",
+            color: "warning",
+          });
+          return;
+        }
+        addToast({
+          title: "Approval failed",
+          description: err.message,
+          color: "danger",
+        });
+      },
+    }
+  );
 
   const revoke = trpc.trustedIssuers.revoke.useMutation({
     onSuccess: () => {

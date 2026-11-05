@@ -9,10 +9,12 @@
  * procedures are newer than `@synap-core/api-types`; see `lib/pod-trpc.ts`).
  *
  * The POST is an allowlist, never a passthrough: only the decision fields are
- * forwarded, and `decision` must be `approve` or `deny`.
+ * forwarded, and `decision` must be `approve` or `deny`. An approval may
+ * carry its proof of presence (`presence`, W3), forwarded when well-formed.
  */
 
 import { isAgentWriteMode } from "@synap-core/types/agents";
+import { presenceProofSchema } from "@synap-core/types/presence";
 import { apiSessionDenial } from "../../../lib/kratos";
 import { callPodMutation, callPodQuery } from "../../../lib/pod-trpc";
 
@@ -71,6 +73,10 @@ export async function POST(req: Request) {
       input.computerName = body.computerName.trim();
     if (isAgentWriteMode(body?.agentWriteMode))
       input.agentWriteMode = body.agentWriteMode;
+    // Proof of presence (W3): connecting a computer is setup. Forwarded only
+    // when it is a well-formed proof; the pod verifies it.
+    const presence = presenceProofSchema.safeParse(body?.presence);
+    if (presence.success) input.presence = presence.data;
   }
 
   const res = await callPodMutation<{ status: string }>(
@@ -80,7 +86,8 @@ export async function POST(req: Request) {
   );
   if (!res.ok)
     return Response.json(
-      { error: res.message, code: res.code },
+      // `reasonCode`: a presence refusal (PRESENCE_*) the page proves and retries.
+      { error: res.message, code: res.code, reasonCode: res.reasonCode },
       { status: res.status }
     );
   return Response.json(res.data);

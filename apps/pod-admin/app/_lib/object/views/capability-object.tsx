@@ -34,7 +34,12 @@
 import { addToast, Chip, Switch } from "@heroui/react";
 import { useState } from "react";
 import { resolveServiceName } from "@synap-core/types/service-marks";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import {
+  useSetToolApproved,
+  useSetToolEnabled,
+} from "../../presence/use-request-doors";
 import { readableError } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
@@ -95,31 +100,46 @@ export function CapabilityObject({
 
   // The pod's own words when it refuses a switch, under the verb it refused.
   const [refusals, setRefusals] = useState<Record<string, string>>({});
-  const setEnabled = trpc.capabilities.setToolEnabled.useMutation({
-    onSuccess: (_res, input) => {
-      setRefusals(({ [input.skillId]: _dropped, ...rest }) => rest);
-      void utils.capabilities.catalog.invalidate();
-      void utils.diagnose.global.invalidate();
+  // With the proof of presence: turning a verb ON is setup (W3).
+  // The dialog names the verb the call turns on.
+  const setEnabled = useSetToolEnabled(
+    (input) => {
+      const verb = verbs.find((v) => v.skillId === input.skillId);
+      return verb
+        ? buildObjectActionTitle({
+            action: "turn_on",
+            objectKind: "skill",
+            objectName: verb.label,
+          })
+        : null;
     },
-    onError: (err, input) => {
-      if (redirectToLoginIfUnauthorized(err)) return;
-      setRefusals((r) => ({
-        ...r,
-        [input.skillId]:
-          readableError(err.message) ?? "The pod didn’t change this action.",
-      }));
-      addToast({
-        title: "That action wasn’t changed",
-        description: readableError(err.message),
-        color: "danger",
-      });
-    },
-  });
+    {
+      onSuccess: (_res, input) => {
+        setRefusals(({ [input.skillId]: _dropped, ...rest }) => rest);
+        void utils.capabilities.catalog.invalidate();
+        void utils.diagnose.global.invalidate();
+      },
+      onError: (err, input) => {
+        if (redirectToLoginIfUnauthorized(err)) return;
+        setRefusals((r) => ({
+          ...r,
+          [input.skillId]:
+            readableError(err.message) ?? "The pod didn’t change this action.",
+        }));
+        addToast({
+          title: "That action wasn’t changed",
+          description: readableError(err.message),
+          color: "danger",
+        });
+      },
+    }
+  );
   // Its access to the service (a member tool row the run gate refuses).
   const [accessRefusals, setAccessRefusals] = useState<Record<string, string>>(
     {}
   );
-  const setAccess = trpc.tools.setApproved.useMutation({
+  // With the proof of presence: turning a tool ON is setup (W3).
+  const setAccess = useSetToolApproved(null, {
     onSuccess: (_res, input) => {
       setAccessRefusals(({ [input.id]: _dropped, ...rest }) => rest);
       void utils.capabilities.catalog.invalidate();

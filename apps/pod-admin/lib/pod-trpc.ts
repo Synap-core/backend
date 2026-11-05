@@ -26,7 +26,14 @@ const INTERNAL_POD_URL = (
 
 export type PodCallResult<T> =
   | { ok: true; data: T }
-  | { ok: false; status: number; message: string; code?: string };
+  | {
+      ok: false;
+      status: number;
+      message: string;
+      code?: string;
+      /** A typed refusal's machine code (`data.reasonCode`, e.g. PRESENCE_REQUIRED). */
+      reasonCode?: string;
+    };
 
 /**
  * Read a tRPC HTTP response into the discriminated result, parsing the
@@ -55,7 +62,7 @@ async function readPodEnvelope<T>(res: Response): Promise<PodCallResult<T>> {
       json?: {
         message?: string;
         code?: string;
-        data?: { httpStatus?: number };
+        data?: { httpStatus?: number; reasonCode?: unknown };
       };
     };
   };
@@ -67,6 +74,9 @@ async function readPodEnvelope<T>(res: Response): Promise<PodCallResult<T>> {
       status: err?.data?.httpStatus ?? res.status,
       message: err?.message ?? `Pod returned ${res.status}.`,
       code: err?.code,
+      ...(typeof err?.data?.reasonCode === "string"
+        ? { reasonCode: err.data.reasonCode }
+        : {}),
     };
   }
 
