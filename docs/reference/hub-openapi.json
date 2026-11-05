@@ -8929,10 +8929,10 @@
             "schema": {
               "type": "string",
               "enum": ["full", "lean"],
-              "description": "full (default) = the array of whole rows. lean = an object `{ projection: 'lean', entities, note }` whose rows carry id, title, kind, status (+ statusCategory/statusLabel) and the kind's selected properties, with `omitted` naming the keys left out (the AI list door, finding 4a5b88a7)."
+              "description": "full (default) = the array of whole rows. lean = an object `{ projection: 'lean', entities, note }` whose rows carry id, title, kind, status (+ statusCategory/statusLabel) and the kind's selected properties, with `omitted` naming the keys left out and `truncated` the full count of a cut list."
             },
             "required": false,
-            "description": "full (default) = the array of whole rows. lean = an object `{ projection: 'lean', entities, note }` whose rows carry id, title, kind, status (+ statusCategory/statusLabel) and the kind's selected properties, with `omitted` naming the keys left out (the AI list door, finding 4a5b88a7).",
+            "description": "full (default) = the array of whole rows. lean = an object `{ projection: 'lean', entities, note }` whose rows carry id, title, kind, status (+ statusCategory/statusLabel) and the kind's selected properties, with `omitted` naming the keys left out and `truncated` the full count of a cut list.",
             "name": "projection",
             "in": "query"
           },
