@@ -35,6 +35,8 @@ import { Check, Info, X } from "lucide-react";
 import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
 import { formatRelative, formatTimestamp } from "../../../../lib/format";
 import { trpc } from "../../../../lib/trpc";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { useApproveIssuer } from "../../../_lib/presence/use-request-doors";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
 import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
@@ -622,10 +624,23 @@ function IssuerBody({
       }
       addToast({ title, description: err.message, color: "danger" });
     };
-  const approve = trpc.trustedIssuers.approve.useMutation({
-    onSuccess: () => done("Issuer approved", "success"),
-    onError: fail("Approval failed"),
-  });
+  // With the proof of presence: an issuer's reach on the pod is governance (W3).
+  const approve = useApproveIssuer(
+    (input) => {
+      const found = list.data?.find((i) => i.id === input.id);
+      return found
+        ? buildObjectActionTitle({
+            action: "approve",
+            objectKind: "trusted_issuer",
+            objectName: found.displayName,
+          })
+        : null;
+    },
+    {
+      onSuccess: () => done("Issuer approved", "success"),
+      onError: fail("Approval failed"),
+    }
+  );
   const reject = trpc.trustedIssuers.reject.useMutation({
     onSuccess: () => done("Issuer rejected", "default"),
     onError: fail("Reject failed"),

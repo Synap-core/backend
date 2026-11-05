@@ -42,6 +42,33 @@ const DOORS: Record<string, RegExp> = {
   "REST /setup/agent/pending/:keyId/approve and /approve-batch":
     /\/setup\/agent\/pending\/[^`"'\s]*?(?:approve(?:-batch)?\b|\/\$\{)/,
   "REST /proposals/:id/approve": /\/api\/hub\/proposals\/[^`"'\s]*\/approve\b/,
+  // W3 slice 2 (backend#808): the decisions that settle no proposal.
+  "tRPC apiKeys.decideKeyRequest":
+    /\bapiKeys\s*\.\s*decideKeyRequest\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC apiKeys.decideOAuthAuthorization":
+    /\bapiKeys\s*\.\s*decideOAuthAuthorization\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // The page posts to its own route, which forwards to
+  // apiKeys.decideDeviceRequest (the route's forwarding is checked below).
+  "route POST /api/device (apiKeys.decideDeviceRequest)":
+    /["'`]\/api\/device["'`]/,
+  "tRPC applicationConnections.approveRequest":
+    /\bapplicationConnections\s*\.\s*approveRequest\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC capabilities.setToolEnabled":
+    /\bcapabilities\s*\.\s*setToolEnabled\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC skills.setApproved":
+    /\bskills\s*\.\s*setApproved\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC tools.setApproved":
+    /\btools\s*\.\s*setApproved\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC mcpServers.setApproved":
+    /\bmcpServers\s*\.\s*setApproved\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC intelligenceRegistry.approveMcp":
+    /\bintelligenceRegistry\s*\.\s*approveMcp\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC marketplace.sources.approveKeyChange":
+    /\bsources\s*\.\s*approveKeyChange\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC trustedIssuers.approve":
+    /\btrustedIssuers\s*\.\s*approve\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "REST /skills/:id/approve": /\/api\/hub\/skills\/[^`"'\s]*\/approve\b/,
+  "REST /tools/:id/approve": /\/api\/hub\/tools\/[^`"'\s]*\/approve\b/,
 };
 
 /**
@@ -66,23 +93,41 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
     inputs: 1,
     doors: ["REST /proposals/:id/approve"],
   },
-  // W3 slice 2 (backend#808): the decisions that settle no proposal take a
-  // proof bound to their own request (`presence.challenge({request})` or
-  // `{oauthConsent}`). Pod admin still calls them directly: routing each
-  // through app/_lib/presence (and adding its DOORS pattern here, which then
-  // forbids the direct call) is lane w3-podadmin's follow-up (review bf96d410,
-  // Lane E). Until then these doors are counted, not yet forced.
-  "api-keys.ts": { inputs: 3, doors: [] },
-  "application-connections.ts": { inputs: 1, doors: [] },
-  "capabilities.ts": { inputs: 1, doors: [] },
-  "hub-protocol/rest/skills-crud.ts": { inputs: 1, doors: [] },
-  "hub-protocol/rest/tools.ts": { inputs: 1, doors: [] },
-  "intelligence-registry.ts": { inputs: 1, doors: [] },
-  "marketplace.ts": { inputs: 1, doors: [] },
-  "mcp-servers.ts": { inputs: 1, doors: [] },
-  "skills.ts": { inputs: 1, doors: [] },
-  "tools.ts": { inputs: 1, doors: [] },
-  "trusted-issuers.ts": { inputs: 1, doors: [] },
+  // W3 slice 2 (backend#808): the decisions that settle no proposal, each
+  // with a proof bound to its own request (`{request}` / `{oauthConsent}`).
+  "api-keys.ts": {
+    inputs: 3,
+    doors: [
+      "tRPC apiKeys.decideKeyRequest",
+      "tRPC apiKeys.decideOAuthAuthorization",
+      "route POST /api/device (apiKeys.decideDeviceRequest)",
+    ],
+  },
+  "application-connections.ts": {
+    inputs: 1,
+    doors: ["tRPC applicationConnections.approveRequest"],
+  },
+  "capabilities.ts": { inputs: 1, doors: ["tRPC capabilities.setToolEnabled"] },
+  "hub-protocol/rest/skills-crud.ts": {
+    inputs: 1,
+    doors: ["REST /skills/:id/approve"],
+  },
+  "hub-protocol/rest/tools.ts": {
+    inputs: 1,
+    doors: ["REST /tools/:id/approve"],
+  },
+  "intelligence-registry.ts": {
+    inputs: 1,
+    doors: ["tRPC intelligenceRegistry.approveMcp"],
+  },
+  "marketplace.ts": {
+    inputs: 1,
+    doors: ["tRPC marketplace.sources.approveKeyChange"],
+  },
+  "mcp-servers.ts": { inputs: 1, doors: ["tRPC mcpServers.setApproved"] },
+  "skills.ts": { inputs: 1, doors: ["tRPC skills.setApproved"] },
+  "tools.ts": { inputs: 1, doors: ["tRPC tools.setApproved"] },
+  "trusted-issuers.ts": { inputs: 1, doors: ["tRPC trustedIssuers.approve"] },
 };
 
 function walk(dir: string, keep: (name: string) => boolean): string[] {
@@ -126,8 +171,17 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
     expect([...found].sort()).toEqual(
       [
         "REST /setup/agent/pending/:keyId/approve and /approve-batch",
+        "route POST /api/device (apiKeys.decideDeviceRequest)",
+        "tRPC apiKeys.decideKeyRequest",
+        "tRPC apiKeys.decideOAuthAuthorization",
+        "tRPC applicationConnections.approveRequest",
+        "tRPC capabilities.setToolEnabled",
+        "tRPC marketplace.sources.approveKeyChange",
         "tRPC proposals.approve",
         "tRPC proposals.batchApprove",
+        "tRPC skills.setApproved",
+        "tRPC tools.setApproved",
+        "tRPC trustedIssuers.approve",
       ].sort()
     );
   });
@@ -172,6 +226,10 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
       )
     );
     for (const d of Object.values(POD_DOORS)) {
+      expect(
+        d.doors.length,
+        "every pod door has a pattern here"
+      ).toBeGreaterThan(0);
       for (const door of d.doors) expect(DOORS[door], door).toBeDefined();
     }
   });
@@ -186,5 +244,16 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
     expect(providers.indexOf("</PresenceProvider>")).toBeGreaterThan(
       providers.indexOf("{children}")
     );
+  });
+
+  it("the device route forwards the proof to apiKeys.decideDeviceRequest, and the refusal's code back", () => {
+    const route = SOURCES.find((f) => f.path === "app/api/device/route.ts");
+    expect(route, "app/api/device/route.ts").toBeDefined();
+    expect(route!.src).toMatch(/["']apiKeys\.decideDeviceRequest["']/);
+    expect(route!.src).toMatch(
+      /presenceProofSchema\.safeParse\(body\?\.presence\)/
+    );
+    expect(route!.src).toMatch(/input\.presence\s*=/);
+    expect(route!.src).toMatch(/reasonCode:\s*res\.reasonCode/);
   });
 });

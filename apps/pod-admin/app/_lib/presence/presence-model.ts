@@ -29,11 +29,44 @@ import {
   PRESENCE_USED,
   sensitiveApprovalReason,
   type PresenceProof,
+  type PresenceRequestKind,
   type PresenceRefusalCode,
 } from "@synap-core/types/presence";
 
-/** What a challenge names: a proposal, or a pending agent key (its `agent/connect`). */
-export type PresenceSubject = { proposalId: string } | { pendingKeyId: string };
+/**
+ * What a challenge names (`presence.challenge`'s input): a proposal; a
+ * pending agent key (its `agent/connect`); a request a door decides with no
+ * proposal (`PRESENCE_REQUEST_KINDS`: a key or device request, an app
+ * connection, an issuer, a catalog key, a skill, tool or MCP server turned
+ * on); or the OAuth authorization a consent screen shows.
+ */
+export type PresenceChallengeSubject =
+  | { proposalId: string }
+  | { pendingKeyId: string }
+  | { request: { kind: PresenceRequestKind; id: string } }
+  | {
+      oauthConsent: {
+        clientId: string;
+        redirectUri: string;
+        codeChallenge?: string | null;
+        state?: string | null;
+      };
+    };
+
+/**
+ * A subject, and how the dialog names what is approved when no proposal
+ * does (a request subject): the page's own heading for it, through the
+ * vocabulary door. A proposal is named by its own heading.
+ */
+export type PresenceSubject = PresenceChallengeSubject & { label?: string };
+
+/** The challenge input: the subject without the dialog's label. */
+export function challengeInput(
+  subject: PresenceSubject
+): PresenceChallengeSubject {
+  const { label: _label, ...input } = subject;
+  return input as PresenceChallengeSubject;
+}
 
 /** Where in a batch this proof is, so the dialog can say "2 of 3". */
 export interface PresenceProgress {
