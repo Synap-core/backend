@@ -241,7 +241,7 @@ describe("a person sets how one action runs, and the next run obeys", () => {
   it("'Approve always' names the request it came from as the rule's source", async () => {
     const requestId = randomUUID();
     await q(
-      `insert into proposals (id, user_id, target_type, proposal_type, status, data) values ($1, $2, 'capability', 'capability.run', 'pending', $3::jsonb)`,
+      `insert into proposals (id, created_by, target_type, proposal_type, status, data) values ($1, $2, 'capability', 'capability.run', 'pending', $3::jsonb)`,
       [requestId, ALICE, JSON.stringify({ verbId: ACTION, skillId: SKILL_ID })]
     );
     await caller(ALICE).setActionMode({
