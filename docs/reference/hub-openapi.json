@@ -16744,6 +16744,27 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "onEnd": {
+                                  "type": "object",
+                                  "properties": {
+                                    "closed": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "cancelled": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "failed": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "additionalProperties": false
                                 }
                               },
                               "additionalProperties": {}
@@ -20173,6 +20194,27 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "onEnd": {
+                                  "type": "object",
+                                  "properties": {
+                                    "closed": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "cancelled": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "failed": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "additionalProperties": false
                                 }
                               },
                               "additionalProperties": {}
@@ -25560,6 +25602,27 @@
                           "maxLength": 200
                         },
                         "maxItems": 50
+                      },
+                      "onEnd": {
+                        "type": "object",
+                        "properties": {
+                          "closed": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "cancelled": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "failed": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "additionalProperties": false
                       }
                     },
                     "additionalProperties": {},

@@ -45247,6 +45247,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					onEnd?: {
+						cancelled?: string | undefined;
+						closed?: string | undefined;
+						failed?: string | undefined;
+					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -46220,6 +46225,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					onEnd?: {
+						cancelled?: string | undefined;
+						closed?: string | undefined;
+						failed?: string | undefined;
+					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -56716,6 +56726,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
+							onEnd?: {
+								cancelled?: string | undefined;
+								closed?: string | undefined;
+								failed?: string | undefined;
+							} | undefined;
 						} | undefined;
 					}[] | undefined;
 					automations?: {
