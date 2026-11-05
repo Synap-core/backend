@@ -32843,6 +32843,7 @@
                         },
                         "decisionId": { "type": "string" },
                         "answerPickedUpAt": { "type": "string" },
+                        "laterUntil": { "type": "string" },
                         "pendingRelay": {
                           "type": "object",
                           "properties": {
@@ -35895,6 +35896,7 @@
                         },
                         "decisionId": { "type": "string" },
                         "answerPickedUpAt": { "type": "string" },
+                        "laterUntil": { "type": "string" },
                         "pendingRelay": {
                           "type": "object",
                           "properties": {
