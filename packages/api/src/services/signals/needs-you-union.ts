@@ -1284,6 +1284,9 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   // A draft has no PR yet: its asks block nothing (`blocksOpenPr` is read only
   // on started sessions' owed slots).
   "blocksOpenPr",
+  // The person's Later is read by a started session's slot class only
+  // (`owedSlotClassOf`): a draft's ask reaches no class to fold it.
+  "laterUntil",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
