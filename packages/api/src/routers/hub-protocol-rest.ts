@@ -39,6 +39,7 @@ import {
   registerLoopsRoutes,
   registerCaptureRoutes,
   registerImportUnitsRoutes,
+  registerChannelConversationsRoutes,
   registerChannelsRoutes,
   registerEntityChannelsRoutes,
   registerChannelEgressRoutes,
@@ -358,6 +359,8 @@ registerWhiteboardsRoutes(app); // /whiteboards/:viewId/placements/propose
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerVaultRoutes(app); // /vault/request
+// Static /channels/<word> routes before registerChannelsRoutes' /channels/:id.
+registerChannelConversationsRoutes(app); // /channels/conversations, /channels/linkedin-reach/:personId, /channels/:channelId/send
 registerChannelsRoutes(app); // /channels/*
 registerChannelEgressRoutes(app); // /channel-egress/pending, /channel-egress/:id/ack
 registerTerminalRoutes(app); // /terminal/logs

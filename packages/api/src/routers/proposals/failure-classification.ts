@@ -349,6 +349,29 @@ export function leavesRowToOtherAttempt(err: unknown): boolean {
   );
 }
 
+const ROW_RECORDED_KEY = "__synapRowRecordedByExecutor";
+
+/**
+ * Mark an approval failure whose executor already wrote the proposal's
+ * outcome itself, and wrote it as something other than a failure: a message
+ * to someone not connected yet stays PENDING and held
+ * (`services/channels/held-sends.ts`), never APPROVAL_FAILED. The approval
+ * catch must not write a failure over it; the caller still sees the error.
+ */
+export function keepRowAsRecorded<E extends object>(err: E): E {
+  (err as Record<string, unknown>)[ROW_RECORDED_KEY] = true;
+  return err;
+}
+
+/** True when {@link keepRowAsRecorded} marked this error. */
+export function keepsRowAsRecorded(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === "object" &&
+    (err as Record<string, unknown>)[ROW_RECORDED_KEY] === true
+  );
+}
+
 /** Read the scalars a thrower ATTACHED (undefined when none were). */
 export function readAttachedFailureMeta(
   err: unknown

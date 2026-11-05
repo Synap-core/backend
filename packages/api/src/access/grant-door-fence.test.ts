@@ -947,6 +947,26 @@ describe("a person's channel doors", () => {
       restDoorAllowed("GET", `/channels/${E}/proposed-messages`, DOC_ONLY)
     ).toBe(false);
   });
+  it("GET /channels/conversations: admitted with channel.read, refused without", () => {
+    expect(
+      restDoorAllowed("GET", "/channels/conversations", PINNED_CHANNEL)
+    ).toBe(true);
+    expect(restDoorAllowed("GET", "/channels/conversations", DOC_ONLY)).toBe(
+      false
+    );
+    expect(
+      restDoorAllowed("GET", "/channels/conversations", PINNED_PROPOSAL)
+    ).toBe(false);
+  });
+  // A POST the fence does not declare a read passes on to its write gates, so
+  // the refusals below are what prove the declaration matches the served
+  // path (`route()` expands `:id` only; a `:personId` entry matched nothing).
+  it("POST /channels/linkedin-reach/:personId: a declared read, admitted with channel.read, refused without", () => {
+    const path = `/channels/linkedin-reach/${E}`;
+    expect(restDoorAllowed("POST", path, PINNED_CHANNEL)).toBe(true);
+    expect(restDoorAllowed("POST", path, DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("POST", path, PINNED_PROPOSAL)).toBe(false);
+  });
   it("only a uuid id is admitted", () => {
     expect(
       restDoorAllowed("GET", "/entities/not-a-uuid/channels", PINNED_CHANNEL)

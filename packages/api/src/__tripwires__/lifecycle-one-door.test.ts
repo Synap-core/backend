@@ -58,7 +58,7 @@ const CLASSIFIED: Record<string, string> = {
     "the operator rebuild sets / removes only lastInteractionAt with its column; a lifecycle is a select",
   // A person's LinkedIn reach (CRM wave 2, S4a): two machine-written keys.
   "api/src/services/connectors/linkedin-reach.ts":
-    "merges only linkedinConnection + linkedinInvitedAt (machine-written reach facts, never a kind's lifecycle key)",
+    "merges only linkedinConnection + linkedinInvitedAt (machine-written reach facts) and fills an empty linkedinProviderId (an id); never a kind's lifecycle key",
 };
 
 const ROOT = join(__dirname, "../../..");

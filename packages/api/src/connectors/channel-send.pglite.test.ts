@@ -22,7 +22,8 @@
  *   - an approval that sends twice, or sends without filling the chat id, or
  *     records the message as anything but outbound / sent / its provider id;
  *   - a send to someone who is not a 1st-degree connection reaching the
- *     provider (refused `not_connected` BEFORE startChat);
+ *     provider (held `not_connected` BEFORE startChat), or being refused /
+ *     marked failed instead of kept pending and held (Messages contract B);
  *   - a chat already held by another channel (the provider's echo) leaving
  *     two channels for one conversation;
  *   - `external_message.sent` not reaching the automations fan-out;
@@ -588,7 +589,7 @@ describe("approval sends once and records the outbound message", () => {
     expect(ids).toEqual(["msg-3", "msg-4"]);
   });
 
-  it("not a 1st-degree connection at approval: refused not_connected BEFORE any send; the claim is released", async () => {
+  it("not a 1st-degree connection at approval: refused not_connected BEFORE any send; the claim is released; the send stays pending, HELD", async () => {
     // Connected when filed, no longer when approved: the dispatch check holds.
     const out = await appSendsTo(PERSON);
     expect(out).toMatchObject({ proposed: true });
@@ -611,8 +612,12 @@ describe("approval sends once and records the outbound message", () => {
     expect(startChat).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
     const [p] = (
-      await q<{ status: string; external_dispatched_at: string | null }>(
-        `select status, external_dispatched_at from proposals where id=$1`,
+      await q<{
+        status: string;
+        external_dispatched_at: string | null;
+        data: Record<string, unknown>;
+      }>(
+        `select status, external_dispatched_at, data from proposals where id=$1`,
         [out.proposalId]
       )
     ).rows;
@@ -620,6 +625,15 @@ describe("approval sends once and records the outbound message", () => {
       status: "pending",
       external_dispatched_at: null,
     });
+    // Kept with its text and the next step, never lost (contract B).
+    expect(p!.data).toMatchObject({
+      body: "Hello Marie",
+      held: {
+        errorClass: "not_connected",
+        reason: expect.stringMatching(/Ask to connect first/),
+      },
+    });
+    expect(p!.data).not.toHaveProperty("failure");
   });
 
   it("the chat already held by another channel: the message lands there, the pending channel is archived", async () => {
@@ -984,7 +998,7 @@ describe("security review (lane D)", () => {
     expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
   });
 
-  it("LinkedIn: an unknown network distance is not a connection (refused at filing, and at dispatch)", async () => {
+  it("LinkedIn: an unknown network distance is not a connection (held at filing, and at dispatch)", async () => {
     const unknownDistance = {
       providerId: "ACoMarie",
       publicIdentifier: "marie-dupont",
@@ -994,12 +1008,12 @@ describe("security review (lane D)", () => {
       relationRequest: null,
     };
     getProfile.mockResolvedValue(unknownDistance);
-    const refused = await appSendsTo(PERSON);
-    expect(refused).toMatchObject({
-      success: false,
-      errorClass: "not_connected",
+    const held = await appSendsTo(PERSON);
+    expect(held).toMatchObject({
+      proposed: true,
+      held: { errorClass: "not_connected" },
     });
-    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(1);
     // Filed while LinkedIn could not be read, the dispatch check still holds.
     getProfile.mockRejectedValueOnce(
       new Error("Unipile getProfile failed: 503")
@@ -1177,9 +1191,11 @@ describe("an agent's send beyond its key's grant is a proposed message", () => {
   });
 });
 
-describe("LinkedIn reach: refused when filed, and recorded on the person (CRM wave 2, S4a)", () => {
+describe("LinkedIn reach: HELD when filed, released on connected, and recorded on the person (CRM wave 2, S4a; Messages contract B)", () => {
   // Rows rule out: a first LinkedIn message to someone not connected (or
-  // whose request still waits) filed as a draft that fails after approval;
+  // whose request still waits) REFUSED (the draft lost) or filed as a plain
+  // draft that fails after approval; a held draft staying held once they
+  // connect;
   // a FAILED read refusing the draft or written as "not connected"; the reach
   // not landing on the person; relation.new not marking them connected; the
   // daily sweep writing for an account it could not read, or missing the
@@ -1227,24 +1243,149 @@ describe("LinkedIn reach: refused when filed, and recorded on the person (CRM wa
     ]);
   });
 
-  it("not connected: refused when filed with the next step named; nothing filed, nothing sent; the person is 'none'", async () => {
+  const heldOf = async (proposalId: string) =>
+    (
+      await q<{ status: string; data: Record<string, unknown> }>(
+        `select status, data from proposals where id=$1`,
+        [proposalId]
+      )
+    ).rows[0]!;
+
+  it("not connected: filed HELD with the next step named, the text kept; nothing sent; the person is 'none'", async () => {
     profileSays({
       networkDistance: "SECOND_DEGREE",
       connection: "not_connected",
       relationRequest: null,
     });
     const out = await appSendsTo(PERSON);
-    expect(out).toMatchObject({ success: false, errorClass: "not_connected" });
-    expect(out.error).toMatch(/not one of your Linkedin connections yet/i);
-    expect(out.error).toMatch(/Ask to connect first/);
-    expect(out).not.toHaveProperty("proposalId");
-    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect(out).toMatchObject({ success: false, proposed: true });
+    expect(out).not.toHaveProperty("errorClass");
+    const held = out.held as { reason: string; errorClass: string };
+    expect(held.errorClass).toBe("not_connected");
+    expect(held.reason).toMatch(/not one of your Linkedin connections yet/i);
+    expect(held.reason).toMatch(/Ask to connect first/);
+    const row = await heldOf(out.proposalId as string);
+    expect(row.status).toBe("pending");
+    expect(row.data).toMatchObject({
+      body: "Hello Marie",
+      entityId: PERSON,
+      held: { errorClass: "not_connected", reason: held.reason },
+    });
     expect(startChat).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
     expect((await propsOf(PERSON)).linkedinConnection).toBe("none");
   });
 
-  it("a request still waiting: refused when filed, saying so; the person is pending since the request's date", async () => {
+  it("held even when the gate would let it run: a held send is filed, never dispatched", async () => {
+    h.gateSaysRun = true;
+    profileSays({
+      networkDistance: "SECOND_DEGREE",
+      connection: "not_connected",
+      relationRequest: null,
+    });
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({
+      proposed: true,
+      held: { errorClass: "not_connected" },
+    });
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("they connect (relation.new): the held send is released, and its approval sends it once", async () => {
+    const { recordAcceptedRelation } =
+      await import("../services/connectors/linkedin-reach-sync.js");
+    await q(
+      `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source, created_at) values ($1,$2,'external_id','linkedin:ACoMarie','test',now())
+       on conflict do nothing`,
+      [randomUUID(), PERSON]
+    );
+    profileSays({
+      networkDistance: "SECOND_DEGREE",
+      connection: "not_connected",
+      relationRequest: null,
+    });
+    const out = await appSendsTo(PERSON);
+    const id = out.proposalId as string;
+    // Approved while still not connected: stays pending and held.
+    await expect(approve(id)).rejects.toBeTruthy();
+    expect((await heldOf(id)).data).toHaveProperty("held");
+    // A held send to someone ELSE is not released by Marie's acceptance.
+    const OTHER = randomUUID();
+    const otherProposal = randomUUID();
+    await q(
+      `insert into proposals (id, created_by, target_type, target_id, proposal_type, status, data, created_at, updated_at)
+       values ($1,$2,'messaging',$3,'messaging.external.send','pending',$4,now(),now())`,
+      [
+        otherProposal,
+        OWNER,
+        randomUUID(),
+        JSON.stringify({
+          entityId: OTHER,
+          body: "x",
+          held: {
+            errorClass: "not_connected",
+            reason: "r",
+            at: NOW.toISOString(),
+          },
+        }),
+      ]
+    );
+    expect(
+      await recordAcceptedRelation({
+        accountExternalId: ACCOUNT,
+        provider: "linkedin",
+        providerId: "ACoMarie",
+        publicIdentifier: null,
+        connector: { getProfile },
+        now: NOW,
+      })
+    ).toBe(PERSON);
+    expect((await heldOf(id)).data).not.toHaveProperty("held");
+    expect((await heldOf(otherProposal)).data).toHaveProperty("held");
+    // Now connected: the approval reads the reach again and sends, once.
+    profileSays({
+      networkDistance: "FIRST_DEGREE",
+      connection: "connected",
+      relationRequest: null,
+    });
+    startChat.mockResolvedValue({ chatId: "chat-rel", messageId: "m-rel" });
+    await approve(id);
+    expect(startChat).toHaveBeenCalledTimes(1);
+    const sent = await heldOf(id);
+    expect(sent.status).toBe("approved");
+    expect(sent.data).not.toHaveProperty("held");
+  });
+
+  it("a send whose approval had FAILED and is retried while still not connected is reopened pending and held", async () => {
+    const out = await appSendsTo(PERSON);
+    const id = out.proposalId as string;
+    await q(
+      `update proposals set status = 'approval_failed', rejection_reason = 'Couldn''t apply — earlier.',
+              data = data || '{"failure":{"errorClass":"transient"}}'::jsonb where id = $1`,
+      [id]
+    );
+    profileSays({
+      networkDistance: "SECOND_DEGREE",
+      connection: "not_connected",
+      relationRequest: null,
+    });
+    await expect(approve(id)).rejects.toBeTruthy();
+    const row = (
+      await q<{
+        status: string;
+        rejection_reason: string | null;
+        data: Record<string, unknown>;
+      }>(`select status, rejection_reason, data from proposals where id=$1`, [
+        id,
+      ])
+    ).rows[0]!;
+    expect(row.status).toBe("pending");
+    expect(row.rejection_reason).toBeNull();
+    expect(row.data).toHaveProperty("held");
+    expect(row.data).not.toHaveProperty("failure");
+  });
+
+  it("a request still waiting: held when filed, saying so; the person is pending since the request's date", async () => {
     profileSays({
       networkDistance: "SECOND_DEGREE",
       connection: "pending",
@@ -1255,11 +1396,11 @@ describe("LinkedIn reach: refused when filed, and recorded on the person (CRM wa
       },
     });
     const out = await appSendsTo(PERSON);
-    expect(out).toMatchObject({ success: false, errorClass: "not_connected" });
-    expect(out.error).toMatch(
+    expect(out).toMatchObject({ proposed: true });
+    expect((out.held as { reason: string }).reason).toMatch(
       /has not accepted your Linkedin connection request yet/i
     );
-    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(1);
     expect(await propsOf(PERSON)).toMatchObject({
       linkedinConnection: "pending",
       linkedinInvitedAt: daysAgo(3),

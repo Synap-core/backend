@@ -388,7 +388,7 @@ export type ChannelSendPlan =
 /**
  * Who a pending channel's first message goes to, and whether the provider
  * will take it: THE reach rule, read by the send at filing
- * (`refuseUnreachableAtFiling`) and at dispatch (`planChannelSend`), so the
+ * (`reachHoldAtFiling`) and at dispatch (`planChannelSend`), so the
  * two can never disagree. The attendee is the channel's participant id, else
  * the person's `<provider>ProviderId`, else looked up by their public
  * identifier. On LinkedIn anyone who is not a 1st-degree connection is
@@ -520,17 +520,19 @@ export async function planChannelSend(args: {
 /**
  * The reach check when a send is FILED for review (not on an approved one):
  * a LinkedIn message that would start a chat with someone who is not a
- * 1st-degree connection is refused now, with the next step named (connect
- * first), instead of being filed as a draft that fails after the person
- * approves it (8 of 10 drafts on 4 Nov 2026). Same rule as at dispatch
+ * 1st-degree connection is HELD (CRM Messages contract b4f8c2cd, B; it was
+ * refused at filing since backend#786): the caller files it with
+ * `data.held` and the next step named (connect first), so the draft is kept
+ * and shown, never lost, and becomes sendable once they connect
+ * (`services/channels/held-sends.ts`). Same rule as at dispatch
  * (`readChannelReach`).
  *
- * Only `not_connected` refuses here. Everything else files as before, and the
+ * Only `not_connected` holds here. Everything else files as before, and the
  * dispatch check still holds: a channel with a chat (it continues), another
  * provider, no account to read with, and a read that FAILED (LinkedIn or
  * Unipile down): an unread reach is not "not connected".
  */
-export async function refuseUnreachableAtFiling(args: {
+export async function reachHoldAtFiling(args: {
   channel: SendChannel;
   connector: MessagingConnector;
   namedAccountId: string | null | undefined;

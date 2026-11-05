@@ -730,6 +730,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "capture duplicate door scope + strong-match write gate (dedup)",
   "services/capture-agent/degraded-capture-identity.ts":
     "degraded capture: strong-match recheck by id + duplicate door scope (dedup)",
+  "services/channels/linkedin-reach-read.ts":
+    "one person's LinkedIn reach: the person read by id (POST /channels/linkedin-reach/:personId)",
   "services/channels/person-channels.ts":
     "one person's channels: the person read by id (GET /entities/:id/channels)",
   "services/diagnose/index.ts": "diagnose one object, by id",

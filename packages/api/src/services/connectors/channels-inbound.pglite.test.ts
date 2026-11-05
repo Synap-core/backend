@@ -18,7 +18,9 @@
  *     provider's same id, a lookup with no match);
  *   - a person's pending channel (opened before any chat) getting a twin
  *     when the chat appears, instead of its chat id;
- *   - a receipt moving a delivery status backwards.
+ *   - a receipt moving a delivery status backwards;
+ *   - a message the person sent from LinkedIn itself leaving its draft
+ *     waiting, or the echo of a pod send withdrawing any draft.
  *
  * Cannot see: a live Unipile account (payload shapes come from lane B's
  * fixtures), production Postgres, the pg-boss worker wiring.
@@ -871,6 +873,132 @@ describe("review fixes (#698)", () => {
     await webhook(msg("chat-del", "d2", { from: "ACoMarie", sentAt: T(2) }));
     const [received] = sideEffects("received");
     expect(received!.data.isReply).toBeUndefined();
+  });
+});
+
+describe("a message sent outside the pod closes the drafts it replaces (contract E)", () => {
+  // Rows rule out: a message the person sent from LinkedIn itself leaving
+  // the draft it replaces waiting (and sendable a second time); the provider's
+  // ECHO of a pod send withdrawing the send in flight or the conversation's
+  // other drafts; a draft filed after the outside message withdrawn; a
+  // history import (old messages) withdrawing today's drafts.
+  async function chatWithMarie(chat: string): Promise<string> {
+    const { rows } = await q<{ id: string }>(
+      `insert into channels (user_id, workspace_id, channel_type, scope, title, context_object_type, context_object_id,
+                             external_source, external_id, external_channel_id, status, metadata)
+       values ($1,$2,'external','workspace','Marie Curie','entity',$3,'linkedin',$4,$4,'active','{}'::jsonb)
+       returning id`,
+      [OWNER, WS, MARIE, chat]
+    );
+    return rows[0]!.id;
+  }
+  async function draftOn(
+    channelId: string,
+    opts: {
+      at: string;
+      claimed?: boolean;
+      status?: string;
+      data?: Record<string, unknown>;
+    }
+  ): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, created_by, workspace_id, target_type, target_id, proposal_type, data, status,
+                              external_dispatched_at, created_at, updated_at)
+       values ($1,$2,$3,'messaging',$4,'messaging.external.send',$5::jsonb,$6,$7,$8,$8)`,
+      [
+        id,
+        OWNER,
+        WS,
+        channelId,
+        JSON.stringify({
+          channelId,
+          entityId: MARIE,
+          body: "Hi Marie",
+          ...(opts.data ?? {}),
+        }),
+        opts.status ?? "pending",
+        opts.claimed ? opts.at : null,
+        opts.at,
+      ]
+    );
+    return id;
+  }
+  const statusOf = async (id: string) =>
+    (
+      await q<{ status: string; data: Record<string, unknown> }>(
+        `select status, data from proposals where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+  const fromMe = (chat: string, id: string, sentAt: string) =>
+    msg(chat, id, {
+      direction: "outbound",
+      body: "Sent from my phone",
+      sentAt,
+      senderName: "Me",
+      senderProviderId: "ACoMe",
+    });
+
+  it("an outbound message from LinkedIn itself withdraws the pending drafts (held too) filed before it", async () => {
+    const ch = await chatWithMarie("chat-outside");
+    const draft = await draftOn(ch, { at: T(1) });
+    const held = await draftOn(ch, {
+      at: T(2),
+      data: {
+        held: {
+          errorClass: "not_connected",
+          reason: "Ask to connect first.",
+          at: T(2),
+        },
+      },
+    });
+    const later = await draftOn(ch, { at: T(20) });
+    expect(await webhook(fromMe("chat-outside", "out-1", T(10)))).toBe(200);
+    const [m] = await messagesIn(ch);
+    for (const id of [draft, held]) {
+      const row = await statusOf(id);
+      expect(row.status).toBe("withdrawn");
+      expect(row.data).toMatchObject({
+        withdrawReason: expect.stringMatching(/directly/),
+        closedByMessageId: m!.id,
+      });
+    }
+    // Filed after the message: it is not what the message replaced.
+    expect((await statusOf(later)).status).toBe("pending");
+  });
+
+  it("the echo of a pod send in flight withdraws nothing: not the send, not another draft", async () => {
+    const ch = await chatWithMarie("chat-echo");
+    // The send being dispatched holds its claim; the provider echoes it
+    // before the executor recorded the message.
+    const inFlight = await draftOn(ch, { at: T(1), claimed: true });
+    const other = await draftOn(ch, { at: T(2) });
+    expect(await webhook(fromMe("chat-echo", "echo-1", T(10)))).toBe(200);
+    expect((await statusOf(inFlight)).status).toBe("pending");
+    expect((await statusOf(other)).status).toBe("pending");
+  });
+
+  it("the echo of a pod send already approved (its message id) withdraws nothing", async () => {
+    const ch = await chatWithMarie("chat-echo-2");
+    await draftOn(ch, {
+      at: T(1),
+      claimed: true,
+      status: "approved",
+      data: { sentResult: { externalMessageId: "echo-2" } },
+    });
+    const other = await draftOn(ch, { at: T(2) });
+    expect(await webhook(fromMe("chat-echo-2", "echo-2", T(10)))).toBe(200);
+    expect((await statusOf(other)).status).toBe("pending");
+  });
+
+  it("an inbound message (they wrote) withdraws nothing", async () => {
+    const ch = await chatWithMarie("chat-in");
+    const draft = await draftOn(ch, { at: T(1) });
+    expect(
+      await webhook(msg("chat-in", "in-1", { from: "ACoMarie", sentAt: T(10) }))
+    ).toBe(200);
+    expect((await statusOf(draft)).status).toBe("pending");
   });
 });
 

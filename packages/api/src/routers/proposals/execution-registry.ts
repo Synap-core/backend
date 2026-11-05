@@ -60,6 +60,7 @@ export {
 import {
   classifyThrownFailure,
   leavesRowToOtherAttempt,
+  keepsRowAsRecorded,
   safeApprovalError,
   safeFailureSentence,
   type ProposalFailureMeta,
@@ -452,7 +453,9 @@ export async function dispatchProposalApproval(
     const safe = safeFailureSentence(err, failure);
     // A lost dispatch claim whose row another attempt owns: that attempt
     // records its own outcome, so this one tells only its caller.
-    if (!leavesRowToOtherAttempt(err)) {
+    // An executor that recorded its own outcome (a held send stays pending)
+    // is not overwritten with a failure either.
+    if (!leavesRowToOtherAttempt(err) && !keepsRowAsRecorded(err)) {
       await onApprovalFailed(args.input.proposalId, safe, failure);
     }
     // NEVER `throw err`. The original message is raw upstream text and

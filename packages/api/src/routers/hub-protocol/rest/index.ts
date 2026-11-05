@@ -77,6 +77,7 @@ export { registerWhiteboardsRoutes } from "./whiteboards.js";
 export { registerMcpServersRoutes } from "./mcp-servers.js";
 export { registerAutomationsRoutes } from "./automations.js";
 export { registerVaultRoutes } from "./vault.js";
+export { registerChannelConversationsRoutes } from "./channel-conversations.js";
 export { registerChannelsRoutes } from "./channels.js";
 export { registerChannelEgressRoutes } from "./channel-egress.js";
 export { registerTerminalRoutes } from "./terminal.js";
