@@ -113,6 +113,26 @@ const REFUSED = (reason: string): FencedReadDoor => ({
  */
 const PROPOSAL_GET = READS("proposal", "entity");
 
+/**
+ * Load an instruction skill: MCP `synap_load_skill` and its REST twins
+ * (`GET /agent-skills`, `/agent-skills/by-slug/:slug`, `/agent-skills/:id`,
+ * the CLI's `synap skill get|suggest`). Each reads only ACTIVE, APPROVED
+ * instruction skills on the person's floor (`visibleSkillsWhere`): system
+ * runbooks and the person's own. Skills have no read subject in the read hook,
+ * so any key that holds a live permission may load one; one declaration, so
+ * REST and MCP answer the same for every key (the CLI's own key was refused
+ * `synap skill get` while it could load the same skill over MCP).
+ */
+const LOAD_SKILL = READS();
+
+/**
+ * Recall the person's remembered facts (`knowledge_facts`, owner-pinned):
+ * `POST /memory/search` (by embedding) and its full-text twin `GET /memory`
+ * (`knowledgeRepository.searchFacts`), which the Raycast extension's recall
+ * calls. The same rows, so one declaration.
+ */
+const MEMORY_RECALL = READS("entity", "preference");
+
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
@@ -275,6 +295,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/keys\/templates\/?$/,
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
+  // The built-in skill packages' SKILL.md files, read from the image's
+  // `skills/` folder (`getSkillPackages`): no pod row at all. The CLI's
+  // skills installer reads them with the computer's key.
+  /^\/skills\/system\/?$/,
 ];
 
 /**
@@ -546,6 +570,51 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/timeline\/?$/, READS("track", "session", "event", "proposal")],
   // One proposal: the same door as MCP `synap_get_proposal` (PROPOSAL_GET).
   [route("/proposals/:id"), PROPOSAL_GET],
+  // The capability catalog of one space (`synap connect <tool>`, `synap
+  // capability`; finding 3122ba42): `buildCapabilityCatalog` reads the
+  // capability containers (subject `tool`, as `/installed`), their
+  // `member_of` links, the member tools and skills, and the connection state
+  // of each card: which of the person's own (or pod-wide) vault credentials a
+  // container names exists, its name and service, and whether it needs
+  // reauth — never a secret's value; `buildAutomationCatalog` reads the
+  // space's automations. Every read is on the person's floor
+  // (`userVisibleWhere`), none through a grant clause, so a pinned key is
+  // refused.
+  [
+    /^\/capabilities\/catalog\/?$/,
+    READS("tool", "skill", "link", "automation"),
+  ],
+  // Runtime discovery (finding cce86e6b: Raycast's Search Synap, agents'
+  // session bootstrap): the kinds and roles with their property schemas
+  // (`profiles.listProfiles`), the relation types of the lens
+  // (`listEffectiveRelationTypes`) and each kind's usage, counted over its
+  // entities (`loadProfileFill`). The same rule as MCP `synap_list_profiles`,
+  // plus the relation vocabulary.
+  [/^\/discover\/?$/, READS("entity", "relation_def")],
+  // Full-text recall of remembered facts: the twin of POST /memory/search.
+  // GET only: every other /memory route is an owner-wide write
+  // (GRANT_OWNER_WIDE_REST_WRITES).
+  [/^\/memory\/?$/, MEMORY_RECALL],
+  // Load a skill over REST: the same door as MCP `synap_load_skill`.
+  [/^\/agent-skills\/?$/, LOAD_SKILL],
+  // A slug may hold `/`; the client encodes it (`%2F`), and the fence sees
+  // the path undecoded (`decodeURI` leaves `%2F`), so one segment.
+  [/^\/agent-skills\/by-slug\/[^/]+\/?$/, LOAD_SKILL],
+  [route("/agent-skills/:id"), LOAD_SKILL],
+  // The pod's stored cell sources (finding 7da9c21f): `GET /cells` reads the
+  // active frame / iframe `widget_definitions` of one space (person's
+  // membership checked) and pod-wide; `GET /widget-definitions` the built-in
+  // catalog plus the installed rows (`listRenderables`). Subject `widget`,
+  // read on no grant clause, so a pinned key is refused.
+  [/^\/cells\/?$/, READS("widget")],
+  [/^\/widget-definitions\/?$/, READS("widget")],
+  // Poll a bulk import (`rest/import-units.ts`): the pg-boss job the caller
+  // enqueued, its state and per-unit outcome (`entityId` | `proposalId` |
+  // `error`), never the payload; another person's job is the same 404 as a
+  // missing one. Admitted to the keys that can enqueue one, which
+  // POST /import/enqueue-units checks as `entity.<kind>.create`: a key that
+  // could not start an import has nothing to poll.
+  [route("/import/units-job/:id"), NARROWED("entity", [], "create")],
   // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
   // every 5xx on the pod, whoever met it. Pod owner or admin only, like
   // `/usage`; no grant can narrow it, so a scoped key is refused.
@@ -610,7 +679,7 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // `readableFileEntity`) and that entity's owner-locked document, then calls
   // the transcription provider (rate class `ai_interactive`).
   [route("/files/:id/transcribe"), SEAMED],
-  [/^\/memory\/search\/?$/, READS("entity", "preference")],
+  [/^\/memory\/search\/?$/, MEMORY_RECALL],
   // A read (no `install`) and a governed install (TEMPLATE-LIFECYCLE B). The
   // standing names a space only when the person's floor AND the key's grant
   // reach it (`readTemplateStanding`); a holder it hides is answered as absent
@@ -748,8 +817,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "track"
   ),
   // Skills have no read subject in the read hook (system + the person's own
-  // runbooks): any key that holds a live permission may load one.
-  synap_load_skill: READS(),
+  // runbooks): any key that holds a live permission may load one (LOAD_SKILL).
+  synap_load_skill: LOAD_SKILL,
   synap_diagnose: REFUSED("Pod internals across every subject."),
 };
 

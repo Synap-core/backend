@@ -25751,6 +25751,85 @@
         }
       }
     },
+    "/cells": {
+      "get": {
+        "tags": ["Cells"],
+        "summary": "List installed source cells (frame and iframe)",
+        "description": "The active frame / iframe cells of one space (`workspaceId`, your membership checked) plus the pod-wide ones; with no `workspaceId`, the pod-wide ones only.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Installed cells",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "typeKey": { "type": "string" },
+                      "name": { "type": "string" },
+                      "rendererType": {
+                        "type": "string",
+                        "enum": ["frame", "iframe"]
+                      },
+                      "deps": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                      },
+                      "rendererSource": { "type": "string" },
+                      "viewTypes": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string" }
+                      },
+                      "contentKind": { "type": ["string", "null"] },
+                      "externalHosts": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string" }
+                      }
+                    },
+                    "required": [
+                      "typeKey",
+                      "name",
+                      "rendererType",
+                      "deps",
+                      "rendererSource",
+                      "viewTypes",
+                      "contentKind",
+                      "externalHosts"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/mcp-servers": {
       "get": {
         "tags": ["MCP"],
@@ -39380,10 +39459,10 @@
         }
       }
     },
-    "/agent-skills/list": {
+    "/agent-skills": {
       "get": {
         "tags": ["Agent Skills"],
-        "summary": "List all agent skills",
+        "summary": "List the active, approved instruction skills you can load",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -39522,17 +39601,18 @@
         }
       }
     },
-    "/agent-skills/get": {
+    "/agent-skills/by-slug/{slug}": {
       "get": {
         "tags": ["Agent Skills"],
-        "summary": "Get a single agent skill by slug",
+        "summary": "Get one active, approved instruction skill by slug",
+        "description": "A slug may hold `/` (`rules/start-here`): send it URL-encoded (`rules%2Fstart-here`).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
             "schema": { "type": "string", "minLength": 1 },
             "required": true,
             "name": "slug",
-            "in": "query"
+            "in": "path"
           },
           {
             "schema": { "type": "string", "format": "uuid" },
@@ -39603,6 +39683,133 @@
                     "updatedAt"
                   ]
                 }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent-skills/{id}": {
+      "get": {
+        "tags": ["Agent Skills"],
+        "summary": "Get one active, approved instruction skill by id",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Skill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string", "format": "uuid" },
+                    "slug": { "type": "string" },
+                    "name": { "type": "string" },
+                    "description": { "type": ["string", "null"] },
+                    "topics": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "body": { "type": ["string", "null"] },
+                    "source": { "type": ["string", "null"] },
+                    "author": { "type": ["string", "null"] },
+                    "version": { "type": ["string", "null"] },
+                    "tags": { "type": "array", "items": { "type": "string" } },
+                    "teachesTools": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "skillGroup": { "type": ["string", "null"] },
+                    "alwaysOn": { "type": "boolean" },
+                    "createdAt": { "type": "string" },
+                    "updatedAt": { "type": "string" },
+                    "match": {
+                      "type": "object",
+                      "properties": {
+                        "terms": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      },
+                      "required": ["terms", "fields"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "slug",
+                    "name",
+                    "description",
+                    "topics",
+                    "body",
+                    "source",
+                    "author",
+                    "version",
+                    "tags",
+                    "teachesTools",
+                    "skillGroup",
+                    "alwaysOn",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
