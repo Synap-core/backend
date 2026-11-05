@@ -110,14 +110,20 @@ vi.mock("../../../utils/permission-check.js", () => ({
 vi.mock("../../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 
 // The one-space verdict reads the DB; it is proven on PGlite
-// (one-space-per-domain.pglite.test.ts). This suite is about the preflight gate.
+// (one-space-per-domain.pglite.test.ts). This suite is about the preflight gate
+// (and, below, that an app's install answers that verdict before governance).
+const oneSpace = vi.hoisted(() => ({
+  verdict: vi.fn(async (..._a: unknown[]): Promise<unknown> => ({
+    action: "create",
+  })),
+}));
 vi.mock(
   "../../../services/workspace-creation-service.js",
   async (importOriginal) => ({
     ...(await importOriginal<
       typeof import("../../../services/workspace-creation-service.js")
     >()),
-    checkOneSpacePerDomain: async () => ({ action: "create" }),
+    checkOneSpacePerDomain: (...a: unknown[]) => oneSpace.verdict(...a),
   })
 );
 
@@ -378,5 +384,48 @@ describe("POST /packages/preflight — an app holding package.install", () => {
     // Nothing of the pod was read for it.
     expect(mockComposeTarget).not.toHaveBeenCalled();
     expect(mockPreflight).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * L7: a fresh install an app asks for (`package.install`) answers the one
+ * space per domain rule like every caller: a live space already holding the
+ * pack's domain is the typed `exists` (409), never a second space and never a
+ * proposal. The verdict itself is proven on PGlite for any caller
+ * (one-space-per-domain.pglite.test.ts, "a live DOMAIN TWIN the caller cannot
+ * adopt is REFUSED"); this pins that the app's request meets it BEFORE the
+ * gate.
+ */
+describe("POST /packages/apply — an app's install meets one space per domain first", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("answers the existing space (409, status exists) and never reaches the gate", async () => {
+    const existing = {
+      status: "exists",
+      workspaceId: "ws-existing",
+      guidance: "This domain already has a space: use it.",
+    };
+    oneSpace.verdict.mockResolvedValueOnce({
+      action: "refuse",
+      reply: existing,
+    });
+    const { grantOfScope, runWithGrant } = await import("@synap/database");
+    const res = await runWithGrant(
+      grantOfScope({
+        permissions: ["entity.read", "package.install"],
+        workspaceIds: ["w1"],
+      }),
+      () =>
+        apply(buildApp(), {
+          _meta: { slug: "creator-pack" },
+          profiles: [
+            { slug: "client", displayName: "Client", profileKind: "kind" },
+          ],
+        })
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject(existing);
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockMaterialize).not.toHaveBeenCalled();
   });
 });
