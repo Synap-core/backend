@@ -13,7 +13,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "API key",
-        "description": "Pod API key (Bearer) issued via /api/hub/setup/agent or pod admin tooling. Browser/web clients may use the X-Session-Token header instead. See GET /api/hub/auth/status to introspect the calling key."
+        "description": "Pod API key (Bearer) issued via /api/hub/setup/agent or pod admin tooling. A Synap app signed in through this pod's OAuth door sends its device token (Bearer synap_pd_...): the person, as a session. Browser/web clients may use the X-Session-Token header instead. See GET /api/hub/auth/status to introspect the calling key."
       }
     },
     "responses": {

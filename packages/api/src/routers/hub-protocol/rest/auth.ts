@@ -196,7 +196,7 @@ export function registerAuthRoutes(app: HubHono): void {
     },
   });
 
-  // Auth-skipped (`_middleware/auth.ts` skipAuthPaths): the key under question
+  // Auth-skipped (`_middleware/auth-skip.ts`): the key under question
   // may not authenticate — that is the point. It reads the bearer itself.
   app.openapi(keyStateRoute, async (c) => {
     const token = extractBearerToken(c.req.header("authorization"));

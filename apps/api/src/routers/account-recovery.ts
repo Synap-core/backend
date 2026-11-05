@@ -12,6 +12,12 @@
  *   GET  /status       session — codes set?, courier, Cloud trust, session marks
  *   POST /codes        session, privileged — create / regenerate the batch
  *   PUT  /cloud-trust  session, privileged, pod admin — off | sign_in | sign_in_recovery
+ *
+ * "session" is a Kratos session or a Synap app's DEVICE session (the desktop
+ * or Relay signed in through this pod's OAuth door: `appSessionMiddleware`).
+ * A device is privileged only while its last real sign-in is recent
+ * (`sessionMarks`, policy.ts), so the privileged routes keep refusing a
+ * device that has not stepped up.
  *                      ("Allow sign-in with Synap Cloud": `off` is refused
  *                      while an owner can sign in ONLY with Synap Cloud)
  *
@@ -50,8 +56,8 @@ import {
 } from "../account-recovery/codes.js";
 import {
   decideCredentialChange,
-  sessionIsCloudOnly,
-  sessionIsPrivileged,
+  sessionMarks,
+  type DeviceSessionLike,
   type KratosSessionLike,
 } from "../account-recovery/policy.js";
 import {
@@ -382,29 +388,29 @@ export function createAccountRecoveryRouter(
 
   // ── Authenticated ─────────────────────────────────────────────────────
 
-  for (const path of ["/status", "/codes", "/cloud-trust"]) {
-    router.use(path, ...deps.authenticate);
-  }
+  // One literal path per line, so the tripwire
+  // `credential-doors-refuse-device-session` reads which routes a device
+  // session reaches (the real deps wire `appSessionMiddleware()`).
+  router.use("/status", ...deps.authenticate);
+  router.use("/codes", ...deps.authenticate);
+  router.use("/cloud-trust", ...deps.authenticate);
 
   interface Caller {
     account: PodAccount;
-    session: KratosSessionLike;
+    session: KratosSessionLike & DeviceSessionLike;
     privileged: boolean;
     cloudOnly: boolean;
   }
 
   async function resolveCaller(c: Context): Promise<Caller | null> {
     const identityId = c.get("userId" as never) as string | undefined;
-    const session = (c.get("session" as never) ?? {}) as KratosSessionLike;
+    const session = (c.get("session" as never) ?? {}) as KratosSessionLike &
+      DeviceSessionLike;
     if (!identityId) return null;
     const account = await deps.findAccountByIdentity(identityId);
     if (!account) return null;
-    return {
-      account,
-      session,
-      privileged: sessionIsPrivileged(session, deps.now()),
-      cloudOnly: sessionIsCloudOnly(session),
-    };
+    // A Kratos session, or a Synap app's device session (its step-up clock).
+    return { account, session, ...sessionMarks(session, deps.now()) };
   }
 
   // The one rule (@synap/auth), over this router's injected reads.

@@ -236,6 +236,12 @@ function authorizationServerMetadata(issuer: string) {
     // `synap_requests`. `scopes_supported` stays the `scope` values an MCP or
     // app client may send; the two are different grammars (config.ts).
     synap_app_permissions: [...OAUTH_APP_PERMISSIONS],
+    // A Synap extension, the CONTRACT for the device sign-in: Hub REST
+    // (`/api/hub/*`) and `/api/account-recovery/status` accept a Synap app's
+    // device token as the person (hub `authenticatePersonDevice`). An app
+    // uses the device sign-in only on a pod that advertises it; an older pod
+    // keeps the app's older sign-in, whose Hub reads still work there.
+    synap_person_device_hub: true,
   };
 }
 

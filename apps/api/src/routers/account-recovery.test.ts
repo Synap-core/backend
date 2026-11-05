@@ -719,6 +719,86 @@ describe('PUT /cloud-trust off: "Allow sign-in with Synap Cloud" (ADDENDUM 2026-
   });
 });
 
+/**
+ * A Synap app's DEVICE session (`appSessionMiddleware`, `synap_pd_…`): no
+ * Kratos methods, a step-up clock (`device.authTime`, when its person last
+ * presented a pod credential). Would catch: a device read as "never
+ * privileged" (status unusable on the phone), or as privileged on a stale
+ * clock (recovery codes minted from a leaked token).
+ */
+function deviceSession(authMinutesAgo: number | null) {
+  return JSON.stringify({
+    identity: { id: OWNER.identityId, traits: { email: OWNER_EMAIL } },
+    active: true,
+    device: {
+      id: "device-1",
+      clientId: "synap-relay",
+      authTime:
+        authMinutesAgo === null
+          ? null
+          : new Date(Date.now() - authMinutesAgo * 60_000).toISOString(),
+    },
+  });
+}
+
+describe("a Synap app's device session", () => {
+  it("GET /status answers the person, with the device's honest marks", async () => {
+    const world = makeWorld();
+    const res = await app(world).request("/status", {
+      headers: { "x-test-session": deviceSession(5) },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).session).toEqual({
+      privileged: true,
+      cloudOnly: false,
+      canManage: true,
+    });
+  });
+
+  it("a device whose last real sign-in is past the window is not privileged: POST /codes → 403 reauth_required", async () => {
+    const world = makeWorld();
+    const status = await app(world).request("/status", {
+      headers: { "x-test-session": deviceSession(16) },
+    });
+    expect((await status.json()).session.privileged).toBe(false);
+    const res = await app(world).request("/codes", {
+      method: "POST",
+      headers: { "x-test-session": deviceSession(16) },
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("reauth_required");
+    expect(world.rows).toHaveLength(0);
+  });
+
+  it("a device that just stepped up generates codes", async () => {
+    const world = makeWorld();
+    const res = await app(world).request("/codes", {
+      method: "POST",
+      headers: { "x-test-session": deviceSession(1) },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).codes).toHaveLength(RECOVERY_CODE_COUNT);
+  });
+
+  it("a device with no step-up clock (consented through Synap Cloud alone) is Cloud-only and never privileged", async () => {
+    const world = makeWorld({ trust: "sign_in" });
+    const status = await app(world).request("/status", {
+      headers: { "x-test-session": deviceSession(null) },
+    });
+    expect((await status.json()).session).toEqual({
+      privileged: false,
+      cloudOnly: true,
+      canManage: false,
+    });
+    const res = await app(world).request("/codes", {
+      method: "POST",
+      headers: { "x-test-session": deviceSession(null) },
+    });
+    expect(res.status).toBe(403);
+    expect(world.rows).toHaveLength(0);
+  });
+});
+
 describe("GET /doors", () => {
   it("offers only what works on this pod", async () => {
     const world = makeWorld({ trust: "sign_in" });

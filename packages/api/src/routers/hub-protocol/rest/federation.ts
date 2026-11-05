@@ -15,7 +15,7 @@
  * and repoint the pod's "cp" sign-in provider (SECURITY-KEYS C2). NOT the Hub key — a pod holds no durable secret it can share with the
  * CP, and the pod's stored hub key has drifted from the CP's copy; the CP's
  * ES256 signing key is the credential the pod verifiably trusts. This route is
- * therefore listed in `skipAuthPaths` (it does its own verification) — mirroring
+ * therefore listed in `HUB_AUTH_SKIP_PATHS` (`_middleware/auth-skip.ts`) (it does its own verification) — mirroring
  * `setup.ts`. The OIDC client fields live INSIDE the signed assertion, so they
  * cannot be tampered independently of the signature.
  *

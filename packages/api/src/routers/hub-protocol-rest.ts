@@ -161,6 +161,8 @@ app.openAPIRegistry.registerComponent("securitySchemes", "bearerAuth", {
   bearerFormat: "API key",
   description:
     "Pod API key (Bearer) issued via /api/hub/setup/agent or pod admin tooling. " +
+    "A Synap app signed in through this pod's OAuth door sends its device token " +
+    "(Bearer synap_pd_...): the person, as a session. " +
     "Browser/web clients may use the X-Session-Token header instead. " +
     "See GET /api/hub/auth/status to introspect the calling key.",
 });
@@ -235,11 +237,11 @@ app.use("*", sessionMiddleware);
 //   - Replays come back with `X-Idempotent-Replay: true`.
 //   - Fails OPEN on cache errors — never breaks the request.
 //
-// Skip list (E1.1 — must stay aligned with `skipAuthPaths` above):
+// Skip list (E1.1 — must stay aligned with `HUB_AUTH_SKIP_PATHS` above):
 //   - `/setup/agent` returns a one-shot `hubApiKey`. With no auth running
 //     before idempotency, two operators replaying the same body + key would
 //     receive the same cached secret. NEVER cache.
-//   - `/entity-share/deliver` is authed via CP JWT (also skipAuthPaths) and
+//   - `/entity-share/deliver` is authed via CP JWT (also HUB_AUTH_SKIP_PATHS) and
 //     would fall back to `userId = "anonymous"` for the cache key — same
 //     cross-tenant replay risk. NEVER cache.
 //
@@ -258,7 +260,7 @@ app.use(
       "/setup/service",
       "/entity-share/deliver",
       // ── Unauthenticated setup/auth-bootstrap doors ───────────────────────
-      // These fall to `userId = "anonymous"` (they are in `skipAuthPaths`), so
+      // These fall to `userId = "anonymous"` (they are in `HUB_AUTH_SKIP_PATHS`), so
       // the cache key is NOT partitioned by a real user — a replayed
       // Idempotency-Key would serve one caller another caller's response.
       // `/setup/magic-link` is the sharpest: it returns `{ token, url }` where
@@ -409,7 +411,7 @@ registerObservabilityRoutes(app); // /observability/routing-health — decision/
 // call and discloses the resolved IS host. See the file header for the full
 // argument for a second door over a `?deps=1` flag on /health.
 registerHealthDependenciesRoutes(app);
-registerPublicProjectionRoutes(app); // /public/projection — UNAUTH facet-scoped public read (skipAuthPaths)
+registerPublicProjectionRoutes(app); // /public/projection — UNAUTH facet-scoped public read (HUB_AUTH_SKIP_PATHS)
 registerPublicSharesRoutes(app); // /public/shares/:token — credentialless read of a PUBLISHED share (public-doors.ts)
 registerPublicSitesRoutes(app); // /public/sites/:token — credentialless manifest of a published SITE (public-doors.ts)
 registerPublicFormsRoutes(app); // /public/forms/:token — credentialless guest form (GET definition, POST → constant 202)
@@ -443,7 +445,7 @@ app.doc31("/openapi.json", {
   servers: [{ url: "/api/hub", description: "Pod-relative base URL" }],
   // Global security requirement — every operation inherits `bearerAuth`
   // unless it explicitly sets `security: []` (currently: /health, /openapi.json,
-  // /docs, /entity-share/deliver, /setup/agent — all listed in `skipAuthPaths`
+  // /docs, /entity-share/deliver, /setup/agent — all listed in `HUB_AUTH_SKIP_PATHS`
   // above and registered with `security: []` in their stubs/route defs).
   security: [{ bearerAuth: [] }],
 });

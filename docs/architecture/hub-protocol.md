@@ -26,11 +26,17 @@ surface in `packages/api`.
 ## Middleware chain
 
 1. **Health** routes register first and need no auth.
-2. **Auth** (`_middleware/auth.ts`) accepts three credentials: a bearer token
-   the pod signed itself for one Intelligence Service turn (the IS delegation,
-   `utils/is-delegation.ts`), a bearer API key (agents, the CLI), or a Kratos
-   session in `X-Session-Token` (the extension and web clients, with full
-   `hub-protocol.read` and `hub-protocol.write` scopes). Failures return the
+2. **Auth** (`_middleware/auth.ts`) accepts four credentials: a Synap app's
+   device token (`Bearer synap_pd_…`, the desktop or Relay signed in through
+   the pod's OAuth door), a bearer token the pod signed itself for one
+   Intelligence Service turn (the IS delegation, `utils/is-delegation.ts`), a
+   bearer API key (agents, the CLI), or a Kratos session in `X-Session-Token`
+   (the extension and web clients). A device token and a Kratos session are
+   the person, with full `hub-protocol.read` and `hub-protocol.write` scopes; a
+   device session must have signed in recently (a step-up) at a route that
+   creates or widens a credential (`refuseStaleDeviceSession`, tripwire
+   `credential-doors-refuse-device-session`). The paths auth never reads are
+   one list, `_middleware/auth-skip.ts`. Failures return the
    standard 401 envelope (`utils/auth-error.ts`). See
    [api-keys.md](api-keys.md) for key types, grants and scopes, and
    [auth-and-federation.md](auth-and-federation.md) for sessions and federated

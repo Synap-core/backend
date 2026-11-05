@@ -18,7 +18,7 @@
  * Auth for BOTH routes = a CP TRUSTED-ISSUER assertion (verifyCpAssertion
  * below: the approved Control Plane issuer only), NOT a hub API key: the CP-held pod credential (`intelligenceApiKey`)
  * is a random bootstrap secret, not a `synap_*` key, so it could never pass the
- * key-format middleware. Both routes are listed in `skipAuthPaths`
+ * key-format middleware. Both routes are listed in `HUB_AUTH_SKIP_PATHS` (`_middleware/auth-skip.ts`)
  * (hub-protocol-rest.ts) so that middleware doesn't run, and each verifies its
  * OWN purpose claim (`mcp_redeem` / `mcp_revoke`) so a redeem assertion can't
  * be replayed as a revoke and vice-versa.
@@ -126,7 +126,7 @@ async function verifyCpAssertion(
 
 export function registerMcpRedeemRoutes(app: HubHono): void {
   app.post("/mcp/redeem", async (c) => {
-    // This route is in `skipAuthPaths`, so the key-format middleware does NOT
+    // This route is in `HUB_AUTH_SKIP_PATHS` (`_middleware/auth-skip.ts`), so the key-format middleware does NOT
     // run — see `verifyCpAssertion` above for the CP-trusted-issuer auth block.
     // The one-time `code` below is the SECOND required credential.
     const authFailure = await verifyCpAssertion(c, "mcp_redeem");

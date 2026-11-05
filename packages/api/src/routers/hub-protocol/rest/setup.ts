@@ -126,6 +126,7 @@ import {
   type HubVariables,
   httpStatusForTrpcError,
   requireUuidParam,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import {
   agentApprovalPageUrl as approvalPageUrl,
@@ -1829,6 +1830,8 @@ export function registerSetupRoutes(app: HubHono): void {
    * the mapping ID only (retrieve the token from your own storage).
    */
   app.post("/setup/external-user", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!isSubTokenFeatureEnabled()) {
       return c.json(
         {

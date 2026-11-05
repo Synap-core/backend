@@ -7,8 +7,9 @@
  *   mint door) → the token on the REAL app session gate
  *   (`appSessionMiddleware` → `resolvePersonDeviceSession`) → the REAL tRPC
  *   context (`createContext`) and the REAL `devices` procedures → refresh,
- *   revoke and the devices list; and the same token refused by the REAL agent
- *   doors (`mcpHttpApp`, `hubAuthMiddleware`).
+ *   revoke and the devices list; the same token refused by the REAL agent door
+ *   `mcpHttpApp`, and accepted as the person by the REAL Hub REST auth
+ *   (`hubAuthMiddleware`), whose credential routes ask a stale device to step up.
  *
  * Rows that rule out a wrong rule:
  *  (a) /authorize: any loopback port is accepted, `localhost` is refused AND
@@ -16,7 +17,10 @@
  *      reach the consent screen;
  *  (b) the token is the PERSON on /trpc (the device marked `current`), while
  *      the same person in a browser session sees it as another device;
- *  (c) /mcp (a write) and Hub REST answer 401 to it;
+ *  (c) /mcp (a write) answers 401 to it; Hub REST takes it as the person
+ *      (a revoked or unknown one is 401, an API key still goes to the key
+ *      lookup), and a Hub credential route refuses a stale device
+ *      (STEP_UP_REQUIRED) as tRPC does;
  *  (d) a reused refresh token ends the DEVICE, its live access token too;
  *  (e) the absolute cap is enforced — past it nothing refreshes or
  *      authenticates, and near it nothing is minted past it;
@@ -150,11 +154,15 @@ import { applicationConnectionsRouter } from "../routers/application-connections
 import {
   STEP_UP_REQUIRED,
   STEP_UP_WINDOW_MS,
+  assertFreshAuthentication,
   runAsDeviceSession,
 } from "../utils/device-session.js";
 import { applyVaultSecretGrant } from "./vault-secret-grant.js";
 import { mcpHttpApp } from "../routers/mcp/http-handler.js";
 import { hubAuthMiddleware } from "../routers/hub-protocol/_middleware/auth.js";
+import { registerWebhooksRoutes } from "../routers/hub-protocol/rest/webhooks.js";
+import { registerVaultRoutes } from "../routers/hub-protocol/rest/vault.js";
+import { registerCalendarFeedRoutes } from "../routers/hub-protocol/rest/calendar-feed.js";
 import type {
   HubHono,
   HubVariables,
@@ -546,8 +554,14 @@ describe("(a) /authorize for a Synap app", () => {
     const res = await oauthApp.request(
       "/.well-known/oauth-authorization-server"
     );
-    const doc = (await res.json()) as { synap_first_party_clients: string[] };
+    const doc = (await res.json()) as {
+      synap_first_party_clients: string[];
+      synap_person_device_hub?: boolean;
+    };
     expect(doc.synap_first_party_clients.sort()).toEqual([DESKTOP, RELAY]);
+    // The contract an app reads before using the device sign-in: this pod's
+    // Hub REST takes the device token as the person.
+    expect(doc.synap_person_device_hub).toBe(true);
   });
 });
 
@@ -592,7 +606,7 @@ describe("(b) the device token is the person on the app API", () => {
 
 // ─── (c) refused on the agent doors ──────────────────────────────────────────
 
-describe("(c) /mcp and Hub REST refuse a device token", () => {
+describe("(c) /mcp refuses a device token; Hub REST takes it as the person", () => {
   it("an /mcp write is 401", async () => {
     const s = await signIn();
     const res = await mcpHttpApp.request("/", {
@@ -612,17 +626,147 @@ describe("(c) /mcp and Hub REST refuse a device token", () => {
     expect(res.status).toBe(401);
   });
 
-  it("a Hub REST call is 401", async () => {
-    const s = await signIn();
+  /** A Hub app behind the REAL auth middleware, with the REAL webhooks routes. */
+  function hubApi() {
     const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
     hub.use("/*", hubAuthMiddleware as never);
-    hub.get("/entities", (c) => c.json({ reached: true }));
+    hub.get("/whoami", (c) =>
+      c.json({
+        userId: c.get("userId"),
+        scopes: c.get("scopes"),
+        sessionKind: c.get("sessionKind") ?? null,
+        apiKeyId: c.get("apiKeyId") ?? null,
+      })
+    );
+    // A credential write deep in a service, with no context at hand: it reads
+    // the device scope the middleware opened.
+    hub.post("/deep-credential", (c) => {
+      try {
+        assertFreshAuthentication();
+        return c.json({ passed: true });
+      } catch {
+        return c.json({ refused: true }, 403);
+      }
+    });
+    registerWebhooksRoutes(hub);
+    registerVaultRoutes(hub);
+    registerCalendarFeedRoutes(hub);
     const root = new Hono();
     root.route("/api/hub", hub);
-    const res = await root.request("/api/hub/entities", {
-      headers: { authorization: `Bearer ${s.access}` },
+    return root;
+  }
+  const hubCall = (path: string, bearer: string, init: RequestInit = {}) =>
+    hubApi().request(`/api/hub${path}`, {
+      ...init,
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+        ...(init.headers ?? {}),
+      },
     });
+
+  it("a Hub REST read is the person, with a session's scopes, marked a device session", async () => {
+    const s = await signIn();
+    const res = await hubCall("/whoami", s.access);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      userId: PERSON,
+      scopes: ["hub-protocol.read", "hub-protocol.write"],
+      sessionKind: "person_device",
+      apiKeyId: null,
+    });
+  });
+
+  it("a signed-out device's token is 401 key_revoked, and tells the app to refresh", async () => {
+    const s = await signIn();
+    await revokePersonDevice(h.db, { deviceId: s.deviceId, reason: "test" });
+    const res = await hubCall("/whoami", s.access);
     expect(res.status).toBe(401);
+    expect(res.headers.get("www-authenticate")).toContain("invalid_token");
+    expect((await res.json()).reason).toBe("key_revoked");
+  });
+
+  it("an unknown device token is 401 key_revoked", async () => {
+    const res = await hubCall("/whoami", "synap_pd_not-a-real-token");
+    expect(res.status).toBe(401);
+    expect((await res.json()).reason).toBe("key_revoked");
+  });
+
+  it("CONTROL — a bearer without the device prefix still goes to the API-key lookup", async () => {
+    const res = await hubCall("/whoami", "not-a-key-at-all");
+    expect(res.status).toBe(401);
+    expect((await res.json()).reason).toBe("invalid_format");
+    expect(res.headers.get("www-authenticate")).toBeNull();
+  });
+
+  it("a Hub credential route answers 403 STEP_UP_REQUIRED to a stale device", async () => {
+    const s = await signIn("stale", STALE_MS);
+    const res = await hubCall("/webhooks", s.access, {
+      method: "POST",
+      body: JSON.stringify({
+        name: "from a phone",
+        url: "https://example.com/hook",
+        eventTypes: ["entity.created"],
+      }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).reasonCode).toBe(STEP_UP_REQUIRED);
+    const n = await q<{ n: number }>(
+      `select count(*)::int as n from webhook_subscriptions`
+    );
+    expect(n.rows[0]!.n).toBe(0);
+  });
+
+  it("CONTROL — the same route is not refused that way to a device that signed in a minute ago", async () => {
+    const s = await signIn("fresh", MIN_MS);
+    const res = await hubCall("/webhooks", s.access, {
+      method: "POST",
+      body: JSON.stringify({ name: "x", url: "not a url", eventTypes: [] }),
+    });
+    expect(((await res.json()) as { reasonCode?: string }).reasonCode).not.toBe(
+      STEP_UP_REQUIRED
+    );
+  });
+
+  it("a secret's plaintext (POST /vault/redeem) needs a step-up from a stale device", async () => {
+    const s = await signIn("stale", STALE_MS);
+    const res = await hubCall("/vault/redeem", s.access, {
+      method: "POST",
+      body: JSON.stringify({ ref: `vault://${randomUUID()}/value` }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).reasonCode).toBe(STEP_UP_REQUIRED);
+  });
+
+  it("minting or rotating the calendar feed URL needs a step-up from a stale device; a fresh one mints", async () => {
+    const stale = await signIn("stale", STALE_MS);
+    for (const path of ["/calendar/feed", "/calendar/feed/rotate"]) {
+      const res = await hubCall(path, stale.access, { method: "POST" });
+      expect(res.status, path).toBe(403);
+      expect((await res.json()).reasonCode, path).toBe(STEP_UP_REQUIRED);
+    }
+    const none = await q<{ n: number }>(
+      `select count(*)::int as n from calendar_feed_tokens`
+    );
+    expect(none.rows[0]!.n).toBe(0);
+    const fresh = await signIn("fresh", MIN_MS);
+    const minted = await hubCall("/calendar/feed", fresh.access, {
+      method: "POST",
+    });
+    expect(minted.status).toBe(200);
+  });
+
+  it("a credential write deep in a service refuses a stale device too (the request's device scope)", async () => {
+    const stale = await signIn("stale", STALE_MS);
+    expect(
+      (await hubCall("/deep-credential", stale.access, { method: "POST" }))
+        .status
+    ).toBe(403);
+    const fresh = await signIn("fresh", MIN_MS);
+    expect(
+      (await hubCall("/deep-credential", fresh.access, { method: "POST" }))
+        .status
+    ).toBe(200);
   });
 });
 
