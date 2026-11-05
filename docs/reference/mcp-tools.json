@@ -234,14 +234,20 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default; use synap_get_entity or detail:'full' for full values.",
+      "description": "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default (id, title, kind, status and the kind's selected properties; `omitted` names what each row left out — pass those keys in `fields` or read one object with synap_get_entity); detail:'full' returns unprojected rows.",
       "parameters": [
         {
           "name": "detail",
           "type": "enum",
           "required": false,
-          "description": "lean (default) = null columns and systemData omitted, string values over 120 chars truncated with '…[truncated: N chars total]' (every property key kept). full = unprojected rows.",
+          "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; strings over 120 chars truncated with '…[truncated: N chars total]'); `omitted` lists the property keys left out. full = unprojected rows.",
           "enum": ["lean", "full"]
+        },
+        {
+          "name": "fields",
+          "type": "array<string>",
+          "required": false,
+          "description": "Lean only: extra property keys (or columns, e.g. createdAt) to return WHOLE on every row, never truncated — e.g. the keys a previous reply listed in `omitted`."
         },
         {
           "name": "profileSlug",
@@ -324,7 +330,12 @@
           "detail": {
             "type": "string",
             "enum": ["lean", "full"],
-            "description": "lean (default) = null columns and systemData omitted, string values over 120 chars truncated with '…[truncated: N chars total]' (every property key kept). full = unprojected rows."
+            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; strings over 120 chars truncated with '…[truncated: N chars total]'); `omitted` lists the property keys left out. full = unprojected rows."
+          },
+          "fields": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Lean only: extra property keys (or columns, e.g. createdAt) to return WHOLE on every row, never truncated — e.g. the keys a previous reply listed in `omitted`."
           },
           "profileSlug": {
             "type": "string",

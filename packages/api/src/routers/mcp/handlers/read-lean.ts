@@ -17,21 +17,19 @@
  * naming what was cut and how to get it back.
  */
 
-/** Profile description cap in the digest. Live p90 = 110 chars, max = 151. */
-export const PROFILE_DESCRIPTION_CAP = 120;
+import {
+  capString,
+  ENTITY_STRING_CAP,
+} from "../../../services/entity-lean-list.js";
 
 /**
- * Long string cap in a lean entity row. 120 chars is enough to recognise a
- * note. Measured: at 200 the 50-note budget fixture came to 41,710 chars (over
- * budget), because the ~14 live UUID/timestamp columns per row are fixed cost.
+ * The entity-row projection lives in `services/entity-lean-list.ts` (one door
+ * for MCP `synap_get_entities` and Hub REST `GET /users/:userId/entities`).
  */
-export const ENTITY_STRING_CAP = 120;
+export { ENTITY_STRING_CAP };
 
-function capString(value: string, cap: number): string {
-  return value.length > cap
-    ? `${value.slice(0, cap)}…[truncated: ${value.length} chars total]`
-    : value;
-}
+/** Profile description cap in the digest. Live p90 = 110 chars, max = 151. */
+export const PROFILE_DESCRIPTION_CAP = 120;
 
 /**
  * One profile as the default digest carries it: what an agent needs to CHOOSE
@@ -110,44 +108,6 @@ export const PROFILES_DIGEST_NOTE =
   "detail:'full' for complete profile rows and full relation-type rows (displayName, " +
   "description, isDirectional, inverseLabel). Exposure edges are not listed: file an " +
   "entity into a project with synap_file_into_project.";
-
-/** Top-level entity columns a lean row never carries (always `{}` / internal). */
-const ENTITY_WITHHELD_COLUMNS: ReadonlySet<string> = new Set(["systemData"]);
-
-/**
- * One entity row as the default `synap_get_entities` carries it. Null
- * top-level columns and `systemData` are dropped; long top-level strings and
- * long top-level string PROPERTY values are truncated with an explicit marker.
- * Every property KEY is kept (including null-valued ones) — a value may be
- * cut, a key is never removed. Nested objects/arrays inside properties are
- * passed through untouched.
- */
-export function toLeanEntity(
-  row: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(row)) {
-    if (value === null || value === undefined) continue;
-    if (ENTITY_WITHHELD_COLUMNS.has(key)) continue;
-    if (key === "properties" && typeof value === "object") {
-      const props: Record<string, unknown> = {};
-      for (const [pk, pv] of Object.entries(value as Record<string, unknown>)) {
-        props[pk] =
-          typeof pv === "string" ? capString(pv, ENTITY_STRING_CAP) : pv;
-      }
-      out.properties = props;
-      continue;
-    }
-    out[key] =
-      typeof value === "string" ? capString(value, ENTITY_STRING_CAP) : value;
-  }
-  return out;
-}
-
-export const ENTITIES_LEAN_NOTE =
-  "Lean rows: null columns and systemData omitted; string values longer than " +
-  `${ENTITY_STRING_CAP} chars end in '…[truncated: N chars total]' (every property key is kept). ` +
-  "synap_get_entity { entityId } returns one full row; detail:'full' here returns every row unprojected.";
 
 /** Picks `keys` that are present and non-null — a digest never invents a field. */
 function pick(

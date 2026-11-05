@@ -18,7 +18,7 @@
  *
  * Reachability, not shape: the lean output must still NAME every profile slug,
  * every relation slug valid for each lens, every entity id and every property
- * key. Non-vacuity: the fixture's `detail:'full'` output must exceed the budget
+ * key that carries a value (listed, or named in the row's `omitted`). Non-vacuity: the fixture's `detail:'full'` output must exceed the budget
  * and carry the nulls / long values / systemData the lean path removes.
  *
  * WHAT THIS DOES NOT COVER: nested strings inside object/array property values
@@ -54,6 +54,16 @@ vi.mock("../../../utils/relation-types.js", async (importOriginal) => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   getDb: vi.fn(async () => ({})),
+  // The lean door reads each kind's defs; the note kind declares none here,
+  // so its properties are ranked by their stored values.
+  ProfileResolutionService: class {
+    async getEffectiveProperties() {
+      return [];
+    }
+    async getEffectiveLifecycles() {
+      return new Map();
+    }
+  },
 }));
 
 import { readHandlers } from "./read.js";
@@ -337,7 +347,7 @@ describe("synap_get_entities — default lean rows fit the budget", () => {
     );
   });
 
-  it("the default call is ≤ budget, keeps every id and property key, and marks every cut", async () => {
+  it("the default call is ≤ budget, keeps every id, reaches every property key, and marks every cut", async () => {
     const lean = await call("synap_get_entities", {
       profileSlug: "note",
       limit: 50,
@@ -361,9 +371,17 @@ describe("synap_get_entities — default lean rows fit the budget", () => {
       expect(got).not.toHaveProperty("systemData");
       expect(got).not.toHaveProperty("fileUrl");
       const props = got.properties as Record<string, unknown>;
-      expect(Object.keys(props).sort()).toEqual(
-        Object.keys(src.properties).sort()
-      );
+      // Reachability: every key with a value the row does not already say is
+      // either listed or named in `omitted` (null values and a `title`
+      // property equal to the title are not repeated).
+      const reached = new Set([
+        ...Object.keys(props),
+        ...((got.omitted as string[] | undefined) ?? []),
+      ]);
+      for (const [k, v] of Object.entries(src.properties)) {
+        if (v === null || (k === "title" && v === src.title)) continue;
+        expect(reached.has(k)).toBe(true);
+      }
       const content = props.content as string;
       if (src.properties.content.length > ENTITY_STRING_CAP) {
         cuts++;

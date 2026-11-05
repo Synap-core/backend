@@ -34,6 +34,10 @@ import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
+  ENTITIES_LEAN_NOTE,
+  projectLeanEntityList,
+} from "../../../services/entity-lean-list.js";
+import {
   compareListedEntities,
   lastInteractionWindowWhere,
   parseEntityListSort,
@@ -315,14 +319,44 @@ export function registerEntitiesRoutes(app: HubHono): void {
             "Only entities carrying a live facet of this role (e.g. `client`)."
           ),
         limit: z.string().optional(),
+        projection: z
+          .enum(["full", "lean"])
+          .optional()
+          .describe(
+            "full (default) = the array of whole rows. lean = an object " +
+              "`{ projection: 'lean', entities, note }` whose rows carry id, " +
+              "title, kind, status (+ statusCategory/statusLabel) and the " +
+              "kind's selected properties, with `omitted` naming the keys " +
+              "left out (the AI list door, finding 4a5b88a7)."
+          ),
+        fields: z
+          .string()
+          .optional()
+          .describe(
+            "With projection=lean: comma-separated property keys or columns " +
+              "returned whole on every row (e.g. the keys a row listed in " +
+              "`omitted`)."
+          ),
       }),
     },
     responses: {
       ...trpcErrorResponses,
       200: {
-        description: "Array of entities",
+        description:
+          "Array of entities, or with projection=lean the lean list object",
         content: {
-          "application/json": { schema: z.array(RawEntityRecordSchema) },
+          "application/json": {
+            schema: z.union([
+              z.array(RawEntityRecordSchema),
+              z
+                .object({
+                  projection: z.literal("lean"),
+                  entities: z.array(RawEntityRecordSchema),
+                  note: z.string(),
+                })
+                .openapi("LeanEntityList"),
+            ]),
+          },
         },
       },
       401: {
@@ -401,6 +435,23 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // Honor this endpoint's documented contract: pod-wide returned regardless.
         includePodWide: true,
       });
+      if (query.projection === "lean") {
+        const fields = (query.fields ?? "")
+          .split(",")
+          .map((f) => f.trim())
+          .filter(Boolean);
+        return c.json(
+          {
+            projection: "lean" as const,
+            entities: await projectLeanEntityList(
+              result as unknown as Array<Record<string, unknown>>,
+              fields.length > 0 ? { fields } : {}
+            ),
+            note: ENTITIES_LEAN_NOTE,
+          },
+          200
+        );
+      }
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, userId }, "getEntities failed");
