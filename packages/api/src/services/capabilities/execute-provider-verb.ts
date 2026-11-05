@@ -28,6 +28,7 @@ import {
   type FailureErrorClass,
 } from "../../connectors/external-dispatch.js";
 import { interpolateString, interpolateDeep } from "../_shared/interpolate.js";
+import { encodeFormBody } from "../../connectors/form-encode.js";
 
 type DetailSpec = Omit<ProviderVerbSpec, "tool" | "expand">;
 
@@ -120,11 +121,37 @@ function encodeForPath(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...mapped };
   for (const [name, m] of Object.entries(spec.paramMapping ?? {})) {
-    if (m.encode === "uri" && out[name] !== undefined && out[name] !== null) {
+    if (out[name] === undefined || out[name] === null) continue;
+    if (m.encode === "uri") {
       out[name] = encodeURIComponent(String(out[name]));
+    } else if (m.encode === "path") {
+      out[name] = encodePathParam(name, String(out[name]));
     }
   }
   return out;
+}
+
+/**
+ * `encode: "path"` — a parameter that IS a relative resource path (a generic
+ * verb's `customers/cus_123/balance_transactions`), kept under the verb's
+ * `pathTemplate` prefix: split on `/` (one leading or trailing slash dropped),
+ * each segment percent-encoded on its own (so `?`, `#`, `%` and `\` can never
+ * start a query, a fragment or a second encoding), and an empty, `.` or `..`
+ * segment refused before the call (URL normalisation would otherwise climb out
+ * of the prefix: `/v1/../x` reaches `/x`). The host is the tool's fixed
+ * `baseUrl` whatever the value (`composeVaultUrl`).
+ */
+function encodePathParam(name: string, raw: string): string {
+  const trimmed = raw.replace(/^\//, "").replace(/\/$/, "");
+  const segments = trimmed.split("/");
+  for (const seg of segments) {
+    if (seg === "" || seg === "." || seg === "..") {
+      throw new Error(
+        `provider verb: parameter "${name}" must be a relative path of named segments (e.g. "customers/cus_123"); an empty, "." or ".." segment is refused.`
+      );
+    }
+  }
+  return segments.map((seg) => encodeURIComponent(seg)).join("/");
 }
 
 /** Build `key=value&…`; arrays → repeated keys; drop keys with empty tokens. */
@@ -262,11 +289,51 @@ export function buildProviderRequest(
     return { method: "POST", path, query: "", body, mapped };
   }
 
-  const query = buildQueryString(spec.query, mapped);
-  const body = spec.body
+  let query = buildQueryString(spec.query, mapped);
+  let body = spec.body
     ? (interpolateDeep(spec.body, mapped) as Record<string, unknown>)
     : undefined;
+  if (spec.bodyFrom) {
+    const passed = passThroughObject(spec.bodyFrom, mapped[spec.bodyFrom]);
+    if (passed) {
+      if (/^(GET|HEAD|DELETE)$/i.test(spec.method ?? "")) {
+        const extra = encodeFormBody(passed);
+        if (extra) query = query ? `${query}&${extra}` : extra;
+      } else {
+        body = { ...(body ?? {}), ...passed };
+      }
+    }
+  }
   return { method: spec.method, path, query, body, mapped };
+}
+
+/**
+ * The `bodyFrom` parameter's value as a plain object: absent/empty → none; an
+ * object → itself; a string holding a JSON object → parsed (callers that can
+ * only send strings). Anything else is refused with the parameter's name, so a
+ * wrong shape never reaches the provider as `[object Object]` or a dropped body.
+ */
+function passThroughObject(
+  name: string,
+  value: unknown
+): Record<string, unknown> | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  let v = value;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      throw new Error(
+        `provider verb: parameter "${name}" must be an object of the provider's fields (or a JSON object string).`
+      );
+    }
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new Error(
+      `provider verb: parameter "${name}" must be an object of the provider's fields (or a JSON object string).`
+    );
+  }
+  return v as Record<string, unknown>;
 }
 
 // ── single provider call (used by the top-level verb AND each expand detail) ──

@@ -254,6 +254,7 @@ const CONNECT_AFFORDANCE =
 export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { refuseWorkerSendPastCeiling } from "../services/playbooks/worker-send-ceiling.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
+import { encodeFormBody } from "./form-encode.js";
 import { isUuid } from "@synap-core/types/property-render";
 
 /**
@@ -2202,7 +2203,12 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     if (!encoded.ok) return encoded.result;
     fileBody = encoded.body;
     headers["Content-Type"] = fileBody.contentType;
-  } else if (body !== undefined) headers["Content-Type"] = "application/json";
+  }
+  const encodedBody =
+    fileBody || body === undefined
+      ? undefined
+      : encodeVaultBody(toolConfig, body);
+  if (encodedBody) headers["Content-Type"] = encodedBody.contentType;
 
   // Inject the secret per config — header or query. Never logged.
   if (auth.in === "query") {
@@ -2216,17 +2222,40 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     {
       method: method.toUpperCase(),
       headers,
-      body: fileBody
-        ? fileBody.body
-        : body !== undefined
-          ? JSON.stringify(body)
-          : undefined,
+      body: fileBody ? fileBody.body : encodedBody?.payload,
     },
     target.allowedPorts,
     fileBody
   );
   return sent.result;
 };
+
+/**
+ * The wire form of a vault:// tool's JSON-object body. JSON by default; a tool
+ * whose API takes form bodies declares `config.bodyEncoding: "form"` (Stripe v1:
+ * "accepts form-encoded request bodies"), and every body it sends is then
+ * `application/x-www-form-urlencoded` with bracket nesting (`form-encode.ts`).
+ * The encoding belongs to the TOOL (the API), not to a verb: a direct call and
+ * the replay of an approved proposal read the same tool row, so both send the
+ * same bytes. Any other value is JSON, as before.
+ */
+function encodeVaultBody(
+  toolConfig: Record<string, unknown>,
+  body: unknown
+): { contentType: string; payload: string } {
+  if (
+    toolConfig.bodyEncoding === "form" &&
+    body !== null &&
+    typeof body === "object" &&
+    !Array.isArray(body)
+  ) {
+    return {
+      contentType: "application/x-www-form-urlencoded",
+      payload: encodeFormBody(body as Record<string, unknown>),
+    };
+  }
+  return { contentType: "application/json", payload: JSON.stringify(body) };
+}
 
 /**
  * Encode a file body, turning its typed refusal (file gone, over a cap, a bad
@@ -2486,11 +2515,15 @@ async function sessionAuthCall(args: {
       fileBody = encoded.body;
       headers["Content-Type"] = fileBody.contentType;
     } else if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
       if (typeof body === "object" && body !== null && !Array.isArray(body)) {
         body = fillSessionSlots(body as Record<string, unknown>);
       }
     }
+    const encodedBody =
+      fileBody || body === undefined
+        ? undefined
+        : encodeVaultBody(toolConfig, body);
+    if (encodedBody) headers["Content-Type"] = encodedBody.contentType;
     headers[config.token.header] = `${config.token.prefix}${session.token}`;
 
     const sent = await sendVaultRequest(
@@ -2498,11 +2531,7 @@ async function sessionAuthCall(args: {
       {
         method: input.method.toUpperCase(),
         headers,
-        body: fileBody
-          ? fileBody.body
-          : body !== undefined
-            ? JSON.stringify(body)
-            : undefined,
+        body: fileBody ? fileBody.body : encodedBody?.payload,
       },
       target.allowedPorts,
       fileBody
