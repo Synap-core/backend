@@ -636,6 +636,12 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.templateNoun.work.other": "Modèles de travail",
   "vocabulary.templateNoun.space.one": "Modèle d’espace",
   "vocabulary.templateNoun.space.other": "Modèles d’espace",
+  "vocabulary.packageNoun.template.one": "Modèle",
+  "vocabulary.packageNoun.template.other": "Modèles",
+  "vocabulary.packageNoun.pack.one": "Pack",
+  "vocabulary.packageNoun.pack.other": "Packs",
+  "vocabulary.grant.packageInstall":
+    "Ajouter des packs et des modèles à votre pod",
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} many {# de {nouns}} other {# {nouns}}}",
 };

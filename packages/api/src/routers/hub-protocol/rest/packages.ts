@@ -40,6 +40,11 @@ import {
   type NamedInstallRoute,
 } from "../../../services/template-apply/propose.js";
 import { packagePreflightReadable } from "../../../access/grant-door-fence.js";
+import {
+  packageObjectCount,
+  summarizePackageContents,
+} from "../../../services/package-contents-summary.js";
+import { resolvePackageNoun } from "@synap-core/types/vocabulary";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
 import {
@@ -661,9 +666,11 @@ export function registerPackagesRoutes(app: HubHono): void {
       const namedRoute = await routeNamedInstall({ userId, raw, body });
       const named = namedInstallBody({ raw, body }, namedRoute);
       if (!named) return c.json(CATALOG_DEFINITION_UNREADABLE, 502);
+      const contents = await resolvePackageContents(named.body);
       return c.json(
         {
-          contents: await resolvePackageContents(named.body),
+          contents,
+          noun: resolvePackageNoun(packageObjectCount(contents)),
           source: namedRoute.kind === "catalog" ? "catalog" : "request",
           pod: {
             status: "withheld",
@@ -702,17 +709,22 @@ export function registerPackagesRoutes(app: HubHono): void {
         ? { compose: { workspaceId: composeTarget.workspaceId } }
         : {}),
     });
+    // Template or pack, from what the package holds (`resolvePackageNoun`).
+    const noun = resolvePackageNoun(
+      packageObjectCount(summarizePackageContents(body))
+    );
     // The update preview: what data this update would change, counted by the
     // conversion engine's dry run (`[]` for a fresh install). A failed read is
     // reported as such, never as "no changes".
     try {
       const dataChanges = (await updateDataChanges(body)) ?? [];
-      return c.json({ ...report, apply, dataChanges }, 200);
+      return c.json({ ...report, apply, dataChanges, noun }, 200);
     } catch (err) {
       return c.json(
         {
           ...report,
           apply,
+          noun,
           dataChanges: null,
           dataChangesError: err instanceof Error ? err.message : String(err),
         },
@@ -1189,6 +1201,10 @@ export function registerPackagesRoutes(app: HubHono): void {
       }
     }
 
+    // Template or pack, from what the package holds (`resolvePackageNoun`).
+    result.noun = resolvePackageNoun(
+      packageObjectCount(summarizePackageContents(body))
+    );
     return c.json(result, 201);
   });
 }

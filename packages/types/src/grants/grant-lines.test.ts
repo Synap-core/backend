@@ -42,14 +42,13 @@ describe("grantLines", () => {
     expect(lines.join(" ")).not.toMatch(/facet|entity\.|\+\d+ more/);
   });
 
-  // Rules out: "Add to my pod"'s permission shown as the raw pattern, or
-  // worded by hand: its noun is the vocabulary's `package` (L7).
-  it("package.install is worded through the vocabulary door", () => {
-    const lines = grantLines(draft("package.install"));
-    expect(lines).toEqual([
-      `${verb("install")} ${resolveObjectNounPlural("package")}`,
+  // Rules out: "Add to my pod"'s permission read as "Install Packages" (a
+  // word the product never uses) or as the raw pattern (L7; founder,
+  // 2026-11-05). The exact string, not the helper compared to itself.
+  it("package.install reads as adding packs and templates", () => {
+    expect(grantLines(draft("package.install"))).toEqual([
+      "Add packs and templates to your pod",
     ]);
-    expect(lines.join(" ")).not.toContain("package.install");
   });
 
   it("uses the pod's own name for a kind when it has one", () => {

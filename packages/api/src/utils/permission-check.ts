@@ -97,12 +97,14 @@ import {
   resolveActionLabel,
   resolveObjectNoun,
   resolveObjectNounPlural,
+  resolvePackageNoun,
   humanizeToken,
 } from "@synap-core/types/vocabulary";
 import { buildProjectFilingSummary } from "../services/projects/project-filing-summary.js";
 import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
 import { buildTrackParticipantSummary } from "../services/tracks/track-participant-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
+import { packageObjectCount } from "../services/package-contents-summary.js";
 import {
   defaultApprovalSentence,
   isLikelyUUID,
@@ -3333,7 +3335,24 @@ export function buildProposalSummary(
       objectName:
         payloadName(data.targetName) ?? payloadName(data.name) ?? undefined,
     });
-    return `${head} to the latest template`;
+    return `${head} to the latest ${resolvePackageNoun(
+      packageObjectCount(data.contents)
+    ).toLowerCase()}`;
+  }
+  // A fresh template install (Hub `/packages/apply`): "Add pack "Content OS""
+  // or "Add template "…"", the noun derived from what it holds, never the
+  // "Create Space" its gate subject reads as (founder, 2026-11-05).
+  if (
+    subjectType === "workspace" &&
+    action === "create" &&
+    data.source === "packages.apply" &&
+    data.contents
+  ) {
+    const noun = resolvePackageNoun(
+      packageObjectCount(data.contents)
+    ).toLowerCase();
+    const name = payloadName(data.name);
+    return name ? `Add ${noun} "${name}"` : `Add a ${noun}`;
   }
   // An agent's Library organisation (`library/organize`): the door wrote the
   // one-line summary from the ops and the names it resolved.
