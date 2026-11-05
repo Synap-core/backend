@@ -41,9 +41,26 @@ export const STEP_UP_REQUIRED = "STEP_UP_REQUIRED";
 export const STEP_UP_REQUIRED_MESSAGE =
   "Confirm it's you before changing who or what can reach this pod.";
 
+/**
+ * The step-up refusal as a JSON body (Hub REST, status 403): what a Synap app
+ * reads to step up, whichever route refused. tRPC carries the same
+ * `reasonCode` in `error.data.reasonCode`.
+ */
+export const STEP_UP_REFUSAL_BODY = {
+  error: STEP_UP_REQUIRED_MESSAGE,
+  code: STEP_UP_REQUIRED,
+  reasonCode: STEP_UP_REQUIRED,
+} as const;
+
 export interface DeviceSessionFacts {
   id: string;
   authTime: Date | null;
+  /**
+   * Set on the request's scope when `assertFreshAuthentication` refuses it,
+   * so a door that maps errors itself still answers the step-up (Hub REST:
+   * `authenticatePersonDevice`, the ONE mapper).
+   */
+  stepUpRefused?: boolean;
 }
 
 export interface SessionKindCarrier {
@@ -147,6 +164,8 @@ export function assertFreshAuthentication(
 ): void {
   const device = deviceOf(ctx);
   if (!device || isFreshDevice(device)) return;
+  const scope = deviceScope.getStore();
+  if (scope) scope.stepUpRefused = true;
   throw new TRPCError({
     code: "FORBIDDEN",
     message: STEP_UP_REQUIRED_MESSAGE,
