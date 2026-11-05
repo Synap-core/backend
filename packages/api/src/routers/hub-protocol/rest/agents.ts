@@ -19,6 +19,7 @@ import {
   logger,
   type HubHono,
   httpStatusForTrpcError,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import {
   findOrCreateServiceAgentUser,
@@ -59,6 +60,8 @@ export function registerAgentsRoutes(app: HubHono): void {
    *     absent from the incoming payload (active = false, no delete)
    */
   app.post("/agents/sync", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }

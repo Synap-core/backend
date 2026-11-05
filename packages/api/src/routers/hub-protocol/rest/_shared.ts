@@ -16,6 +16,11 @@ import {
 import { TRPCError } from "@trpc/server";
 import { refusalCodeInCause } from "../../../utils/trpc-cause-code.js";
 import {
+  assertFreshAuthentication,
+  STEP_UP_REQUIRED,
+  STEP_UP_REQUIRED_MESSAGE,
+} from "../../../utils/device-session.js";
+import {
   db,
   users,
   workspaceMembers,
@@ -118,6 +123,12 @@ export type HubVariables = {
    * `c.req.header("x-session-id")`, which is unvalidated client input.
    */
   sessionId?: string;
+  /**
+   * `person_device` when a Synap app's DEVICE token authenticated the request
+   * (the auth middleware's `authenticatePersonDevice`, as `app-session.ts`
+   * marks it on /trpc). Unset for a key, a delegation or a Kratos session.
+   */
+  sessionKind?: "person_device";
 };
 
 /**
@@ -130,6 +141,39 @@ export type HubVariables = {
  * while keeping vanilla `app.get` / `app.post` handlers for incremental migration.
  */
 export type HubHono = OpenAPIHono<{ Variables: HubVariables }>;
+
+/**
+ * The Hub REST twin of tRPC's `credentialProcedure`: a route that creates,
+ * rotates, widens or approves a CREDENTIAL (a key, a grant, an app's reach, a
+ * governance rule, a membership, a share, a webhook…) calls this first and
+ * returns what it answers. A Synap app's DEVICE session whose last real
+ * sign-in is past the step-up window gets 403 `STEP_UP_REQUIRED` (`reasonCode`
+ * as on tRPC): the app re-confirms it is the person and retries. A key, an IS
+ * delegation, a Kratos session or a freshly signed-in device passes (null).
+ * The ONE predicate is `assertFreshAuthentication` (utils/device-session.ts),
+ * over the scope the auth middleware opened for the device. Tripwire:
+ * `credential-doors-refuse-device-session` (it finds the Hub routes).
+ */
+export function refuseStaleDeviceSession(
+  c: Context<{ Variables: HubVariables }>
+): Response | null {
+  try {
+    assertFreshAuthentication({ sessionKind: c.get("sessionKind") ?? null });
+    return null;
+  } catch (err) {
+    // Duck-typed (never `instanceof TRPCError`: see `httpStatusForTrpcError`).
+    const cause = (err as { cause?: { reasonCode?: unknown } } | null)?.cause;
+    if (cause?.reasonCode !== STEP_UP_REQUIRED) throw err;
+    return c.json(
+      {
+        error: STEP_UP_REQUIRED_MESSAGE,
+        code: STEP_UP_REQUIRED,
+        reasonCode: STEP_UP_REQUIRED,
+      },
+      403
+    );
+  }
+}
 
 /**
  * Check whether the current API key holds a scope.

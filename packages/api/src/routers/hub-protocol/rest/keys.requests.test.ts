@@ -23,6 +23,8 @@ vi.mock("./_shared.js", () => ({
   hasScope: (scopes: string[] | undefined, required: string) =>
     (scopes ?? []).includes(required),
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  // The callers here hold keys, never a device session: the step-up passes.
+  refuseStaleDeviceSession: () => null,
 }));
 
 vi.mock("../../../services/api-keys.js", () => ({

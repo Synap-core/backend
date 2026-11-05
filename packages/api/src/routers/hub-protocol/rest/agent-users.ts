@@ -55,6 +55,7 @@ import {
   type HubHono,
   httpStatusForTrpcError,
   requireUuidParam,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 
 export function registerAgentUsersRoutes(app: HubHono): void {
@@ -65,6 +66,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
    * Returns { agentUserId, email, apiKey } — key is shown ONCE.
    */
   app.post("/agent-users", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
@@ -632,6 +635,8 @@ export function registerAgentUsersRoutes(app: HubHono): void {
    * sibling of the same person) back to the pod default and write unreviewed.
    */
   app.patch("/agent-users/:agentUserId/governance", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },

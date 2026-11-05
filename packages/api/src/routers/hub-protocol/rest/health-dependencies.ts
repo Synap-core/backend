@@ -11,7 +11,7 @@
  *     An opt-in query param keeps that risk one typo away (a probe configured
  *     with `?deps=1` silently becomes a readiness probe).
  *  2. This door is AUTHENTICATED (registered after the middleware and NOT in
- *     `skipAuthPaths`), for two reasons: it performs an outbound network call
+ *     `HUB_AUTH_SKIP_PATHS` (`_middleware/auth-skip.ts`)), for two reasons: it performs an outbound network call
  *     on request — unauthenticated, that is a free amplification lever against
  *     an internet-facing pod — and it discloses the resolved IS host. A key is
  *     no burden for the intended callers (`synap doctor`, the browser

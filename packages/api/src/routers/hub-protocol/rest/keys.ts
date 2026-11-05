@@ -41,6 +41,7 @@ import {
   logger,
   type HubHono,
   httpStatusForTrpcError,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 
 /** Why this key may not self-rotate to the CLI scope set, or null if it may. */
@@ -119,6 +120,8 @@ export function registerKeysRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const stale = refuseStaleDeviceSession(c);
+      if (stale) return stale;
       const keyId = c.get("apiKeyId");
       const userId = c.get("userId") as string;
 
@@ -424,6 +427,8 @@ function registerKeyRequestRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const stale = refuseStaleDeviceSession(c);
+      if (stale) return stale;
       const keyId = c.get("apiKeyId");
       if (!keyId)
         return c.json(
@@ -540,6 +545,8 @@ function registerKeyRequestRoutes(app: HubHono): void {
       },
     }),
     async (c) => {
+      const stale = refuseStaleDeviceSession(c);
+      if (stale) return stale;
       if (!c.get("apiKeyId"))
         return c.json(
           { error: "Collect a key with the API key that asked for it." },

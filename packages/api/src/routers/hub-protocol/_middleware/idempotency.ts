@@ -82,7 +82,7 @@ export interface IdempotencyOptions {
   /**
    * Paths that should never be subject to idempotency caching.
    * Match is suffix-based (same shape as the auth middleware's
-   * skipAuthPaths) so we work with the mount path being `/api/hub`.
+   * HUB_AUTH_SKIP_PATHS) so we work with the mount path being `/api/hub`.
    * Endpoints that issue secrets (`/setup/agent`) or are authed
    * out-of-band (`/entity-share/deliver`) MUST be in this list.
    */

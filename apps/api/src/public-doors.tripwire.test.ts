@@ -660,7 +660,7 @@ describe("public doors — no layer keeps its own list", () => {
   const CONSUMERS = [
     path.join(
       BACKEND,
-      "packages/api/src/routers/hub-protocol/_middleware/auth.ts"
+      "packages/api/src/routers/hub-protocol/_middleware/auth-skip.ts"
     ),
     path.join(
       BACKEND,
