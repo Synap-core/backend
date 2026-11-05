@@ -169,6 +169,17 @@ export function useSetMachineRunsScripts(
   );
 }
 
+/** Whose computer this is (backend#828), sensitive since W3 slice 3 (#827). */
+export function useSetMachineBelongsTo(
+  defaults?: ActionHandlers<typeof trpc.machines.setBelongsTo.useMutation>
+) {
+  return useSensitiveAction(
+    "machines.setBelongsTo",
+    trpc.machines.setBelongsTo.useMutation(),
+    defaults
+  );
+}
+
 // ── Agents and governance ───────────────────────────────────────────────
 
 export function useSetAgentPosture(
