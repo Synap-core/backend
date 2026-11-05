@@ -871,13 +871,15 @@ Escalation L4 — crystallize AFTER a session succeeded and the process is clear
 
 **List templates** · Group: `build` · readOnlyHint: true · openWorldHint: false
 
-List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Launch one via synap_run_playbook.
+List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…), or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.
 
-| Parameter     | Type   | Required | Description                                                                                                             |
-| ------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `workspaceId` | string | no       | Optional workspace narrow — only that workspace's playbooks plus pod-wide ones. Omit for the full user-visible catalog. |
-| `status`      | enum   | no       | Optional status filter. One of: `draft`, `active`, `paused`, `archived`.                                                |
-| `limit`       | number | no       | Page size (1–100, default 50).                                                                                          |
+| Parameter     | Type   | Required | Description                                                                                                                 |
+| ------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `workspaceId` | string | no       | Optional workspace narrow — only that workspace's playbooks plus pod-wide ones. Omit for the full user-visible catalog.     |
+| `status`      | enum   | no       | Optional status filter. One of: `draft`, `active`, `paused`, `archived`.                                                    |
+| `limit`       | number | no       | Page size (1–100, default 50).                                                                                              |
+| `playbookId`  | string | no       | Read ONE playbook in full (its whole definition), instead of listing.                                                       |
+| `detail`      | enum   | no       | lean (default) = the digest per playbook; full = complete rows (large: pair it with a small limit). One of: `lean`, `full`. |
 
 ## synap_match_playbooks
 
