@@ -12,8 +12,11 @@
  *  - no `onEnd` moves nothing;
  *  - the process's own `humanOnlyStatuses` force a proposal even for a move
  *    an agent may otherwise make (the forcePropose plumbing);
- *  - a lifecycle humanOnly option, and a move into done, by an AGENT's close
- *    is a proposal; the same move by a PERSON's close applies;
+ *  - a lifecycle humanOnly option by an AGENT's close is a proposal; the
+ *    same move by a PERSON's close applies;
+ *  - an agent's END move into done APPLIES: the session's end is the
+ *    guardrail, so the done/lost default floor of a stage move does not apply
+ *    (founder, 2026-11-05; governance `lifecycleMove.atSessionEnd`);
  *  - a subject already at the value is left alone (no second transition);
  *  - a ROLE process moves the role's facet, not the entity;
  *  - a target still open at the close moves; one the session already
@@ -409,7 +412,7 @@ describe("no onEnd", () => {
 });
 
 describe("governance: the status door decides each end move", () => {
-  it("an agent's close into done is a PROPOSAL; nothing written", async () => {
+  it("an agent's close into done APPLIES: the session's end is the guardrail", async () => {
     const finding = await seedFinding("fixing");
     const sessionId = await sessionOn(finding, { closed: "fixed" });
     const res = await completeFocusSession({
@@ -419,15 +422,12 @@ describe("governance: the status door decides each end move", () => {
     });
     expect(res?.session.status).toBe("closed");
     expect(res?.endMoves?.moves[0]?.outcome).toMatchObject({
-      status: "proposed",
+      status: "written",
       value: "fixed",
     });
-    expect(await statusOf(finding)).toBe("fixing");
-    // Filed under the session, for the person to approve.
-    const outcome = res?.endMoves?.moves[0]?.outcome as { proposalId?: string };
-    expect((await pendingProposalsOf(sessionId)).map((p) => p.id)).toContain(
-      outcome.proposalId
-    );
+    expect(await statusOf(finding)).toBe("fixed");
+    // Nothing waits for the person: the move was not filed as a proposal.
+    expect(await pendingProposalsOf(sessionId)).toEqual([]);
   });
 
   it("an agent's close into a lifecycle humanOnly option is a proposal", async () => {

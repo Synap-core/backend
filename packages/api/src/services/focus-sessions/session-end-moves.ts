@@ -14,10 +14,12 @@
  *
  * Each move goes through THE writer the stage path uses
  * (`writeSubjectStatusValue`, stage-subject-status.ts): the status door as
- * the session, its governance floor (an agent's move into done/lost proposes;
- * a humanOnly value proposes for an agent; the process's own
- * `humanOnlyStatuses` propose for anyone), a role process moving the facet, a
- * thing already there left alone. A move that could not happen is reported,
+ * the session, governed like any write of the closer (its rules: an "ask
+ * first" agent's move proposes), a humanOnly value proposing for an agent, the
+ * process's own `humanOnlyStatuses` proposing for anyone, a role process
+ * moving the facet, a thing already there left alone. Unlike a stage move, an
+ * end move skips the done/lost default floor: the session having to END is the
+ * guardrail (founder, 2026-11-05; governance `lifecycleMove.atSessionEnd`). A move that could not happen is reported,
  * never thrown: the session has ended, and a failed move must not undo that.
  *
  * NOT here, on purpose: `stale` (the reaper's mark, not an end — pod
@@ -124,6 +126,10 @@ export async function applySessionEndMoves(input: {
       value,
       reason,
       actor: input.actor,
+      // The session's END is the guardrail: the move is governed like any
+      // write of the closer, without the done/lost default floor (founder,
+      // 2026-11-05, plan b38e5e64 §7.2).
+      atSessionEnd: true,
     });
     moves.push({ ...thing, outcome });
   }

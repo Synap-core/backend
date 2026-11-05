@@ -188,6 +188,12 @@ export async function writeSubjectStatusValue(input: {
   actor: StatusMoveActor;
   /** The hold to record when the move pauses the thing (a stage's own). */
   pauseHold?: Hold;
+  /**
+   * A session END move (session-end-moves.ts): governed like any write of the
+   * closer, without the done/lost default floor (`moveStatus.atSessionEnd`).
+   * A stage move never sets it.
+   */
+  atSessionEnd?: boolean;
 }): Promise<StageSubjectStatusOutcome> {
   const { session, entityId, value, reason, actor } = input;
   const proc = input.process;
@@ -214,6 +220,7 @@ export async function writeSubjectStatusValue(input: {
       reason,
       forcePropose: humanOnly || undefined,
       ...(input.pauseHold ? { pauseHold: input.pauseHold } : {}),
+      ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
     };
 
     // A ROLE subject: the facet's status, through the door, or nothing.
