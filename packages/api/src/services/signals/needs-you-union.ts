@@ -64,6 +64,7 @@ import {
   type NeedsYouInvite,
   needsYouPriority,
   type NeedsYouPriority,
+  isSetAside,
 } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
@@ -1077,6 +1078,8 @@ export interface OwedSlotSignalInput {
   pendingRelay?: SlotPendingRelay;
   /** Kept owed past its session, straight from `listOwedSlots`. */
   keptOwedAt?: string;
+  /** The person's Later on it, straight from `listOwedSlots` (the class reads it). */
+  laterUntil?: string;
   /** A param slot's param, straight from `listOwedSlots`. */
   paramName?: string;
   /** Who asked and their name, straight from `listOwedSlots`. */
@@ -1187,6 +1190,9 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
+  // Read by the slot's class only (`owedSlotClassOf`): a set-aside ask
+  // reaches the signal as its Review later fold, never as a second field.
+  "laterUntil",
   "sessionStatus",
   "workspaceId",
   "icon",
@@ -1278,6 +1284,9 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   // A draft has no PR yet: its asks block nothing (`blocksOpenPr` is read only
   // on started sessions' owed slots).
   "blocksOpenPr",
+  // The person's Later is read by a started session's slot class only
+  // (`owedSlotClassOf`): a draft's ask reaches no class to fold it.
+  "laterUntil",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
@@ -1353,17 +1362,20 @@ export function signalsFromDraftAsks(
 /**
  * THE class of one owed slot — the one derivation the list and the count
  * read. The rule's class when the read stamped it (`listNeedsYouOwed`
- * classifies); else the older reading: Review later past 7 days
+ * classifies); else the older reading: Review later while the person set it
+ * aside (`isSetAside`) or past 7 days
  * (`isAskReviewLater`), the headline otherwise.
  */
 export function owedSlotClassOf(
   row: Pick<
     OwedSlotSignalInput,
-    "needsYouClass" | "owedSince" | "blocksOpenPr"
+    "needsYouClass" | "owedSince" | "blocksOpenPr" | "laterUntil"
   >,
   now: Date = new Date()
 ): NeedsYouSlotClass {
   if (row.needsYouClass) return row.needsYouClass;
+  // The person's own Later wins until its time, as in the rule.
+  if (isSetAside(row.laterUntil, now)) return "review_later";
   // An ask that blocks an open PR is never aged out, classified or not.
   if (row.blocksOpenPr) return "needs_you";
   return isAskReviewLater(row, now) ? "review_later" : "needs_you";

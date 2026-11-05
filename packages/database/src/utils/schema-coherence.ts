@@ -154,6 +154,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "pushed_at",
     addedBy: "0375_notifications_pushed_at.sql",
   },
+  // notifications — the agent a push was about (0402). An agent's own push
+  // limit counts it; missing, that count throws and the push is skipped for
+  // an agent with a limit (the row is still written and the bell shows it).
+  {
+    table: "notifications",
+    column: "push_agent_id",
+    addedBy: "0402_notifications_push_agent.sql",
+  },
   // The status watcher's episode claims (0376). Absent, every watcher tick
   // fails at its claim and no signal is raised.
   {
@@ -1369,6 +1377,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "presence_device_keys",
     column: "public_key",
     addedBy: "0398_presence.sql",
+  },
+  // A passkey change redeems its proof once (0401); absence means Kratos'
+  // settings guard would 42703 on every passkey change.
+  {
+    table: "presence_challenges",
+    column: "redeemed_at",
+    addedBy: "0401_presence_redeemed.sql",
   },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.

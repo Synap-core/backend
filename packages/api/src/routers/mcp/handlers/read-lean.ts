@@ -17,16 +17,14 @@
  * naming what was cut and how to get it back.
  */
 
-import {
-  capString,
-  ENTITY_STRING_CAP,
-} from "../../../services/entity-lean-list.js";
+import { ENTITY_STRING_CAP } from "../../../services/entity-lean-list.js";
 
-/**
- * The entity-row projection lives in `services/entity-lean-list.ts` (one door
- * for MCP `synap_get_entities` and Hub REST `GET /users/:userId/entities`).
- */
-export { ENTITY_STRING_CAP };
+/** A long string cut to `cap` chars, its full length said after it. */
+function capString(value: string, cap: number): string {
+  return value.length > cap
+    ? `${value.slice(0, cap)}…[truncated: ${value.length} chars total]`
+    : value;
+}
 
 /** Profile description cap in the digest. Live p90 = 110 chars, max = 151. */
 export const PROFILE_DESCRIPTION_CAP = 120;

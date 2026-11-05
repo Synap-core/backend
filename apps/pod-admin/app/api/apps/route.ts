@@ -2,9 +2,10 @@
  * Apps proxy — `GET /api/apps` (list), `DELETE /api/apps` (revoke, or
  * `{ action: "remove" }` to remove a revoked app for good), plus
  * `GET /api/apps?publicId=<id>` for ONE app (the detail page), and
- * `PATCH /api/apps` for a pod app's two settings (spec 17 PB4):
- * `{ action: "narrow", approved }` (keep only those pairs) and
- * `{ action: "write-mode", applyAutomatically }`.
+ * `PATCH /api/apps` for a pod app's access (spec 17 PB4):
+ * `{ action: "narrow", approved }` (keep only those pairs). Its other
+ * setting, "Apply automatically", is a sensitive action the page sends
+ * itself, with its proof of presence.
  *
  * The pod's `apps.list` / `apps.get` / `apps.revoke` / `apps.remove` tRPC
  * procedures are the
@@ -97,10 +98,14 @@ export async function DELETE(req: Request) {
   return Response.json(res.data);
 }
 
-/** The only settings this proxy forwards — an allowlist, never a passthrough. */
+/**
+ * The only settings this proxy forwards — an allowlist, never a passthrough.
+ * "Apply automatically" (`apps.setWriteMode`) is not here: it is a sensitive
+ * action (W3 slice 3), so the page calls it with its proof of presence
+ * through `app/_lib/presence` (tripwire `presence-approve-doors`).
+ */
 const SETTING_PROCEDURE = {
   narrow: "apps.narrow",
-  "write-mode": "apps.setWriteMode",
 } as const;
 
 export async function PATCH(req: Request) {
@@ -110,7 +115,6 @@ export async function PATCH(req: Request) {
     publicId?: unknown;
     action?: unknown;
     approved?: unknown;
-    applyAutomatically?: unknown;
   } | null;
   const publicId = body?.publicId;
   if (typeof publicId !== "string" || !publicId.trim()) {
@@ -126,19 +130,8 @@ export async function PATCH(req: Request) {
       );
     }
     input = { publicId, approved: body.approved };
-  } else if (action === "write-mode") {
-    if (typeof body?.applyAutomatically !== "boolean") {
-      return Response.json(
-        { error: "applyAutomatically must be true or false" },
-        { status: 400 }
-      );
-    }
-    input = { publicId, applyAutomatically: body.applyAutomatically };
   } else {
-    return Response.json(
-      { error: "action must be narrow or write-mode" },
-      { status: 400 }
-    );
+    return Response.json({ error: "action must be narrow" }, { status: 400 });
   }
   const res = await callPodMutation<unknown>(
     SETTING_PROCEDURE[action],

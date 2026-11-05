@@ -37,6 +37,17 @@
  *     `credentialProcedure`, its chain has `.use(requireFreshAuthentication)`, or its
  *     body calls `assertFreshAuthentication`. A proposal EXECUTOR that reaches one
  *     must declare `widensCredential: true`.
+ *  5. HUB REST (`/api/hub/*`) accepts the device token as the person too, so
+ *     its routes are doors: every route registered on a `HubHono` app under
+ *     `routers/hub-protocol/` (and `hub-protocol-rest.ts`), except the paths
+ *     the auth middleware never authenticates (`hubAuthSkipped`, the ONE list
+ *     it reads). A Hub route is guarded when its handler calls
+ *     `refuseStaleDeviceSession` (itself checked to call
+ *     `assertFreshAuthentication`). The hub router's own `scopedProcedure`s,
+ *     reached from those routes through `getCaller`, are doors as well. A call
+ *     on a tRPC caller (`x.createCaller(…)`, `getCaller(…)`) enters a
+ *     procedure, which this scan judges as its own door; it is not resolved
+ *     by name from the route.
  *
  * NON-VACUITY: the scan parses > 400 files; every credential table has at
  * least one writer; known doors are classified; and a synthetic source that
@@ -55,6 +66,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { stripComments } from "../../../../scripts/strip-comments.mjs";
+import { hubAuthSkipped } from "../routers/hub-protocol/_middleware/auth-skip.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
@@ -100,16 +112,24 @@ const CREDENTIAL_TABLES: Record<string, string> = {
   webhookSubscriptions: "webhook_subscriptions",
   secretShares: "secret_shares",
   resourceShares: "resource_shares",
+  // A personal ICS feed URL: its token is the capability, and it keeps
+  // serving every calendar entity the person reads after the token that
+  // minted it has expired (`rest/calendar-feed.ts`).
+  calendarFeedTokens: "calendar_feed_tokens",
+  // Recovery codes take the ACCOUNT over (`/api/account-recovery/codes`).
+  accountRecoveryCodes: "account_recovery_codes",
 };
 
 /**
  * Reading a secret's VALUE is a credential act too: a door that decrypts in
- * its own body and may hand the plaintext back (`secrets.reveal`). Matched
- * as a direct call whose name starts with `decrypt`. A door that decrypts
+ * its own body and may hand the plaintext back (`secrets.reveal`), or calls
+ * the vault's one resolver (`resolveVaultSecret`, which returns the
+ * plaintext: Hub `POST /vault/redeem`). Matched as a direct call whose name
+ * starts with `decrypt`, or is `resolveVaultSecret`. A door that decrypts
  * only to USE the value (call a provider, sign a request) and never returns
  * it is classified here, with why — a new one must be classified to pass.
  */
-const SECRET_READ_CALL = /^decrypt/;
+const SECRET_READ_CALL = /^(decrypt|resolveVaultSecret$)/;
 
 /**
  * Credential tables NO pod code writes today (only their schema exists).
@@ -129,6 +149,8 @@ const EXEMPT_WRITERS: Record<string, string> = {
     "the pod's own built-in agent joins the space a person talks to it in; it adds no person and no key, and is a no-op once the agent is a member",
   materializePodAdminsIntoWorkspace:
     "adds only the people who already administer the whole pod to a space they could already administer; it gives no one access they did not hold",
+  resolveCaptureActorUserId:
+    "enrolls only the pod's own built-in Capture agent (`getCaptureAgentUserId`) into the space the caller's own write targets, so its governed capture writes reach the ladder; it adds no person and no key",
 };
 
 /**
@@ -184,6 +206,29 @@ const KNOWN_CREDENTIAL_DOORS = [
   "packages/api/src/routers/shares.ts share",
 ];
 
+/**
+ * Hub REST routes that MUST be seen as doors and guarded (the same promise as
+ * `KNOWN_CREDENTIAL_DOORS`, for the Hub twin).
+ */
+const KNOWN_HUB_CREDENTIAL_DOORS = [
+  "packages/api/src/routers/hub-protocol/rest/keys.ts POST /keys/rotate-cli",
+  "packages/api/src/routers/hub-protocol/rest/apps.ts POST /apps",
+  "packages/api/src/routers/hub-protocol/rest/agent-users.ts POST /agent-users",
+  "packages/api/src/routers/hub-protocol/rest/webhooks.ts POST /webhooks",
+  "packages/api/src/routers/hub-protocol/rest/shares.ts POST /shares",
+  // Hands a secret's plaintext back (`resolveVaultSecret`).
+  "packages/api/src/routers/hub-protocol/rest/vault.ts POST /vault/redeem",
+  // Mint a bearer ICS URL that outlives the token.
+  "packages/api/src/routers/hub-protocol/rest/calendar-feed.ts POST /calendar/feed",
+  "packages/api/src/routers/hub-protocol/rest/calendar-feed.ts POST /calendar/feed/rotate",
+  // A tRPC door that returns a secret's plaintext.
+  "packages/api/src/routers/devplane.ts resolveEntitySecret",
+  // Account recovery, reached through its deps' `appSessionMiddleware()`.
+  "apps/api/src/routers/account-recovery.ts POST /codes",
+];
+/** At least this many Hub REST routes are scanned (the real count is higher). */
+const HUB_ROUTE_FLOOR = 400;
+
 /** At least this many guarded doors reach a credential (the real count is higher). */
 const GUARDED_DOOR_FLOOR = 70;
 
@@ -205,6 +250,7 @@ const NARROWING_COLUMNS = new Set([
   "retiredAt",
   "deletedAt",
   "lastUsedAt",
+  "lastAccessedAt",
   "updatedAt",
   "replacedBy",
   "consumedAt",
@@ -235,7 +281,24 @@ const NARROWING_SQL_COLUMNS = new Set([
 ]);
 
 const GUARD_CALL = "assertFreshAuthentication";
+/** The Hub REST guard (rest/_shared.ts); it must call `GUARD_CALL`. */
+const HUB_GUARD_CALL = "refuseStaleDeviceSession";
+/** Where the Hub REST routes and the hub tRPC router live. */
+const HUB_DIR = "packages/api/src/routers/hub-protocol/";
+const HUB_ROOT_FILE = "packages/api/src/routers/hub-protocol-rest.ts";
+const isHubFile = (rel: string) =>
+  rel.startsWith(HUB_DIR) || rel === HUB_ROOT_FILE;
+/** The Hono methods a Hub route is registered with. */
+const HUB_ROUTE_METHODS = /^(get|post|put|patch|delete|openapi)$/;
 const GUARDED_BUILDERS = new Set(["credentialProcedure"]);
+/**
+ * A door outside tRPC and Hub REST whose own check is the step-up, with why.
+ * Each must exist (checked below).
+ */
+const EQUIVALENT_GUARDS: Record<string, string> = {
+  guardCredentialChange:
+    "apps/api/src/routers/account-recovery.ts: refuses a session that is not privileged; a device session is privileged only while its step-up clock is within the 15-min privileged window (`sessionMarks`, account-recovery/policy.ts)",
+};
 const GUARD_MIDDLEWARE = "requireFreshAuthentication";
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
@@ -464,18 +527,33 @@ function localBindings(sf: ts.SourceFile): Map<string, string> {
   return out;
 }
 
-/** The names a subtree calls, resolved to candidate unit names. */
+/** The leftmost identifier of a receiver chain `a.b.c`, or null. */
+function rootIdentifier(e: ts.Expression): string | null {
+  while (ts.isPropertyAccessExpression(e)) e = e.expression;
+  return ts.isIdentifier(e) ? e.text : null;
+}
+
+/**
+ * The names a subtree calls, resolved to candidate unit names. A method call
+ * whose receiver chain starts at a name in `skipReceivers` is not collected.
+ */
 function calledNames(
   node: ts.Node,
   bindings: Map<string, string>,
-  singletons: Map<string, string>
+  singletons: Map<string, string>,
+  skipReceivers: ReadonlySet<string> = new Set()
 ): Set<string> {
   const out = new Set<string>();
   const visit = (n: ts.Node) => {
     if (ts.isCallExpression(n)) {
       const callee = n.expression;
       if (ts.isIdentifier(callee)) out.add(callee.text);
-      else if (ts.isPropertyAccessExpression(callee)) {
+      else if (
+        ts.isPropertyAccessExpression(callee) &&
+        skipReceivers.has(rootIdentifier(callee.expression) ?? "")
+      ) {
+        // A call into a tRPC caller: the procedure is its own door.
+      } else if (ts.isPropertyAccessExpression(callee)) {
         const method = callee.name.text;
         out.add(method);
         let recv: ts.Expression = callee.expression;
@@ -510,9 +588,17 @@ interface Verdicts {
   /** Why a unit is credential: the table it writes, or the unit it calls. */
   why: Map<string, string>;
   writers: Map<string, Set<string>>;
-  reaches: (node: ts.Node, file: string) => string | null;
+  reaches: (
+    node: ts.Node,
+    file: string,
+    skipReceivers?: ReadonlySet<string>
+  ) => string | null;
   /** Every credential write and credential unit a door's code reaches. */
-  reachesAll: (node: ts.Node, file: string) => string[];
+  reachesAll: (
+    node: ts.Node,
+    file: string,
+    skipReceivers?: ReadonlySet<string>
+  ) => string[];
   unitNames: Set<string>;
 }
 
@@ -576,17 +662,35 @@ function judge(a: Analysis): Verdicts {
   }
 
   /** The credential unit a door's code reaches first, or null. */
-  const reaches = (node: ts.Node, file: string): string | null => {
+  const reaches = (
+    node: ts.Node,
+    file: string,
+    skipReceivers?: ReadonlySet<string>
+  ): string | null => {
     const direct = widenedTables(node);
     if (direct.length > 0) return `writes ${direct[0]}`;
-    const calls = calledNames(node, bindingsByFile.get(file)!, a.singletons);
+    const calls = calledNames(
+      node,
+      bindingsByFile.get(file)!,
+      a.singletons,
+      skipReceivers
+    );
     for (const c of calls) if (resolvable(c) && credential.has(c)) return c;
     return null;
   };
 
-  const reachesAll = (node: ts.Node, file: string): string[] => {
+  const reachesAll = (
+    node: ts.Node,
+    file: string,
+    skipReceivers?: ReadonlySet<string>
+  ): string[] => {
     const out = widenedTables(node).map((t) => `writes ${t}`);
-    const calls = calledNames(node, bindingsByFile.get(file)!, a.singletons);
+    const calls = calledNames(
+      node,
+      bindingsByFile.get(file)!,
+      a.singletons,
+      skipReceivers
+    );
     for (const c of calls) if (resolvable(c) && credential.has(c)) out.push(c);
     return [...new Set(out)].sort();
   };
@@ -732,6 +836,250 @@ function localObjectSchema(arg: ts.Expression): ts.Node | null {
   return null;
 }
 
+/** Is `name` declared, in an enclosing scope of `at`, with type `HubHono`? */
+function isHubHonoName(name: string, at: ts.Node): boolean {
+  for (let p: ts.Node | undefined = at.parent; p; p = p.parent) {
+    const decls: ts.Node[] = [];
+    if (ts.isFunctionLike(p)) decls.push(...p.parameters);
+    if (ts.isBlock(p) || ts.isSourceFile(p)) {
+      for (const st of p.statements)
+        if (ts.isVariableStatement(st))
+          decls.push(...st.declarationList.declarations);
+    }
+    for (const d of decls) {
+      if (
+        (ts.isParameter(d) || ts.isVariableDeclaration(d)) &&
+        ts.isIdentifier(d.name) &&
+        d.name.text === name
+      ) {
+        return d.type?.getText() === "HubHono";
+      }
+    }
+  }
+  return false;
+}
+
+/** A string literal's text (plain or no-substitution template), else null. */
+function literalText(e: ts.Node | undefined): string | null {
+  return e && (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e))
+    ? e.text
+    : null;
+}
+
+/** An identifier's initializer when a const in the same file binds it; else `e`. */
+function constValue(e: ts.Expression): ts.Expression {
+  if (!ts.isIdentifier(e)) return e;
+  let found: ts.Expression | undefined;
+  const find = (n: ts.Node) => {
+    if (
+      !found &&
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === e.text &&
+      n.initializer
+    )
+      found = n.initializer;
+    ts.forEachChild(n, find);
+  };
+  find(e.getSourceFile());
+  return found ?? e;
+}
+
+/** `createRoute({ method, path })` — inline, or a const bound to one in the file. */
+function openapiRouteOf(
+  arg: ts.Expression,
+  sf: ts.SourceFile
+): { method: string | null; path: string | null } {
+  let e: ts.Expression | undefined = arg;
+  if (ts.isIdentifier(arg)) {
+    e = undefined;
+    const find = (n: ts.Node) => {
+      if (
+        !e &&
+        ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.name.text === arg.text
+      )
+        e = n.initializer;
+      ts.forEachChild(n, find);
+    };
+    find(sf);
+  }
+  const obj =
+    e && ts.isCallExpression(e) ? e.arguments[0] : (e as ts.Node | undefined);
+  if (!obj || !ts.isObjectLiteralExpression(obj))
+    return { method: null, path: null };
+  const prop = (k: string) =>
+    literalText(
+      (
+        obj.properties.find(
+          (p) => ts.isPropertyAssignment(p) && nameOf(p) === k
+        ) as ts.PropertyAssignment | undefined
+      )?.initializer
+    );
+  return { method: prop("method"), path: prop("path") };
+}
+
+/**
+ * A Hub REST route registration: its method, path (`:param` form; "?" when
+ * not readable, which is never skipped), its handler arguments, and whether
+ * the auth middleware skips its path (then no credential reaches it).
+ */
+function hubRouteOf(node: ts.Node): {
+  method: string;
+  path: string;
+  handlers: ts.Node[];
+  skipped: boolean;
+} | null {
+  if (
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !HUB_ROUTE_METHODS.test(node.expression.name.text) ||
+    !ts.isIdentifier(node.expression.expression) ||
+    !isHubHonoName(node.expression.expression.text, node)
+  )
+    return null;
+  const verb = node.expression.name.text;
+  const first = node.arguments[0];
+  if (!first) return null;
+  const route =
+    verb === "openapi"
+      ? openapiRouteOf(first, node.getSourceFile())
+      : { method: verb, path: literalText(constValue(first)) };
+  const path = route.path?.replace(/\{(\w+)\}/g, ":$1") ?? "?";
+  const sample = path.replace(/:\w+/g, "x");
+  return {
+    method: (route.method ?? "?").toUpperCase(),
+    path,
+    handlers: node.arguments.slice(1),
+    skipped: route.path !== null && hubAuthSkipped(`/api/hub${sample}`),
+  };
+}
+
+/**
+ * Per file: the paths a router guards with a deps middleware list that the
+ * real deps fill with `appSessionMiddleware()`. Derived in three steps: (1) a
+ * variable typed `T` whose object literal has a property `p` = an array
+ * holding `appSessionMiddleware()`; (2) the file that declares `interface T`;
+ * (3) in it, `x.use("<path>", ...<any>.p)`.
+ */
+function deviceWiredPaths(a: Analysis): Map<string, Set<string>> {
+  const wiredProps = new Map<string, Set<string>>(); // T → props
+  const declaredIn = new Map<string, string>(); // T → file
+  for (const [rel, sf] of a.files) {
+    const visit = (n: ts.Node) => {
+      if (ts.isInterfaceDeclaration(n)) declaredIn.set(n.name.text, rel);
+      if (
+        ts.isVariableDeclaration(n) &&
+        n.type &&
+        n.initializer &&
+        ts.isObjectLiteralExpression(n.initializer)
+      ) {
+        for (const prop of n.initializer.properties) {
+          if (
+            ts.isPropertyAssignment(prop) &&
+            ts.isArrayLiteralExpression(prop.initializer) &&
+            prop.initializer.elements.some(
+              (e) =>
+                ts.isCallExpression(e) &&
+                e.expression.getText() === "appSessionMiddleware"
+            )
+          ) {
+            const t = n.type.getText();
+            wiredProps.set(
+              t,
+              (wiredProps.get(t) ?? new Set()).add(nameOf(prop)!)
+            );
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  const out = new Map<string, Set<string>>();
+  for (const [t, props] of wiredProps) {
+    const rel = declaredIn.get(t);
+    if (!rel) continue;
+    const paths = new Set<string>();
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === "use"
+      ) {
+        const path = literalText(n.arguments[0]);
+        const wires = n.arguments
+          .slice(1)
+          .some(
+            (arg) =>
+              ts.isSpreadElement(arg) &&
+              ts.isPropertyAccessExpression(arg.expression) &&
+              props.has(arg.expression.name.text)
+          );
+        if (path && wires) paths.add(path);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(a.files.get(rel)!);
+    out.set(rel, paths);
+  }
+  return out;
+}
+
+/** A route `x.<method>("<path>", …handlers)` whose path is device-wired. */
+function depsWiredRoute(
+  node: ts.Node,
+  paths: Set<string> | undefined
+): { method: string; path: string; handlers: ts.Node[] } | null {
+  if (
+    !paths ||
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !/^(get|post|put|patch|delete)$/.test(node.expression.name.text)
+  )
+    return null;
+  const path = literalText(node.arguments[0]);
+  if (!path || !paths.has(path)) return null;
+  return {
+    method: node.expression.name.text.toUpperCase(),
+    path,
+    handlers: node.arguments.slice(1),
+  };
+}
+
+/**
+ * The names bound in `scope` to a tRPC caller (`x.createCaller(…)`, or
+ * `getCaller(…)`, awaited or not): a call on one enters a procedure.
+ */
+function trpcCallerNames(scope: ts.Node): Set<string> {
+  const out = new Set<string>();
+  const visit = (n: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.initializer
+    ) {
+      let init: ts.Expression = n.initializer;
+      while (ts.isAwaitExpression(init) || ts.isParenthesizedExpression(init))
+        init = init.expression;
+      if (ts.isCallExpression(init)) {
+        const callee = init.expression;
+        const name = ts.isIdentifier(callee)
+          ? callee.text
+          : ts.isPropertyAccessExpression(callee)
+            ? callee.name.text
+            : null;
+        if (name === "createCaller" || name === "getCaller")
+          out.add(n.name.text);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
+  return out;
+}
+
 /**
  * Every door a device token can reach, with what it reaches and whether it
  * is guarded. A tRPC procedure is found WHEREVER it is defined — inside
@@ -741,6 +1089,7 @@ function localObjectSchema(arg: ts.Expression): ts.Node | null {
  */
 function doorsOf(a: Analysis, v: Verdicts): DoorVerdict[] {
   const out: DoorVerdict[] = [];
+  const depsWired = deviceWiredPaths(a);
   for (const [rel, sf] of a.files) {
     const visit = (node: ts.Node) => {
       // tRPC: any `name: <builder>…` or `const name = <builder>…`.
@@ -752,7 +1101,9 @@ function doorsOf(a: Analysis, v: Verdicts): DoorVerdict[] {
         const init = node.initializer;
         const { root, uses } = chainOf(init);
         const door = `${rel} ${nameOf(node)}`;
-        if (KEY_ONLY_BUILDERS.has(root!)) {
+        // A key-only builder keeps a device out, except in the hub router,
+        // which Hub REST reaches through `getCaller` for a device too.
+        if (KEY_ONLY_BUILDERS.has(root!) && !isHubFile(rel)) {
           ts.forEachChild(node, visit);
           return;
         }
@@ -800,6 +1151,53 @@ function doorsOf(a: Analysis, v: Verdicts): DoorVerdict[] {
           guarded:
             flag || calledNames(obj, new Map(), new Map()).has(GUARD_CALL),
         });
+      }
+      // Hub REST: <app: HubHono>.<method>(route, …handlers), unless the auth
+      // middleware never authenticates its path.
+      const hub = isHubFile(rel) ? hubRouteOf(node) : null;
+      if (hub && !hub.skipped) {
+        for (const scope of hub.handlers) {
+          const callers = trpcCallerNames(scope);
+          const door = `${rel} ${hub.method} ${hub.path}`;
+          const read = secretRead(scope);
+          const readsSecret =
+            read && !(door in DECRYPTS_WITHOUT_RETURNING)
+              ? `reads a secret value (${read})`
+              : null;
+          const reachesAll = v.reachesAll(scope, rel, callers);
+          if (readsSecret) reachesAll.push(readsSecret);
+          out.push({
+            door,
+            reaches: v.reaches(scope, rel, callers) ?? readsSecret ?? "",
+            reachesAll,
+            guarded: calledNames(scope, new Map(), new Map()).has(
+              HUB_GUARD_CALL
+            ),
+          });
+        }
+      }
+      // A router whose deps wire `appSessionMiddleware()` into a middleware
+      // list: `x.use("<path>", ...deps.<list>)` makes `<path>`'s handlers
+      // doors (account recovery).
+      const wired = depsWiredRoute(node, depsWired.get(rel));
+      if (wired) {
+        for (const scope of wired.handlers) {
+          const door = `${rel} ${wired.method} ${wired.path}`;
+          const read = secretRead(scope);
+          const reachesAll = v.reachesAll(scope, rel);
+          if (read) reachesAll.push(`reads a secret value (${read})`);
+          const called = calledNames(scope, new Map(), new Map());
+          out.push({
+            door,
+            reaches:
+              v.reaches(scope, rel) ??
+              (read ? `reads a secret value (${read})` : ""),
+            reachesAll,
+            guarded:
+              called.has(GUARD_CALL) ||
+              Object.keys(EQUIVALENT_GUARDS).some((g) => called.has(g)),
+          });
+        }
       }
       // Hono: x.use(path, appSessionMiddleware()) → the whole file;
       //       x.post(path, appSessionMiddleware(), …handlers) → those handlers.
@@ -1049,6 +1447,169 @@ describe("credential doors refuse a Synap app's device session", () => {
     expect(unguarded([asDeclared(["token"])])).toEqual([]);
     expect(unguarded([asDeclared(["token", "userId"])])).toHaveLength(1);
     expect(unguarded([asDeclared(null)])).toHaveLength(1);
+  });
+
+  it("the Hub REST routes are doors: seen, the auth-skipped ones left out, the known ones guarded", () => {
+    const hubDoors = allDoors.filter((d) =>
+      d.door.startsWith("packages/api/src/routers/hub-protocol")
+    );
+    const routes = hubDoors.filter((d) =>
+      / (GET|POST|PUT|PATCH|DELETE|\?) /.test(d.door)
+    );
+    expect(routes.length).toBeGreaterThan(HUB_ROUTE_FLOOR);
+    // Nearly every path is read; an unreadable one ("?", a path built at run
+    // time) is still a door, never skipped (the positive control below).
+    expect(routes.filter((d) => / \?$/.test(d.door)).length).toBeLessThan(10);
+    const seen = new Map(allDoors.map((d) => [d.door, d]));
+    for (const name of KNOWN_HUB_CREDENTIAL_DOORS) {
+      const d = seen.get(name);
+      expect(d, `${name} is no longer seen by the scan`).toBeDefined();
+      expect(d!.reaches, `${name} no longer reaches a credential`).not.toBe("");
+      expect(d!.guarded, `${name} is not guarded`).toBe(true);
+    }
+    // A path the auth middleware never authenticates reads no device token.
+    for (const skipped of [
+      "packages/api/src/routers/hub-protocol/rest/device.ts POST /setup/device",
+      "packages/api/src/routers/hub-protocol/rest/mcp-redeem.ts POST /mcp/redeem",
+    ]) {
+      expect(seen.has(skipped), `${skipped} is auth-skipped`).toBe(false);
+    }
+    // The Hub guard is the ONE predicate underneath.
+    const guard = real.units.find((u) => u.name === HUB_GUARD_CALL);
+    expect(guard, `${HUB_GUARD_CALL} exists`).toBeDefined();
+    expect(calledNames(guard!.node, new Map(), new Map()).has(GUARD_CALL)).toBe(
+      true
+    );
+  });
+
+  it("every register*Routes mounted on the Hub app takes a HubHono (so the scan finds its routes)", () => {
+    const root = real.files.get(HUB_ROOT_FILE)!;
+    const registered = new Set<string>();
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isIdentifier(n.expression) &&
+        /^register\w+Routes$/.test(n.expression.text)
+      )
+        registered.add(n.expression.text);
+      ts.forEachChild(n, visit);
+    };
+    visit(root);
+    expect(registered.size).toBeGreaterThan(90);
+    const notHubHono = [...registered].filter((name) => {
+      const unit = real.units.find(
+        (u) => u.name === name && isHubFile(u.file) && u.file !== HUB_ROOT_FILE
+      );
+      const fn = unit?.node as ts.FunctionLikeDeclaration | undefined;
+      return fn?.parameters[0]?.type?.getText() !== "HubHono";
+    });
+    expect(notHubHono).toEqual([]);
+  });
+
+  it("account recovery's device-wired routes are doors; every equivalent guard exists", () => {
+    const seen = new Map(allDoors.map((d) => [d.door, d]));
+    for (const route of ["GET /status", "POST /codes", "PUT /cloud-trust"]) {
+      expect(
+        seen.has(`apps/api/src/routers/account-recovery.ts ${route}`),
+        route
+      ).toBe(true);
+    }
+    // The unauthenticated doors are not wired: no session reaches them.
+    expect(
+      seen.has("apps/api/src/routers/account-recovery.ts POST /redeem")
+    ).toBe(false);
+    for (const g of Object.keys(EQUIVALENT_GUARDS)) {
+      expect(verdicts.unitNames.has(g), g).toBe(true);
+    }
+  });
+
+  it("POSITIVE CONTROL — deps that wire appSessionMiddleware() make a router's routes doors", () => {
+    const sample = analyse([
+      {
+        rel: "apps/api/src/routers/__sample_deps__.ts",
+        code: `
+          export const sampleDeps: SampleDeps = {
+            authenticate: [appSessionMiddleware(), refuseGuestSession],
+          };
+        `,
+      },
+      {
+        rel: "apps/api/src/routers/__sample_router__.ts",
+        code: `
+          export interface SampleDeps { authenticate: MiddlewareHandler[] }
+          class CodeRepo { async replace(u) { await db.insert(apiKeys).values({ u }); } }
+          const repo = new CodeRepo();
+          export function createSampleRouter(deps: SampleDeps) {
+            const router = new Hono();
+            router.post("/open", async (c) => repo.replace("x"));
+            router.use("/mint", ...deps.authenticate);
+            router.use("/guarded", ...deps.authenticate);
+            router.post("/mint", async (c) => repo.replace("x"));
+            router.post("/guarded", async (c) => { await guardCredentialChange(c); return repo.replace("x"); });
+            return router;
+          }
+        `,
+      },
+    ]);
+    const flagged = unguarded(doorsOf(sample, judge(sample)))
+      .filter((d) => d.door.includes("__sample_router__"))
+      .map((d) => d.door);
+    expect(flagged).toEqual([
+      "apps/api/src/routers/__sample_router__.ts POST /mint",
+    ]);
+  });
+
+  it("POSITIVE CONTROL — an unguarded Hub route that mints a key is flagged", () => {
+    const sample = analyse([
+      {
+        rel: "packages/api/src/services/__sample_hub_mint__.ts",
+        code: `
+          class ApiKeyService {
+            async generateApiKey(userId) { return db.insert(apiKeys).values({ userId }); }
+          }
+          export const apiKeyService = new ApiKeyService();
+        `,
+      },
+      {
+        rel: "packages/api/src/routers/hub-protocol/rest/__sample__.ts",
+        code: `
+          const mintRoute = createRoute({ method: "post", path: "/sample/{id}/mint" });
+          export function registerSampleRoutes(app: HubHono, other: Hono) {
+            app.post("/sample/mint", async (c) => apiKeyService.generateApiKey(c.get("userId")));
+            app.openapi(mintRoute, async (c) => apiKeyService.generateApiKey("x"));
+            app.post("/sample/guarded", async (c) => {
+              const stale = refuseStaleDeviceSession(c);
+              if (stale) return stale;
+              return apiKeyService.generateApiKey(c.get("userId"));
+            });
+            // A path built at run time is never skipped: still a door.
+            for (const p of ["/setup/device"]) {
+              app.post(p, async (c) => apiKeyService.generateApiKey("x"));
+            }
+            // Auth-skipped: no credential is read on this path.
+            app.post("/setup/device", async (c) => apiKeyService.generateApiKey("x"));
+            // A procedure call through a tRPC caller is that procedure's door.
+            app.post("/sample/through-caller", async (c) => {
+              const caller = await getCaller(c);
+              return caller.keys.generateApiKey({});
+            });
+            // Hands a secret's plaintext back, unguarded.
+            app.post("/sample/redeem", async (c) => c.json({ value: await resolveVaultSecret("s", "u") }));
+            // Not a Hub app: not a Hub route.
+            other.post("/sample/elsewhere", async (c) => apiKeyService.generateApiKey("x"));
+          }
+        `,
+      },
+    ]);
+    const flagged = unguarded(doorsOf(sample, judge(sample)))
+      .filter((d) => d.door.includes("__sample__"))
+      .map((d) => d.door);
+    expect(flagged.sort()).toEqual([
+      "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST /sample/:id/mint",
+      "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST /sample/mint",
+      "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST /sample/redeem",
+      "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST ?",
+    ]);
   });
 
   it("every door that reaches a credential is guarded", () => {

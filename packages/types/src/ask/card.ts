@@ -53,6 +53,7 @@ import {
 } from "../proposals/fate.js";
 import { ageSpan, ageSpanSpoken, shortDate } from "../lens/age.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
+import { isSetAside } from "../needs-you/set-aside.js";
 // The zod-free leaf (the needs-you rule reaches it without zod): re-exported
 // here so `./card.js` callers keep their import.
 import {
@@ -724,6 +725,8 @@ export interface AskCardSlot {
   pendingRelay?: AskCardPendingRelay | null;
   /** The closing agent kept it owed past its session: it no longer ends with it. */
   keptOwedAt?: string | null;
+  /** The person set it aside until then ("Later", `../needs-you/set-aside.ts`). */
+  laterUntil?: string | null;
   /** The asking agent's user id (`ExpectedOutput.askedBy`). */
   askedBy?: string | null;
   /**
@@ -786,9 +789,10 @@ export function askFate(
  * and its list fold read (api `needs-you-union.ts`), so they cannot disagree.
  */
 export function isAskReviewLater(
-  slot: Pick<AskCardSlot, "owedSince" | "pendingRelay">,
+  slot: Pick<AskCardSlot, "owedSince" | "pendingRelay" | "laterUntil">,
   now: Date | number = Date.now()
 ): boolean {
+  if (isSetAside(slot.laterUntil, now)) return true;
   return askFate({ label: "", ...slot }, now).kind === "review_later";
 }
 

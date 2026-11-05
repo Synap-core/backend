@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalJson,
   isPresenceCode,
+  presenceActionDigest,
+  presenceActionSubject,
+  sensitiveActionReason,
   oauthConsentId,
   PRESENCE_REFUSAL_CODES,
   presenceRequestSubject,
@@ -137,5 +141,52 @@ describe("proof of presence vocabulary", () => {
         state: "s",
       })
     ).not.toBe(a);
+  });
+});
+
+describe("sensitive actions (slice 3, founder decision 1)", () => {
+  it("names the key, governance and machine-default doors; an everyday door is not one", () => {
+    expect(sensitiveActionReason("apiKeys.create")).toBe("setup");
+    expect(sensitiveActionReason("governanceRules.widenCell")).toBe(
+      "governance"
+    );
+    expect(sensitiveActionReason("shares.share")).toBeNull();
+    expect(sensitiveActionReason("governanceRules.revoke")).toBeNull();
+  });
+
+  it("canonical JSON sorts keys at every level and keeps array order", () => {
+    expect(canonicalJson({ b: 1, a: { d: [2, 1], c: null } })).toBe(
+      '{"a":{"c":null,"d":[2,1]},"b":1}'
+    );
+  });
+
+  it("the digest binds the path and the input, whatever the key order, never the proof", async () => {
+    const a = await presenceActionDigest("apiKeys.create", {
+      keyName: "ci",
+      expiresInDays: 30,
+    });
+    expect(
+      await presenceActionDigest("apiKeys.create", {
+        expiresInDays: 30,
+        keyName: "ci",
+        presence: { kind: "device_key" },
+      })
+    ).toBe(a);
+    expect(
+      await presenceActionDigest("apiKeys.create", {
+        keyName: "ci",
+        expiresInDays: 31,
+      })
+    ).not.toBe(a);
+    expect(
+      await presenceActionDigest("apiKeys.rotate", {
+        keyName: "ci",
+        expiresInDays: 30,
+      })
+    ).not.toBe(a);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(presenceActionSubject("apiKeys.create", a)).toBe(
+      `action:apiKeys.create:${a}`
+    );
   });
 });

@@ -14,6 +14,7 @@
  */
 
 import {
+  COMPUTER_BELONGS_TO,
   computerKeyRead,
   computerKeyState,
   days,
@@ -223,6 +224,44 @@ export function belongsToMark(
   c: Pick<ComputerLike, "belongsTo">
 ): string | null {
   return c.belongsTo ? resolveComputerBelongsToLabel(c.belongsTo) : null;
+}
+
+/** What each answer to "whose computer is it" changes (decision c83e0661). */
+const BELONGS_TO_LINE: Record<ComputerBelongsTo, string> = {
+  person:
+    "Its owner's own computer. Each agent on it is approved on its own; the computer never inherits an agent's approval.",
+  agent:
+    "A box an agent works on. When its owner lets one agent on it change things without asking, the computer gets the same approval, so the agent is not held back.",
+  shared:
+    "Several people or agents work on it, like a cloud machine. The computer never inherits an agent's approval.",
+};
+
+/**
+ * The choices for whose computer it is (`machines.setBelongsTo`), in the
+ * pod's order, each with its vocabulary mark and what it changes.
+ */
+export function belongsToChoices(): {
+  value: ComputerBelongsTo;
+  label: string;
+  line: string;
+}[] {
+  return COMPUTER_BELONGS_TO.map((value) => ({
+    value,
+    label: resolveComputerBelongsToLabel(value),
+    line: BELONGS_TO_LINE[value],
+  }));
+}
+
+/**
+ * What a whose-computer change took back: leaving "an agent's" revokes the
+ * approvals the computer had inherited from its agent (`seedsRevoked`). Null
+ * when nothing was taken back.
+ */
+export function seedsRevokedLine(seedsRevoked: number): string | null {
+  if (seedsRevoked <= 0) return null;
+  return seedsRevoked === 1
+    ? "1 approval it had inherited from its agent was taken back."
+    : `${seedsRevoked} approvals it had inherited from its agent were taken back.`;
 }
 
 /**

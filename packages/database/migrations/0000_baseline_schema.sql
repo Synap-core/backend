@@ -2771,6 +2771,7 @@ CREATE TABLE IF NOT EXISTS "notifications" (
   "expires_at"    timestamp with time zone,
   "snoozed_until" timestamp with time zone,
   "pushed_at"     timestamp with time zone,
+  "push_agent_id" text,
   "created_at"    timestamp with time zone NOT NULL DEFAULT now()
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
@@ -2793,6 +2794,7 @@ ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "read_at" timestamp with ti
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "snoozed_until" timestamp with time zone;
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "pushed_at" timestamp with time zone;  -- 0375 (daily push cap)
+ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "push_agent_id" text;  -- 0402 (an agent's own push limit)
 ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS "notifs_user_workspace_status_idx"
@@ -2823,6 +2825,11 @@ CREATE INDEX IF NOT EXISTS "notifs_snoozed_until_idx"
 CREATE INDEX IF NOT EXISTS "notifs_user_pushed_idx"
   ON "notifications" ("user_id", "pushed_at")
   WHERE "pushed_at" IS NOT NULL;
+
+-- One agent's pushes today, for its own push limit (migration 0402).
+CREATE INDEX IF NOT EXISTS "notifs_user_push_agent_idx"
+  ON "notifications" ("user_id", "push_agent_id", "pushed_at")
+  WHERE "push_agent_id" IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "notification_preferences" (
   "id"                  uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -5729,6 +5736,10 @@ CREATE TABLE IF NOT EXISTS "presence_challenges" (
 
 CREATE INDEX IF NOT EXISTS "presence_challenges_user_subject_idx"
   ON "presence_challenges" ("user_id", "subject");
+
+-- 0401: a passkey-change grant redeemed by Kratos' settings guard — mirrors 0401_presence_redeemed.sql.
+ALTER TABLE "presence_challenges"
+  ADD COLUMN IF NOT EXISTS "redeemed_at" timestamptz;
 
 CREATE TABLE IF NOT EXISTS "presence_device_keys" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),

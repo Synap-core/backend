@@ -58,6 +58,17 @@ export const INVITE_EMAIL_MISMATCH = {
 } as const;
 
 /**
+ * Pod-defined refusal (settings hook, W3 slice 3, founder decision 2): a
+ * passkey change by a person who already holds a passkey or a Relay device
+ * key needs a proof from one of them first (`presence.authorizePasskeyChange`).
+ */
+export const PASSKEY_CHANGE_NEEDS_PRESENCE = {
+  id: 4000906,
+  text: "Confirm it's you with a passkey or Relay you already have, then try again.",
+  context: { reason: "passkey_change_needs_presence" },
+} as const;
+
+/**
  * Kratos v1.3.1 account-linking ids (ory/kratos@v1.3.1 `text/id.go`, values
  * obtained by compiling that file — not from memory). Kratos lands an existing
  * pod account that signs in with Synap Cloud for the first time on a LOGIN flow

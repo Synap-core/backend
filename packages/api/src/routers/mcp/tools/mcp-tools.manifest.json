@@ -54,7 +54,7 @@
           "detail": {
             "type": "string",
             "enum": ["lean", "full"],
-            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; strings over 120 chars truncated with '…[truncated: N chars total]'); `omitted` lists the property keys left out. full = unprojected rows."
+            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows."
           },
           "fields": {
             "type": "array",
@@ -1769,12 +1769,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -1926,12 +1926,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -2057,12 +2057,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -2140,12 +2140,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -2263,12 +2263,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -2535,12 +2535,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -2692,12 +2692,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -2823,12 +2823,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -2906,12 +2906,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -3029,12 +3029,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -3311,12 +3311,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -3468,12 +3468,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -3599,12 +3599,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -3682,12 +3682,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -3805,12 +3805,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -4082,12 +4082,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -4239,12 +4239,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -4370,12 +4370,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -4453,12 +4453,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -4576,12 +4576,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -4770,12 +4770,12 @@
                         "enum": ["routine", "commitment"]
                       },
                       "urgency": {
-                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                         "type": "string",
                         "enum": ["today", "whenever"]
                       },
                       "answerBy": {
-                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                         "type": "string",
                         "maxLength": 40
                       },
@@ -4927,12 +4927,12 @@
                         "enum": ["routine", "commitment"]
                       },
                       "urgency": {
-                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                         "type": "string",
                         "enum": ["today", "whenever"]
                       },
                       "answerBy": {
-                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                         "type": "string",
                         "maxLength": 40
                       },
@@ -5058,12 +5058,12 @@
                         "enum": ["routine", "commitment"]
                       },
                       "urgency": {
-                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                         "type": "string",
                         "enum": ["today", "whenever"]
                       },
                       "answerBy": {
-                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                         "type": "string",
                         "maxLength": 40
                       },
@@ -5141,12 +5141,12 @@
                         "enum": ["routine", "commitment"]
                       },
                       "urgency": {
-                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                         "type": "string",
                         "enum": ["today", "whenever"]
                       },
                       "answerBy": {
-                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                         "type": "string",
                         "maxLength": 40
                       },
@@ -5264,12 +5264,12 @@
                         "enum": ["routine", "commitment"]
                       },
                       "urgency": {
-                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                         "type": "string",
                         "enum": ["today", "whenever"]
                       },
                       "answerBy": {
-                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                         "type": "string",
                         "maxLength": 40
                       },
@@ -5675,7 +5675,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. Every ask still notifies as today until push levels ship. `dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
+      "description": "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. An ask due within the hour also breaks through the person's Focus; any other ask is a normal push. `dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -5766,12 +5766,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -5923,12 +5923,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -6054,12 +6054,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -6137,12 +6137,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -6260,12 +6260,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -6353,7 +6353,7 @@
           "urgency": {
             "type": "string",
             "enum": ["today", "whenever"],
-            "description": "A hint: today (default) | whenever. It can only LOWER the priority the pod derives: 'whenever' ranks the ask lower. It still notifies as today until push levels ship."
+            "description": "A hint: today (default) | whenever. It can only LOWER the priority the pod derives: 'whenever' ranks the ask lower."
           },
           "answerBy": {
             "type": "string",
@@ -7019,12 +7019,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -7176,12 +7176,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -7307,12 +7307,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -7390,12 +7390,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -7513,12 +7513,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -7661,6 +7661,28 @@
             },
             "description": "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
           },
+          "onEnd": {
+            "type": "object",
+            "properties": {
+              "closed": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "cancelled": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "failed": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "additionalProperties": false,
+            "description": "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
+          },
           "expectedOutputs": {
             "type": "array",
             "items": {
@@ -7759,12 +7781,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -7916,12 +7938,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -8047,12 +8069,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -8130,12 +8152,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -8253,12 +8275,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -8579,12 +8601,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -8736,12 +8758,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -8867,12 +8889,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -8950,12 +8972,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -9073,12 +9095,12 @@
                                 "enum": ["routine", "commitment"]
                               },
                               "urgency": {
-                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                                 "type": "string",
                                 "enum": ["today", "whenever"]
                               },
                               "answerBy": {
-                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                                 "type": "string",
                                 "maxLength": 40
                               },
@@ -9254,6 +9276,28 @@
             },
             "description": "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
           },
+          "onEnd": {
+            "type": "object",
+            "properties": {
+              "closed": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "cancelled": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "failed": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "additionalProperties": false,
+            "description": "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
+          },
           "expectedOutputs": {
             "type": "array",
             "items": {
@@ -9352,12 +9396,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -9509,12 +9553,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -9640,12 +9684,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -9723,12 +9767,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -9846,12 +9890,12 @@
                           "enum": ["routine", "commitment"]
                         },
                         "urgency": {
-                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                           "type": "string",
                           "enum": ["today", "whenever"]
                         },
                         "answerBy": {
-                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                           "type": "string",
                           "maxLength": 40
                         },
@@ -12433,12 +12477,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -12590,12 +12634,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -12721,12 +12765,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -12804,12 +12848,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },
@@ -12927,12 +12971,12 @@
                     "enum": ["routine", "commitment"]
                   },
                   "urgency": {
-                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower.",
                     "type": "string",
                     "enum": ["today", "whenever"]
                   },
                   "answerBy": {
-                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus.",
                     "type": "string",
                     "maxLength": 40
                   },

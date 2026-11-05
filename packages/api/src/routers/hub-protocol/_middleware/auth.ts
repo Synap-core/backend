@@ -5,14 +5,18 @@
  * `app.use("/*", hubAuthMiddleware)`), so the door itself — not a re-derived
  * helper — can be exercised by tests. Behaviour and ordering are unchanged.
  *
- * Accepts three credential types:
- *   1. `Authorization: Bearer <pod+jwt>` — the per-turn IS delegation this pod
+ * Accepts four credential types:
+ *   1. `Authorization: Bearer synap_pd_…` — a Synap app's DEVICE token (the
+ *      desktop or Relay signed in through this pod's OAuth door): the PERSON,
+ *      exactly as a Kratos session token is (`authenticatePersonDevice`)
+ *   2. `Authorization: Bearer <pod+jwt>` — the per-turn IS delegation this pod
  *      signed itself (D4, `authenticateIsDelegation` below)
- *   2. `Authorization: Bearer <api-key>` — IS agents, external agents, CLI (API key auth)
- *   3. `X-Session-Token: <kratos-token>` — browser extension, web clients (Kratos session auth)
+ *   3. `Authorization: Bearer <api-key>` — IS agents, external agents, CLI (API key auth)
+ *   4. `X-Session-Token: <kratos-token>` — browser extension, web clients (Kratos session auth)
  *
- * Session-token callers receive full hub-protocol.read + hub-protocol.write scopes.
- * Skip auth for endpoints listed in skipAuthPaths.
+ * Session callers (a Kratos session token, a device token) receive full
+ * hub-protocol.read + hub-protocol.write scopes. Skip auth for the paths of
+ * `HUB_AUTH_SKIP_PATHS` (`auth-skip.ts`).
  */
 
 import {
@@ -50,6 +54,10 @@ import {
   type VerifiedIsDelegation,
 } from "@synap/database";
 import { APP_PERSON_KEY_TYPE } from "@synap/database/schema";
+import {
+  isPersonDeviceToken,
+  resolvePersonDeviceSession,
+} from "@synap/database/person-devices";
 import { isIntelligenceServiceOrigin } from "@synap/intelligence-client";
 
 import { apiKeyService } from "../../../services/api-keys.js";
@@ -65,11 +73,9 @@ import {
 } from "../../../access/guest-containment.js";
 import { reportNoPodAccess } from "../../../access/pod-access.js";
 import { reportRunnerState } from "../../../services/focus-sessions/session-runners.js";
+import { runAsDeviceSession } from "../../../utils/device-session.js";
 import type { HubVariables } from "../rest/_shared.js";
-import {
-  isPublicDoorPath,
-  PUBLIC_PROJECTION_PATH,
-} from "../../../public-doors.js";
+import { hubAuthSkipped, hubRelativePath } from "./auth-skip.js";
 
 const logger = createLogger({ module: "hub-protocol-auth" });
 
@@ -240,6 +246,61 @@ async function authenticateIsDelegation(
   );
 }
 
+/** What a signed-in person holds on this door (a Kratos session or a device). */
+const PERSON_SESSION_SCOPES = ["hub-protocol.read", "hub-protocol.write"];
+
+/**
+ * A Synap app's DEVICE token (`synap_pd_…`): the person, exactly where and how
+ * a Kratos session token is (same scopes, same guest refusal), resolved by the
+ * ONE validator `appSessionMiddleware` uses (`resolvePersonDeviceSession`).
+ * The request is marked a device session the way app-session marks it
+ * (`sessionKind`, and the async scope `runAsDeviceSession`), so every
+ * credential door it reaches asks for a fresh sign-in: a Hub route through
+ * `refuseStaleDeviceSession` (rest/_shared.ts), a service or a tRPC procedure
+ * through `assertFreshAuthentication`, which reads the same scope. Tripwire:
+ * `credential-doors-refuse-device-session` (it scans the Hub routes too).
+ *
+ * A token that does not resolve (unknown, expired, its device signed out) is
+ * 401 `key_revoked` with `WWW-Authenticate: invalid_token`, so the app
+ * refreshes; a failed lookup is 503, never "signed out".
+ */
+async function authenticatePersonDevice(
+  c: Context<{ Variables: HubVariables }>,
+  next: Next,
+  token: string
+): Promise<Response | void> {
+  let session;
+  try {
+    session = await resolvePersonDeviceSession(db, token);
+  } catch (err) {
+    logger.warn({ err }, "device token lookup failed");
+    return c.json(
+      {
+        error: "auth_service_unavailable",
+        message: "Sign-in could not be checked. Please retry.",
+      },
+      503
+    );
+  }
+  if (!session) {
+    c.header("WWW-Authenticate", 'Bearer error="invalid_token"');
+    return authErrorResponse(c, "key_revoked", {
+      message:
+        "This device's sign-in is invalid or expired. Refresh it, or sign in again.",
+    });
+  }
+  c.set("userId", session.identity.id);
+  c.set("scopes", [...PERSON_SESSION_SCOPES]);
+  c.set("sessionKind", "person_device");
+  c.set("personDeviceId", session.device.id);
+  const refused = await refuseGuestPrincipal(c);
+  if (refused) return refused;
+  return runAsDeviceSession(
+    { id: session.device.id, authTime: session.device.authTime },
+    () => next()
+  );
+}
+
 /** The explicit full access the `is_internal` key is minted with (provision.ts). */
 const IS_DELEGATION_GRANT = grantOfScope({ permissions: ["*"] });
 
@@ -248,98 +309,21 @@ export const hubAuthMiddleware = async (
   next: Next
 ) => {
   const reqPath = c.req.path;
-  // Public-by-design paths. `/openapi.json` and `/docs` are discovery
-  // surfaces — gating them behind auth defeats their purpose (Eve CLI
-  // and similar operators need to read the spec BEFORE they have a
-  // valid bearer to know what endpoints exist). `/health` is the
-  // standard liveness probe. `/entity-share/deliver` and `/setup/agent`
-  // use specialized auth (CP JWT and PROVISIONING_TOKEN respectively)
-  // and run their own checks downstream.
-  //
-  // Match logic: the request path arrives mounted under `/api/hub/...` (or the
-  // `/api/hub-protocol/...` alias). We strip the known mount prefix, then
-  // exact-compare the de-prefixed path against `skipAuthPaths`. Boundary-safe:
-  // a future route ending in `/health`, `/docs`, etc. is NOT silently skipped.
-  const skipAuthPaths = [
-    "/health",
-    "/openapi.json",
-    // Static, no-DB agent orientation doc — public by design (same posture as
-    // /openapi.json). Matched exactly as rel === "/manifest".
-    "/manifest",
-    "/docs",
-    "/entity-share/deliver",
-    "/setup/agent",
-    // /setup/service uses the same specialized provisioning auth as /setup/agent
-    // (trusted-issuer JWT / PROVISIONING_TOKEN / setup.agent-scoped or
-    // hub-protocol.write key) — it runs its own checks downstream.
-    "/setup/service",
-    "/setup/status",
-    "/setup/magic-link",
-    "/setup/first-admin",
-    // Invite acceptance — the invitee has no API key yet; token is the capability
-    "/setup/accept-invite",
-    // Public projection — an INTENTIONALLY unauthenticated, read-only surface for
-    // a workspace's opt-in public data. Safe to expose without a key because the
-    // handler is default-deny (404 unless settings.publicProjection.enabled ===
-    // true), facet-workspace-scoped (never returns pod-wide private entities), and
-    // field-whitelisted. (Kept OUTSIDE the credentialless public-door
-    // namespace below — see `public-doors.ts`.)
-    PUBLIC_PROJECTION_PATH,
-    // CP→pod OIDC federation client push — authenticated by the CP's ISSUER
-    // SIGNATURE (verifyIssuerJwt against the pinned trusted issuer), not an API
-    // key. The handler runs its own verification.
-    "/federation/oidc-config",
-    // CP-MCP consent-code redeem — CP authenticates with a trusted-issuer JWT
-    // (verifyTrustedIssuerJwt), NOT a hub API key: the CP-held pod credential is
-    // a bootstrap secret, not a `synap_*` key, so it can't pass the key-format
-    // middleware. The handler verifies the CP assertion + the one-time code.
-    "/mcp/redeem",
-    // CP-MCP disconnect revoke — same CP-trusted-issuer auth as /mcp/redeem,
-    // scoped to its own `mcp_revoke` purpose claim (not replayable as a redeem).
-    "/mcp/revoke",
-    // The device door (RFC 8628, MACHINE-IDENTITY-PLAN W2): the terminal has
-    // no credential yet — that is what it asks for. Create is IP-budgeted at
-    // the edge (`device_auth`); collection is gated by the device code.
-    "/setup/device",
-    "/setup/device/token",
-    // The holder's view of a key that may NOT authenticate (awaiting approval,
-    // replaced, expired) — it reads the bearer itself and answers only about
-    // the presented secret (`services/key-holder-state.ts`).
-    "/auth/key-state",
-  ];
-  // Strip the known mount prefix so the unprefixed `skipAuthPaths` entries can
-  // be matched exactly. `reqPath` carries the mount prefix (`/api/hub` or the
-  // `/api/hub-protocol` alias); a naive `===` against the unprefixed entries
-  // would never match the mounted request.
-  const HUB_MOUNTS = ["/api/hub-protocol", "/api/hub"]; // longest first
-  const mount = HUB_MOUNTS.find(
-    (m) => reqPath === m || reqPath.startsWith(m + "/")
-  );
-  const rel = mount ? reqPath.slice(mount.length) || "/" : reqPath;
-  if (
-    skipAuthPaths.includes(rel) ||
-    // Credentialless public doors (`/public/*`, Sites W3): the capability is in
-    // the path (a hashed share token) and NO credential is ever read — an
-    // Authorization / X-Session-Token sent here is ignored, never resolved, so
-    // it cannot change the response. The ONE predicate also drives the
-    // idempotency skip, the transport CORS and the rate class.
-    isPublicDoorPath(reqPath) ||
-    // The pending-agent review/approve/reject subtree is token-protected (the
-    // secret keyId IS the capability) and opened in a browser with no auth
-    // header. Matched on the de-prefixed path — boundary-safe (no longer skips
-    // a route that merely contains the substring).
-    rel.startsWith("/setup/agent/pending/") ||
-    // Personal ICS feed — token in the PATH is the capability. Prefix + `.ics`
-    // so GET/POST `/calendar/feed` and POST `/calendar/feed/rotate` still
-    // authenticate. Do not skip `/calendar` itself.
-    (rel.startsWith("/calendar/feed/") && rel.endsWith(".ics"))
-  ) {
-    return next();
-  }
+  // Paths that read no credential here (`auth-skip.ts`, the ONE list).
+  if (hubAuthSkipped(reqPath)) return next();
+  // `rel`: the path without its mount — what the door fences rule on.
+  const rel = hubRelativePath(reqPath);
 
   // ── 1. Try API key (agents / IS) ─────────────────────────────
   const authHeader = c.req.header("authorization") ?? null;
   const token = extractBearerToken(authHeader);
+
+  // Tried ONLY for a token with the device prefix: an API key or an IS
+  // delegation never reaches this branch, and a device token never reaches
+  // the key lookup (it is no `api_keys` row).
+  if (token && isPersonDeviceToken(token)) {
+    return authenticatePersonDevice(c, next, token);
+  }
 
   if (token && isPodJwtShaped(token)) {
     return authenticateIsDelegation(c, next, token);
@@ -641,7 +625,7 @@ export const hubAuthMiddleware = async (
       if (session?.identity?.id) {
         c.set("userId", session.identity.id as string);
         // Authenticated pod users get full hub-protocol scopes
-        c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
+        c.set("scopes", [...PERSON_SESSION_SCOPES]);
         const refusedSession = await refuseGuestPrincipal(c);
         if (refusedSession) return refusedSession;
         return next();

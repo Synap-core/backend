@@ -150,6 +150,10 @@ import {
 import { postChannelMessage } from "../../messaging/post-message.js";
 import { FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE } from "../lifecycle-events.js";
 import { recordOwnerRoomReply } from "../session-answer.js";
+import {
+  RUN_CONTINUE_SLOT_LABEL,
+  RUN_TURNS_META_KEY,
+} from "../../runs/run-turn-end.js";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { registerThreadsRoutes } from "../../../routers/hub-protocol/rest/threads.js";
 
@@ -835,6 +839,106 @@ describe("the answer loop", () => {
       userMessageId: messageId,
       agentType: "researcher",
     });
+  });
+
+  /**
+   * A live pod run that stopped and asked "Keep the run going" (what
+   * `askToKeepGoing` leaves), its ledger holding the last stop's checkpoint.
+   */
+  async function stoppedRunAsking(): Promise<{
+    sessionId: string;
+    channelId: string;
+    idea: string;
+  }> {
+    const { sessionId, channelId } = await seed();
+    const runId = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, started_at)
+       values ($1, $2, $3, 'is-agent', 'running', '{}'::jsonb, $4, now())`,
+      [runId, randomUUID(), sessionId, OWNER]
+    );
+    const idea = "9d57a207-1c2b-4d3e-8f40-5a6b7c8d9e0f";
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb, metadata = $3::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([
+          {
+            kind: "decision",
+            label: RUN_CONTINUE_SLOT_LABEL,
+            owner: "human",
+            blockedReason: "decision",
+            why: "This run stopped before it was finished 3 times.",
+            owedSince: "2026-11-05T09:00:00.000Z",
+            ask: { mode: "confirm", prompt: "Keep it going?" },
+          },
+        ]),
+        JSON.stringify({
+          [RUN_TURNS_META_KEY]: {
+            runId,
+            stops: 3,
+            autoContinues: 2,
+            turns: [],
+            lastCheckpoint: {
+              records: [{ id: idea, tool: "propose_entity_graph" }],
+              left: "Left: move the ideas to Used.",
+            },
+          },
+        }),
+      ]
+    );
+    return { sessionId, channelId, idea };
+  }
+
+  it("a YES to 'Keep the run going' wakes a RUN turn: its declared tools, the checkpoint as turn context, the person's words untouched (review of backend#824)", async () => {
+    const { sessionId, idea } = await stoppedRunAsking();
+    const res = await send(
+      app(),
+      "POST",
+      `/focus-sessions/${sessionId}/outputs/answer`,
+      {
+        expectedLabel: RUN_CONTINUE_SLOT_LABEL,
+        value: { type: "confirm", confirmed: true },
+        text: "Yes, keep going",
+      }
+    );
+    expect(await res.json()).toMatchObject({ triggered: true });
+    expect(h.triggers).toHaveLength(1);
+    const turn = h.triggers[0]!;
+    // The run profile reaches the approved continuation.
+    expect(turn.run).toMatchObject({ playbookId: expect.any(String) });
+    // The checkpoint rides as turn context (pod reference data) ...
+    const entries = (
+      turn.turnContext as { entries: Array<{ key: string; value: unknown }> }
+    ).entries;
+    expect(
+      entries.find((e) => e.key === "run.checkpoint.ids.1")?.value
+    ).toEqual([idea]);
+    expect(entries.find((e) => e.key === "run.checkpoint.left")?.value).toBe(
+      "Left: move the ideas to Used."
+    );
+    // ... never inside the person's message, which stays what they said.
+    const [posted] = (
+      await q<{ content: string }>(
+        `select content from messages where id = $1`,
+        [turn.userMessageId]
+      )
+    ).rows;
+    expect(turn.content).toBe(posted!.content);
+    expect(String(turn.content)).not.toContain(idea);
+  });
+
+  it("a NO to 'Keep the run going' is still a run turn, with no checkpoint (review of backend#824)", async () => {
+    const { sessionId, idea } = await stoppedRunAsking();
+    await send(app(), "POST", `/focus-sessions/${sessionId}/outputs/answer`, {
+      expectedLabel: RUN_CONTINUE_SLOT_LABEL,
+      value: { type: "confirm", confirmed: false },
+    });
+    expect(h.triggers).toHaveLength(1);
+    const turn = h.triggers[0]!;
+    expect(turn.run).toBeDefined();
+    expect(turn).not.toHaveProperty("turnContext");
+    expect(String(turn.content)).not.toContain(idea);
   });
 
   it("the direct door with NO pod-run agent staffed and no question wakes nobody", async () => {

@@ -78,7 +78,7 @@ export interface A2AIResponseTriggerData {
   turnContext?: Record<string, unknown> | null;
   /** Set when the turn works a playbook run: its declared tools, forwarded
    *  verbatim as the IS `run` (see `RunToolProfile`). */
-  run?: RunToolProfile | null;
+  run?: RunToolProfile;
   /** Pre-resolved intelligence service URL */
   serviceUrl: string;
   /** Pre-resolved API key (decrypted) for the intelligence service */

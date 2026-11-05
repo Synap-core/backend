@@ -30,6 +30,7 @@
  * request's "Never" option writes the narrow one (this agent × this act).
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { assertPodAdmin, assertWorkspaceUsable } from "../trpc.js";
@@ -648,6 +649,7 @@ export const governanceRulesRouter = router({
    * Kratos `protectedProcedure`, never on the agent (Hub/MCP) doors.
    */
   setReversibleDefault: credentialProcedure
+    .input(presenceInput)
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);
@@ -679,6 +681,7 @@ export const governanceRulesRouter = router({
    * app's device token needs a fresh sign-in (`credentialProcedure`).
    */
   setOwnOrganiseDefault: credentialProcedure
+    .input(presenceInput)
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);
@@ -693,6 +696,7 @@ export const governanceRulesRouter = router({
    * how the five granularities map to inputs.
    */
   create: credentialProcedure
+    .input(presenceInput)
     .input(CreateInputSchema)
     .mutation(async ({ ctx, input }) => {
       // A rule that can never fire is refused, not stored (B3). An exact action
@@ -796,6 +800,7 @@ export const governanceRulesRouter = router({
    * the agent (Hub/MCP) doors — an agent does not widen its own lane.
    */
   proposeNextRung: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         itemRef: z.object({
@@ -837,6 +842,7 @@ export const governanceRulesRouter = router({
    * Humans only (Kratos `protectedProcedure`); an agent never widens itself.
    */
   widenCell: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         agentUserId: z.string().min(1),

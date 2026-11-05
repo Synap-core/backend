@@ -20,6 +20,7 @@ const SESSION = "11111111-1111-4111-8111-111111111111";
 const h = vi.hoisted(() => ({
   graded: [] as unknown[],
   accepted: [] as unknown[],
+  later: [] as unknown[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -63,6 +64,18 @@ vi.mock("../services/focus-sessions/triage.js", async (orig) => ({
   }),
 }));
 
+vi.mock("../services/focus-sessions/ask-later.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  setAskLater: vi.fn(async (p: unknown) => {
+    h.later.push(p);
+    return {};
+  }),
+  clearAskLater: vi.fn(async (p: unknown) => {
+    h.later.push(p);
+    return { cleared: true };
+  }),
+}));
+
 const { focusSessionsRouter } = await import("./focus-sessions.js");
 
 const person = () =>
@@ -87,6 +100,7 @@ describe("person-only session doors", () => {
   beforeEach(() => {
     h.graded = [];
     h.accepted = [];
+    h.later = [];
   });
 
   it("grade: an agent key is refused before the grade door runs", async () => {
@@ -111,5 +125,35 @@ describe("person-only session doors", () => {
   it("acceptFromTriage: the person reaches the accept (control)", async () => {
     await person().acceptFromTriage({ sessionId: SESSION });
     expect(h.accepted).toHaveLength(1);
+  });
+
+  // Later on an owed ask (decision 9bc9f75c): an agent that could set an ask
+  // aside would move its own ask in the person's list.
+  const LATER = {
+    sessionId: SESSION,
+    expectedLabel: "pick-a-name",
+    until: new Date(Date.now() + 3_600_000),
+  };
+
+  it("askLater / clearAskLater: an agent key is refused before the door runs", async () => {
+    await expect(agentKey().askLater(LATER)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(
+      agentKey().clearAskLater({
+        sessionId: SESSION,
+        expectedLabel: "pick-a-name",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.later).toHaveLength(0);
+  });
+
+  it("askLater / clearAskLater: the person reaches the door (control)", async () => {
+    await person().askLater(LATER);
+    await person().clearAskLater({
+      sessionId: SESSION,
+      expectedLabel: "pick-a-name",
+    });
+    expect(h.later).toHaveLength(2);
   });
 });

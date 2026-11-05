@@ -68,7 +68,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
 
 import { readHandlers } from "./read.js";
 import type { McpToolContext } from "./shared.js";
-import { ENTITY_STRING_CAP } from "./read-lean.js";
+import { ENTITY_STRING_CAP } from "../../../services/entity-lean-list.js";
 
 // ── Fixture: mirrors the live pod (117 profiles, 15 workspaces, 409+ relation
 // rows of which 22 pod-wide; 50 notes with long bodies). Deterministic. ──────
@@ -385,12 +385,13 @@ describe("synap_get_entities — default lean rows fit the budget", () => {
       const content = props.content as string;
       if (src.properties.content.length > ENTITY_STRING_CAP) {
         cuts++;
-        expect(
-          content.startsWith(src.properties.content.slice(0, ENTITY_STRING_CAP))
-        ).toBe(true);
-        expect(content).toContain(
-          `[truncated: ${src.properties.content.length} chars total]`
+        // Cut with no marker inside; its full length rides beside it.
+        expect(content).toBe(
+          src.properties.content.slice(0, ENTITY_STRING_CAP)
         );
+        expect(
+          (got.truncated as Record<string, number> | undefined)?.content
+        ).toBe(src.properties.content.length);
       } else {
         expect(content).toBe(src.properties.content);
       }

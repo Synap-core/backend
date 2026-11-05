@@ -10,6 +10,7 @@ import {
 } from "./playbook-definition.js";
 import { playbookStageSchema } from "./playbook-stage.js";
 import {
+  carryProcessOver,
   foldProcessIntoSubjectProfile,
   ProcessDeclarationError,
   readPlaybookProcess,
@@ -144,6 +145,7 @@ describe("the ONE fold: activators/humanOnlyStatuses → subjectProfile", () => 
         { on: "enters_status", status: "published", mode: "propose" },
       ],
       humanOnlyStatuses: ["published"],
+      onEnd: {},
       activatorsInvalid: false,
     });
   });
@@ -161,6 +163,49 @@ describe("the ONE fold: activators/humanOnlyStatuses → subjectProfile", () => 
         activators: [{ on: "created", mode: "run" }],
       })
     ).toThrow(ProcessDeclarationError);
+  });
+});
+
+describe("subjectProfile.onEnd — what a session end moves the subject to", () => {
+  it("rides inside subjectProfile through the ONE write schema and reads back", () => {
+    const r = playbookDefinitionSchema.parse({
+      ...BASE,
+      subjectProfile: {
+        profileSlug: "finding",
+        onEnd: { cancelled: "open", failed: "open" },
+      },
+    });
+    expect(readPlaybookProcess(r.subjectProfile).onEnd).toEqual({
+      cancelled: "open",
+      failed: "open",
+    });
+  });
+
+  it("refuses a key that is not a terminal status, and a blank value", () => {
+    for (const onEnd of [{ stale: "open" }, { closed: "" }, ["open"]]) {
+      expect(
+        playbookDefinitionSchema.safeParse({
+          ...BASE,
+          subjectProfile: { profileSlug: "finding", onEnd },
+        }).success,
+        JSON.stringify(onEnd)
+      ).toBe(false);
+    }
+  });
+
+  it("a subjectProfile patch that does not name onEnd keeps the stored one", () => {
+    const stored = {
+      profileSlug: "finding",
+      statusProperty: "status",
+      onEnd: { cancelled: "open" },
+    };
+    expect(
+      carryProcessOver({ profileSlug: "finding", filter: {} }, stored)
+    ).toMatchObject({ onEnd: { cancelled: "open" } });
+    // A patch binding ANOTHER kind carries nothing: its lifecycle differs.
+    expect(
+      carryProcessOver({ profileSlug: "lead" }, stored)
+    ).not.toHaveProperty("onEnd");
   });
 });
 

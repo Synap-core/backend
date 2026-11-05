@@ -2725,6 +2725,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         await notifySessionNeedsYou({
           sessionId: id,
           byAgent: !!agentUserId,
+          agentUserId,
           reason: {
             kind: "slots",
             before: existing.expectedOutputs,

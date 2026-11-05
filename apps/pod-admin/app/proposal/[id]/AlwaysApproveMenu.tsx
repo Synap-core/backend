@@ -59,6 +59,11 @@ import { trpc } from "../../../lib/trpc";
 import { showApprovalProgressToast } from "../../_lib/approval-progress/approval-progress-toast";
 import { useApproveProposal } from "../../_lib/presence/use-approve";
 import {
+  useCreateGovernanceRule,
+  useSetActionMode,
+  type CreateGovernanceRuleInput,
+} from "../../_lib/presence/use-sensitive-actions";
+import {
   decisionFailure,
   decisionReceipt,
   readApproveAnswer,
@@ -72,9 +77,7 @@ import { showReceipt } from "../../_lib/receipt/decision-receipt-toast";
 import { alwaysApproveT } from "./copy";
 import { approveInput, renderedRevision } from "./use-proposal-decision";
 
-type CreateRuleInput = Parameters<
-  ReturnType<typeof trpc.governanceRules.create.useMutation>["mutate"]
->[0];
+type CreateRuleInput = CreateGovernanceRuleInput;
 
 interface Granularity {
   key: GovernanceGrantOption["id"];
@@ -242,8 +245,9 @@ export function AlwaysApproveMenu({
   };
   // With the proof of presence when the pod asks for one (W3).
   const approve = useApproveProposal();
-  const createRule = trpc.governanceRules.create.useMutation();
-  const setActionMode = trpc.governanceRules.setActionMode.useMutation();
+  // With the proof of presence (W3 slice 3): both are sensitive actions.
+  const createRule = useCreateGovernanceRule();
+  const setActionMode = useSetActionMode();
 
   const t = alwaysApproveT();
   const granularities = deriveGrantOptions(proposal, t);
@@ -363,7 +367,7 @@ export function RejectNeverMenu({
     onRunningChange?.(value);
   };
   const reject = trpc.proposals.reject.useMutation();
-  const createRule = trpc.governanceRules.create.useMutation();
+  const createRule = useCreateGovernanceRule();
 
   const t = alwaysApproveT();
   const never = deriveGovernanceNeverOption(grantContext(proposal));

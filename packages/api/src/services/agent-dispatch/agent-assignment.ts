@@ -252,6 +252,40 @@ export async function setAgentPaused(p: {
 }
 
 /**
+ * Set or clear the daily push limit of one agent — how many times a day its
+ * work may ring the person's phone (founder decision 9bc9f75c: none by
+ * default, "agents settings could setup a limit per agent"). Stored in the
+ * agent's settings (`users.agent_metadata.pushDailyLimit`); `null` removes it
+ * (unlimited). Enforced by the one push producer (`push-decision.ts` rule
+ * 4b). Owner or pod admin, like pausing.
+ */
+export async function setAgentPushDailyLimit(p: {
+  callerId: string;
+  agentUserId: string;
+  dailyLimit: number | null;
+}): Promise<{ agentUserId: string; pushDailyLimit: number | null }> {
+  const agent = await loadManagedAgent(p.callerId, p.agentUserId);
+  await db
+    .update(users)
+    .set({
+      agentMetadata:
+        p.dailyLimit === null
+          ? drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) - 'pushDailyLimit'`
+          : drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) || jsonb_build_object('pushDailyLimit', ${p.dailyLimit}::int)`,
+    })
+    .where(eq(users.id, agent.id));
+  await auditLog({
+    subjectType: "agent_user",
+    action: "update",
+    phase: "completed",
+    subjectId: agent.id,
+    userId: p.callerId,
+    data: { pushDailyLimit: p.dailyLimit, by: agent.by },
+  });
+  return { agentUserId: agent.id, pushDailyLimit: p.dailyLimit };
+}
+
+/**
  * The agent `ownerId` assigned to `target` — the per-owner row setAgentAssignment
  * writes (`metadata.ownerId` = the agent's owner, one per target, 0329) — or
  * null when that person assigned nobody there. A failed read throws.

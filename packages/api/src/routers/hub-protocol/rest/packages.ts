@@ -12,6 +12,7 @@ import {
   hasScope,
   httpStatusForTrpcError,
   readJsonBody,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import { hubValidationHook } from "./_validation-hook.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -665,6 +666,8 @@ export function registerPackagesRoutes(app: HubHono): void {
   });
 
   app.post("/packages/apply", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     // A write (it creates/updates workspaces through the gate): a read-only key
     // reached it — no scope was checked here.
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {

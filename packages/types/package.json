@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.12.10",
+  "version": "1.12.13",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -324,6 +324,10 @@
     "./website-tools": {
       "types": "./dist/website-tools/index.d.ts",
       "import": "./dist/website-tools/index.js"
+    },
+    "./computers": {
+      "types": "./dist/computers/index.d.ts",
+      "import": "./dist/computers/index.js"
     },
     "./capture": {
       "types": "./dist/capture/index.d.ts",

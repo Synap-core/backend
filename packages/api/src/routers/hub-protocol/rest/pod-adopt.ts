@@ -36,6 +36,7 @@ import {
   logger,
   type HubHono,
   httpStatusForTrpcError,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
@@ -124,6 +125,8 @@ export function registerPodAdoptRoutes(app: HubHono): void {
   });
 
   app.post("/pod/adopt", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },

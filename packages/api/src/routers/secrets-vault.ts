@@ -17,6 +17,7 @@
  * - Complete audit trail.
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { presenceProofSchema } from "@synap-core/types/presence";
 import { assertPresenceForApproval } from "../services/presence/gate.js";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
@@ -463,6 +464,7 @@ export const secretsVaultRouter = router({
    * Audit: writes a `revealed` row to secret_audit_log.
    */
   reveal: credentialProcedure
+    .input(presenceInput)
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       // 1. Ownership check — reuses the same findById guard as get/update.

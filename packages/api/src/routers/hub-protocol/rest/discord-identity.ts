@@ -49,6 +49,7 @@ import {
   resolveActingContext,
   type HubHono,
   httpStatusForTrpcError,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
@@ -249,6 +250,8 @@ export function registerDiscordIdentityRoutes(app: HubHono): void {
   });
 
   app.post("/discord/identity/link", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },

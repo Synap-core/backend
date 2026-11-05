@@ -16,12 +16,13 @@ no account service at all.
 
 ## Credentials a pod accepts
 
-| Caller                         | Credential                                                                   | Checked by                                                     |
-| ------------------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Browser, apps                  | Kratos session: cookie `ory_kratos_session` or header `X-Session-Token`      | `orySessionMiddleware` (`packages/auth/src/ory-middleware.ts`) |
-| Agents, CLI, integrations      | API key, `Authorization: Bearer`                                             | [api-keys.md](api-keys.md)                                     |
-| Intelligence Service, one turn | bearer token the pod signed for that turn                                    | Hub auth middleware ([hub-protocol.md](hub-protocol.md))       |
-| Desktop local mode             | the fixed `LOCAL_AUTH_TOKEN` (bearer or `x-local-token`); Kratos is not used | `orySessionMiddleware` local-mode branch                       |
+| Caller                         | Credential                                                                   | Checked by                                                              |
+| ------------------------------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Browser, apps                  | Kratos session: cookie `ory_kratos_session` or header `X-Session-Token`      | `orySessionMiddleware` (`packages/auth/src/ory-middleware.ts`)          |
+| Synap apps (desktop, Relay)    | device token from the pod's OAuth door, `Authorization: Bearer synap_pd_…`   | `appSessionMiddleware` (app API), Hub auth middleware, account recovery |
+| Agents, CLI, integrations      | API key, `Authorization: Bearer`                                             | [api-keys.md](api-keys.md)                                              |
+| Intelligence Service, one turn | bearer token the pod signed for that turn                                    | Hub auth middleware ([hub-protocol.md](hub-protocol.md))                |
+| Desktop local mode             | the fixed `LOCAL_AUTH_TOKEN` (bearer or `x-local-token`); Kratos is not used | `orySessionMiddleware` local-mode branch                                |
 
 An origin approved as an external application must send `X-Session-Token` on
 every request; it never falls back to an ambient pod cookie.

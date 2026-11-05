@@ -125,4 +125,41 @@ describe("/agents/[id] — the agent's page in the console", () => {
     expect(html).toContain(`href="/members?focus=${OWNER}"`);
     expect(text(html)).toContain("Ada Lovelace");
   });
+
+  // L8 (focus wave 4 Nov): pause existed in the API (`agentUsers.setPaused`)
+  // and on the desktop, but pod admin, which runs the agents, had no door.
+  it("pauses an agent its viewer may manage, and says when it is paused", () => {
+    answer();
+    const rows = h.answers.get("agentUsers.list") as Array<
+      Record<string, unknown>
+    >;
+    rows[0] = { ...rows[0], pausedAt: null, viewerCanDisconnect: true };
+    let page = text(renderToStaticMarkup(<AgentPage />));
+    expect(page).toContain("Not paused.");
+    expect(page).toMatch(/\bPause\b/);
+
+    rows[0] = {
+      ...rows[0],
+      pausedAt: "2026-11-05T09:00:00Z",
+      viewerCanDisconnect: true,
+    };
+    page = text(renderToStaticMarkup(<AgentPage />));
+    expect(page).toContain("Paused: it takes no work.");
+    expect(page).toMatch(/\bResume\b/);
+  });
+
+  it("shows the pause to a viewer who may not change it, with no button", () => {
+    answer();
+    const rows = h.answers.get("agentUsers.list") as Array<
+      Record<string, unknown>
+    >;
+    rows[0] = {
+      ...rows[0],
+      pausedAt: "2026-11-05T09:00:00Z",
+      viewerCanDisconnect: false,
+    };
+    const page = text(renderToStaticMarkup(<AgentPage />));
+    expect(page).toContain("Only its owner or a pod admin can pause it.");
+    expect(page).not.toMatch(/\bResume\b/);
+  });
 });

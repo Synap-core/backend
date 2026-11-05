@@ -71,6 +71,45 @@ export function sessionIsPrivileged(
   return now.getTime() - at <= maxAgeMs;
 }
 
+/**
+ * A Synap app's DEVICE session (`appSessionMiddleware`, a `synap_pd_…` token).
+ * It carries no Kratos methods; its `device.authTime` is when its person last
+ * presented a credential AT this pod (`kratosCredentialTime` at consent: never
+ * a federated Synap Cloud sign-in), moved only by a step-up, never by a
+ * refresh.
+ */
+export interface DeviceSessionLike {
+  device?: { authTime?: Date | string | null } | null;
+}
+
+/**
+ * The two marks the recovery doors rule on, for a Kratos session or a
+ * device session. A device's honest equivalents, from its step-up clock:
+ *   - privileged: that clock is within `PRIVILEGED_SESSION_MAX_AGE_MS`, the
+ *     window a Kratos session gets (a stale device answers `reauth_required`;
+ *     the app steps up — `/authorize` with `prompt=login` — and retries);
+ *   - Cloud-only: it has no such clock (its consenting session was proven by
+ *     Synap Cloud alone), since the clock is only ever a pod credential's time.
+ */
+export function sessionMarks(
+  session: KratosSessionLike & DeviceSessionLike,
+  now: Date,
+  maxAgeMs: number = PRIVILEGED_SESSION_MAX_AGE_MS
+): { privileged: boolean; cloudOnly: boolean } {
+  if (!session.device) {
+    return {
+      privileged: sessionIsPrivileged(session, now, maxAgeMs),
+      cloudOnly: sessionIsCloudOnly(session),
+    };
+  }
+  const at = session.device.authTime
+    ? new Date(session.device.authTime).getTime()
+    : NaN;
+  if (!Number.isFinite(at)) return { privileged: false, cloudOnly: true };
+  const age = now.getTime() - at;
+  return { privileged: age >= 0 && age <= maxAgeMs, cloudOnly: false };
+}
+
 export type CredentialChangeDecision =
   | { allow: true; via: "pod_factor" | "cloud_trusted" | "first_factor" }
   | { allow: false; reason: "cloud_session_not_allowed" };

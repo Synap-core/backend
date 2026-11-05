@@ -64,6 +64,7 @@ import {
 } from "./protocol.js";
 import {
   isFirstPartyClientId,
+  personDeviceClient,
   OAUTH_DEFAULT_SCOPES,
   isSynapApp,
   normalizeRequestedScopes,
@@ -368,6 +369,9 @@ export async function resolveClientAndRedirect(
     }
     try {
       client = await resolveCimdClient(clientId, resolveIssuer());
+      // A document declaring `person`: a native app signing the person in
+      // on a device, the same door as the built-in Synap apps (config.ts).
+      client = personDeviceClient(client) ?? client;
     } catch (err) {
       if (err instanceof ClientMetadataError) {
         throw new AuthorizeUserError(

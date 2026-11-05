@@ -272,7 +272,13 @@ function PresenceDialog({
     }
   }
 
-  const decline = () => settle({ error: new PresenceDeclined(t("declined")) });
+  // A change this page makes itself (`doing`), not an approval: its own
+  // words, and only this browser can prove it (no Relay).
+  const doing = ask?.subject.doing ?? null;
+  const decline = () =>
+    settle({
+      error: new PresenceDeclined(t(doing ? "declined.act" : "declined")),
+    });
   const challenge =
     phase.kind === "ready" || phase.kind === "signing" ? phase.challenge : null;
   const progress = ask?.progress;
@@ -288,6 +294,7 @@ function PresenceDialog({
         : phase,
     passkeySupported: isPasskeyAssertionSupported(),
     progress,
+    inBrowserOnly: doing !== null,
   });
   const reread = () => ask && void read.current(ask, null);
   const status = !view.status
@@ -315,7 +322,9 @@ function PresenceDialog({
             : t("title")}
         </ModalHeader>
         <ModalBody className="gap-3 text-[13px] text-foreground/85">
-          {challenge ? (
+          {doing ? (
+            <p>{t("act", { doing })}</p>
+          ) : challenge ? (
             <ApprovingWhat
               proposalId={challenge.proposalId}
               label={ask?.subject.label}
@@ -323,11 +332,13 @@ function PresenceDialog({
           ) : (
             <p>{t("action.unnamed")}</p>
           )}
-          <p className="text-foreground/65">{t("why")}</p>
+          <p className="text-foreground/65">{t(doing ? "why.act" : "why")}</p>
           {view.notice && (
             <div className="flex flex-col gap-1 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
               {view.notice === "noPasskey" && (
-                <p className="font-medium">{t("noPasskey.title")}</p>
+                <p className="font-medium">
+                  {t(doing ? "noPasskey.title.act" : "noPasskey.title")}
+                </p>
               )}
               <p>
                 {view.notice === "noPasskey"
