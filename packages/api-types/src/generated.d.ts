@@ -34069,12 +34069,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				clientId: string;
+				clientName: string | null;
 				createdAt: Date;
 				current: boolean;
 				expiresAt: Date;
 				id: string;
 				label: string | null;
 				lastUsedAt: Date | null;
+				runsOn: "computer" | "phone" | null;
 			}[];
 		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
