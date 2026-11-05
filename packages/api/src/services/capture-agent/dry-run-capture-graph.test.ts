@@ -82,7 +82,8 @@ describe("dryRunCaptureGraph", () => {
       },
     ]);
     expect(out.unresolvedProfiles).toEqual([
-      { label: "Nobody", profileSlug: "ghost" },
+      // The ref and the space it was looked up in (where it would land).
+      { label: "Nobody", profileSlug: "ghost", ref: "g", workspaceId: null },
     ]);
     expect(out.relationsFailed).toHaveLength(1);
     expect(out.relationsFailed[0].reason).toMatch(

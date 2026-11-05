@@ -76,7 +76,10 @@ vi.mock("../../routers/relations.js", () => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { ProfileResolutionService } from "@synap/database";
+import {
+  ProfileResolutionService,
+  PropertyValidationService,
+} from "@synap/database";
 
 const { submitCaptureGraph } = await import("./submit-capture-graph.js");
 const writer = await import("../../utils/event-backed-proposal.js");
@@ -161,10 +164,26 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  // Every kind resolves where it lands (A4 holds an item whose kind does not;
+  // that is not what this suite is about), with a validator that passes.
   vi.spyOn(
     ProfileResolutionService.prototype,
     "resolveProfile"
+  ).mockResolvedValue({ id: "profile-1", defaultValues: {} } as never);
+  // …and declares no lifecycle (no born-status floor to read).
+  vi.spyOn(
+    ProfileResolutionService.prototype,
+    "getEffectiveLifecycle"
   ).mockResolvedValue(null as never);
+  vi.spyOn(
+    PropertyValidationService.prototype,
+    "validateEntityCreateForProposal"
+  ).mockResolvedValue({
+    valid: true,
+    errors: [],
+    unmodeled: [],
+    modeled: [],
+  } as never);
   vi.spyOn(dedup, "findPriorCaptureGraphProposal").mockResolvedValue(null);
 });
 

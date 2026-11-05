@@ -110,6 +110,16 @@ import {
 import { openLink } from "../../utils/deep-links.js";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import { captureGraphMemberVerdict } from "./capture-graph-governance.js";
+import {
+  assertNoHeldItemAutoApplies,
+  buildHeldCaptureItem,
+  buildHeldProposalOperations,
+  landingWorkspaceOf,
+  splitHeldItems,
+  type HeldCaptureItem,
+} from "./capture-graph-hold.js";
+import { describeMissingKind } from "../profiles/kind-elsewhere.js";
+import { kindMissingSentence } from "../../utils/kind-missing.js";
 import { refuseAtAgentPendingCap } from "../../utils/permission-check.js";
 import {
   fenceCaptureGraphOperations,
@@ -144,6 +154,17 @@ import {
 const logger = createLogger({ module: "submit-capture-graph" });
 
 /** One flagged create_entity op that fails its EFFECTIVE schema at propose time. */
+/** A `create_entity` op whose kind does not resolve where the item lands. */
+export interface CaptureGraphUnresolvedProfile {
+  /** Human label (op title, falling back to its ref). */
+  label: string;
+  profileSlug: string;
+  /** The op's ref, when it has one. */
+  ref?: string;
+  /** The space the kind was looked up in: where the item would land. */
+  workspaceId: string | null;
+}
+
 export interface CaptureGraphInvalidEntity {
   /** Human label for the reviewer/agent (op title, falling back to its ref). */
   label: string;
@@ -573,6 +594,15 @@ export interface SubmitCaptureGraphResult {
    * can have failed. Omitted when nothing failed.
    */
   relationsFailed?: MaterializeRelationFailure[];
+  /**
+   * Items HELD for review because their kind is not available in the space
+   * they would land in (A4, founder decision D2), each with where the kind
+   * does exist (`kindMissing.foundIn`), `suggestions` and a plain `message`.
+   * On an applied graph each waits in its own pending proposal
+   * (`proposalId`); on a pending graph, in that proposal. Omitted when every
+   * kind resolved.
+   */
+  held?: HeldCaptureItem[];
   writeReceipt: {
     /**
      * `partial` is the Hub Protocol receipt word for exactly this shape (see
@@ -737,9 +767,12 @@ export async function buildCaptureGraphOperations(
  *
  * `modeledFields` is what every RESOLVED kind in the graph models, by slug.
  *
- * `unresolvedProfiles` lists ops whose profile did not resolve for the lens.
- * Submit does NOT reject on it (a cold profile lens can fail open, and
- * unknown-slug graphs are a separate guard); the dry run reports it.
+ * `unresolvedProfiles` lists ops whose kind does not resolve in the space the
+ * item LANDS in (`targetWorkspaceId ?? workspaceId`, the create door's own
+ * lens). Submit does not reject the graph on it: each such item is HELD for
+ * review while its siblings file (`capture-graph-hold.ts`, founder decision
+ * D2); a revision carrying one is refused (`validateCompositeOperations`);
+ * the dry run reports it.
  */
 export async function preflightCaptureGraphOperations(
   database: CaptureGraphDb,
@@ -750,13 +783,13 @@ export async function preflightCaptureGraphOperations(
   invalidEntities: CaptureGraphInvalidEntity[];
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
   modeledFields: CaptureGraphModeledFields;
-  unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
+  unresolvedProfiles: CaptureGraphUnresolvedProfile[];
   /** Connected plan: every structure / ownership problem (empty otherwise). */
   planProblems: CapturePlanProblem[];
   /** The ops to file — plan `create_project` steps carry the stamped evidence. */
   operations: CompositeProposalOperation[];
 }> {
-  const unresolvedProfiles: Array<{ label: string; profileSlug: string }> = [];
+  const unresolvedProfiles: CaptureGraphUnresolvedProfile[] = [];
   const profileResolution = new ProfileResolutionService(database);
   const propertyValidation = new PropertyValidationService(profileResolution);
   const invalidEntities: CaptureGraphInvalidEntity[] = [];
@@ -780,18 +813,26 @@ export async function preflightCaptureGraphOperations(
       });
       continue;
     }
+    // The kind is looked up where the item LANDS — `targetWorkspaceId ??
+    // workspaceId`, exactly `entities.create`'s `governanceWorkspaceId` — not
+    // the graph's lens: e8fc00d6's `trend` resolved for the graph and not in
+    // Foundation, where the create door then refused it.
+    const landingWorkspaceId = landingWorkspaceOf(op, workspaceId);
     const profile = await profileResolution.resolveProfile(
       op.profileSlug,
       userId,
-      workspaceId
+      landingWorkspaceId
     );
-    // Unknown profile ⇒ don't NEWLY reject here (a cold profile lens can
-    // fail-open, and unknown-slug graphs are a separate guard). Required-prop
-    // preflight is scoped to KNOWN profiles — exactly the materializer's check.
+    // Unknown kind where it lands ⇒ reported, not a rejection of the graph:
+    // the submit core holds THIS item for review and files its siblings
+    // (`capture-graph-hold.ts`). Required-prop preflight is scoped to KNOWN
+    // profiles — exactly the materializer's check.
     if (!profile) {
       unresolvedProfiles.push({
         label: op.title || op.ref || op.profileSlug,
         profileSlug: op.profileSlug,
+        ...(op.ref ? { ref: op.ref } : {}),
+        workspaceId: landingWorkspaceId,
       });
       continue;
     }
@@ -813,7 +854,7 @@ export async function preflightCaptureGraphOperations(
     } = await propertyValidation.validateEntityCreateForProposal(
       propsToCheck,
       profile.id,
-      workspaceId,
+      landingWorkspaceId,
       {
         ...(op.title !== undefined ? { title: op.title } : {}),
         profileDefaults:
@@ -958,14 +999,30 @@ export async function validateCompositeOperations(
     workspaceId: string | null;
   }
 ): Promise<{ problems: string[]; operations: CompositeProposalOperation[] }> {
-  const { invalidEntities, planProblems, operations } =
+  const { invalidEntities, planProblems, operations, unresolvedProfiles } =
     await preflightCaptureGraphOperations(
       database,
       input.operations,
       input.userId,
       input.workspaceId
     );
+  // A4: a revision may not carry an item whose kind is unavailable where it
+  // lands — it would fail at approve, exactly as filing now holds it. Before
+  // this a revision could swap `trend` for another unknown kind and pass.
+  const kindProblems: string[] = [];
+  for (const u of unresolvedProfiles) {
+    const detail = await describeMissingKind({
+      profileSlug: u.profileSlug,
+      userId: input.userId,
+      workspaceId: u.workspaceId,
+      database,
+    });
+    kindProblems.push(
+      `"${u.label}" (${u.profileSlug}): ${kindMissingSentence(detail).replace(/^Couldn't file it — t/, "T")}`
+    );
+  }
   const problems = [
+    ...kindProblems,
     ...invalidEntities.map(
       (e) => `"${e.label}" (${e.profileSlug}): ${e.errors.join("; ")}`
     ),
@@ -1009,7 +1066,7 @@ export async function dryRunCaptureGraph(
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
   /** Every resolved kind's modelled fields — the dry run is the place to ask. */
   modeledFields: CaptureGraphModeledFields;
-  unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
+  unresolvedProfiles: CaptureGraphUnresolvedProfile[];
   relationsFailed: MaterializeRelationFailure[];
   entityCount: number;
   relationCount: number;
@@ -1424,6 +1481,7 @@ export async function submitCaptureGraph(
     invalidEntities,
     unmodeledProperties,
     modeledFields,
+    unresolvedProfiles,
     planProblems,
     operations,
   } = await preflightCaptureGraphOperations(
@@ -1445,6 +1503,34 @@ export async function submitCaptureGraph(
     // Rejected BEFORE any proposal is filed — pending-proposal-one-door untouched.
     throw new CaptureGraphValidationError(invalidEntities, submitProblems);
   }
+  // ── HELD ITEMS (A4, founder decision D2) ─────────────────────────────────
+  // An item whose kind does not resolve where it LANDS can never be created
+  // there (the create door refuses it). It is held for review, with where the
+  // kind does exist; its siblings still file. Never auto-applied: the
+  // auto-apply terminal below materializes only `split.applyOps`, and
+  // `assertNoHeldItemAutoApplies` guards that hand-off.
+  const heldItems: HeldCaptureItem[] = [];
+  for (const u of unresolvedProfiles) {
+    heldItems.push(
+      buildHeldCaptureItem({
+        ref: u.ref ?? u.label,
+        label: u.label,
+        profileSlug: u.profileSlug,
+        workspaceId: u.workspaceId,
+        kindMissing: await describeMissingKind({
+          profileSlug: u.profileSlug,
+          userId,
+          workspaceId: u.workspaceId,
+        }),
+      })
+    );
+  }
+  const heldRefs = new Set(heldItems.map((h) => h.ref));
+  const heldSplit =
+    heldItems.length > 0 ? splitHeldItems(operations, heldRefs) : null;
+  // What the stored proposal says it holds (both terminals).
+  const heldAdvisory = (items: HeldCaptureItem[]) =>
+    items.length > 0 ? { heldItems: items } : {};
   const homes = computeImportHomes(operations);
   const isPlan = hasComposedSteps(operations);
   // A project step below the agent evidence floor is shown to a human with
@@ -1511,11 +1597,17 @@ export async function submitCaptureGraph(
   // filed for review with POSSIBLE_DUPLICATE and the reviewer decides per item.
   // Why a scored member proposed (its `reasonCode`), for the pending row.
   let memberReason: string | null = null;
+  // A held item is never auto-applied (A4). When it can be split off, the
+  // siblings alone are scored and may apply; when it cannot (a plan, every
+  // item held, a role pointing at it), the whole graph waits as one proposal.
+  const applySplit = heldSplit && heldSplit.splittable ? heldSplit : null;
+  const autoApplyOperations = applySplit ? applySplit.applyOps : operations;
   if (
     input.agentUserId &&
     bindings.length === 0 &&
     !planNeedsReview &&
-    !possibleDuplicate
+    !possibleDuplicate &&
+    (heldItems.length === 0 || applySplit !== null)
   ) {
     // Every member scored by the ONE resolver with the signals its own door
     // gates on — governance by kind AND the born-status lifecycle floor — so
@@ -1525,7 +1617,7 @@ export async function submitCaptureGraph(
       agentUserId: input.agentUserId,
       userId,
       workspaceId,
-      operations,
+      operations: autoApplyOperations,
     });
     memberReason = memberVerdict.reasonCode;
     const allAutoApprove = !memberVerdict.proposes;
@@ -1633,10 +1725,12 @@ export async function submitCaptureGraph(
             // same project the pending row would have stored.
             ...(receiptProjectId ? { projectId: receiptProjectId } : {}),
             data: {
-              operations,
+              operations: autoApplyOperations,
               source,
               graphSource: "capture",
-              homes,
+              homes: applySplit
+                ? computeImportHomes(autoApplyOperations)
+                : homes,
               // Filled in by the UPDATE below, once materialization has told us
               // what actually landed. Empty here is the HONEST value: nothing
               // has been created yet. `revert` treats an empty set as "no
@@ -1677,16 +1771,45 @@ export async function submitCaptureGraph(
             ? { governanceProposalId: captureProposalId }
             : {}),
         };
+        // TRIPWIRE (A4): nothing whose kind is unresolved where it lands is
+        // ever handed to the auto-apply materializer.
+        assertNoHeldItemAutoApplies(autoApplyOperations, heldRefs);
         const materialized = await materializeAgentGraphUnderReceipt(
           compositeCtx,
           {
             receipt: captureReceipt,
-            operations,
+            operations: autoApplyOperations,
             agentUserId: input.agentUserId ?? null,
             source,
             idempotencyKey,
           }
         );
+
+        // The held items, filed for review AFTER their siblings landed, so
+        // their relations name the rows just created (nothing is created
+        // twice when the held proposal is approved). Never throws: the
+        // siblings are already committed.
+        const filedHeld = applySplit
+          ? await fileHeldCaptureItems({
+              split: applySplit,
+              items: heldItems,
+              createdIdByRef: new Map(
+                materialized.entities
+                  .filter((e) => e.ref)
+                  .map((e) => [e.ref!, e.entityId] as [string, string])
+              ),
+              receiptId: captureReceipt?.id,
+              userId,
+              agentUserId: input.agentUserId,
+              workspaceId,
+              source,
+              idempotencyKey,
+              projectId: resolvedProjectId,
+              sessionId: input.sessionId,
+              sessionSource: input.sessionSource,
+              channelId: input.channelId,
+            })
+          : [];
 
         // Complete the receipt inserted BEFORE materialization: fill in what
         // actually landed, so the row is traceable, shows in the Proposals app,
@@ -1717,6 +1840,10 @@ export async function submitCaptureGraph(
               proposalId: captureReceipt.id,
               record: buildMaterializedRecord(materialized),
               baseData: captureReceipt.data,
+              // The receipt names what it held, and where each item waits.
+              ...(filedHeld.length > 0
+                ? { dataPatch: heldAdvisory(filedHeld) }
+                : {}),
             });
           } catch (err) {
             logger.warn(
@@ -1728,7 +1855,8 @@ export async function submitCaptureGraph(
 
         return {
           proposalId: recordId,
-          entityCount: graphEntities.length,
+          // What filed under this receipt; held items are counted in `held`.
+          entityCount: graphEntities.length - filedHeld.length,
           // The ACTUALLY CREATED relation count, not the submitted one — this
           // graph was just materialized above, so `materialized.relations` is
           // the honest number. `relations.length` (submitted) diverges the
@@ -1800,6 +1928,7 @@ export async function submitCaptureGraph(
           ...(materialized.relationsFailed.length
             ? { relationsFailed: materialized.relationsFailed }
             : {}),
+          ...(filedHeld.length > 0 ? { held: filedHeld } : {}),
           ...placementReceipt,
           writeReceipt: {
             // The entities landed; if any submitted edge did NOT, this graph is
@@ -1898,6 +2027,8 @@ export async function submitCaptureGraph(
       ...proposalProvenance,
       ...duplicateAdvisory,
       ...requiredLinkAdvisory,
+      // A4: items that cannot file as they stand, and where their kind lives.
+      ...heldAdvisory(heldItems),
       ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     },
   });
@@ -1934,6 +2065,16 @@ export async function submitCaptureGraph(
       : {}),
     ...requiredLinkReply,
     ...(projectOutcome ? { project: projectOutcome } : {}),
+    // A4: named in the reply, waiting in THIS proposal with the rest.
+    ...(heldItems.length > 0
+      ? {
+          held: heldItems.map((h) => ({
+            ...h,
+            ...(proposalId ? { proposalId } : {}),
+            ...(reviewUrl ? { reviewUrl } : {}),
+          })),
+        }
+      : {}),
     ...placementReceipt,
     writeReceipt: {
       state: "pending",
@@ -1945,6 +2086,106 @@ export async function submitCaptureGraph(
       source,
     },
   };
+}
+
+/**
+ * File the items held out of an auto-applied graph (A4) as ONE pending
+ * `import.graph` linked to the receipt: the held items as they were sent,
+ * plus their relations, whose landed endpoints are written as real ids. The
+ * same pending budget as any agent graph applies; at the cap the items are
+ * returned `notFiled` (with the cap's reason) instead of failing a capture
+ * whose siblings already landed. Never throws.
+ */
+async function fileHeldCaptureItems(args: {
+  split: Extract<ReturnType<typeof splitHeldItems>, { splittable: true }>;
+  items: HeldCaptureItem[];
+  createdIdByRef: Map<string, string>;
+  receiptId: string | undefined;
+  userId: string;
+  agentUserId: string | undefined;
+  workspaceId: string | null;
+  source: string;
+  idempotencyKey: string;
+  projectId: string | null;
+  sessionId: string | undefined;
+  sessionSource: SubmitCaptureGraphInput["sessionSource"];
+  channelId: string | null | undefined;
+}): Promise<HeldCaptureItem[]> {
+  const { operations, dropped } = buildHeldProposalOperations(
+    args.split,
+    args.createdIdByRef
+  );
+  const droppedFor = (ref: string) =>
+    dropped
+      .filter((r) => r.sourceRef === ref || r.targetRef === ref)
+      .map(({ sourceRef, targetRef, type }) => ({
+        sourceRef,
+        targetRef,
+        type,
+      }));
+  const withDropped = (h: HeldCaptureItem): HeldCaptureItem => {
+    const d = droppedFor(h.ref);
+    return d.length > 0 ? { ...h, droppedRelations: d } : h;
+  };
+  const notFiled = (reason: string) =>
+    args.items.map((h) => ({ ...withDropped(h), notFiled: reason }));
+  try {
+    if (args.agentUserId) {
+      const refusal = await refuseAtAgentPendingCap({
+        attributionAgentUserId: args.agentUserId,
+        userId: args.userId,
+        workspaceId: args.workspaceId,
+        subjectType: "entity",
+        action: "create",
+        correlationId: randomUUID(),
+      });
+      if (refusal) return notFiled(refusal.reason);
+    }
+    const labels = args.items.map((h) => `"${h.label}"`).join(", ");
+    const { proposal } = await createEventBackedProposal({
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      targetType: "entity",
+      targetId: randomUUID(),
+      proposalType: "import.graph",
+      action: "create",
+      source: "api",
+      summary: `Held for review: ${labels} (kind not available where it lands)`,
+      ...(args.agentUserId ? { agentUserId: args.agentUserId } : {}),
+      ...(args.channelId ? { threadId: args.channelId } : {}),
+      ...(args.sessionId ? { sessionId: args.sessionId } : {}),
+      ...(args.sessionSource ? { sessionSource: args.sessionSource } : {}),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
+      data: {
+        operations,
+        source: args.source,
+        graphSource: "capture",
+        bindings: [],
+        homes: computeImportHomes(operations),
+        // Its own key: a re-send of the whole graph resolves to the receipt.
+        idempotencyKey: `${args.idempotencyKey}:held`,
+        heldItems: args.items.map(withDropped),
+        ...(args.receiptId ? { heldFromProposalId: args.receiptId } : {}),
+        ...(args.projectId ? { projectId: args.projectId } : {}),
+      },
+    });
+    const proposalId = (proposal as { id?: string } | undefined)?.id;
+    if (!proposalId) return notFiled("the review proposal was not created");
+    const reviewUrl = openLink(proposalId);
+    return args.items.map((h) => ({
+      ...withDropped(h),
+      proposalId,
+      reviewUrl,
+    }));
+  } catch (err) {
+    logger.warn(
+      { err, userId: args.userId, receiptId: args.receiptId },
+      "capture auto-apply: held items could not be filed for review"
+    );
+    return notFiled(
+      `filing it for review failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 }
 
 /**

@@ -804,6 +804,8 @@ export function registerCaptureRoutes(app: HubHono): void {
           ...(graph.relationsFailed
             ? { relationsFailed: graph.relationsFailed }
             : {}),
+          // Items held for review (kind not available where they land).
+          ...(graph.held ? { held: graph.held } : {}),
           ...(graph.unmodeledProperties
             ? { unmodeledProperties: graph.unmodeledProperties }
             : {}),

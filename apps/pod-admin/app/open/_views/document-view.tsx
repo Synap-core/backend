@@ -20,6 +20,9 @@
  * pod objects through the read-only bridge, answered with THIS viewer's
  * permissions and lensed to the page's own space (`content/html-frame`,
  * contract `@synap-core/types/cell-bridge`). Source is a toggle away.
+ *
+ * Above the body, its proposals (`DocumentLineage`): the one that created it
+ * and the changes waiting on it, each a door to its proposal page.
  */
 
 import { trpc } from "../../../lib/trpc";
@@ -37,6 +40,7 @@ import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { BounceView } from "./bounce-view";
+import { DocumentLineage } from "./document-lineage";
 
 /** The stored type, as a reader calls it. */
 const TYPE_LABEL: Record<string, string> = {
@@ -120,6 +124,10 @@ export function DocumentView({ id }: { id: string }) {
         ],
       }}
     >
+      <DocumentLineage
+        documentId={doc.id}
+        sourceProposalId={doc.sourceProposalId}
+      />
       {media ? (
         <MediaView media={media} alt={mediaAlt(doc.title, null)} size="full" />
       ) : (
