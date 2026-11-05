@@ -952,7 +952,10 @@ export interface RunChoiceOption {
 	label: string;
 	/** Its wake mark; `null` for Synap AI (always awake, the pod runs it). */
 	wake: AgentWake | null;
-	/** The mark's words ("Can't wake · Computer offline"); `null` with no mark. */
+	/**
+	 * The line under it: an agent's mark ("Can't wake · Computer offline"), or
+	 * how Synap AI runs ("Runs in Synap").
+	 */
 	wakeLabel: string | null;
 	/** At most one: Synap AI when the playbook allows it, else none. */
 	recommended: boolean;
