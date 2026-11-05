@@ -325,6 +325,10 @@
       "types": "./dist/website-tools/index.d.ts",
       "import": "./dist/website-tools/index.js"
     },
+    "./computers": {
+      "types": "./dist/computers/index.d.ts",
+      "import": "./dist/computers/index.js"
+    },
     "./capture": {
       "types": "./dist/capture/index.d.ts",
       "import": "./dist/capture/index.js"
