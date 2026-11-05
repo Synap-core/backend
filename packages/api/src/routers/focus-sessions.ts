@@ -249,6 +249,7 @@ function slotOwnershipResult(
         message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.alreadyDone}`,
       });
     case "ref_unreachable":
+    case "ask_refused":
       // Block only. The `default` below returns SUCCESS, so a refusal with no
       // case here would report `ok: true` while the pointer was dropped.
       throw new TRPCError({ code: "BAD_REQUEST", message: result.reason });
