@@ -18,7 +18,7 @@ export const en = {
   "presence.source.env":
     "This pod’s operator turned it on in the pod’s environment. It can’t be turned off here.",
   "presence.source.changed": "Changed {when}.",
-  "presence.source.default": "Off since this pod was set up.",
+  "presence.source.default": "On by default.",
   "presence.missing.none":
     "Nothing went through without a proof in the last 30 days.",
   "presence.missing.wouldRefuse":
@@ -55,7 +55,7 @@ export const fr: Catalog<typeof en> = {
   "presence.source.env":
     "L’opérateur de ce pod l’a activé dans l’environnement du pod. Il ne peut pas être désactivé ici.",
   "presence.source.changed": "Modifié {when}.",
-  "presence.source.default": "Désactivé depuis l’installation de ce pod.",
+  "presence.source.default": "Activé par défaut.",
   "presence.missing.none":
     "Rien n’est passé sans preuve ces 30 derniers jours.",
   "presence.missing.wouldRefuse":

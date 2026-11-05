@@ -156,6 +156,12 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
+  // setting enforces, services/presence/mode.ts), so its sensitive approvals
+  // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
+  await h.client!.exec(
+    `insert into pod_settings (settings) values ('{"presence":{"mode":"report","changedBy":"test","changedAt":"2026-11-05T00:00:00.000Z"}}'::jsonb)`
+  );
   await q(
     `insert into users (id, email, user_type) values ($1, 'owner@x', 'human')`,
     [OWNER]

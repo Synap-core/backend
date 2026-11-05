@@ -8,14 +8,6 @@
  * (`security.factor_changed`, in-app and push). Losing them all goes through
  * account recovery.
  */
-import {
-  and,
-  count,
-  db,
-  eq,
-  isNull,
-  presenceDeviceKeys,
-} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   presenceKeyFingerprint,
@@ -23,28 +15,11 @@ import {
 } from "@synap-core/types/presence";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { assertPresenceForRequest } from "./gate.js";
-import { readPasskeys } from "./proof.js";
+import { hasProofFactor } from "./proof.js";
 
 const logger = createLogger({ module: "presence-factors" });
 
-/**
- * Does the person hold a factor that can prove presence? A failed read of
- * their passkeys throws: it is never "no factor", which would let a session
- * add one unapproved.
- */
-export async function hasProofFactor(userId: string): Promise<boolean> {
-  const [row] = await db
-    .select({ n: count() })
-    .from(presenceDeviceKeys)
-    .where(
-      and(
-        eq(presenceDeviceKeys.userId, userId),
-        isNull(presenceDeviceKeys.revokedAt)
-      )
-    );
-  if (Number(row?.n ?? 0) > 0) return true;
-  return (await readPasskeys(userId)).length > 0;
-}
+export { hasProofFactor };
 
 /**
  * May this person enrol this new device key? Their first factor rests on the

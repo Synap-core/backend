@@ -1,6 +1,6 @@
 /**
- * The start proxy forwards exactly two writes — S1's intent and "Skip setup
- * for now" — and nothing else a body names. Behavioural: the route runs with
+ * The start proxy forwards exactly three writes — S1's intent, going past
+ * the defaults step, and "Skip setup for now" — and nothing else a body names. Behavioural: the route runs with
  * the Kratos and pod callers mocked, and the test reads what it called.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +48,17 @@ describe("POST /api/start", () => {
       {
         path: "onboarding.recordStartStep",
         input: { step: "intent", patch: { slug: "crm", source: "cloud" } },
+      },
+    ]);
+  });
+
+  it("defaults → recordStartStep with an empty patch: no setting rides along", async () => {
+    const res = await post({ action: "defaults", presence: "report" });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([
+      {
+        path: "onboarding.recordStartStep",
+        input: { step: "defaults", patch: {} },
       },
     ]);
   });

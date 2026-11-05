@@ -82,7 +82,9 @@ const {
   assertPresenceForApproval,
   assertPresenceForRequest,
 } = await import("./gate.js");
-const { invalidatePresenceMode, readPresenceMode } = await import("./mode.js");
+const { invalidatePresenceMode, readPresenceMode, writePresenceMode } =
+  await import("./mode.js");
+const { PRESENCE_NO_FACTOR_HINT } = await import("./gate.js");
 const { changePresenceMode } = await import("./mode-change.js");
 const { redeemPasskeyChangeGrant } = await import("./passkey-change.js");
 const { assertMayEnrollDeviceKey } = await import("./factors.js");
@@ -233,6 +235,17 @@ async function refusal(p: Promise<unknown>): Promise<string> {
   }
 }
 
+/** A pod whose admins never chose a mode: no stored setting, cache dropped. */
+async function noStoredMode(): Promise<void> {
+  await h.client!.exec("delete from pod_settings");
+  invalidatePresenceMode();
+}
+
+/** An admin's explicit choice of `report` (the stored setting). */
+async function reportByChoice(): Promise<void> {
+  await writePresenceMode({ mode: "report", changedBy: PERSON });
+}
+
 describe("proof of presence: the gate", () => {
   beforeAll(async () => {
     await h.client!.exec(`
@@ -270,10 +283,11 @@ describe("proof of presence: the gate", () => {
     deviceKeyId = row.id;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.PUBLIC_URL = POD;
     process.env.SYNAP_PRESENCE_PROOF = "enforce";
     h.events.length = 0;
+    await noStoredMode();
     h.passkeys = [
       {
         id: credentialId.toString("base64"),
@@ -301,6 +315,7 @@ describe("proof of presence: the gate", () => {
 
   it("report mode lets a sensitive approval through and records it; a request made AS THE PERSON is refused in every mode", async () => {
     delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
     expect(await refusal(gate(SENSITIVE))).toBe("accepted");
     expect(h.events.map((e) => e.type)).toEqual(["presence.missing"]);
     expect(await refusal(gate(AS_PERSON))).toBe("PRESENCE_REQUIRED");
@@ -309,6 +324,7 @@ describe("proof of presence: the gate", () => {
   it("GUARDRAIL: an everyday approval is unchanged (no proof, nothing recorded)", async () => {
     expect(await refusal(gate(EVERYDAY))).toBe("accepted");
     delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
     expect(await refusal(gate(EVERYDAY))).toBe("accepted");
     expect(h.events).toEqual([]);
   });
@@ -483,10 +499,11 @@ describe("passkeyRpId: the rp id the installer gives Kratos", () => {
 });
 
 describe("proof of presence: decisions that settle no proposal (slice 2)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.PUBLIC_URL = POD;
     process.env.SYNAP_PRESENCE_PROOF = "enforce";
     h.events.length = 0;
+    await noStoredMode();
   });
   afterEach(() => {
     delete process.env.SYNAP_PRESENCE_PROOF;
@@ -544,6 +561,7 @@ describe("proof of presence: decisions that settle no proposal (slice 2)", () =>
 
   it("report mode lets it through and records a valid presence.missing", async () => {
     delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
     expect(await refusal(request("device_request", crypto.randomUUID()))).toBe(
       "accepted"
     );
@@ -552,13 +570,13 @@ describe("proof of presence: decisions that settle no proposal (slice 2)", () =>
 });
 
 describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env.PUBLIC_URL = POD;
     process.env.SYNAP_PRESENCE_PROOF = "enforce";
     h.events.length = 0;
     h.notices.length = 0;
     h.passkeys = [];
-    invalidatePresenceMode();
+    await noStoredMode();
   });
   afterEach(() => {
     delete process.env.SYNAP_PRESENCE_PROOF;
@@ -626,6 +644,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
 
   it("GUARDRAIL: the pod setting drives the mode; ON is free, OFF needs a proof and tells the admins", async () => {
     delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
     expect((await readPresenceMode()).mode).toBe("report");
     expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe("accepted");
     await changePresenceMode({ userId: PERSON, mode: "enforce" });
@@ -654,6 +673,74 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     ).toBe("accepted");
     expect((await readPresenceMode()).mode).toBe("report");
     expect(h.events.map((e) => e.type)).toContain("presence.mode_changed");
+  });
+
+  it("GUARDRAIL: a pod with no setting enforces by default; an explicit choice, either way, wins", async () => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    expect(await readPresenceMode()).toMatchObject({
+      mode: "enforce",
+      source: "default",
+      changedBy: null,
+    });
+    expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+    await reportByChoice();
+    expect(await readPresenceMode()).toMatchObject({
+      mode: "report",
+      source: "setting",
+      changedBy: PERSON,
+    });
+    expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe("accepted");
+    await writePresenceMode({ mode: "enforce", changedBy: OTHER });
+    expect(await readPresenceMode()).toMatchObject({
+      mode: "enforce",
+      source: "setting",
+      changedBy: OTHER,
+    });
+    // The env floor keeps its meaning over an explicit `report`.
+    await reportByChoice();
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    expect(await readPresenceMode()).toMatchObject({
+      mode: "enforce",
+      source: "env",
+    });
+  });
+
+  it("GUARDRAIL: with no factor, the default refuses, says how to add one, and the first factor needs no proof", async () => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    // OTHER holds no device key and no passkey (h.passkeys is empty).
+    const refused = await gate(SENSITIVE, undefined, OTHER).catch(
+      (e: Error & { cause?: { reasonCode?: string } }) => e
+    );
+    expect(
+      (refused as { cause?: { reasonCode?: string } }).cause?.reasonCode
+    ).toBe("PRESENCE_REQUIRED");
+    expect((refused as Error).message).toContain(PRESENCE_NO_FACTOR_HINT);
+    // Switching the check off says the same to someone with no factor.
+    const off = await changePresenceMode({
+      userId: OTHER,
+      mode: "report",
+    }).catch((e: Error) => e);
+    expect((off as Error).message).toContain(PRESENCE_NO_FACTOR_HINT);
+    // The way back in: their first Relay device key needs no proof.
+    const fresh = crypto.generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+    });
+    const freshPublic = b64u(
+      fresh.publicKey.export({ type: "spki", format: "der" })
+    );
+    expect(
+      await refusal(
+        assertMayEnrollDeviceKey({ userId: OTHER, publicKey: freshPublic })
+      )
+    ).toBe("accepted");
+    // Someone who HOLDS a factor gets the plain refusal, no hint.
+    const held = await gate(SENSITIVE).catch((e: Error) => e);
+    expect((held as Error).message).not.toContain(PRESENCE_NO_FACTOR_HINT);
+    expect(
+      (held as { cause?: { reasonCode?: string } }).cause?.reasonCode
+    ).toBe("PRESENCE_REQUIRED");
   });
 
   it("the operator env floor forces enforce and cannot be switched off here", async () => {

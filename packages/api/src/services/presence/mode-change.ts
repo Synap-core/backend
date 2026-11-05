@@ -15,7 +15,7 @@ import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { auditLog } from "../../utils/audit-log.js";
-import { assertPresenceForRequest } from "./gate.js";
+import { assertPresenceForRequest, presenceRequiredMessage } from "./gate.js";
 import {
   readPresenceMode,
   recordModeChange,
@@ -93,8 +93,10 @@ export async function changePresenceMode(args: {
     if (!args.proof) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message:
-          "Confirm it is you: turning this off needs Face ID, Touch ID or your passkey.",
+        message: await presenceRequiredMessage(
+          args.userId,
+          "Confirm it is you: turning this off needs Face ID, Touch ID or your passkey."
+        ),
         cause: {
           reasonCode: PRESENCE_REQUIRED,
           proposalId: presenceRequestSubject("presence_mode", "report"),

@@ -35,6 +35,7 @@ import {
 } from "@synap-core/types/presence";
 import {
   and,
+  count,
   db,
   eq,
   gt,
@@ -220,6 +221,27 @@ export async function readPasskeys(
       publicKey: new Uint8Array(Buffer.from(c.public_key!, "base64")),
       counter: c.authenticator?.sign_count ?? 0,
     }));
+}
+
+/**
+ * Does the person hold a factor that can prove presence: a Relay device key
+ * not revoked, or a passkey in Kratos? A failed read of their passkeys
+ * throws: it is never "no factor", which would let a session add one
+ * unapproved. (Here, beside `readPasskeys`, so the gate can ask it without
+ * the factor-change graph of `factors.ts`, which re-exports it.)
+ */
+export async function hasProofFactor(userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(presenceDeviceKeys)
+    .where(
+      and(
+        eq(presenceDeviceKeys.userId, userId),
+        isNull(presenceDeviceKeys.revokedAt)
+      )
+    );
+  if (Number(row?.n ?? 0) > 0) return true;
+  return (await readPasskeys(userId)).length > 0;
 }
 
 async function verifyPasskey(

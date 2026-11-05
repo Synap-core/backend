@@ -13,6 +13,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { callPodQuery } from "../../lib/pod-trpc";
+import { podHostOf } from "./_lib/pod-host";
 import { StartIsland } from "./_lib/start-island";
 import {
   intentModel,
@@ -24,18 +25,6 @@ import {
 import { StartIntentForm } from "./StartIntentForm";
 
 export const dynamic = "force-dynamic";
-
-/** The pod's public host when configured, else the host this page was asked on. */
-function podHostOf(h: Headers): string | undefined {
-  try {
-    const configured = process.env.POD_PUBLIC_URL?.trim();
-    if (configured) return new URL(configured).host;
-  } catch {
-    // A malformed POD_PUBLIC_URL is the layout's problem to report; the
-    // request's own host still names this pod.
-  }
-  return h.get("host") ?? undefined;
-}
 
 export default async function StartPage({
   searchParams,

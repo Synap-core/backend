@@ -30,6 +30,7 @@ const done = (facts: StartFacts) =>
 const setupVals = {
   v: 1 as const,
   intent: { slug: "sales", source: "here" as const, at: T },
+  defaults: { at: T },
   view: { profile: "deal", view: "deal-pipeline", type: "kanban", at: T },
   path: { kind: "quick" as const, at: T },
   setup: { proposalId: "p1", at: T },
@@ -43,10 +44,23 @@ describe("deriveStartSteps (§2.2 table)", () => {
     expect(nextStartStep(s)).toBe("start:intent");
   });
 
-  it("2. intent set marks intent only", () => {
-    expect(done(f({ values: { v: 1, intent: setupVals.intent } }))).toEqual([
-      "start:intent",
+  it("2. intent set marks intent only; next is the defaults step", () => {
+    const facts = f({ values: { v: 1, intent: setupVals.intent } });
+    expect(done(facts)).toEqual(["start:intent"]);
+    expect(nextStartStep(deriveStartSteps(facts))).toBe("start:defaults");
+  });
+
+  it("2b. defaults: done once the owner went past it, never before", () => {
+    expect(done(f({ values: { v: 1, defaults: { at: T } } }))).toEqual([
+      "start:defaults",
     ]);
+    expect(
+      nextStartStep(
+        deriveStartSteps(
+          f({ values: { v: 1, intent: setupVals.intent, defaults: { at: T } } })
+        )
+      )
+    ).toBe("start:views");
   });
 
   it("3. views is done when the start declares fewer than 2 views", () => {
@@ -91,6 +105,7 @@ describe("deriveStartSteps (§2.2 table)", () => {
     });
     expect(done(facts)).toEqual([
       "start:intent",
+      "start:defaults",
       "start:views",
       "start:path",
       "start:setup",
