@@ -114,8 +114,8 @@ const TABLE: Array<[Row, NeedsYouBucket, string]> = [
       count: 1,
       blockedReason: "Decision",
     },
-    "decision",
-    "an owed slot is always a question",
+    "question",
+    "an owed slot is always a question, even one blocked on a person's choice",
   ],
   [
     { id: "access", kind: "access-request", count: 1 },
@@ -216,8 +216,8 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
     const sum = NEEDS_YOU_BUCKETS.reduce((n, b) => n + counts[b], 0);
     expect(sum).toBe(rows.length);
     expect(counts).toEqual({
-      decision: 12,
-      question: 5,
+      decision: 11,
+      question: 6,
       routine: 1,
       broken: 2,
     });

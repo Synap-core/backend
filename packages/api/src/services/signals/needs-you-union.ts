@@ -412,6 +412,14 @@ export interface Signal {
    */
   priority?: NeedsYouPriority;
   /**
+   * `proposal-cluster`: the kind of object the proposal acts on (the cluster's
+   * `targetType`: "tool", a profile slug, ...), so the Inbox row wears that
+   * kind's own icon instead of the same decision mark on every row. Absent when
+   * the proposal names no target kind. A token, never a label: surfaces resolve
+   * its glyph and noun through the vocabulary.
+   */
+  subjectKind?: string;
+  /**
    * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
    * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
    */
@@ -584,6 +592,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "blocksOpenPr",
   "needsYouClass",
   "priority",
+  "subjectKind",
   "unblocks",
   "source",
   "by",
@@ -914,6 +923,9 @@ export function signalFromCluster(
       ? "older"
       : ageBucketOf(cluster.latestAt, now),
     ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
+    ...(cluster.targetType?.trim()
+      ? { subjectKind: cluster.targetType.trim() }
+      : {}),
     ...(cluster.needsYouClass
       ? {
           needsYouClass: cluster.needsYouClass,
