@@ -31,7 +31,7 @@ import {
   ResourceRowEmpty,
   ResourceRowError,
 } from "../../components/resource-row";
-import { FilterChips } from "../../components/filter-chips";
+import { FilterChip, FilterRow } from "../../components/filter-chip";
 import { kindIcon } from "../../../_lib/object/kind-icon";
 import { navHref } from "../../../../lib/console-nav";
 import {
@@ -44,10 +44,6 @@ import { TrustChip } from "./sources-tab";
 import type { CatalogEntry } from "./types";
 
 const PAGE_SIZE = 60;
-/** The chip that clears the kind filter (not a catalog kind). */
-const ALL = "all";
-/** The chip that clears the source filter — never a source id (ids are [a-z0-9-]). */
-const ALL_SOURCES = "*";
 
 export function CatalogTab() {
   const [search, setSearch] = useState("");
@@ -102,49 +98,52 @@ export function CatalogTab() {
 
   return (
     <div>
-      <Input
-        aria-label="Search the catalog"
-        placeholder="Search the catalog…"
-        value={search}
-        onValueChange={setSearch}
-        size="sm"
-        radius="md"
-        variant="bordered"
-        startContent={<Search size={14} className="text-foreground/40" />}
-        className="mb-3 max-w-md"
+      <FilterRow
+        search={
+          <Input
+            aria-label="Search the catalog"
+            placeholder="Search the catalog…"
+            value={search}
+            onValueChange={setSearch}
+            size="sm"
+            radius="md"
+            variant="bordered"
+            startContent={<Search size={14} className="text-foreground/40" />}
+          />
+        }
+        filters={
+          <>
+            {sourceChips.length > 1 && (
+              <FilterChip
+                label="Source"
+                allLabel="All sources"
+                value={source}
+                options={sourceChips.map((s) => ({
+                  id: s.key,
+                  label: s.label,
+                }))}
+                onChange={setSource}
+              />
+            )}
+            {page && (
+              <FilterChip<CatalogEntry["kind"]>
+                label="Kind"
+                allLabel="All kinds"
+                value={kind}
+                options={page.kinds.map((k) => ({
+                  id: k.kind,
+                  label: catalogKindLabel(k.objectKind),
+                  count:
+                    kind === null && !debounced && pageIsWholeCatalog
+                      ? (countsInPage.get(k.kind) ?? 0)
+                      : null,
+                }))}
+                onChange={setKind}
+              />
+            )}
+          </>
+        }
       />
-
-      {sourceChips.length > 1 && (
-        <FilterChips
-          ariaLabel="Source"
-          active={source ?? ALL_SOURCES}
-          chips={[{ key: ALL_SOURCES, label: "All sources" }, ...sourceChips]}
-          // Pressing the active source again clears it.
-          onSelect={(k) =>
-            setSource(k === ALL_SOURCES || k === source ? null : k)
-          }
-        />
-      )}
-
-      {page && (
-        <FilterChips
-          ariaLabel="Kind"
-          active={kind ?? ALL}
-          chips={[
-            { key: ALL as typeof ALL | CatalogEntry["kind"], label: "All" },
-            ...page.kinds.map((k) => ({
-              key: k.kind,
-              label: catalogKindLabel(k.objectKind),
-              count:
-                kind === null && !debounced && pageIsWholeCatalog
-                  ? (countsInPage.get(k.kind) ?? 0)
-                  : undefined,
-            })),
-          ]}
-          // Pressing the active kind again clears it.
-          onSelect={(k) => setKind(k === ALL || k === kind ? null : k)}
-        />
-      )}
 
       {catalog.isLoading && <CatalogSkeleton />}
 

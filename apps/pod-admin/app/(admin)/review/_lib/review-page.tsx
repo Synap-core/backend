@@ -33,7 +33,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { TRPCClientError } from "@trpc/client";
-import { Alert, Button, Textarea } from "@heroui/react";
+import { Alert, Button, Tab, Tabs, Textarea } from "@heroui/react";
 import { Check, ChevronRight, SlidersHorizontal, X } from "lucide-react";
 import { navHref } from "../../../../lib/console-nav";
 import { FATE_COPY } from "@synap-core/types/proposals/fate";
@@ -48,7 +48,8 @@ import type { Exit } from "../../../../lib/open-in";
 import { ExitFallback } from "../../../../lib/exit-link";
 import { PageHeader, PageShell } from "../../components/page-header";
 import { ConfirmModal } from "../../components/confirm-modal";
-import { FilterChips } from "../../components/filter-chips";
+import { FilterRow } from "../../components/filter-chip";
+import { SegmentedChoice } from "../../components/segmented-choice";
 import { useNeedsYouCount } from "../../components/side-nav-badges";
 import {
   ResourceRowEmpty,
@@ -113,9 +114,13 @@ const CATALOGS = { en, fr };
 /**
  * What is waiting, or what was decided. The packages replaced the old
  * Access · Changes · Asks chips (founder B-1); a link naming one of those
- * still narrows the list and keeps "Waiting" pressed.
+ * still narrows the list and keeps "Waiting" selected.
+ *
+ * TABS, not a filter (page-grammar §9): they switch what the page is for,
+ * deciding what waits or reading what was decided; the grouping and the
+ * layout offer exist on Waiting only.
  */
-const CHIPS: Array<{ key: "all" | "history"; label: keyof typeof en }> = [
+const VIEWS: Array<{ key: "all" | "history"; label: keyof typeof en }> = [
   { key: "all", label: "view.waiting" },
   { key: "history", label: "view.history" },
 ];
@@ -438,11 +443,10 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
               <span className="text-[12px] font-medium text-foreground/65">
                 {t("groupBy")}
               </span>
-              <FilterChips
+              <SegmentedChoice
                 ariaLabel={t("groupBy")}
-                className=""
                 active={groupBy}
-                chips={REVIEW_GROUP_BYS.map((g) => ({
+                options={REVIEW_GROUP_BYS.map((g) => ({
                   key: g,
                   label: resolveReviewGroupByLabel(g),
                 }))}
@@ -487,16 +491,44 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
               }
             />
           )}
-          <FilterChips
-            param="type"
-            defaultKey="all"
-            active={filter === "history" ? "history" : "all"}
-            chips={CHIPS.map((c) => ({
-              ...c,
-              label: t(c.label),
-              count:
-                c.key === "history" || !signals.data ? undefined : counts.all,
-            }))}
+          <FilterRow
+            tabs={
+              <Tabs
+                aria-label={t("title")}
+                variant="underlined"
+                selectedKey={filter === "history" ? "history" : "all"}
+                onSelectionChange={(next) =>
+                  replaceParams((params) => {
+                    if (next === "history") params.set("type", "history");
+                    else params.delete("type");
+                    params.delete("focus");
+                  })
+                }
+                classNames={{
+                  tabList: "gap-4 px-0",
+                  tab: "h-9 px-1",
+                  cursor: "bg-primary",
+                  tabContent:
+                    "text-[12.5px] font-medium text-foreground/65 group-data-[selected=true]:text-foreground",
+                }}
+              >
+                {VIEWS.map((v) => (
+                  <Tab
+                    key={v.key}
+                    title={
+                      <span className="inline-flex items-center gap-1.5">
+                        {t(v.label)}
+                        {v.key === "all" && signals.data && (
+                          <span className="tabular text-[11px] text-foreground/65">
+                            {counts.all}
+                          </span>
+                        )}
+                      </span>
+                    }
+                  />
+                ))}
+              </Tabs>
+            }
           />
 
           {offerLayout && (
