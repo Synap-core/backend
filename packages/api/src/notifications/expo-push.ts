@@ -66,6 +66,11 @@ export interface ExpoPushInput {
    * `@synap-core/types/push`). Omitted ⇒ Expo's defaults, as before W8.
    */
   interruptionLevel?: "time-sensitive" | "active" | "passive";
+  /**
+   * The Android notification channel (`PUSH_ANDROID_CHANNELS`, one per
+   * interruption level); Relay creates them at start. iOS ignores it.
+   */
+  channelId?: string;
   threadId?: string;
   categoryId?: string;
   /** `null` ⇒ silent (a passive push). Omitted ⇒ `"default"`. */
@@ -153,6 +158,7 @@ async function postBatch(
         ...(input.interruptionLevel
           ? { interruptionLevel: input.interruptionLevel }
           : {}),
+        ...(input.channelId ? { channelId: input.channelId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.categoryId ? { categoryId: input.categoryId } : {}),
         ...(input.data ? { data: input.data } : {}),

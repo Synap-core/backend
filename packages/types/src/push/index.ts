@@ -62,8 +62,10 @@ export function isPushCategory(v: unknown): v is PushCategory {
 
 /**
  * How hard a push interrupts.
- *   `interruptive` — sound, banner, breaks through Focus when time-sensitive.
+ *   `interruptive` — sound and banner.
  *   `passive`      — lands silently in the notification list.
+ * Whether it also breaks through Focus is the `interruptionLevel`
+ * ({@link pushInterruptionLevel}).
  */
 export type PushLevel = "interruptive" | "passive";
 
@@ -97,20 +99,24 @@ export interface PushCategoryPolicy {
 export const PUSH_CATEGORY_POLICY: Readonly<
   Record<PushCategory, PushCategoryPolicy>
 > = {
+  // PUSH LEVELS (founder decision 9bc9f75c, 2026-11-04): an agent waiting on
+  // you is a NORMAL push (sound, banner) that Focus may hold; only "something
+  // broke" or an ask due within the hour (`PushFacts.dueSoon`) breaks through
+  // Focus. See {@link pushInterruptionLevel}.
   "blocking-ask": {
     defaultOn: true,
     level: "interruptive",
-    interruptionLevel: "time-sensitive",
+    interruptionLevel: "active",
   },
   "decision-blocking": {
     defaultOn: true,
     level: "interruptive",
-    interruptionLevel: "time-sensitive",
+    interruptionLevel: "active",
   },
   "work-broke": {
     defaultOn: true,
     level: "interruptive",
-    interruptionLevel: "active",
+    interruptionLevel: "time-sensitive",
   },
   // A status signal (status-flow W6): on, but silent — it is news about a
   // thing you own, not an agent waiting on you.
@@ -225,6 +231,19 @@ export interface PushFacts {
    * a stray agent write), so that work waits on the decision.
    */
   proposalBlocksOpenSession?: boolean;
+  /**
+   * A needs-you ask the pod ranks P0: its `answerBy` is due within the hour
+   * or already past (`needsYouPriority`, `../needs-you/priority.ts`). Only
+   * this, or "something broke", breaks through Focus
+   * ({@link pushInterruptionLevel}); it is never held back by the daily cap.
+   */
+  dueSoon?: boolean;
+  /**
+   * The AGENT whose work this push is about (the agent that asked, filed the
+   * proposal or relayed the answer). Read by the agent's own push limit
+   * ({@link normalizeAgentPushDailyLimit}); absent = no agent limit applies.
+   */
+  agentUserId?: string;
 }
 
 /**
@@ -303,6 +322,9 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
  * At most this many pushes a day per person (plan Q4.1, founder 2026-10-29):
  * the push past it is not sent — the notification still lands in-app and in
  * needs-you, where the morning brief carries it. The day is the person's own.
+ * An ask due within the hour (`PushFacts.dueSoon`) is never held back by it:
+ * it is one of the two pushes that break through Focus (decision 9bc9f75c);
+ * it still counts.
  */
 export const PUSH_DAILY_CAP = 3;
 
@@ -330,6 +352,70 @@ export function pushCapExemptTypes(): string[] {
         PUSH_CAP_EXEMPT_CATEGORIES.includes(rule)
     )
     .map(([type]) => type);
+}
+
+// ─── Breaking through Focus ─────────────────────────────────────────────────
+
+/**
+ * Categories whose push ALWAYS breaks through Focus (iOS `time-sensitive`):
+ * something the person owns broke (founder decision 9bc9f75c, 2026-11-04).
+ */
+export const PUSH_BREAKS_FOCUS_CATEGORIES: readonly PushCategory[] = [
+  "work-broke",
+];
+
+/**
+ * THE ONE answer to "does this push break through Focus?" — iOS
+ * `time-sensitive`, Android's `breaks-focus` channel. Two cases only:
+ * "something broke" ({@link PUSH_BREAKS_FOCUS_CATEGORIES}), or an ask or
+ * decision that waits on the person and is due within the hour
+ * (`facts.dueSoon`). Every other push keeps its category's level; a blocking
+ * ask with no near deadline is a normal (`active`) push Focus may hold.
+ */
+export function pushInterruptionLevel(
+  category: PushCategory,
+  facts: Pick<PushFacts, "dueSoon"> = {}
+): PushInterruptionLevel {
+  if (PUSH_BREAKS_FOCUS_CATEGORIES.includes(category)) return "time-sensitive";
+  if (facts.dueSoon === true && PUSH_NEEDS_YOU_CATEGORIES.includes(category)) {
+    return "time-sensitive";
+  }
+  const level = PUSH_CATEGORY_POLICY[category].interruptionLevel;
+  return level === "time-sensitive" ? "active" : level;
+}
+
+/**
+ * The Android notification channel a push rings on, one per interruption
+ * level (Relay registers them at start, `src/lib/push-channels.ts`). The id
+ * names the LEVEL, never a category, so a new category needs no new channel.
+ */
+export const PUSH_ANDROID_CHANNELS: Readonly<
+  Record<PushInterruptionLevel, string>
+> = {
+  "time-sensitive": "breaks-focus",
+  active: "needs-you",
+  passive: "quiet",
+};
+
+// ─── An agent's own push limit ──────────────────────────────────────────────
+
+/**
+ * An agent's daily push limit, set by its person in the agent's settings
+ * (`users.agent_metadata.pushDailyLimit`). There is NO limit by default
+ * (founder decision 9bc9f75c: "it is not limited (for now) but agents settings
+ * could setup a limit per agent"): absent = unlimited. `0` = this agent never
+ * rings the phone; its asks still land in the bell and on Home.
+ */
+export const AGENT_PUSH_DAILY_LIMIT_MAX = 50;
+
+/** A stored limit as a number, or `null` = unlimited (anything malformed too). */
+export function normalizeAgentPushDailyLimit(raw: unknown): number | null {
+  return typeof raw === "number" &&
+    Number.isInteger(raw) &&
+    raw >= 0 &&
+    raw <= AGENT_PUSH_DAILY_LIMIT_MAX
+    ? raw
+    : null;
 }
 
 /** The category a notification pushes under, or `null` (do not push). */
@@ -683,6 +769,8 @@ export interface PushPayloadExtras {
 /** Expo message fields the pod sets from the category (Expo push API names). */
 export interface PushEnvelope {
   interruptionLevel: PushInterruptionLevel;
+  /** The Android channel ({@link PUSH_ANDROID_CHANNELS}); iOS ignores it. */
+  channelId: string;
   /** iOS stacks pushes sharing one thread (a session's asks). */
   threadId?: string;
   /** Registered OS action category, when the push is quick-answerable. */
@@ -693,11 +781,20 @@ export interface PushEnvelope {
 
 export function pushEnvelope(
   category: PushCategory,
-  opts: { threadId?: string; quickAnswer?: PushQuickAnswer | null } = {}
+  opts: {
+    threadId?: string;
+    quickAnswer?: PushQuickAnswer | null;
+    /** {@link PushFacts.dueSoon}: an ask due within the hour breaks Focus. */
+    dueSoon?: boolean;
+  } = {}
 ): PushEnvelope {
   const policy = PUSH_CATEGORY_POLICY[category];
+  const interruptionLevel = pushInterruptionLevel(category, {
+    dueSoon: opts.dueSoon,
+  });
   return {
-    interruptionLevel: policy.interruptionLevel,
+    interruptionLevel,
+    channelId: PUSH_ANDROID_CHANNELS[interruptionLevel],
     sound: policy.level === "passive" ? null : "default",
     ...(opts.threadId ? { threadId: opts.threadId } : {}),
     ...(opts.quickAnswer ? { categoryId: opts.quickAnswer.category } : {}),

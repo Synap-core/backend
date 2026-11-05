@@ -153,6 +153,11 @@ export type ConsoleAppVia = (typeof CONSOLE_APP_VIAS)[number];
 /** One object's own console page, keyed like a page id. */
 export const CONSOLE_OBJECT_PAGES = {
   computer: { audience: "admin" },
+  /**
+   * One of the person's OWN computers (`/my-computers/<id>`), the page a
+   * member manages it on. `consoleLink` sends a non-admin's `computer` here.
+   */
+  myComputer: { audience: "member" },
   /** An agent's own page (`/agents/<id>`, its agent USER id). */
   agent: { audience: "admin" },
   /** A space's own page (`/workspaces/<id>`). */
@@ -169,6 +174,7 @@ export type ConsoleTarget =
   | { page: Exclude<FocusPageId, "review">; focus?: string }
   | { page: "review"; type?: ConsoleReviewType; focus?: string }
   | { page: "computer"; id: string }
+  | { page: "myComputer"; id: string }
   | { page: "agent"; id: string }
   | { page: "space"; id: string }
   | { page: "application"; via: ConsoleAppVia; id: string }
@@ -227,6 +233,10 @@ export function consolePath(target: ConsoleTarget): string | null {
     case "computer": {
       const id = nonEmpty(t.id);
       return id ? `/computers/${encodeURIComponent(id)}` : null;
+    }
+    case "myComputer": {
+      const id = nonEmpty(t.id);
+      return id ? `/my-computers/${encodeURIComponent(id)}` : null;
     }
     case "agent": {
       const id = nonEmpty(t.id);
@@ -374,7 +384,13 @@ export function consoleLink(
   role: ConsoleAudience | null | undefined,
   target: ConsoleTarget | null | undefined
 ): ConsoleLink | null {
-  if (!target || !consoleTargetVisibleTo(target, role ?? "member")) return null;
+  if (!target) return null;
+  // A member manages their own computer on its member page; the pod's
+  // /my-computers/<id> reads a computer that is not theirs as not found.
+  if (target.page === "computer" && (role ?? "member") !== "admin") {
+    target = { page: "myComputer", id: target.id };
+  }
+  if (!consoleTargetVisibleTo(target, role ?? "member")) return null;
   const href = consoleHref(origin, target);
   return href ? { href, label: consoleVerbLabel(target) } : null;
 }

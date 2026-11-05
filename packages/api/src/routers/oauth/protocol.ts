@@ -316,6 +316,54 @@ export function matchFirstPartyRedirect(
 }
 
 /**
+ * A redirect path: one or more `/segment`s of plain characters. A segment
+ * never starts with `.` (no dot-segment) and is never empty; no query,
+ * fragment or percent-encoding, so the string the matcher compares is the
+ * only spelling there is.
+ */
+const NATIVE_REDIRECT_PATH_RE = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/;
+
+function isPlainRedirectPath(path: string): boolean {
+  return NATIVE_REDIRECT_PATH_RE.test(path);
+}
+
+/** `http://127.0.0.1/<path>` or `http://[::1]/<path>`: no port, nothing after the path. */
+const LOOPBACK_DECLARED_RE = /^http:\/\/(?:127\.0\.0\.1|\[::1\])(\/.*)$/;
+
+/**
+ * A reverse-DNS private-use scheme (RFC 8252 §7.1: it holds a period),
+ * lowercase as written canonically, then `:/` and a path. One slash only:
+ * `scheme://…` would name an authority, which a native redirect has none of.
+ */
+const PRIVATE_SCHEME_REDIRECT_RE =
+  /^([a-z][a-z0-9+-]*(?:\.[a-z][a-z0-9+-]*)+):(\/(?!\/).*)$/;
+
+/**
+ * The NATIVE redirect a client declared in its metadata document, as the rule
+ * `matchFirstPartyRedirect` applies, or null when it is not one. Only a
+ * client that signs a person in (`person` scope, `personDeviceClient` in
+ * config.ts) may declare one; every other document stays https-only.
+ *   - loopback: `http://127.0.0.1/<path>` or `http://[::1]/<path>`, declared
+ *     WITHOUT a port (RFC 8252 §7.3: the app binds one when it listens, so
+ *     any port matches); `localhost` is not one (§8.3).
+ *   - private-use scheme: `<reverse.dns>:/<path>`, matched exactly. The pod
+ *     cannot verify who owns a scheme; PKCE makes an intercepted code useless.
+ */
+export function nativeRedirectRule(uri: string): FirstPartyRedirectRule | null {
+  const loopback = LOOPBACK_DECLARED_RE.exec(uri);
+  if (loopback) {
+    return isPlainRedirectPath(loopback[1]!)
+      ? { kind: "loopback", path: loopback[1]! }
+      : null;
+  }
+  const scheme = PRIVATE_SCHEME_REDIRECT_RE.exec(uri);
+  if (scheme && isPlainRedirectPath(scheme[2]!)) {
+    return { kind: "private-scheme", uri };
+  }
+  return null;
+}
+
+/**
  * The ONE redirect check every door runs (/authorize, the consent screen,
  * /token): a first-party client by its rules, every other client by its
  * registered list, byte for byte.

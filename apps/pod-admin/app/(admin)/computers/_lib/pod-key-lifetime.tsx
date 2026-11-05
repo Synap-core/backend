@@ -7,9 +7,10 @@
  * this many days; the terminal renews them before they run out. A computer
  * can override it (its own page, "Change key lifetime").
  *
- * Reads/writes `apiKeys.getMachineDefaults` / `.setMachineDefaults` (pod
- * admin) through `/api/machine-defaults`. A failed read says so with Retry —
- * never a guessed "90".
+ * Reads `apiKeys.getMachineDefaults` (pod admin) through
+ * `/api/machine-defaults`; a failed read says so with Retry — never a guessed
+ * "90". Changing it is `apiKeys.setMachineDefaults`, a sensitive action sent
+ * with its proof of presence (W3 slice 3, `app/_lib/presence`).
  */
 
 import { Button, Input, addToast } from "@heroui/react";
@@ -17,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
 import type { MachineDefaults } from "../../../../lib/machine-defaults";
 import { FormModal } from "../../components/form-modal";
+import { useSetMachineDefaults } from "../../../_lib/presence/use-sensitive-actions";
 import { days, validKeyTtl } from "./computer-model";
 
 type Read =
@@ -128,6 +130,7 @@ function PodKeyLifetimeModal({
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
+  const setDefaults = useSetMachineDefaults();
   const [draft, setDraft] = useState(String(value.keyTtlDays));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,10 +141,8 @@ function PodKeyLifetimeModal({
     setSaving(true);
     setError(null);
     try {
-      const saved = await call({
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keyTtlDays: n }),
+      const saved: MachineDefaults = await setDefaults.mutateAsync({
+        keyTtlDays: n,
       });
       onSaved(saved);
       // Every computer that follows the default now reads the new lifetime.

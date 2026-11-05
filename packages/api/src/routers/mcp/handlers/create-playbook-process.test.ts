@@ -153,6 +153,34 @@ describe("synap_create_playbook → the process contract", () => {
     }
   });
 
+  it("onEnd reaches the procedure INSIDE subjectProfile, and a bad status key is refused there", async () => {
+    h.creates.length = 0;
+    await buildHandlers.synap_create_playbook!(
+      ctx({
+        name: "Fix a finding",
+        goalTemplate: "Fix it",
+        subjectProfileSlug: "finding",
+        onEnd: { cancelled: "open", failed: "open" },
+      })
+    );
+    expect(h.creates[0]!.subjectProfile).toEqual({
+      profileSlug: "finding",
+      onEnd: { cancelled: "open", failed: "open" },
+    });
+    expect(createInputSchema.safeParse(h.creates[0]).success).toBe(true);
+
+    h.creates.length = 0;
+    await buildHandlers.synap_create_playbook!(
+      ctx({
+        name: "Fix a finding",
+        goalTemplate: "Fix it",
+        subjectProfileSlug: "finding",
+        onEnd: { stale: "open" },
+      })
+    );
+    expect(createInputSchema.safeParse(h.creates[0]).success).toBe(false);
+  });
+
   it("the advertised tool schema teaches every process field", async () => {
     const tool = (await tools.list()).find(
       (t) => t.name === "synap_create_playbook"
@@ -165,10 +193,17 @@ describe("synap_create_playbook → the process contract", () => {
       "statusProperty",
       "activators",
       "humanOnlyStatuses",
+      "onEnd",
       "expectedOutputs",
     ]) {
       expect(props[k], k).toBeDefined();
     }
+    // Derived from the onEnd schema: its keys are the terminal statuses.
+    expect(Object.keys(props.onEnd!.properties as object).sort()).toEqual([
+      "cancelled",
+      "closed",
+      "failed",
+    ]);
     const stageProps = (props.stages!.items as Record<string, unknown>)
       .properties as Record<string, Record<string, unknown>>;
     for (const k of ["subjectStatus", "gate", "onFail", "expectedOutputs"]) {

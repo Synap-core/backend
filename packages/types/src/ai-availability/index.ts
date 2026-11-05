@@ -83,6 +83,7 @@ export const AI_FAILURE_CODES = [
   "rate_limited",
   "timeout",
   "circuit_open",
+  "entitlement_unavailable",
   "upstream_error",
   "bad_request",
   "invalid_response",
@@ -117,6 +118,8 @@ export type AiRefusalCode = AiFailureCode | IsFailureCode;
  *     capacity state that frees on a reset, as the UX contract tables it.
  *   - `upstream_error` / `provider_error` → transient: one 5xx is not "AI is
  *     offline". `circuit_open` IS — the breaker opened on repeated failures.
+ *   - `entitlement_unavailable` → transient: the IS could not read the
+ *     account's entitlement from the Control Plane this once; a retry may pass.
  */
 const FAILURE_STATE: {
   readonly [C in AiRefusalCode]: AiAvailabilityKind | null;
@@ -137,6 +140,7 @@ const FAILURE_STATE: {
   rate_limited: null,
   timeout: null,
   circuit_open: "service_down",
+  entitlement_unavailable: null,
   upstream_error: null,
   bad_request: null,
   invalid_response: null,

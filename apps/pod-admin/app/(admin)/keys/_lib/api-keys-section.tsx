@@ -67,6 +67,7 @@ import {
   type UnifiedKey,
 } from "./key-model";
 import { KeyDrawer } from "./key-drawer";
+import { useRotateKey } from "../../../_lib/presence/use-sensitive-actions";
 import { RevealKeyModal } from "./key-modals";
 import { newKeyHref } from "./key-form-model";
 
@@ -132,7 +133,8 @@ export function ApiKeysSection() {
     },
   });
 
-  const rotate = trpc.apiKeys.rotate.useMutation({
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const rotate = useRotateKey({
     onSuccess: (res) => {
       void utils.apiKeys.adminListAll.invalidate();
       void utils.apiKeys.listSystemKeys.invalidate();

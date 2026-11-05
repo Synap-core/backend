@@ -525,6 +525,8 @@ async function wake(p: {
    * ⇒ the words go to the agent as an answer, which never settles a call.
    */
   confirmation?: { confirmationId: string; decision: "approved" | "rejected" };
+  /** The answer's typed value, when it has one: a confirmed YES continues a stopped run. */
+  value?: SlotAnswerValue;
 }): Promise<boolean> {
   if (!p.target) return false;
   if (p.target.reach === "dispatch") {
@@ -547,23 +549,28 @@ async function wake(p: {
     return sent.status === "sent";
   }
   // In a LIVE run's room the woken turn is a run turn: the run's declared
-  // tools (and, for the answer to "Keep the run going", its checkpoint), the
-  // one resolver the kickoff and the automatic continuation use.
+  // tools (and, for a YES to "Keep the run going", its checkpoint as turn
+  // context), the one resolver the kickoff and the automatic continuation use.
+  // The person's words go to the agent as they are.
   const runTurn = await runTurnForAnswer({
     sessionId: p.sessionId,
     userId: p.ownerId,
     slotLabel: p.slotLabel,
+    approved: p.value?.type === "confirm" && p.value.confirmed,
   });
   return triggerAutoRespond({
     channelId: p.channelId,
     userMessageId: p.messageId,
-    content: runTurn.checkpointWords
-      ? `${p.content}\n\n${runTurn.checkpointWords}`
-      : p.content,
+    content: p.content,
     sourceUserId: p.ownerId,
     focusSessionId: p.sessionId,
     agentType: p.target.agentType,
-    ...(runTurn.run ? { run: runTurn.run } : {}),
+    ...(runTurn.liveRun === "found"
+      ? {
+          run: runTurn.run,
+          ...(runTurn.turnContext ? { turnContext: runTurn.turnContext } : {}),
+        }
+      : {}),
   });
 }
 
@@ -734,6 +741,7 @@ export async function recordOwnerRoomReply(p: {
     if (!claimed) return { status: "no_open_question" };
 
     let slot: OwnerRoomReplySlotStatus | undefined;
+    let answeredValue: SlotAnswerValue | undefined;
     if (question.slotLabel) {
       const reading = await readRoomReplyAsAnswer({
         channelId: p.channelId,
@@ -765,6 +773,7 @@ export async function recordOwnerRoomReply(p: {
             : {}),
         });
         slot = answered.status;
+        if (answered.status === "answered") answeredValue = reading.value;
       }
     }
 
@@ -780,6 +789,7 @@ export async function recordOwnerRoomReply(p: {
             session: { id: session.id, ownerId: p.userId },
           }),
           slotLabel: question.slotLabel,
+          ...(answeredValue ? { value: answeredValue } : {}),
         })
       : false;
 
@@ -1208,6 +1218,7 @@ export async function answerSessionSlot(p: {
         sessionId: session.id,
         target,
         slotLabel: answered.expectedLabel,
+        ...(value ? { value } : {}),
         // Only the claimed approval card's OWN typed confirm names the call.
         ...(questionId && question?.confirmationId && value?.type === "confirm"
           ? {

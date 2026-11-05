@@ -114,6 +114,13 @@ export interface AgentMetadata {
    * here so a re-enrolment (device flow) mints the new key with the same scope.
    */
   runsScripts?: boolean;
+  /**
+   * How many pushes a day this agent's work may send its person (founder
+   * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
+   * only by `agentUsers.setPushLimit`; read by the push producer
+   * (`push-decision.ts` rule 4b).
+   */
+  pushDailyLimit?: number;
 }
 
 export const users = pgTable("users", {

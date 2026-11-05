@@ -40,6 +40,7 @@ import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
 import { useBatchApproveProposals } from "../../../_lib/presence/use-approve";
 import { needsPresence } from "../../../_lib/presence/presence-model";
+import { useCreateGovernanceRule } from "../../../_lib/presence/use-sensitive-actions";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { isUuid } from "../../../../lib/format";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
@@ -347,7 +348,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
 
   // ── "Always for this agent" (B-3): a governance rule, human door only ─────
   const [alwaysFor, setAlwaysFor] = useState<RowGroup | null>(null);
-  const createRule = trpc.governanceRules.create.useMutation();
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const createRule = useCreateGovernanceRule();
   const alwaysRule = alwaysFor ? alwaysRuleOf(alwaysFor) : null;
   async function confirmAlways() {
     if (!alwaysRule || !alwaysFor) return;

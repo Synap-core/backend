@@ -1128,6 +1128,13 @@ export interface AgentMetadata {
 	 * here so a re-enrolment (device flow) mints the new key with the same scope.
 	 */
 	runsScripts?: boolean;
+	/**
+	 * How many pushes a day this agent's work may send its person (founder
+	 * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
+	 * only by `agentUsers.setPushLimit`; read by the push producer
+	 * (`push-decision.ts` rule 4b).
+	 */
+	pushDailyLimit?: number;
 }
 /**
  * Shared provenance vocabulary for the uniform `created_by_kind` column added
@@ -12449,13 +12456,14 @@ declare const AI_FAILURE_CODES: readonly [
 	"rate_limited",
 	"timeout",
 	"circuit_open",
+	"entitlement_unavailable",
 	"upstream_error",
 	"bad_request",
 	"invalid_response",
 	"unknown"
 ];
 export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
-export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
+export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "entitlement_unavailable" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
 /**
  * A COMMITTED PARTIAL turn — the client-shaped verdict.
  *
@@ -13790,6 +13798,15 @@ export interface ExpectedOutput {
 	 * stale `answer` that no longer deep-equals the stored one.
 	 */
 	answerPickedUpAt?: string;
+	/**
+	 * The person set this owed ask aside until then ("Later", founder decision
+	 * 9bc9f75c): Review later for them until that instant, back on its own
+	 * after it (`isSetAside`, `@synap-core/types/needs-you`). SERVER-STAMPED by
+	 * the Later door only (api `ask-later.ts`), never by a client or an agent.
+	 * ISO timestamp. Cleared by the door's Undo; an answer or a hand-back makes
+	 * the slot no longer owed, so a stale one is read by nobody.
+	 */
+	laterUntil?: string;
 	/**
 	 * A relayed answer to a `commitment` ask, waiting for the person's tap — see
 	 * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
@@ -17308,6 +17325,11 @@ export interface OwedSlot {
 	 * says it ends with the session.
 	 */
 	keptOwedAt?: string;
+	/**
+	 * The person set it aside until then (`ExpectedOutput.laterUntil`): the
+	 * rule reads it as Review later until that instant (`isSetAside`).
+	 */
+	laterUntil?: string;
 	/**
 	 * A param slot's param (`ExpectedOutput.paramName`): what it asks the
 	 * person to set. Its cause is already on `askCause`; the name travels so a
@@ -21978,8 +22000,10 @@ declare const PUSH_CATEGORIES: readonly [
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
 /**
  * How hard a push interrupts.
- *   `interruptive` — sound, banner, breaks through Focus when time-sensitive.
+ *   `interruptive` — sound and banner.
  *   `passive`      — lands silently in the notification list.
+ * Whether it also breaks through Focus is the `interruptionLevel`
+ * ({@link pushInterruptionLevel}).
  */
 export type PushLevel = "interruptive" | "passive";
 /** The iOS `interruptionLevel` Expo forwards (Expo push message field). */
@@ -25392,6 +25416,8 @@ export interface OwedSlotSignalInput {
 	pendingRelay?: SlotPendingRelay;
 	/** Kept owed past its session, straight from `listOwedSlots`. */
 	keptOwedAt?: string;
+	/** The person's Later on it, straight from `listOwedSlots` (the class reads it). */
+	laterUntil?: string;
 	/** A param slot's param, straight from `listOwedSlots`. */
 	paramName?: string;
 	/** Who asked and their name, straight from `listOwedSlots`. */
@@ -26197,6 +26223,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				pausedAt: Date | null;
 				pendingKeys: number;
 				pendingProposalId: string | null;
+				pushDailyLimit: number | null;
 				reach: "dispatch" | "pod" | "pull";
 				revokedKeys: number;
 				role: string | null;
@@ -26314,6 +26341,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				posture: "ask-first" | "create-with-undo" | null;
 				status: "updated";
+			};
+		}>;
+		setPushLimit: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				dailyLimit: number | null;
+			};
+			meta: object;
+			output: {
+				agentUserId: string;
+				pushDailyLimit: number | null;
 			};
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -34122,12 +34160,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				clientId: string;
+				clientName: string | null;
 				createdAt: Date;
 				current: boolean;
 				expiresAt: Date;
 				id: string;
 				label: string | null;
 				lastUsedAt: Date | null;
+				runsOn: "computer" | "phone" | null;
 			}[];
 		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
@@ -36503,6 +36543,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				triggered: boolean;
 			};
 		}>;
+		askLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				expectedLabel: string;
+				sessionId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				label: string;
+				laterUntil: Date;
+				sessionId: string;
+			};
+		}>;
 		attachAgent: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentId: string;
@@ -36836,6 +36889,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
 				warnings: string[];
+			};
+		}>;
+		clearAskLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				expectedLabel: string;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
 			};
 		}>;
 		close: import("@trpc/server").TRPCMutationProcedure<{
@@ -37198,6 +37261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
@@ -38357,6 +38421,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
@@ -43461,6 +43526,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					icon: string | null;
 					id: string;
 					priority: "high" | "low" | "normal" | "urgent";
+					pushAgentId: string | null;
 					pushedAt: Date | null;
 					readAt: Date | null;
 					snoozedUntil: Date | null;
@@ -45316,6 +45382,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					onEnd?: {
+						cancelled?: string | undefined;
+						closed?: string | undefined;
+						failed?: string | undefined;
+					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -46312,6 +46383,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					onEnd?: {
+						cancelled?: string | undefined;
+						closed?: string | undefined;
+						failed?: string | undefined;
+					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -56808,6 +56884,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
+							onEnd?: {
+								cancelled?: string | undefined;
+								closed?: string | undefined;
+								failed?: string | undefined;
+							} | undefined;
 						} | undefined;
 					}[] | undefined;
 					automations?: {

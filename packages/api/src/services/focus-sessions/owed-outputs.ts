@@ -283,6 +283,11 @@ export interface OwedSlot {
    */
   keptOwedAt?: string;
   /**
+   * The person set it aside until then (`ExpectedOutput.laterUntil`): the
+   * rule reads it as Review later until that instant (`isSetAside`).
+   */
+  laterUntil?: string;
+  /**
    * A param slot's param (`ExpectedOutput.paramName`): what it asks the
    * person to set. Its cause is already on `askCause`; the name travels so a
    * surface hands the whole row to the card adapter (`askCardSlotOf`).
@@ -484,6 +489,7 @@ export function projectOwedSlots(
         : {}),
       ...(facts?.blocksOpenPr ? { blocksOpenPr: true as const } : {}),
       ...(slot.keptOwedAt ? { keptOwedAt: slot.keptOwedAt } : {}),
+      ...(slot.laterUntil ? { laterUntil: slot.laterUntil } : {}),
       ...(slot.paramName ? { paramName: slot.paramName } : {}),
     });
   }

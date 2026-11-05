@@ -280,6 +280,18 @@ describe("askFate — the owed ask's fate on silence", () => {
     });
   });
 
+  it("set aside by the person (Later): Review later until its time, not after", () => {
+    const fresh = daysAgo(1);
+    const at = (ms: number) => new Date(NOW + ms).toISOString();
+    expect(
+      isAskReviewLater({ owedSince: fresh, laterUntil: at(3_600_000) }, NOW)
+    ).toBe(true);
+    expect(
+      isAskReviewLater({ owedSince: fresh, laterUntil: at(-60_000) }, NOW)
+    ).toBe(false);
+    expect(isAskReviewLater({ owedSince: fresh }, NOW)).toBe(false);
+  });
+
   it("a criterion grade never retires with its session, though its ask is a choose", () => {
     const grade = ask({
       mode: "choose",

@@ -626,6 +626,15 @@ export interface ExpectedOutput {
    */
   answerPickedUpAt?: string;
   /**
+   * The person set this owed ask aside until then ("Later", founder decision
+   * 9bc9f75c): Review later for them until that instant, back on its own
+   * after it (`isSetAside`, `@synap-core/types/needs-you`). SERVER-STAMPED by
+   * the Later door only (api `ask-later.ts`), never by a client or an agent.
+   * ISO timestamp. Cleared by the door's Undo; an answer or a hand-back makes
+   * the slot no longer owed, so a stale one is read by nobody.
+   */
+  laterUntil?: string;
+  /**
    * A relayed answer to a `commitment` ask, waiting for the person's tap — see
    * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
    * slot stays owed (`owner: 'human'`) while it is here, and the person's
@@ -1190,16 +1199,35 @@ export type AwaitedGateProposalType =
 export const DEFAULT_STAGE_GATE_PROPOSAL_TYPE: StageGateProposalType =
   "playbook.stage_gate";
 
+/** The terminal statuses a session ends in — the keys of {@link PlaybookOnEnd}. */
+export const PLAYBOOK_ON_END_STATUSES = [
+  "closed",
+  "cancelled",
+  "failed",
+] as const;
+export type PlaybookOnEndStatus = (typeof PLAYBOOK_ON_END_STATUSES)[number];
+
+/**
+ * `subjectProfile.onEnd` — the status the process moves what it worked on (its
+ * subject and every target still open) to when the session ENDS in that
+ * terminal status. Each value is an option of the subject's lifecycle; a
+ * terminal status with no entry moves nothing. Applied by the one close door
+ * (`complete-session.ts`, @synap/api) through the status door, as the session.
+ */
+export type PlaybookOnEnd = Partial<Record<PlaybookOnEndStatus, string>>;
+
 /**
  * The subject-LIFECYCLE half of a stored `subjectProfile` — tolerant (stored
  * jsonb is data). `statusProperty` names the subject kind's property holding
- * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose.
+ * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose;
+ * `onEnd` the value each session end moves the subject to (junk dropped).
  * The api's `readPlaybookProcess` adds the zod-parsed `activators` on top.
  */
 export function readSubjectLifecycle(subjectProfile: unknown): {
   profileSlug: string | null;
   statusProperty: string | null;
   humanOnlyStatuses: string[];
+  onEnd: PlaybookOnEnd;
 } {
   const sp =
     subjectProfile && typeof subjectProfile === "object"
@@ -1207,12 +1235,21 @@ export function readSubjectLifecycle(subjectProfile: unknown): {
       : {};
   const str = (v: unknown) =>
     typeof v === "string" && v.trim() ? v.trim() : null;
+  const onEnd: PlaybookOnEnd = {};
+  if (sp.onEnd && typeof sp.onEnd === "object" && !Array.isArray(sp.onEnd)) {
+    const raw = sp.onEnd as Record<string, unknown>;
+    for (const status of PLAYBOOK_ON_END_STATUSES) {
+      const value = str(raw[status]);
+      if (value) onEnd[status] = value;
+    }
+  }
   return {
     profileSlug: str(sp.profileSlug),
     statusProperty: str(sp.statusProperty),
     humanOnlyStatuses: Array.isArray(sp.humanOnlyStatuses)
       ? sp.humanOnlyStatuses.flatMap((v) => (str(v) ? [str(v)!] : []))
       : [],
+    onEnd,
   };
 }
 

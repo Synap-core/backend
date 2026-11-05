@@ -96,26 +96,12 @@ describe("PATCH /api/apps (a pod app's settings, PB4)", () => {
     ]);
   });
 
-  it("sets the write mode", async () => {
-    const res = await patch({
-      publicId: "app_1",
-      action: "write-mode",
-      applyAutomatically: true,
-    });
-    expect(res.status).toBe(200);
-    expect(calls).toEqual([
-      {
-        path: "apps.setWriteMode",
-        input: { publicId: "app_1", applyAutomatically: true },
-      },
-    ]);
-  });
-
   it("refuses anything else without calling the pod", async () => {
     for (const body of [
       { publicId: "app_1", action: "rename", name: "x" },
       { publicId: "app_1", action: "narrow", approved: [] },
-      { publicId: "app_1", action: "write-mode", applyAutomatically: "yes" },
+      // A sensitive action never goes through the proxy (it needs a proof).
+      { publicId: "app_1", action: "write-mode", applyAutomatically: true },
       { action: "narrow", approved: KEEP },
     ]) {
       expect((await patch(body)).status).toBe(400);

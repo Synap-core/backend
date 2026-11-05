@@ -5,9 +5,14 @@ import { describe, it, expect, vi } from "vitest";
  * the playbook's `requiredIntents` and its space's `taskIntents`, under the
  * run's lens — and a failed read said as `failed`, never as "declares nothing".
  */
+const warned = vi.hoisted(() => [] as Array<[unknown, string]>);
 vi.mock("@synap-core/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap-core/core")>()),
-  createLogger: () => ({ warn: () => {}, error: () => {}, info: () => {} }),
+  createLogger: () => ({
+    warn: (o: unknown, msg: string) => warned.push([o, msg]),
+    error: () => {},
+    info: () => {},
+  }),
 }));
 
 const {
@@ -53,6 +58,7 @@ const index = new Map<string, Match[]>([
 // with two verbs, a skill (its one verb is its name), and one nobody grants.
 const capabilities: Registry["capabilities"] = [
   {
+    kind: "source-provider",
     id: "tool-fireflies",
     name: "fireflies",
     verbs: [
@@ -61,11 +67,24 @@ const capabilities: Registry["capabilities"] = [
     ],
   },
   {
+    kind: "skill",
     id: "skill-ibis",
     name: "ibis-decision-analysis",
     verbs: [{ id: "ibis-decision-analysis" }],
   },
-  { id: "tool-gmail", name: "gmail", verbs: [{ id: "gmail_send" }] },
+  {
+    kind: "tool",
+    id: "tool-gmail",
+    name: "gmail",
+    verbs: [{ id: "gmail_send" }],
+  },
+  // A skill that shares the gmail tool's name.
+  {
+    kind: "skill",
+    id: "skill-gmail",
+    name: "gmail",
+    verbs: [{ id: "gmail-tone" }],
+  },
 ];
 const registry: Registry = { index, capabilities };
 
@@ -177,6 +196,63 @@ describe("resolveRunToolProfile", () => {
     expect(p.verbs).toEqual(["ibis-decision-analysis"]);
   });
 
+  it("a grant names its capability by kind too: a skill grant never offers the same-named tool's verbs (review of backend#824)", async () => {
+    const offered = async (grant: { kind: "tool" | "skill"; id: string }) =>
+      (
+        await resolveRunToolProfile(
+          input,
+          deps({
+            readGrants: async () => [grant],
+            readTaskIntents: async () => [],
+            readPlaybook: async () => ({
+              name: "Write mail",
+              requiredIntents: [],
+              stages: [],
+              workspaceId: null,
+            }),
+          })
+        )
+      ).verbs;
+    expect(await offered({ kind: "skill", id: "gmail" })).toEqual([
+      "gmail-tone",
+    ]);
+    expect(await offered({ kind: "tool", id: "gmail" })).toEqual([
+      "gmail_send",
+    ]);
+    // A provider tool is granted as a plain `tool`.
+    expect(await offered({ kind: "tool", id: "fireflies" })).toEqual([
+      "fireflies_import_last_meeting",
+      "fireflies_search",
+    ]);
+  });
+
+  it("verbs the cap leaves out are logged, never dropped in silence (review of backend#824)", async () => {
+    warned.length = 0;
+    const many = Array.from({ length: RUN_PROFILE_MAX_VERBS }, (_, i) => ({
+      id: `g${i}`,
+    }));
+    const p = await resolveRunToolProfile(
+      input,
+      deps({
+        readGrants: async () => [{ kind: "tool", id: "tool-big" }],
+        readRegistry: async () => ({
+          index,
+          capabilities: [
+            { kind: "tool", id: "tool-big", name: "big", verbs: many },
+          ],
+        }),
+      })
+    );
+    expect(p.verbs).toHaveLength(RUN_PROFILE_MAX_VERBS);
+    expect(p.verbs).not.toContain("postiz_schedule_post");
+    expect(warned).toEqual([
+      [
+        expect.objectContaining({ playbookId: "pb-1", dropped: 3 }),
+        expect.stringContaining("more verbs than the IS accepts"),
+      ],
+    ]);
+  });
+
   it("granted verbs come first and every verb comes once", async () => {
     const p = await resolveRunToolProfile(
       input,
@@ -282,8 +358,14 @@ describe("foldRunVerbs", () => {
       ],
       ["b", [verb("b", "v0")]],
     ]);
-    const verbs = foldRunVerbs(["g", "y".repeat(201)], ["a", "b"], many);
+    const { verbs, dropped } = foldRunVerbs(
+      ["g", "y".repeat(201)],
+      ["a", "b"],
+      many
+    );
     expect(verbs).toHaveLength(RUN_PROFILE_MAX_VERBS);
+    // g + v0..v106 are 108 distinct verbs: 8 past the cap.
+    expect(dropped).toBe(8);
     expect(verbs[0]).toBe("g");
     expect(verbs).not.toContain("y".repeat(201));
     expect(new Set(verbs).size).toBe(verbs.length);

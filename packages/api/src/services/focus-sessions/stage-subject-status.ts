@@ -44,7 +44,14 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, entities, eq, getWorkspaceMembership } from "@synap/database";
+import {
+  db,
+  entities,
+  eq,
+  getWorkspaceMembership,
+  type StatusMoveActor,
+} from "@synap/database";
+import type { Hold } from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
@@ -118,39 +125,102 @@ export async function writeStageSubjectStatus(input: {
     if (!value)
       return { status: "skipped", reason: "stage_has_no_subject_status" };
 
+    const reasoning = `The process entered stage "${stage.name ?? stage.key}", which is "${value}".`;
+    return await writeSubjectStatusValue({
+      session,
+      entityId: session.subjectEntityId,
+      process: { ...proc, statusProperty: proc.statusProperty },
+      value,
+      reason: reasoning,
+      actor: input.agentUserId
+        ? {
+            kind: "agent",
+            userId: input.userId,
+            agentUserId: input.agentUserId,
+          }
+        : { kind: "human", userId: input.userId },
+      // A stage that pauses its subject: it waits on the stage (W4).
+      pauseHold: {
+        on: "thing",
+        ref: `stage:${stage.key}`,
+        reason: reasoning,
+      },
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      { err, sessionId: session.id, toStage: input.toStage },
+      "stage subject-status write failed — the stage stands"
+    );
+    return { status: "failed", reason };
+  }
+}
+
+/**
+ * THE ONE WRITER of a process's status value onto ONE thing it works on — the
+ * stage path above (the subject, on entering a stage) and the END path
+ * (`session-end-moves.ts`: the subject and every target still open, on the
+ * session's close) both write through here, so the two can never disagree on
+ * the rules:
+ *  - a ROLE process moves the role's FACET through the status door, or nothing;
+ *  - a thing already at the value is left alone (`already_set`);
+ *  - a kind that DECLARES a lifecycle moves through `moveStatus` (its
+ *    governance floor: an agent's move into done/lost proposes; a humanOnly
+ *    option proposes for an agent) — the process's own `humanOnlyStatuses`
+ *    force a proposal for anyone (OR-ed, never a downgrade);
+ *  - a kind with NO lifecycle keeps the legacy governed `entities.update`.
+ * Every move names the session (`sessionId`), so its transition does too.
+ * Never throws: a write that could not happen is `failed`, with why.
+ */
+export async function writeSubjectStatusValue(input: {
+  session: { id: string; workspaceId: string | null };
+  /** The thing to move: the session's subject, or one of its targets. */
+  entityId: string;
+  process: {
+    profileSlug: string | null;
+    statusProperty: string;
+    humanOnlyStatuses: string[];
+  };
+  value: string;
+  /** Shown on the move (and its proposal) as why. */
+  reason: string;
+  /** Who moves it: the person, or the agent (on the person's behalf). */
+  actor: StatusMoveActor;
+  /** The hold to record when the move pauses the thing (a stage's own). */
+  pauseHold?: Hold;
+  /**
+   * A session END move (session-end-moves.ts): governed like any write of the
+   * closer, without the done/lost default floor (`moveStatus.atSessionEnd`).
+   * A stage move never sets it.
+   */
+  atSessionEnd?: boolean;
+}): Promise<StageSubjectStatusOutcome> {
+  const { session, entityId, value, reason, actor } = input;
+  const proc = input.process;
+  try {
     const [subject] = await db
       .select({
         properties: entities.properties,
         workspaceId: entities.workspaceId,
       })
       .from(entities)
-      .where(eq(entities.id, session.subjectEntityId))
+      .where(eq(entities.id, entityId))
       .limit(1);
     if (!subject) return { status: "skipped", reason: "subject_not_found" };
 
-    const reasoning = `The process entered stage "${stage.name ?? stage.key}", which is "${value}".`;
+    const humanOnly = proc.humanOnlyStatuses.includes(value);
     const moveInput = {
-      entityId: session.subjectEntityId,
+      entityId,
       property: proc.statusProperty,
       to: value,
-      // No belief to defend: the stage decides the value; the door's own
+      // No belief to defend: the process decides the value; the door's own
       // compare-and-set still guards the read→write window.
-      actor: input.agentUserId
-        ? {
-            kind: "agent" as const,
-            userId: input.userId,
-            agentUserId: input.agentUserId,
-          }
-        : { kind: "human" as const, userId: input.userId },
+      actor,
       sessionId: session.id,
-      reason: reasoning,
-      forcePropose: proc.humanOnlyStatuses.includes(value) || undefined,
-      // A stage that pauses its subject: it waits on the stage (W4).
-      pauseHold: {
-        on: "thing" as const,
-        ref: `stage:${stage.key}`,
-        reason: reasoning,
-      },
+      reason,
+      forcePropose: humanOnly || undefined,
+      ...(input.pauseHold ? { pauseHold: input.pauseHold } : {}),
+      ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
     };
 
     // A ROLE subject: the facet's status, through the door, or nothing.
@@ -192,30 +262,33 @@ export async function writeStageSubjectStatus(input: {
     // The kind declares no lifecycle: `statusProperty` is a plain property,
     // written through the governed entity-update door as before —
     // `entities.update` as the session owner, attributed to the agent when one
-    // drove the advance, inside the session (its forceProposeWrites governance
+    // drove the move, inside the session (its forceProposeWrites governance
     // applies).
     let workspaceRole = "owner";
     if (wsId) {
-      const membership = await getWorkspaceMembership(db, wsId, input.userId);
+      const membership = await getWorkspaceMembership(db, wsId, actor.userId);
       if (membership) workspaceRole = membership.role;
     }
     const { entitiesRouter } = await import("../../routers/entities.js");
     const caller = entitiesRouter.createCaller({
       db,
       authenticated: true,
-      userId: input.userId,
+      userId: actor.userId,
       workspaceId: wsId,
       workspaceRole,
       sessionId: session.id,
     } as unknown as Context);
     const res = (await caller.update({
-      id: session.subjectEntityId,
+      id: entityId,
       properties: { [proc.statusProperty]: value },
-      ...(input.agentUserId
-        ? { agentUserId: input.agentUserId, source: "agent" as const }
+      ...(actor.kind === "agent"
+        ? {
+            ...(actor.agentUserId ? { agentUserId: actor.agentUserId } : {}),
+            source: "agent" as const,
+          }
         : { source: "user" as const }),
-      reasoning,
-      ...(proc.humanOnlyStatuses.includes(value) ? { forcePropose: true } : {}),
+      reasoning: reason,
+      ...(humanOnly ? { forcePropose: true } : {}),
     })) as { status?: string; proposalId?: string };
     if (res?.status === "proposed" && res.proposalId) {
       return {
@@ -227,12 +300,12 @@ export async function writeStageSubjectStatus(input: {
     }
     return { status: "written", property: proc.statusProperty, value };
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const why = err instanceof Error ? err.message : String(err);
     logger.warn(
-      { err, sessionId: session.id, toStage: input.toStage },
-      "stage subject-status write failed — the stage stands"
+      { err, sessionId: session.id, entityId, value },
+      "process status write failed — what triggered it stands"
     );
-    return { status: "failed", reason };
+    return { status: "failed", reason: why };
   }
 }
 

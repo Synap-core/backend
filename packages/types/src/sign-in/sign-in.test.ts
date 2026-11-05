@@ -46,6 +46,27 @@ describe("signedInDeviceView", () => {
     );
   });
 
+  it("an app registered by its document is named by its document, and runs where the pod read it", () => {
+    const v = signedInDeviceView({
+      ...row,
+      clientId: "https://apps.example.com/oauth/clients/desktop.json",
+      clientName: " Example Desktop ",
+      runsOn: "computer",
+    });
+    expect(v).toMatchObject({
+      appName: "Example Desktop",
+      kind: "computer",
+      title: "Example Desktop",
+    });
+    // CONTROL — without them, the id is humanized, never a URL shown as a name.
+    expect(
+      signedInDeviceView({
+        ...row,
+        clientId: "https://apps.example.com/oauth/clients/desktop.json",
+      }).kind
+    ).toBe("phone");
+  });
+
   it("titles a row by the device's own label, and dates it by its last use", () => {
     const v = signedInDeviceView({
       ...row,

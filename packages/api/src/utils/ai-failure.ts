@@ -39,6 +39,7 @@
  *   rate_limit       — 429
  *   timeout          — the call was aborted on our deadline
  *   circuit          — our client refused to call out (breaker open after repeated failures)
+ *   entitlement_unavailable — the IS could not read the account's entitlement (Control Plane unreachable)
  *   upstream         — 5xx from the AI service
  *   bad_request      — 4xx: the request itself was rejected as invalid
  *   invalid_response — the call succeeded but the payload was unusable
@@ -66,6 +67,7 @@ export type AiFailureClass =
   | "rate_limit"
   | "timeout"
   | "circuit"
+  | "entitlement_unavailable"
   | "upstream"
   | "bad_request"
   | "invalid_response"
@@ -217,6 +219,8 @@ const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
   rate_limit: "rate_limit",
   timeout: "timeout",
   circuit_open: "circuit",
+  // The IS could not read the account's entitlement (503): a moment, not a refusal.
+  entitlement_unavailable: "entitlement_unavailable",
   provider_error: "upstream",
   cancelled: "cancelled",
   unknown: "unknown",
@@ -434,6 +438,15 @@ const COPY: Record<
     needsOperator: false,
     message:
       "Recent calls to the AI service failed, so this pod stopped calling it for a moment. The underlying failure is in the pod logs.",
+  },
+  // The account service (Control Plane) could not be reached, so the IS could
+  // not tell whether AI is included: no operator or payer acts, a retry may pass.
+  entitlement_unavailable: {
+    code: "entitlement_unavailable",
+    retryable: true,
+    needsOperator: false,
+    message:
+      "AI is paused for a moment: the account service could not be reached.",
   },
   upstream: {
     code: "upstream_error",

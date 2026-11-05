@@ -42,7 +42,8 @@ import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { HostName } from "../../_lib/host-name";
 import { PageHeader } from "../../(admin)/components/page-header";
-import { formatRelative } from "../../../lib/format";
+import { formatRelative, readableError } from "../../../lib/format";
+import { useSetAppWriteMode } from "../../_lib/presence/use-sensitive-actions";
 import { chipColor, type AppDetailRow } from "../_lib/app-view";
 import { appHolderAccess, appMode } from "@synap-core/types/apps/app-view";
 import {
@@ -488,6 +489,9 @@ function PodAppSettings({
   const [narrowing, setNarrowing] = useState(false);
   const [mode, setMode] = useState(pod.write_mode);
   const [switching, setSwitching] = useState(false);
+  // With the proof of presence (W3 slice 3): a sensitive action, so it goes
+  // to the pod's own door, not through the `/api/apps` proxy.
+  const setWriteMode = useSetAppWriteMode();
   // "Apply automatically" ON waits here for its confirm (`writeModeConfirm`).
   const [confirmOn, setConfirmOn] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -519,22 +523,24 @@ function PodAppSettings({
 
   async function switchMode(on: boolean) {
     setSwitching(true);
-    const r = await patchApp({
-      publicId: app.public_id,
-      action: "write-mode",
-      applyAutomatically: on,
-    });
-    setSwitching(false);
-    setConfirmOn(false);
-    if (!r.ok) {
+    try {
+      setMode(
+        await setWriteMode.mutateAsync({
+          publicId: app.public_id,
+          applyAutomatically: on,
+        })
+      );
+    } catch (err) {
       addToast({
         title: "Couldn't change it",
-        description: r.error,
+        description:
+          readableError((err as { message?: string }).message) ?? "Try again.",
         color: "danger",
       });
-      return;
+    } finally {
+      setSwitching(false);
+      setConfirmOn(false);
     }
-    setMode(r.data as PodAppInfo["write_mode"]);
   }
 
   /** The switch's own change: OFF applies now, ON asks first. */

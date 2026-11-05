@@ -1637,3 +1637,131 @@ describe("(m) a person holds at most 20 live devices", () => {
     );
   });
 });
+
+// ─── (m) any app registered by its metadata document, scope `person` ────────
+//
+// Founder decision 2026-11-05: the pod names no app in code. A client whose
+// metadata document declares `person` gets the SAME device sign-in as the
+// built-in ids above, through the same doors; a document that does not
+// declare it never does, whatever redirect it lists.
+
+describe("(m) a metadata-document client with the `person` scope", () => {
+  const NATIVE = "https://apps.example.com/oauth/clients/desktop.json";
+  const NOT_PERSON = "https://apps.example.com/oauth/clients/mcp.json";
+  const NATIVE_LOOPBACK = "http://127.0.0.1:61234/oauth/callback";
+
+  /** The cached, still-fresh copy of a document, as client-metadata.ts writes it. */
+  const cacheDocument = (clientId: string, scopes: string[]) =>
+    (h.db as any).insert(schema.oauthClients).values({
+      clientId,
+      clientKind: "cimd",
+      clientName: "Example Desktop",
+      redirectUris: ["http://127.0.0.1/oauth/callback"],
+      scopes,
+      requestedPermissions: [],
+      requestedTemplates: [],
+      requestedPodWide: [],
+      requestedReasons: {},
+      metadataFetchedAt: new Date(),
+      metadataExpiresAt: new Date(Date.now() + DAY_MS),
+    });
+
+  beforeAll(async () => {
+    await cacheDocument(NATIVE, ["person"]);
+    await cacheDocument(NOT_PERSON, ["mcp.read"]);
+  });
+
+  const authorize = (clientId: string) =>
+    oauthApp.request(
+      `/authorize?${new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: NATIVE_LOOPBACK,
+        response_type: "code",
+        scope: "person",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+        state: "st",
+      })}`
+    );
+
+  it("/authorize takes its loopback redirect on any port, to the consent screen", async () => {
+    const res = await authorize(NATIVE);
+    expect(res.status).toBe(302);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe("https://admin.pod.test.synap.live");
+    expect(target.searchParams.get("client_id")).toBe(NATIVE);
+  });
+
+  it("CONTROL — a document without `person` listing the same redirect is refused and shown, never redirected", async () => {
+    const res = await authorize(NOT_PERSON);
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("consent → /token is a device that IS the person on /trpc, named by its document, signed out from the list", async () => {
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: NATIVE,
+        redirectUri: NATIVE_LOOPBACK,
+        responseType: "code",
+        scope: "person",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        state: "st",
+        approve: true,
+      },
+      PERSON,
+      kratosCtx(PERSON, MIN_MS)
+    );
+    const code = new URL(redirectTo).searchParams.get("code")!;
+    const { status, body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: NATIVE,
+      redirect_uri: NATIVE_LOOPBACK,
+      code_verifier: VERIFIER,
+      synap_device_label: "Ada's laptop",
+    });
+    expect(status).toBe(200);
+    expect(body.access_token).toMatch(/^synap_pd_/);
+    expect(body.refresh_token).toBeTruthy();
+    expect((await device(body.synap_device_id)).client_id).toBe(NATIVE);
+
+    // The person, on the app API; the list names the app by its document.
+    const res = await trpc({ bearer: body.access_token }, "devices.list");
+    expect(res.status).toBe(200);
+    const mine = (res.body.result.data.json as any[]).find(
+      (d) => d.id === body.synap_device_id
+    );
+    expect(mine).toMatchObject({
+      current: true,
+      clientId: NATIVE,
+      clientName: "Example Desktop",
+      runsOn: "computer",
+    });
+
+    // Its refresh is the device's (bound to this client).
+    const refreshed = await refresh(body.refresh_token, NATIVE);
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body.synap_device_id).toBe(body.synap_device_id);
+
+    // Signed out from the browser: the token stops at once.
+    const ended = await trpc({ cookie: BROWSER_COOKIE }, "devices.revoke", {
+      deviceId: body.synap_device_id,
+    });
+    expect(ended.status).toBe(200);
+    expect(
+      (await trpc({ bearer: refreshed.body.access_token }, "devices.list"))
+        .status
+    ).toBe(401);
+  });
+
+  it("CONTROL — the mint door refuses a document that does not declare `person`", async () => {
+    const result = await signInPersonDevice({
+      personUserId: PERSON,
+      clientId: NOT_PERSON,
+      authTime: new Date(),
+    });
+    expect(result).toEqual({ ok: false, reason: "not_first_party" });
+  });
+});

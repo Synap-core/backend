@@ -1511,6 +1511,7 @@ async function executeSingleRun(
     await notifySessionNeedsYou({
       sessionId: session.id,
       byAgent: !!input.agentUserId || input.onMissingRequired === "owe",
+      agentUserId: input.agentUserId,
       recipientUserId: input.userId,
       reason: { kind: "slots", before: [], after: session.expectedOutputs },
     });

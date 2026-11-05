@@ -34,6 +34,7 @@ import {
   writeModeLines,
 } from "../../../../lib/agent-writes/agent-writes";
 import { WriteModeChoice } from "../../../_lib/write-mode-choice";
+import { useSetAgentPosture } from "../../../_lib/presence/use-sensitive-actions";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
 import { toneTextClass } from "../../governance/agents/_lib/mark-tone";
@@ -103,7 +104,8 @@ export function ComputerWrites({ computer }: { computer: ComputerLike }) {
     { agentUserId: computer.id },
     { staleTime: 60_000, retry: false }
   );
-  const setPosture = trpc.agentUsers.setPosture.useMutation({
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const setPosture = useSetAgentPosture({
     onSuccess: async (res) => {
       // The computer's ceiling changes what each of its agents may do.
       await Promise.all([

@@ -5,7 +5,9 @@ import {
   RECONNECT_COMMAND,
   activityLine,
   agentsPhrase,
+  belongsToChoices,
   belongsToMark,
+  seedsRevokedLine,
   computerCounts,
   computerFilterOf,
   computerMatches,
@@ -346,5 +348,28 @@ describe("belongsToMark — whose computer it is", () => {
   it("is no mark when the pod did not say", () => {
     expect(belongsToMark({ belongsTo: null })).toBeNull();
     expect(belongsToMark({})).toBeNull();
+  });
+});
+
+describe("belongsToChoices — the three answers, each with what it changes", () => {
+  it("offers every value the pod accepts, in its order, with the vocabulary's mark", () => {
+    const choices = belongsToChoices();
+    expect(choices.map((c) => c.value)).toEqual(["person", "agent", "shared"]);
+    expect(choices.map((c) => c.label)).toEqual([
+      "Personal",
+      "An agent's",
+      "Shared",
+    ]);
+    for (const c of choices) expect(c.line.length).toBeGreaterThan(20);
+  });
+
+  it("says what leaving an agent's box took back", () => {
+    expect(seedsRevokedLine(0)).toBeNull();
+    expect(seedsRevokedLine(1)).toBe(
+      "1 approval it had inherited from its agent was taken back."
+    );
+    expect(seedsRevokedLine(3)).toBe(
+      "3 approvals it had inherited from its agent were taken back."
+    );
   });
 });

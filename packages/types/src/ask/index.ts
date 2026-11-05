@@ -566,8 +566,9 @@ const stakesField = {
  * A hint only: the pod derives the priority from facts (`needsYouPriority`,
  * `../needs-you/priority.ts`), and `urgency` can only LOWER it, never raise it.
  * There is no louder value on purpose: "it matters within the hour" is
- * `answerBy`, a fact. The priority RANKS; it changes no push yet (every ask
- * still notifies as before until push levels ship).
+ * `answerBy`, a fact. The priority RANKS the feed, and an ask due within the
+ * hour (P0) is the one ask push that breaks through Focus
+ * (`pushInterruptionLevel`, `../push/index.ts`).
  */
 export const ASK_URGENCIES = ["today", "whenever"] as const;
 export type AskUrgency = (typeof ASK_URGENCIES)[number];
@@ -597,7 +598,7 @@ const ticketFields = {
     .enum(ASK_URGENCIES)
     .optional()
     .describe(
-      "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship."
+      "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
     ),
   answerBy: z
     .string()
@@ -608,7 +609,7 @@ const ticketFields = {
     })
     .optional()
     .describe(
-      "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority."
+      "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
     ),
   consequence: z
     .string()

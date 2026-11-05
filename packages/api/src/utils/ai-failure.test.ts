@@ -208,6 +208,7 @@ describe("IS failure envelope", () => {
       rate_limit: "rate_limit",
       timeout: "timeout",
       circuit_open: "circuit",
+      entitlement_unavailable: "entitlement_unavailable",
       provider_error: "upstream",
       cancelled: "cancelled",
       unknown: "unknown",
@@ -215,6 +216,29 @@ describe("IS failure envelope", () => {
     for (const [code, cls] of Object.entries(expected)) {
       expect(classifyAiFailure(withEnvelope({ code }))).toBe(cls);
     }
+  });
+
+  it("entitlement_unavailable (IS 503: the account service could not be reached) is a retryable moment, not a refusal", () => {
+    const described = describeAiFailure(
+      Object.assign(
+        new Error("Intelligence Hub error: 503 Service Unavailable"),
+        {
+          status: 503,
+          failure: {
+            code: "entitlement_unavailable",
+            retryable: true,
+            status: 503,
+          },
+        }
+      )
+    );
+    expect(described).toMatchObject({
+      class: "entitlement_unavailable",
+      code: "entitlement_unavailable",
+      retryable: true,
+      needsOperator: false,
+    });
+    expect(described.message).toMatch(/account service could not be reached/);
   });
 
   it("falls to unknown on a code we do not know — never the nearest neighbour", () => {
