@@ -219,6 +219,9 @@ const STOPPED = {
     ceiling: 250_000,
     spentInputTokens: 131_072,
     firstCall: FIRST_CALL,
+    model: "claude-haiku-5-5",
+    cacheReadInputTokens: 100_000,
+    cacheWriteInputTokens: 20_000,
   },
 };
 
@@ -399,6 +402,10 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       budgetAction: "stop",
       ceiling: 250_000,
       firstCall: FIRST_CALL,
+      // Which model served the turn, and what its prompt cache did.
+      model: "claude-haiku-5-5",
+      cacheReadInputTokens: 100_000,
+      cacheWriteInputTokens: 20_000,
       next: "continue",
     });
     expect(l.turns.map((t) => t.next)).toEqual([
@@ -552,6 +559,27 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     });
     expect(done).toEqual({ code: 200, json: { status: "completed" } });
     expect((await runRow(runId)).status).toBe("completed");
+  });
+
+  it("an unusable model or cache count reads as absent, never a 400 that drops the turn", async () => {
+    const { sessionId, runId } = await seedRun();
+    const done = await completeRun(sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        model: "",
+        cacheReadInputTokens: -1,
+        cacheWriteInputTokens: "many",
+      },
+    });
+    expect(done).toEqual({ code: 200, json: { status: "completed" } });
+    expect((await runRow(runId)).status).toBe("completed");
+    const turn = (await ledger(sessionId)).firstTurn;
+    expect(turn).toMatchObject({ spentInputTokens: 9_000 });
+    expect(turn).not.toHaveProperty("model");
+    expect(turn).not.toHaveProperty("cacheReadInputTokens");
+    expect(turn).not.toHaveProperty("cacheWriteInputTokens");
   });
 
   it("a ledger left by an EARLIER run on the session does not count for this one", async () => {
