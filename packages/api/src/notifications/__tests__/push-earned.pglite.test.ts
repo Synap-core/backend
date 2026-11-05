@@ -76,7 +76,10 @@ vi.mock("../expo-push.js", () => ({
 vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: () => undefined,
 }));
-vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
+vi.mock("@synap/events", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  emitSideEffects: async () => undefined,
+}));
 vi.mock("../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
