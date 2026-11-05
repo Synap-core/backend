@@ -1558,7 +1558,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
+          "Create a standalone document. THREE modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. (3) a page — `type: \"html\"` with `content` a whole HTML page: pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN, no remote font or image; live pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1571,7 +1571,13 @@ export const tools = {
             content: {
               type: "string",
               description:
-                "Authored document body (markdown or plain text). Mutually exclusive with `url`.",
+                'Authored document body (markdown or plain text; with `type: "html"`, the whole page). Mutually exclusive with `url`.',
+            },
+            type: {
+              type: "string",
+              enum: ["markdown", "html"],
+              description:
+                'What `content` is. "markdown" (default) is a document. "html" is a page pod admin runs at `/open/<id>` in an isolated frame: inline only (the policy blocks the network: no CDN, no remote font or image), at most 2 MB, reading pod data through the read-only bridge. The receipt\'s `warnings` say what will not run.',
             },
             url: {
               type: "string",
