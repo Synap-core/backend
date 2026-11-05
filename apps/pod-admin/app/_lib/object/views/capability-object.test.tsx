@@ -66,6 +66,28 @@ vi.mock("../../../../lib/trpc", () => {
           }),
         },
       },
+      governanceRules: {
+        // Each action asks first, the pod's answer when no rule names it.
+        actionModes: {
+          useQuery: (input: { actions: string[] }) => ({
+            data: {
+              modes: input.actions.map((action) => ({
+                action,
+                mode: "ask",
+                ruleId: null,
+                mayRunOnItsOwn: true,
+              })),
+            },
+            isLoading: false,
+            isSuccess: true,
+            isError: false,
+            error: null,
+          }),
+        },
+        setActionMode: {
+          useMutation: () => ({ mutate: vi.fn(), isPending: false }),
+        },
+      },
       workspaces: { list: query(() => []) },
     },
   };

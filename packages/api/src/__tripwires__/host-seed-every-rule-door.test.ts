@@ -47,6 +47,8 @@ const EXEMPT: Record<string, string> = {
     "connection rules: the agent resolver never matches them",
   "database/src/utils/reversible-default.ts":
     "the pod default: an `any` rule, no agent",
+  "api/src/services/governance/action-mode.ts":
+    "a person's run mode for one action: an `any` rule, no agent (mayCarryHostSeed is false), so it has no seed to write or take back",
 };
 
 function sourceFiles(dir: string): string[] {

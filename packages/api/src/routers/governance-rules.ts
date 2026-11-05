@@ -82,6 +82,13 @@ import { authoredByUser } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
 import {
+  ACTION_MODES_BATCH_MAX,
+  assertPersonSetsActionMode,
+  readActionModes,
+  writeActionMode,
+} from "../services/governance/action-mode.js";
+import { ACTION_RUN_MODES } from "@synap-core/types/governance-rules";
+import {
   draftMatrixWiden,
   loadAgentOwner,
 } from "../services/governance/widen-cell.js";
@@ -869,6 +876,52 @@ export const governanceRulesRouter = router({
         rule,
         mayGrant,
         fromProposalId: null,
+      });
+    }),
+  /**
+   * Each action's pod-wide run mode (`services/governance/action-mode.ts`):
+   * runs on its own, asks first, or never, for every AI. Read by a tool's
+   * page and by an approval's "Approve always". A pure read of the rules.
+   */
+  actionModes: protectedProcedure
+    .input(
+      z.object({
+        actions: z.array(z.string().min(1)).max(ACTION_MODES_BATCH_MAX),
+      })
+    )
+    .query(async ({ input }) => ({
+      modes: await readActionModes(input.actions),
+    })),
+  /**
+   * Set ONE action's run mode for every AI on the whole pod: the person's
+   * "runs on its own / asks first / never" on a tool's page, and the rule half
+   * of "Approve always" on a request (`sourceProposalId`, a request that runs
+   * this action). Pod-wide, so a pod admin (`assertCanManageRule`). A person
+   * only: an AI's credential and a scoped key (an app's sign-in) are refused,
+   * before anything is read. A public post never runs on its own
+   * (`ACTION_ALWAYS_ASKS`). Undo = set it back; the rules list shows it too.
+   */
+  setActionMode: credentialProcedure
+    .input(
+      z.object({
+        action: z.string().min(1).max(200),
+        mode: z.enum(ACTION_RUN_MODES),
+        sourceProposalId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertPersonSetsActionMode(ctx);
+      await assertCanManageRule(ctx.userId, {
+        scopeKind: "pod",
+        principalKind: "any",
+      });
+      return writeActionMode({
+        userId: ctx.userId,
+        action: input.action,
+        mode: input.mode,
+        ...(input.sourceProposalId
+          ? { sourceProposalId: input.sourceProposalId }
+          : {}),
       });
     }),
   /**
