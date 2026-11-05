@@ -532,6 +532,17 @@ export const entityHandlers: McpHandlerMap = {
       lensWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    // `markdown` (the door's default) or `html`: a page pod admin runs at
+    // /open/<id>. MCP schemas are advisory, so the value is checked here.
+    if (
+      args.type !== undefined &&
+      args.type !== "markdown" &&
+      args.type !== "html"
+    ) {
+      throw new Error(
+        `\`type\` must be "markdown" or "html", not ${JSON.stringify(args.type)}.`
+      );
+    }
     const attachEntityId = args.entityId as string | undefined;
     const replaceBody = args.replaceBody === true;
     // Refuse an attach that would replace a body BEFORE the document exists.
@@ -550,6 +561,9 @@ export const entityHandlers: McpHandlerMap = {
       workspaceId: requestedWorkspaceId as string,
       title: args.title as string,
       content: (args.content as string) || "",
+      // The same door diagnoses an html page and puts what will not run in
+      // the receipt's `warnings`.
+      ...(args.type ? { type: args.type as "markdown" | "html" } : {}),
       // External reference: a URL to a file/page the agent has (but no bytes
       // to upload). Creates a reference document (storageKey NULL) — the
       // agent-appropriate "here's a file" path when there's no local binary.
