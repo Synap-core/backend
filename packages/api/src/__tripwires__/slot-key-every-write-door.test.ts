@@ -53,6 +53,8 @@ const PRESERVES: Record<string, string> = {
     "the stopped-session reaper's retirement stamps `retiredAt` onto a spread of each stored slot (`stampRetired`)",
   "services/focus-sessions/answer-slot.ts":
     "the answer door stamps `answer` onto a spread of the stored slot",
+  "services/focus-sessions/ask-later.ts":
+    "the person's Later stamps `laterUntil` onto a spread of the stored slot (`stampAskLater`)",
   "services/playbooks/run-playbook.ts":
     "`expectedOutputs:` is the playbook_runs definition snapshot, not a session slot write",
   "routers/sync.ts":
