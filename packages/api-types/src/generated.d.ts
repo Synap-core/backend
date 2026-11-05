@@ -12403,13 +12403,14 @@ declare const AI_FAILURE_CODES: readonly [
 	"rate_limited",
 	"timeout",
 	"circuit_open",
+	"entitlement_unavailable",
 	"upstream_error",
 	"bad_request",
 	"invalid_response",
 	"unknown"
 ];
 export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
-export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
+export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "entitlement_unavailable" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
 /**
  * A COMMITTED PARTIAL turn — the client-shaped verdict.
  *

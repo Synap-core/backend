@@ -240,7 +240,7 @@
           "name": "detail",
           "type": "enum",
           "required": false,
-          "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; strings over 120 chars truncated with '…[truncated: N chars total]'); `omitted` lists the property keys left out. full = unprojected rows.",
+          "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows.",
           "enum": ["lean", "full"]
         },
         {
@@ -330,7 +330,7 @@
           "detail": {
             "type": "string",
             "enum": ["lean", "full"],
-            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; strings over 120 chars truncated with '…[truncated: N chars total]'); `omitted` lists the property keys left out. full = unprojected rows."
+            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows."
           },
           "fields": {
             "type": "array",
