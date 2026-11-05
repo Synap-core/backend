@@ -68,6 +68,9 @@ export default [
       // Same for the pre-commit checker: byte-identical in synap-app,
       // synap-backend and synap-control-plane-api (see its header).
       "scripts/precommit-check.mjs",
+      // The failure-as-empty detector: byte-identical to synap-app's source.
+      "scripts/failure-empty-detector.mjs",
+      "scripts/failure-empty-detector.d.mts",
     ],
   },
   js.configs.recommended,
