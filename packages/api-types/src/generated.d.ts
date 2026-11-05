@@ -17440,7 +17440,30 @@ export interface LooseEnds {
 	} | Unavailable;
 	/** Its open sessions ready to close now (see {@link ReadyToClose}). */
 	readyToClose: ReadyToClose;
+	/** The things its ended sessions left open (see {@link LeftBehindSection}). */
+	leftBehind: LeftBehindSection;
 }
+/**
+ * The things the calling agent's ENDED sessions left behind: the session's
+ * subject or a target, still in an open or active status, with no session on
+ * it now. Newest-ended first; `count` is the whole population.
+ */
+export type LeftBehindSection = {
+	count: number;
+	items: Array<{
+		category: "active" | "open";
+		close: string;
+		closedAt: string;
+		entityId: string;
+		profileSlug: string | null;
+		sessionId: string;
+		/** How the session ended: closed, cancelled or failed. */
+		sessionStatus: string;
+		sessionTitle: string;
+		status: string | null;
+		title: string | null;
+	}>;
+} | Unavailable;
 /**
  * The calling agent's open sessions whose next move is `ready_to_close` — at
  * once, never idle-gated.
@@ -42475,6 +42498,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[];
 					workspaceId: string | null;
 				}[];
+				leftBehind: {
+					items: {
+						category: "active" | "open";
+						endedSession: {
+							closedAt: string;
+							id: string;
+							label: string;
+							status: "cancelled" | "closed" | "failed";
+						};
+						entityId: string;
+						profileSlug: string | null;
+						status: string | null;
+						title: string | null;
+						workspaceId: string | null;
+					}[];
+					total: number;
+				} | null;
 				unattached: {
 					actor?: string | undefined;
 					asksYou: boolean;
