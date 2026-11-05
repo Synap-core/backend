@@ -62,6 +62,7 @@ import {
 import type { PlaybookRun } from "@synap/database/schema";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
+import { isUuid } from "@synap-core/types/property-render";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import { applyRunCapture } from "./apply-run-capture.js";
 import { postChannelMessage } from "../messaging/post-message.js";
@@ -96,14 +97,12 @@ export const CHECKPOINT_MAX_RECORDS = 60;
 export const CHECKPOINT_MAX_LEFT_CHARS = 4_000;
 
 /**
- * One checkpoint record. The id has the IS's own shape (`UUID_RE`, any
- * 8-4-4-4-12 hex id): an RFC-only check refused real pod ids that carry no
- * version nibble, and with them the whole checkpoint.
+ * One checkpoint record. The id is any 8-4-4-4-12 hex id (`isUuid`, the IS's
+ * own shape): an RFC-only check refused real pod ids that carry no version
+ * nibble, and with them the whole checkpoint.
  */
 const checkpointRecordSchema = z.object({
-  id: z
-    .string()
-    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+  id: z.string().refine(isUuid, "not a uuid"),
   tool: z.string().min(1).max(200),
 });
 
