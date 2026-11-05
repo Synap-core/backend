@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   rankRouteCandidates,
   suggestRoutesForEntities,
+  tokenize,
   type RouteCandidate,
 } from "./suggest-routes.js";
 
@@ -225,9 +226,8 @@ describe("rankRouteCandidates — the live CRM Hygiene case", () => {
     const names = ranked.map((r) => r.candidate.name);
     expect(names[0]).toBe("AI Dev Session");
     // CRM Hygiene matched only on generic words ("agent", "each"), which are
-    // stopwords now: it is dropped (-1) or, at worst, ranked below.
-    const crm = names.indexOf("CRM Hygiene");
-    expect(crm === -1 || names.indexOf("AI Dev Session") < crm).toBe(true);
+    // stopwords now, so it is dropped.
+    expect(names.indexOf("CRM Hygiene")).toBe(-1);
   });
 
   it("returns only candidates that matched a word (no bare 'Runs for anything new')", () => {
@@ -348,5 +348,34 @@ describe("rankRouteCandidates — generic words are not evidence (matcher-fixes)
       type: "intent",
       terms: ["fix", "backend"],
     });
+  });
+});
+
+describe("tokenize — the pod-wide stop list is unchanged; generic work words are the ranker's own", () => {
+  it("'Agents need goals per session' tokenizes exactly as on main (recall, dedup, find)", () => {
+    expect([...tokenize("Agents need goals per session").keys()]).toEqual([
+      "agent",
+      "need",
+      "goal",
+      "per",
+      "session",
+    ]);
+  });
+
+  it("the playbook ranker drops those words: intent made only of them matches nothing", () => {
+    const ranked = rankRouteCandidates({
+      entity: {},
+      intentText: "Agents need goals per session",
+      candidates: [
+        {
+          kind: "playbook",
+          id: "p",
+          name: "Agent session goals",
+          text: ["each session needs a goal per agent"],
+          subjectProfileSlug: null,
+        },
+      ],
+    });
+    expect(ranked).toEqual([]);
   });
 });
