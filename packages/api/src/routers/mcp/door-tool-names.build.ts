@@ -38,14 +38,19 @@ const CP_PREFIX = "pod__";
 
 /**
  * `{ name: "define_kind", podToolName: "synap_define_kind" }` pairs out of the CP
- * curated catalog. Fails loudly when a `podToolName:` line was NOT paired — a
- * reformat of that file must break generation, never silently shrink the table.
+ * curated catalog. Keys may be bare or quoted: the CP generator
+ * (`scripts/gen-pod-tools.ts`) writes them as JSON (`"podToolName": "synap_ask"`)
+ * since control-plane-api@1f6d4ef6. Fails loudly when a `podToolName` entry was
+ * NOT paired — a reformat of that file must break generation, never silently
+ * shrink the table.
  */
 export function parseCpCuratedPairs(source: string): Map<string, string> {
   const pairs = new Map<string, string>();
-  const re = /name:\s*"([a-z_]+)",\s*podToolName:\s*"(synap_[a-z_]+)"/g;
+  const re =
+    /"?\bname"?:\s*"([a-z_]+)",\s*"?podToolName"?:\s*"(synap_[a-z_]+)"/g;
   for (const m of source.matchAll(re)) pairs.set(m[2]!, m[1]!);
-  const declared = source.match(/podToolName:\s*"synap_[a-z_]+"/g)?.length ?? 0;
+  const declared =
+    source.match(/"?podToolName"?:\s*"synap_[a-z_]+"/g)?.length ?? 0;
   if (declared === 0 || pairs.size !== declared) {
     throw new Error(
       `CP curated catalog parse: paired ${pairs.size} of ${declared} podToolName entries — the source shape changed; fix parseCpCuratedPairs.`
