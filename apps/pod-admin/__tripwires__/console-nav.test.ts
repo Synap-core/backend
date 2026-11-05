@@ -270,6 +270,11 @@ describe("the client link contract (@synap-core/types/console)", () => {
     expect(existsSync(join(appDir, "(admin)/computers/[id]/page.tsx"))).toBe(
       true
     );
+    // A member's own computer: outside (admin), so a member is never refused.
+    const mine = consolePath({ page: "myComputer", id: "m 1" });
+    expect(mine).toBe("/my-computers/m%201");
+    expect(routeAccess(mine as string)).not.toBe("admin");
+    expect(existsSync(join(appDir, "my-computers/[id]/page.tsx"))).toBe(true);
     expect(
       existsSync(join(appDir, "(admin)/applications/[via]/[id]/page.tsx"))
     ).toBe(true);

@@ -260,6 +260,25 @@ describe("consoleLink", () => {
     expect(consoleLink(null, "admin", { page: "keys" })).toBeNull();
     expect(consoleLink(ORIGIN, "admin", null)).toBeNull();
   });
+
+  // L8 (focus wave, 5 Nov): a member's desktop computer row had no door,
+  // though /my-computers/<id> is where a member manages their own computer.
+  it("sends a member's computer to its member page, an admin's to the admin one", () => {
+    for (const role of ["member", null, undefined] as const) {
+      expect(
+        consoleLink(ORIGIN, role, { page: "computer", id: "m/1" })
+      ).toEqual({
+        href: `${ORIGIN}/my-computers/m%2F1`,
+        label: "Manage in console",
+      });
+    }
+    expect(
+      consoleLink(ORIGIN, "admin", { page: "computer", id: "m/1" })?.href
+    ).toBe(`${ORIGIN}/computers/m%2F1`);
+    expect(
+      consoleLink(ORIGIN, "member", { page: "computer", id: " " })
+    ).toBeNull();
+  });
 });
 
 describe("the doors path", () => {
