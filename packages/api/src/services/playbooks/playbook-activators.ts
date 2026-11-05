@@ -475,7 +475,10 @@ export async function readSubjectProfile(
   return {
     profileKind: row.profileKind === "role" ? "role" : "kind",
     lifecycleProperty: lifecycle?.propertySlug ?? null,
-    ...(lifecycle
+    // A declaration carries its options; a resolver that hands back a
+    // lifecycle with none (a partial read) names none, never a crash here —
+    // this read feeds every activator compile, not only the onEnd check.
+    ...(Array.isArray(lifecycle?.options)
       ? { lifecycleOptions: lifecycle.options.map((o) => o.key) }
       : {}),
   };
