@@ -969,8 +969,7 @@ export async function resolveRunChoice(
     ownerId: input.userId,
     playbookId: input.playbook.id,
   });
-  if (!stored) return fallbackDefault;
-  if (stored.executor === "is-agent") {
+  if (stored?.executor === "is-agent") {
     // A remembered Synap AI on a playbook that only runs on agents is a
     // choice it cannot use: its own executor picks, as with none.
     return synapAiAllowed
@@ -986,10 +985,18 @@ export async function resolveRunChoice(
       : fallbackDefault;
   }
 
+  // The remembered agent is read through THE route's assigned rung, as a run
+  // that named nobody always was (`resolveAssignedRunHandOff`): it floors the
+  // agent on the person, whoever wrote the edge. `stored` names it when the
+  // route refuses it (paused, no longer theirs), so the run can say so.
   const handOff = await resolveAssignedRunHandOff(
     input.userId,
     input.playbook.id
   );
+  const agentUserId =
+    handOff?.agentUserId ??
+    (stored?.executor === "external-agent" ? stored.agentUserId : null);
+  if (!agentUserId) return fallbackDefault;
   if (!synapAiAllowed) {
     return handOff
       ? {
@@ -1008,7 +1015,7 @@ export async function resolveRunChoice(
   const { readAgentsForHandoff } =
     await import("../agent-dispatch/agents-for-handoff.js");
   const row = (await readAgentsForHandoff(input.userId)).agents.find(
-    (a) => a.agentUserId === stored.agentUserId
+    (a) => a.agentUserId === agentUserId
   );
   if (handOff && row?.wake.state === "awake") {
     return {
@@ -1028,7 +1035,7 @@ export async function resolveRunChoice(
       agentUserId: null,
       via: "fallback",
       passedOver: {
-        agentUserId: stored.agentUserId,
+        agentUserId,
         name: row?.name ?? handOff?.name ?? null,
         why: !handOff ? "refused" : (row?.wake.why ?? "not_awake"),
       },

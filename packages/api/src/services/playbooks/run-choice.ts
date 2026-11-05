@@ -69,11 +69,26 @@ export async function readPlaybookRunChoice(p: {
         ...agentOptions,
       ]
     : agentOptions;
+  // An agent assigned before choices were remembered per person (an edge with
+  // no owner) is still the one the route hands runs to: it reads as stored.
+  const remembered =
+    stored ??
+    (decided.runOn.via === "stored" && decided.runOn.agentUserId
+      ? {
+          executor: "external-agent" as const,
+          agentUserId: decided.runOn.agentUserId,
+        }
+      : decided.runOn.via === "fallback" && decided.runOn.passedOver
+        ? {
+            executor: "external-agent" as const,
+            agentUserId: decided.runOn.passedOver.agentUserId,
+          }
+        : null);
   return {
     playbookId: p.playbook.id,
-    stored,
+    stored: remembered,
     // A real choice only: something to pick besides the one way it can run.
-    ask: stored === null && agentOptions.length > 0 && options.length > 1,
+    ask: remembered === null && agentOptions.length > 0 && options.length > 1,
     synapAiAllowed,
     options,
     next: decided.runOn,

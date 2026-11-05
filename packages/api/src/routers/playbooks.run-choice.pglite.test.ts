@@ -151,11 +151,14 @@ const asPerson = () =>
     workspaceId: WS,
   } as unknown as Context);
 
-/** What the newest run recorded about who ran it. */
+/** What the one run recorded about who ran it (each step clears the table). */
 const lastRun = () =>
   q<{ executor: string; run_on: Record<string, unknown> | null }>(
-    `select executor, run_on from playbook_runs order by started_at desc limit 1`
-  ).then((r) => r.rows[0]);
+    `select executor, run_on from playbook_runs`
+  ).then((r) => {
+    expect(r.rows).toHaveLength(1);
+    return r.rows[0];
+  });
 const choiceEdges = () =>
   q<{ from_type: string; from_id: string }>(
     `select from_type, from_id from links where link_type = 'assigned_to' and to_id = $1`,
@@ -292,6 +295,7 @@ describe("answer once with Synap AI, remembered", () => {
     expect(read.ask).toBe(false);
 
     h.dispatched.length = 0;
+    await q(`delete from playbook_runs`);
     await asPerson().run({ playbookId: PLAYBOOK });
     expect(h.dispatched.map((d) => d.ref)).toEqual(["is-agent"]);
     expect((await lastRun())?.run_on).toEqual({
@@ -314,6 +318,7 @@ describe("answer once with an agent, remembered", () => {
       { from_type: "participant", from_id: RUNNING },
     ]);
     h.dispatched.length = 0;
+    await q(`delete from playbook_runs`);
     await asPerson().run({ playbookId: PLAYBOOK });
     expect(h.dispatched).toEqual([]);
     expect(await lastRun()).toEqual({
