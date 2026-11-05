@@ -33,7 +33,7 @@
  * page then names it from the scorecard and says the rest is not visible.
  */
 
-import { Button, addToast } from "@heroui/react";
+import { Button, Chip, addToast } from "@heroui/react";
 import { Pause, Play, Plug, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
@@ -48,7 +48,7 @@ import {
 import { trpc } from "../../../../lib/trpc";
 import { useSetAgentPosture } from "../../presence/use-sensitive-actions";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { formatRelative } from "../../../../lib/format";
+import { formatRelative, readableError } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
 import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
@@ -545,7 +545,7 @@ export function AgentPause({
       if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Couldn't change this",
-        description: err.message,
+        description: readableError(err.message) ?? "Try again.",
         color: "danger",
       });
     },
@@ -554,12 +554,17 @@ export function AgentPause({
   const paused = isAgentPaused(row);
   const mayChange = row.viewerCanDisconnect === true;
   return (
-    <Section title={resolveStatusLabel("paused")}>
-      <p className="text-[12.5px] text-foreground/75">
-        {paused && row.pausedAt
-          ? `Paused ${formatRelative(row.pausedAt)}. ${AGENT_PAUSE_NOTE}`
-          : `Not paused. ${AGENT_PAUSE_NOTE}`}
-      </p>
+    <Section title={resolveActionLabel("pause", "imperative")}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Chip size="sm" variant="flat" color={paused ? "warning" : "default"}>
+          {resolveStatusLabel(paused ? "paused" : "active")}
+        </Chip>
+        <p className="text-[12.5px] text-foreground/75">
+          {paused && row.pausedAt
+            ? `Paused ${formatRelative(row.pausedAt)}. ${AGENT_PAUSE_NOTE}`
+            : "Pausing it stops new work until you resume it."}
+        </p>
+      </div>
       {mayChange ? (
         <Button
           variant="flat"
