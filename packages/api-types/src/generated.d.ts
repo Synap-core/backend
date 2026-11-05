@@ -869,6 +869,46 @@ export interface SessionPostRef {
 	/** For `slot`: the slot's declared label. */
 	label?: string;
 }
+declare const AGENT_WAKE_STATES: readonly [
+	"awake",
+	"can_wake",
+	"cant_wake"
+];
+export type AgentWakeState = (typeof AGENT_WAKE_STATES)[number];
+declare const AGENT_WAKE_HOWS: readonly [
+	"built_in",
+	"binding",
+	"runner"
+];
+export type AgentWakeHow = (typeof AGENT_WAKE_HOWS)[number];
+declare const AGENT_WAKE_REFUSALS: readonly [
+	"paused",
+	"binding_broken",
+	"no_template",
+	"no_template_wake",
+	"no_computer",
+	"no_waker",
+	"computer_offline",
+	"wakes_off"
+];
+export type AgentWakeRefusal = (typeof AGENT_WAKE_REFUSALS)[number];
+export interface AgentWake {
+	state: AgentWakeState;
+	/** What gets it working; `null` when nothing could (no template wake). */
+	how: AgentWakeHow | null;
+	/** Only when `cant_wake`. */
+	why: AgentWakeRefusal | null;
+}
+/**
+ * The agent template an agent is an instance of. `version` is the catalog
+ * version the pod installed it at; `null` = built in (not installed from the
+ * catalog).
+ */
+export interface AgentTemplateRef {
+	slug: string;
+	label: string;
+	version: string | null;
+}
 export type AgentDirection = "external" | "house";
 /**
  * How one agent's writes land (founder, 2026-09-28: "reversible writes act"):
@@ -21449,6 +21489,18 @@ export interface HandoffAgent {
 	 * its harness has none. Never a command an agent wrote.
 	 */
 	open: AgentLaunchRef | null;
+	/**
+	 * The agent template it is an instance of (`resolveAgentTemplate`); `null`
+	 * when its type names none. `version: null` = built in, not from the catalog.
+	 */
+	template: AgentTemplateRef | null;
+	/**
+	 * Can the pod get it working now (`deriveAgentWake`, THE wake rule): awake,
+	 * can_wake (with `how`), or cant_wake with the one reason. Until computers
+	 * can start agents (plan v2 slice 4) no computer is a waker, so a pull
+	 * agent nothing runs reads `cant_wake: no_waker`, never `can_wake`.
+	 */
+	wake: AgentWake;
 	/** direct = lands on the roster now; asks_you = the person approves first. */
 	handOff: HandOffPreview;
 	/** Why it asks or is blocked (the resolver's or the route's words). */

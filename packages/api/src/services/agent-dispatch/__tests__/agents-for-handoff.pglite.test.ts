@@ -109,7 +109,7 @@ const BOUND_BROKEN = randomUUID();
 const APP_AGENT = randomUUID();
 /** A never-seen agent with no machine and no key. */
 const NEVER = randomUUID();
-/** The owner's Cursor, not paused, never seen: a client nothing can start. */
+/** The owner's Cursor, not paused, key never used: a client nothing can start. */
 const IDLE_CURSOR = randomUUID();
 const TOOL = randomUUID();
 /** The owner's agent that would do the handing — already at its proposal limit. */
@@ -226,6 +226,9 @@ beforeAll(async () => {
   );
   await key(THEIRS, TEAMMATE, ago(30_000), "their-laptop");
   await key(THEIRS_ON_DEVBOX, TEAMMATE, ago(30_000), null);
+  // A client holds its own door key (never used, never served): without one,
+  // THE reach rule reads a typed agent as the pod's own (reach 'pod').
+  await key(IDLE_CURSOR, OWNER, null, null);
   await q(
     `insert into tools (id, workspace_id, created_by, name, kind, executor, config, status, approved, metadata, input_schema, capabilities)
      values ($1, null, $2, 'acme', 'external', 'external-agent', $3::jsonb, 'active', true, '{}'::jsonb, '{}'::jsonb, '[]'::jsonb)`,
