@@ -12,6 +12,7 @@ import {
   AskSchema,
   ASK_COPY,
   askCardView,
+  askCardDue,
   askFate,
   answerProvenanceMark,
   answerWasRelayed,
@@ -82,6 +83,66 @@ describe("askCardView — the founder's card", () => {
       ["no", "No", "x", "neutral"],
     ]);
     expect(view.note).toEqual({ label: ASK_COPY.addNote });
+  });
+});
+
+describe("askCardView — the deadline and what the answer does (decision 9bc9f75c)", () => {
+  const MIN = 60_000;
+  const at = (ms: number) => new Date(NOW + ms).toISOString();
+  const slot = (a: unknown): AskCardSlot => ({
+    label: "Publish the launch post",
+    owner: "human",
+    blockedReason: "decision",
+    ask: ask(a),
+    owedSince: daysAgo(0),
+  });
+
+  it("within the hour: the span, warning, soon (the window that breaks Focus)", () => {
+    expect(askCardDue(at(40 * MIN), NOW)).toMatchObject({
+      label: "Needed in 40m",
+      spoken: "Needed in 40 minutes",
+      tone: "warning",
+      soon: true,
+    });
+    expect(askCardDue(at(60 * MIN), NOW)?.soon).toBe(true);
+  });
+
+  it("past it: how late, in the error tone", () => {
+    expect(askCardDue(at(-12 * MIN), NOW)).toMatchObject({
+      label: "Overdue by 12m",
+      spoken: "Overdue by 12 minutes",
+      tone: "error",
+      soon: true,
+    });
+  });
+
+  it("later than the hour: the time, quiet, not soon", () => {
+    const due = askCardDue(at(3 * 60 * MIN), NOW)!;
+    expect(due.label).toMatch(/^Needed by \S/);
+    expect(due).toMatchObject({ tone: "textSecondary", soon: false });
+    // Another day names its date too.
+    expect(askCardDue(at(3 * DAY), NOW)!.label).toMatch(/^Needed by .+, \S/);
+  });
+
+  it("no time, or an unreadable one: no mark", () => {
+    expect(askCardDue(undefined, NOW)).toBeNull();
+    expect(askCardDue("tomorrow", NOW)).toBeNull();
+  });
+
+  it("the card carries both, read from the ask", () => {
+    const view = askCardView(
+      slot({
+        mode: "confirm",
+        answerBy: at(30 * MIN),
+        consequence: " Publishes the post to LinkedIn ",
+      }),
+      { now: NOW }
+    );
+    expect(view.due).toMatchObject({ label: "Needed in 30m", soon: true });
+    expect(view.consequence).toBe("Publishes the post to LinkedIn");
+    const bare = askCardView(slot({ mode: "confirm" }), { now: NOW });
+    expect(bare.due).toBeNull();
+    expect(bare.consequence).toBeNull();
   });
 });
 
