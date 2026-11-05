@@ -100,6 +100,14 @@ export interface MoveStatusInput {
   pauseHold?: Hold;
   /** A replay: the app its proposal was filed by (`proposals.app_id`). */
   appId?: string | null;
+  /**
+   * A session END move (`subjectProfile.onEnd`): governed like any write of
+   * the closer, without the done/lost default floor — the session's end is
+   * the guardrail (governance-policy `lifecycleMove.atSessionEnd`). Set ONLY
+   * by the close door's writer (session-end-moves.ts); no request input
+   * reaches it.
+   */
+  atSessionEnd?: boolean;
 }
 
 const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
@@ -393,7 +401,9 @@ export async function moveStatus(
           ? "agent"
           : "intelligence"
         : "user",
-      lifecycleMove,
+      lifecycleMove: input.atSessionEnd
+        ? { ...lifecycleMove, atSessionEnd: true }
+        : lifecycleMove,
       forcePropose: input.forcePropose,
       ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
       reasoning:

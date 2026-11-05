@@ -76,7 +76,8 @@
  *                                    byte-identical — see below). An `auto`
  *                                    rule on a move INTO done/lost applies
  *                                    only if it names the write; else 2.85
- *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute)
+ *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute;
+ *        a session END move skips 2.85, its end being the guardrail)
  *   2.88 NAMED_RULE_ONLY_EVENT_KEYS → propose (a capability run or a session's
  *                                    tool grant that no rule NAMING it widened
  *                                    at 2.8; ownership and the auto-approve
@@ -1421,7 +1422,20 @@ export interface AgentPolicyInput {
    *                     origin/ceiling floors (2.55/2.56) still apply above.
    * Absent → no effect (every existing verdict unchanged).
    */
-  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  lifecycleMove?: {
+    intoTerminal: boolean;
+    humanOnly: boolean;
+    /**
+     * The move is a session END move (`subjectProfile.onEnd`, applied by the
+     * one close door after the session closed): the session having to END is
+     * the guardrail, so the done/lost default (2.85) and its named-rule-only
+     * widening do NOT apply — the move is governed like any other write of the
+     * closer (founder, 2026-11-05, plan b38e5e64 §7.2): a `propose` rule (an
+     * "ask first" agent) still proposes, and the humanOnly floor (2.075) still
+     * holds. Set ONLY by the close door's writer (`moveStatus.atSessionEnd`).
+     */
+    atSessionEnd?: boolean;
+  };
   /**
    * The write adds a REQUIRED field or a DEFAULT to a kind the pod administrator
    * owns (a system kind, or a shared kind with no home workspace), and the
@@ -2066,9 +2080,14 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
     input.governanceRuleVerdict === "auto" &&
     isNamedRuleOnlyWrite(eventKey) &&
     input.governanceRuleNamesWrite !== true;
+  // The done/lost floor: a terminal move, unless it is a session END move
+  // (the session's end is its guardrail, `lifecycleMove.atSessionEnd`).
+  const terminalFloor =
+    input.lifecycleMove?.intoTerminal === true &&
+    input.lifecycleMove.atSessionEnd !== true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
-    input.lifecycleMove?.intoTerminal === true &&
+    terminalFloor &&
     input.governanceRuleNamesWrite !== true &&
     !(organise && input.governanceRuleIsOwnOrganise === true);
   if (
@@ -2096,7 +2115,7 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   // names the write (see 2.8 above); above ownership and the
   // auto-approve lists so neither silently decides a status move.
   if (input.lifecycleMove) {
-    if (input.lifecycleMove.intoTerminal) {
+    if (terminalFloor) {
       return {
         verdict: "propose",
         reason: PROPOSE_REASON.LIFECYCLE_TERMINAL,

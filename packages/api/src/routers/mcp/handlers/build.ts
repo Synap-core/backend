@@ -453,6 +453,9 @@ export const buildHandlers: McpHandlerMap = {
         if (args.statusProperty !== undefined) {
           subjectProfile.statusProperty = args.statusProperty;
         }
+        // What a session end moves the subject to: validated with the ONE
+        // schema and the definition check's option test by `playbooks.create`.
+        if (args.onEnd !== undefined) subjectProfile.onEnd = args.onEnd;
         return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
       })(),
       // `project` = a METHOD a project runs as a track. Any other value is
@@ -522,10 +525,12 @@ export const buildHandlers: McpHandlerMap = {
       args.subjectProfileSlug.trim()
         ? args.subjectProfileSlug.trim()
         : undefined;
-    if (args.statusProperty !== undefined && !slug) {
+    if (
+      (args.statusProperty !== undefined || args.onEnd !== undefined) &&
+      !slug
+    ) {
       return ok({
-        error:
-          "statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.",
+        error: `${args.statusProperty !== undefined ? "statusProperty" : "onEnd"} needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
       });
     }
     const patch: Record<string, unknown> = {};
@@ -550,6 +555,7 @@ export const buildHandlers: McpHandlerMap = {
         ...(args.statusProperty !== undefined
           ? { statusProperty: args.statusProperty }
           : {}),
+        ...(args.onEnd !== undefined ? { onEnd: args.onEnd } : {}),
       };
     }
     const reasoning = readReasoning(args);

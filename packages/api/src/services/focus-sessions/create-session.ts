@@ -46,6 +46,7 @@ import {
 } from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
+import { buildDefinitionSnapshot } from "../playbooks/run-playbook.js";
 import {
   matchSessionTemplate,
   type SessionPlaybookCandidates,
@@ -1294,7 +1295,10 @@ export async function createFocusSession(
     // The playbook_runs ledger row (status "running") so the runs feed sees the
     // session. Mirrors run-playbook.ts's executeSingleRun insert (executor +
     // definition snapshot), minus the executor dispatch — starting a session is
-    // "I'm working on this playbook", not a full executor run.
+    // "I'm working on this playbook", not a full executor run. The snapshot is
+    // THE shared one (`buildDefinitionSnapshot`): a hand-written copy here
+    // froze no `subjectProfile` (so no lifecycle, no end moves), criteria or
+    // requiredIntents, and a later edit of the playbook then decided this run.
     if (playbook) {
       await tx.insert(playbookRuns).values({
         workspaceId,
@@ -1303,13 +1307,7 @@ export async function createFocusSession(
         executor: playbook.executor,
         status: "running",
         createdBy: agentUserId ?? userId,
-        definitionSnapshot: {
-          version: playbook.version,
-          goalTemplate: playbook.goalTemplate,
-          stages: playbook.stages,
-          params: playbook.params,
-          expectedOutputs: playbook.expectedOutputs,
-        },
+        definitionSnapshot: buildDefinitionSnapshot(playbook),
       });
     }
     return { session: session!, adopted, deduped: undefined };
