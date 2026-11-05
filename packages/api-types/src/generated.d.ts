@@ -10532,6 +10532,12 @@ export interface AgentMatrix {
 		columnsOmitted: number;
 	};
 }
+declare const ACTION_RUN_MODES: readonly [
+	"auto",
+	"ask",
+	"never"
+];
+export type ActionRunMode = (typeof ACTION_RUN_MODES)[number];
 declare const PACKAGE_FIELD_STATES: readonly [
 	"updates",
 	"yours",
@@ -21544,6 +21550,23 @@ export type RuleGrantResult = {
 	outcome: "needs_admin";
 	proposalId: string;
 };
+export interface ActionModeRow {
+	/** The action's name (the verb id). */
+	action: string;
+	mode: ActionRunMode;
+	/** The rule that sets it; `null` when it asks first (no rule). */
+	ruleId: string | null;
+	/** False for an action no rule may run on its own (a public post). */
+	mayRunOnItsOwn: boolean;
+}
+export interface WriteActionModeResult {
+	action: string;
+	mode: ActionRunMode;
+	/** The rule now setting it; `null` for "asks first". */
+	ruleId: string | null;
+	/** False when it was already set that way (nothing written). */
+	changed: boolean;
+}
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
  * propose a change to `governance_rules` / `governance_ceilings` /
@@ -38219,6 +38242,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		actionModes: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				actions: string[];
+			};
+			meta: object;
+			output: {
+				modes: ActionModeRow[];
+			};
+		}>;
 		alwaysApproved: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
@@ -38485,6 +38517,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 			};
+		}>;
+		setActionMode: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				action: string;
+				mode: "ask" | "auto" | "never";
+				sourceProposalId?: string | undefined;
+			};
+			meta: object;
+			output: WriteActionModeResult;
 		}>;
 		setOwnOrganiseDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
