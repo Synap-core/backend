@@ -129,11 +129,19 @@ const WEIGHT = {
   anyKind: 0.5,
 } as const;
 
-/** Words too common to be evidence of intent. */
+/**
+ * Words too common to be evidence of intent. The second line is the generic
+ * vocabulary of describing work itself ("every work session binds to one
+ * playbook", "one ask routes to the right…"): measured on a live start, they
+ * rode back as the matched evidence of the top candidates. Plurals are listed
+ * because the check runs on the raw word, before stemming. Domain nouns such
+ * as "token", "fix" or "backend" are deliberately NOT here.
+ */
 const STOPWORDS: ReadonlySet<string> = new Set(
-  "the and for with this that from into your you our are was were will have has had not but can all any its about when then than them they what which who how why also just more some such only very".split(
-    " "
-  )
+  (
+    "the and for with this that from into your you our are was were will have has had not but can all any its about when then than them they what which who how why also just more some such only very " +
+    "per one every each work works need needs ask asks right session sessions bind binds agent agents goal goals"
+  ).split(" ")
 );
 
 /** Lowercase word → a loose stem (plural `s` dropped), so "reviews" ~ "review". */

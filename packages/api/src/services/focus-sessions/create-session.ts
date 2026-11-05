@@ -805,6 +805,7 @@ export async function createFocusSession(
         workspaceId,
         title,
         goal,
+        excludeGoalTemplates: true,
       });
     } catch (err) {
       // Suggestions are a courtesy, never a gate. A failed lookup must not

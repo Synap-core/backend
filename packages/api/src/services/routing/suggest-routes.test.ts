@@ -224,9 +224,10 @@ describe("rankRouteCandidates — the live CRM Hygiene case", () => {
     });
     const names = ranked.map((r) => r.candidate.name);
     expect(names[0]).toBe("AI Dev Session");
-    expect(names.indexOf("AI Dev Session")).toBeLessThan(
-      names.indexOf("CRM Hygiene")
-    );
+    // CRM Hygiene matched only on generic words ("agent", "each"), which are
+    // stopwords now: it is dropped (-1) or, at worst, ranked below.
+    const crm = names.indexOf("CRM Hygiene");
+    expect(crm === -1 || names.indexOf("AI Dev Session") < crm).toBe(true);
   });
 
   it("returns only candidates that matched a word (no bare 'Runs for anything new')", () => {
@@ -274,5 +275,78 @@ describe("suggestRoutesForEntities", () => {
     });
     expect(s!.entityId).toBe("e1");
     expect(s!.suggestions.map((r) => r.candidate.id)).toEqual(["pb-review"]);
+  });
+});
+
+describe("rankRouteCandidates — generic words are not evidence (matcher-fixes)", () => {
+  const generic: RouteCandidate[] = [
+    {
+      kind: "playbook",
+      id: "generic",
+      name: "Night shift",
+      text: [
+        "Every work session needs one agent per goal: ask the right owner, per task",
+      ],
+      subjectProfileSlug: null,
+    },
+    {
+      kind: "playbook",
+      id: "tokens",
+      name: "Cut token spend",
+      text: ["Fewer tokens per unit of work"],
+      subjectProfileSlug: null,
+    },
+  ];
+  const goal =
+    "The founder's agents spend fewer tokens per unit of work: one ask routes to the right playbook, every work session binds to one playbook, and needs a goal";
+
+  it("never offers a stopword as a matched term or in the reason, and drops a candidate that only shares them", () => {
+    const ranked = rankRouteCandidates({
+      entity: {},
+      intentText: goal,
+      candidates: generic,
+    });
+    // the generic-only candidate is dropped (no anyKind-only rescue either)
+    expect(ranked.map((r) => r.candidate.id)).toEqual(["tokens"]);
+    const terms = ranked.flatMap((r) =>
+      r.signals.flatMap((s) => (s.type === "intent" ? s.terms : []))
+    );
+    expect(terms).toContain("tokens");
+    for (const w of [
+      "per",
+      "one",
+      "every",
+      "work",
+      "needs",
+      "ask",
+      "right",
+      "session",
+      "binds",
+      "agents",
+      "goal",
+    ]) {
+      expect(terms).not.toContain(w);
+      expect(ranked[0]!.reason).not.toContain(`“${w}”`);
+    }
+  });
+
+  it("keeps domain words that look generic but are evidence (fix, synap, backend)", () => {
+    const ranked = rankRouteCandidates({
+      entity: {},
+      intentText: "fix a bug in synap-backend and land it",
+      candidates: [
+        {
+          kind: "playbook",
+          id: "ship",
+          name: "Ship a change",
+          text: ["fix the backend"],
+          subjectProfileSlug: null,
+        },
+      ],
+    });
+    expect(ranked[0]!.signals[0]).toEqual({
+      type: "intent",
+      terms: ["fix", "backend"],
+    });
   });
 });
