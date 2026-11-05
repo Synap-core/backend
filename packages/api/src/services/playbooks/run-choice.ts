@@ -18,6 +18,7 @@ import type {
 } from "@synap-core/types/agents";
 import {
   SYNAP_AI_LABEL,
+  resolveAgentReachLabel,
   resolveAgentWakeHowLabel,
   resolveAgentWakeRefusalLabel,
   resolveAgentWakeStateLabel,
@@ -35,6 +36,56 @@ function wakeWords(wake: AgentWake): string {
     : state;
 }
 
+/** What names one agent among the person's, as the roster serves it. */
+export interface AgentLabelInput {
+  agentUserId: string;
+  name: string | null;
+  /** Its computer's name (`HandoffAgent.computer.name`); null = none. */
+  computer: string | null;
+  reach: string;
+}
+
+/**
+ * Each agent's label in the ask, telling apart agents that share a name (two
+ * "Claude Code", one per computer: founder's pod, 2026-11-05, finding
+ * 2288ffce). A name nobody else has stays as it is. Shared names carry what
+ * tells them apart, in order: the computer ("Claude Code · MacBook"); with no
+ * computer, how the pod reaches it (the reach words, e.g. "Synap sends it
+ * work" for a connector) or "No computer"; agents still alike get an ordinal
+ * ("(2)"), in roster order. Pure; words through the vocabulary door.
+ */
+export function distinctAgentLabels(
+  agents: readonly AgentLabelInput[]
+): Map<string, string> {
+  const base = (a: AgentLabelInput) => a.name?.trim() || "Agent";
+  const count = new Map<string, number>();
+  for (const a of agents) count.set(base(a), (count.get(base(a)) ?? 0) + 1);
+  const firstPass = agents.map((a) => {
+    const name = base(a);
+    if ((count.get(name) ?? 0) < 2) return { id: a.agentUserId, label: name };
+    const where = a.computer?.trim()
+      ? a.computer.trim()
+      : a.reach === "dispatch"
+        ? resolveAgentReachLabel("dispatch")
+        : resolveAgentWakeRefusalLabel("no_computer");
+    return { id: a.agentUserId, label: `${name} · ${where}` };
+  });
+  const seen = new Map<string, number>();
+  const total = new Map<string, number>();
+  for (const f of firstPass) total.set(f.label, (total.get(f.label) ?? 0) + 1);
+  const out = new Map<string, string>();
+  for (const f of firstPass) {
+    if ((total.get(f.label) ?? 0) < 2) {
+      out.set(f.id, f.label);
+      continue;
+    }
+    const n = (seen.get(f.label) ?? 0) + 1;
+    seen.set(f.label, n);
+    out.set(f.id, n === 1 ? f.label : `${f.label} (${n})`);
+  }
+  return out;
+}
+
 export async function readPlaybookRunChoice(p: {
   userId: string;
   playbook: Pick<Playbook, "id" | "executor">;
@@ -47,16 +98,25 @@ export async function readPlaybookRunChoice(p: {
   ]);
   // The person's own agents a hand-off could reach: the pod's own agents are
   // Synap AI, offered once as such, never one row per persona.
-  const agentOptions: RunChoiceOption[] = roster.agents
-    .filter((a) => a.reach !== "pod" && a.canTakeYourWork)
-    .map((a) => ({
-      choice: { executor: "external-agent", agentUserId: a.agentUserId },
+  const offered = roster.agents.filter(
+    (a) => a.reach !== "pod" && a.canTakeYourWork
+  );
+  const labels = distinctAgentLabels(
+    offered.map((a) => ({
+      agentUserId: a.agentUserId,
       name: a.name,
-      label: a.name?.trim() || "Agent",
-      wake: a.wake,
-      wakeLabel: wakeWords(a.wake),
-      recommended: false,
-    }));
+      computer: a.computer?.name ?? null,
+      reach: a.reach,
+    }))
+  );
+  const agentOptions: RunChoiceOption[] = offered.map((a) => ({
+    choice: { executor: "external-agent", agentUserId: a.agentUserId },
+    name: a.name,
+    label: labels.get(a.agentUserId) ?? (a.name?.trim() || "Agent"),
+    wake: a.wake,
+    wakeLabel: wakeWords(a.wake),
+    recommended: false,
+  }));
   const options: RunChoiceOption[] = synapAiAllowed
     ? [
         {

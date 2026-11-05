@@ -3616,7 +3616,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…), or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3633,6 +3633,17 @@ export const tools = {
             limit: {
               type: "number",
               description: "Page size (1–100, default 50).",
+            },
+            playbookId: {
+              type: "string",
+              description:
+                "Read ONE playbook in full (its whole definition), instead of listing.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              description:
+                "lean (default) = the digest per playbook; full = complete rows (large: pair it with a small limit).",
             },
           },
           required: [],
