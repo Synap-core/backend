@@ -10,18 +10,23 @@
  * door it needs (`GET /entities?projectId=&offset=`, hub-rest-client
  * `getRecentEntities`) answered 403 GRANT_DOOR_UNSUPPORTED for every scoped
  * key, because the fence did not list it — although every branch but `q` reads
- * through the seamed `entities.getEntities`. It is listed now, and the `q`
- * branch (Typesense, which no grant narrows) is refused for any key with a
- * limit.
+ * through the seamed `entities.getEntities`. It is listed now.
+ *
+ * `q` (finding cce86e6b, Raycast's Search Synap): Typesense ranks every match
+ * the PERSON may see; `search.search` then re-reads the hits through the
+ * entity floor with the key's grant ANDed (`withinGrantSearchHits`), so a
+ * fenced key gets only in-grant hits, in relevance order. Typesense is mocked
+ * at its boundary (`searchService.search`); everything after it is real: the
+ * hub `search.search` procedure, the listing rule and the grant intersect,
+ * compiled and run on PGlite.
  *
  * Rows rule out: listing the door without the seam narrowing (the control
  * shows the floor alone returns every row), a fence that sees only `/api/hub`
- * (alias rows), a `q` guard that trusts `isFencedGrant` (a `*` pinned to a
- * project is not "fenced" but search would escape the pin), and a guard that
- * refuses everyone (the full-access `q` control is not a fence refusal).
+ * (alias rows), a search bound that skips a `*` pinned to a project, a bound
+ * that loses relevance order, a bound that also re-reads (or widens) the
+ * full-access answer, and a fenced search that does not widen its window.
  *
- * Cannot see: production Postgres, Typesense (the full-access `q` control only
- * proves the refusal is grant-dependent, not that search answers).
+ * Cannot see: production Postgres, real Typesense ranking.
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
@@ -34,6 +39,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   getApiKeyStatus: vi.fn(),
+  search: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -57,6 +63,11 @@ vi.mock("../../../services/api-keys.js", () => ({
     checkRateLimit: () => true,
   },
 }));
+// Typesense, at its boundary: it ranks what the PERSON may see, never the
+// key's grant. Everything after it is real.
+vi.mock("@synap/search", () => ({
+  searchService: { search: (...a: unknown[]) => h.search(...a) },
+}));
 vi.mock("../../../services/external-user-mapping.js", () => ({
   isSubTokenFeatureEnabled: () => false,
   resolveExternalUserMapping: vi.fn(),
@@ -68,7 +79,12 @@ import * as schema from "@synap/database/schema";
 // at load) — otherwise a scoped grant reads deny-all, not narrowed.
 import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
-import { registerEntitiesRoutes } from "./entities.js";
+import {
+  GRANT_BOUNDED_SEARCH_WINDOW,
+  registerEntitiesRoutes,
+} from "./entities.js";
+import { runWithGrant } from "@synap/database";
+import { withinGrantSearchHits } from "../../../services/retrieval/grant-bounded-search-hits.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const BASIC =
@@ -187,7 +203,28 @@ beforeAll(async () => {
   }
 }, 120_000);
 
+/**
+ * Typesense's ranking: every row the person may see, out-of-grant rows ranked
+ * FIRST and between, so a bound that keeps the wrong rows or loses the order
+ * shows.
+ */
+const RANKED = [POD_OUT, IN_PROJECT, OUT_OF_PROJECT, POD_IN_PROJECT];
+const hit = (id: string) => ({
+  id,
+  collection: "entities",
+  document: { id, title: `n ${id}`, entityType: "note" },
+  highlights: [{ field: "title", snippet: "<mark>n</mark>" }],
+  textMatch: 1,
+});
+
 beforeEach(() => {
+  h.search.mockReset();
+  h.search.mockImplementation(async () => ({
+    results: RANKED.map(hit),
+    found: 42,
+    searchTimeMs: 1,
+    facetCounts: { entities: { "entityType.note": 42 } },
+  }));
   h.getApiKeyStatus.mockImplementation(async (bearer: string) => {
     const name = bearer.replace(/^synap_/, "") as KeyName;
     return {
@@ -289,28 +326,74 @@ describe("GET /entities — a project-limited key lists only in-grant rows", () 
   });
 });
 
-describe("GET /entities?q= — search is refused for any key with a limit", () => {
+async function rankedIds(res: Response): Promise<string[]> {
+  expect(res.status).toBe(200);
+  return ((await res.json()) as Array<{ id: string }>).map((r) => r.id);
+}
+
+describe("GET /entities?q= — search is bounded by the key's grant", () => {
   for (const mount of ["/api/hub", "/api/hub-protocol"]) {
-    it(`a project-limited key ⇒ 403 GRANT_DOOR_UNSUPPORTED (${mount})`, async () => {
-      const res = await get("project", `${mount}/entities?q=note`);
-      expect(res.status).toBe(403);
-      expect(await res.json()).toMatchObject({
-        code: "GRANT_DOOR_UNSUPPORTED",
-      });
+    it(`a project-limited key gets only in-grant hits, in relevance order (${mount})`, async () => {
+      expect(
+        await rankedIds(await get("project", `${mount}/entities?q=note`))
+      ).toEqual([IN_PROJECT, POD_IN_PROJECT]);
     });
   }
 
-  it("a `*` pinned to the project is refused too (not 'fenced', still pinned)", async () => {
-    const res = await get("pinnedStar", "/api/hub/entities?q=note");
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ code: "GRANT_DOOR_UNSUPPORTED" });
+  it("a `*` pinned to the project is bounded too (pinned is fenced)", async () => {
+    expect(
+      await rankedIds(await get("pinnedStar", "/api/hub/entities?q=note"))
+    ).toEqual([IN_PROJECT, POD_IN_PROJECT]);
   });
 
-  it("control: an unbounded full-access key is not refused by the guard", async () => {
-    const res = await get("full", "/api/hub/entities?q=note");
-    // Typesense is absent here, so the search itself may fail — but never
-    // with the fence's refusal.
-    const body = (await res.json()) as { code?: string };
-    expect(body.code).not.toBe("GRANT_DOOR_UNSUPPORTED");
+  it("a fenced key ranks a wider window, then cuts to `limit` after the bound", async () => {
+    expect(
+      await rankedIds(await get("project", "/api/hub/entities?q=note&limit=1"))
+    ).toEqual([IN_PROJECT]);
+    expect(h.search).toHaveBeenCalledTimes(1);
+    expect(h.search.mock.calls[0]![0]).toMatchObject({
+      limit: GRANT_BOUNDED_SEARCH_WINDOW,
+    });
+  });
+
+  it("control: an unbounded full-access key is answered unchanged (every hit, Typesense's order, its own limit)", async () => {
+    expect(
+      await rankedIds(await get("full", "/api/hub/entities?q=note&limit=7"))
+    ).toEqual(RANKED);
+    expect(h.search.mock.calls[0]![0]).toMatchObject({ limit: 7 });
+  });
+});
+
+describe("withinGrantSearchHits — what a fenced key never sees", () => {
+  const response = () => ({
+    results: [
+      ...RANKED.map(hit),
+      { id: "d1", collection: "documents", document: { id: "d1" } },
+    ],
+    found: 42,
+    facetCounts: { entities: { "entityType.note": 42 } },
+  });
+  const projectGrant = {
+    scopes: [{ permissions: ["entity.*.read"], projectIds: [PROJECT] }],
+    clientId: null,
+  };
+
+  it("drops out-of-grant and non-entity hits, the person-wide count and the facets", async () => {
+    const out = await runWithGrant(projectGrant, () =>
+      withinGrantSearchHits(response(), OWNER)
+    );
+    expect(out.results.map((r) => r.id)).toEqual([IN_PROJECT, POD_IN_PROJECT]);
+    expect(out.found).toBe(2);
+    expect(out.facetCounts).toBeUndefined();
+    expect(out.boundedByGrant).toBe(true);
+  });
+
+  it("control: no grant (and the full `*`) returns the response untouched", async () => {
+    const r = response();
+    expect(await withinGrantSearchHits(r, OWNER)).toBe(r);
+    const full = { scopes: [{ permissions: ["*"] }], clientId: null };
+    expect(
+      await runWithGrant(full, () => withinGrantSearchHits(r, OWNER))
+    ).toBe(r);
   });
 });
