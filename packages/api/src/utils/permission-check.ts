@@ -1156,9 +1156,14 @@ export interface PermissionCheckBaseOpts {
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
-   * / 2.86 (other moves: execute once attributed).
+   * / 2.86 (other moves: execute once attributed). `atSessionEnd`: a session
+   * END move, which skips 2.85 (governance-policy `lifecycleMove`).
    */
-  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  lifecycleMove?: {
+    intoTerminal: boolean;
+    humanOnly: boolean;
+    atSessionEnd?: boolean;
+  };
   /**
    * An AGENT's write its key's grant does not permit is filed as a PENDING
    * proposal the person approves, instead of being denied at rung 0 (founder
@@ -1329,7 +1334,9 @@ interface AnonymousPolicyFacts {
   /** rung 2.1 (duplicate) — an AI create the duplicate door found a possible twin of. */
   possibleDuplicate: boolean;
   /** rungs 2.075/2.85/2.86 — a lifecycle move, classified by the moveStatus door. */
-  lifecycleMove: { intoTerminal: boolean; humanOnly: boolean } | undefined;
+  lifecycleMove:
+    | { intoTerminal: boolean; humanOnly: boolean; atSessionEnd?: boolean }
+    | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
   podAdminSchemaChange: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
