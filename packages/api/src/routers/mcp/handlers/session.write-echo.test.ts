@@ -206,7 +206,11 @@ describe("synap_update_session echoes, never the whole row", () => {
 describe("synap_complete_session echoes, never the whole closed row", () => {
   it("status, counts and the echo; no row bulk", async () => {
     h.complete.mockResolvedValue({
-      session: { ...fullRow(), status: "closed", closedAt: "2026-11-05T14:00Z" },
+      session: {
+        ...fullRow(),
+        status: "closed",
+        closedAt: "2026-11-05T14:00Z",
+      },
       pendingProposals: [],
       counts: {
         pending: 0,

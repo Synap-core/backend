@@ -245,9 +245,7 @@ describe("takeProposalUpdates", () => {
     await takeProposalUpdates(AGENT, OWNER, S1, T0);
     await proposal({ status: "approved", reviewedAt: at(1) });
     // Read at minute 2 …
-    expect(await takeProposalUpdates(AGENT, OWNER, S1, at(2))).toHaveLength(
-      1
-    );
+    expect(await takeProposalUpdates(AGENT, OWNER, S1, at(2))).toHaveLength(1);
     // … while another transaction had stamped its row at 1.5 and commits now.
     const late = await proposal({ status: "approved", reviewedAt: at(1.5) });
     const next = await takeProposalUpdates(AGENT, OWNER, S1, at(3));
