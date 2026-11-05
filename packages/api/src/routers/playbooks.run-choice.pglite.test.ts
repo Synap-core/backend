@@ -233,13 +233,26 @@ describe("nothing remembered yet", () => {
     expect(read.options[0]).toEqual({
       choice: { executor: "is-agent" },
       name: null,
+      label: "Synap AI",
       wake: null,
+      wakeLabel: null,
       recommended: true,
     });
     expect(read.options.slice(1).map((o) => [o.choice, o.wake?.state])).toEqual(
       expect.arrayContaining([
         [{ executor: "external-agent", agentUserId: RUNNING }, "awake"],
         [{ executor: "external-agent", agentUserId: IDLE }, "cant_wake"],
+      ])
+    );
+    // The words come from the pod, so an app never writes its own.
+    expect(
+      read.options
+        .filter((o) => o.choice.executor === "external-agent")
+        .map((o) => [o.label, o.wakeLabel])
+    ).toEqual(
+      expect.arrayContaining([
+        ["Claude Code", "Awake"],
+        ["Codex", "Can't wake · Nothing can start it yet"],
       ])
     );
     expect(read.next).toEqual({

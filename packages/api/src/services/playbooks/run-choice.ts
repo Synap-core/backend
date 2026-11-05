@@ -12,13 +12,27 @@
  */
 
 import type {
+  AgentWake,
   PlaybookRunChoice,
   RunChoiceOption,
 } from "@synap-core/types/agents";
+import {
+  SYNAP_AI_LABEL,
+  resolveAgentWakeRefusalLabel,
+  resolveAgentWakeStateLabel,
+} from "@synap-core/types/vocabulary";
 import type { Playbook } from "@synap/database/schema";
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
 import { readAgentsForHandoff } from "../agent-dispatch/agents-for-handoff.js";
 import { resolveRunChoice } from "./run-playbook.js";
+
+/** A wake mark's words: its state, and the reason when it cannot wake. */
+function wakeWords(wake: AgentWake): string {
+  const state = resolveAgentWakeStateLabel(wake.state);
+  return wake.why
+    ? `${state} · ${resolveAgentWakeRefusalLabel(wake.why)}`
+    : state;
+}
 
 export async function readPlaybookRunChoice(p: {
   userId: string;
@@ -37,7 +51,9 @@ export async function readPlaybookRunChoice(p: {
     .map((a) => ({
       choice: { executor: "external-agent", agentUserId: a.agentUserId },
       name: a.name,
+      label: a.name?.trim() || "Agent",
       wake: a.wake,
+      wakeLabel: wakeWords(a.wake),
       recommended: false,
     }));
   const options: RunChoiceOption[] = synapAiAllowed
@@ -45,7 +61,9 @@ export async function readPlaybookRunChoice(p: {
         {
           choice: { executor: "is-agent" },
           name: null,
+          label: SYNAP_AI_LABEL,
           wake: null,
+          wakeLabel: null,
           recommended: true,
         },
         ...agentOptions,

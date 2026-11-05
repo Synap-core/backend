@@ -58,8 +58,16 @@ export interface RunChoiceOption {
   choice: RunChoice;
   /** The agent's name; `null` for Synap AI (the vocabulary says its name). */
   name: string | null;
+  /**
+   * The words a surface shows for it, drawn by the pod through the vocabulary
+   * door (`SYNAP_AI_LABEL`, the agent's name), so an app with no copy of the
+   * vocabulary never writes its own.
+   */
+  label: string;
   /** Its wake mark; `null` for Synap AI (always awake, the pod runs it). */
   wake: AgentWake | null;
+  /** The mark's words ("Can't wake · Computer offline"); `null` with no mark. */
+  wakeLabel: string | null;
   /** At most one: Synap AI when the playbook allows it, else none. */
   recommended: boolean;
 }
