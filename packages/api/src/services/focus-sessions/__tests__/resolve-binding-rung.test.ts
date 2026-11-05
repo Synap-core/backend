@@ -66,10 +66,17 @@ describe("rung 1: the caller named it", () => {
 
 describe("rung 2: the subject's kind", () => {
   it("binds the ONE active playbook for that kind", () => {
-    const fix = pb({ name: "Fix a bug", subjectProfile: { profileSlug: "issue" } });
+    const fix = pb({
+      name: "Fix a bug",
+      subjectProfile: { profileSlug: "issue" },
+    });
     const other = pb({ subjectProfile: { profileSlug: "task" } });
     const d = resolveBindingRung(at({ subject: issue() }), [fix, other]);
-    expect(d).toMatchObject({ kind: "bind", rung: "subject", playbookId: fix.id });
+    expect(d).toMatchObject({
+      kind: "bind",
+      rung: "subject",
+      playbookId: fix.id,
+    });
   });
 
   it("two for the same kind in the same space: an offer, never a pick", () => {
@@ -169,7 +176,9 @@ describe("rung 2: the subject's kind", () => {
     const fix = pb({ subjectProfile: { profileSlug: "issue" } });
     expect(resolveBindingRung(at(), [fix])).toEqual({ kind: "none" });
     expect(
-      resolveBindingRung(at({ subject: { kind: "note", properties: {} } }), [fix])
+      resolveBindingRung(at({ subject: { kind: "note", properties: {} } }), [
+        fix,
+      ])
     ).toEqual({ kind: "none" });
   });
 });
@@ -219,7 +228,9 @@ describe("only ACTIVE playbooks bind (a draft changes nothing until a person act
     expect(
       situations.map((s) => {
         const d = resolveBindingRung(s, pool);
-        return d.kind === "bind" ? pool.find((p) => p.id === d.playbookId)?.name : d.kind;
+        return d.kind === "bind"
+          ? pool.find((p) => p.id === d.playbookId)?.name
+          : d.kind;
       })
     ).toEqual(["Fix a bug", "Build a change", "Fix main red"]);
   });
@@ -238,7 +249,11 @@ describe("rung 3: the parent's playbook", () => {
       }),
       [build]
     );
-    expect(d).toMatchObject({ kind: "bind", rung: "parent", playbookId: build.id });
+    expect(d).toMatchObject({
+      kind: "bind",
+      rung: "parent",
+      playbookId: build.id,
+    });
     if (d.kind === "bind") expect(d.reason).toContain("6307df89");
   });
 
@@ -273,10 +288,17 @@ describe("rung 3: the parent's playbook", () => {
     const b = pb({ subjectProfile: { profileSlug: "issue" } });
     const unrelated = pb();
     const pick = resolveBindingRung(
-      at({ subject: issue(), parent: { id: "p", playbookId: b.id, currentStage: null } }),
+      at({
+        subject: issue(),
+        parent: { id: "p", playbookId: b.id, currentStage: null },
+      }),
       [a, b, unrelated]
     );
-    expect(pick).toMatchObject({ kind: "bind", rung: "parent", playbookId: b.id });
+    expect(pick).toMatchObject({
+      kind: "bind",
+      rung: "parent",
+      playbookId: b.id,
+    });
     const outside = resolveBindingRung(
       at({
         subject: issue(),
@@ -290,11 +312,13 @@ describe("rung 3: the parent's playbook", () => {
 
 describe("rung 4: the `main red:` title (rules/github-ci)", () => {
   it("parses the grammar, check names with spaces included", () => {
-    expect(parseMainRedTitle("main red: backend Full suite @1a2b3c4d")).toEqual({
-      repo: "backend",
-      check: "Full suite",
-      sha8: "1a2b3c4d",
-    });
+    expect(parseMainRedTitle("main red: backend Full suite @1a2b3c4d")).toEqual(
+      {
+        repo: "backend",
+        check: "Full suite",
+        sha8: "1a2b3c4d",
+      }
+    );
     expect(parseMainRedTitle("Main red: backend")).toBe("prefix-only");
     expect(parseMainRedTitle("fix the main red build")).toBeNull();
   });
@@ -334,15 +358,16 @@ describe("rung 4: the `main red:` title (rules/github-ci)", () => {
 
   it("no active main-red playbook: none; two: an offer", () => {
     expect(
-      resolveBindingRung(at({ title: "main red: backend Full suite @1a2b3c4d" }), [
-        pb({ name: "Fix main red", status: "draft" }),
-      ])
+      resolveBindingRung(
+        at({ title: "main red: backend Full suite @1a2b3c4d" }),
+        [pb({ name: "Fix main red", status: "draft" })]
+      )
     ).toEqual({ kind: "none" });
     expect(
-      resolveBindingRung(at({ title: "main red: backend Full suite @1a2b3c4d" }), [
-        pb({ name: "Fix main red" }),
-        pb({ name: "Main-red triage" }),
-      ]).kind
+      resolveBindingRung(
+        at({ title: "main red: backend Full suite @1a2b3c4d" }),
+        [pb({ name: "Fix main red" }), pb({ name: "Main-red triage" })]
+      ).kind
     ).toBe("offer");
   });
 });

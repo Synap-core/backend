@@ -1544,10 +1544,8 @@ export async function createFocusSession(
   let binding: string | undefined;
   if (params.bindOnFacts) {
     try {
-      const {
-        bindOnFacts: bindSessionOnFacts,
-        stampBoundBy,
-      } = await import("./bind-on-facts.js");
+      const { bindOnFacts: bindSessionOnFacts, stampBoundBy } =
+        await import("./bind-on-facts.js");
       if (playbook) {
         await stampBoundBy(sessionOut.id, {
           rung: "explicit",

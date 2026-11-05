@@ -253,9 +253,7 @@ export function resolveBindingRung(
     const named = live.filter((p) => MAIN_RED_NAME.test(p.name) && allowed(p));
     if (named.length === 1) {
       const p = named[0]!;
-      const declared = new Set(
-        readPlaybookParams(p.params).map((d) => d.name)
-      );
+      const declared = new Set(readPlaybookParams(p.params).map((d) => d.name));
       const params =
         mainRed === "prefix-only"
           ? undefined

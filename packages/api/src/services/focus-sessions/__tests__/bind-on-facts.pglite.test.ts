@@ -173,7 +173,11 @@ async function insertPlaybook(
       USER,
       name,
       JSON.stringify([
-        { key: `${name.toLowerCase().replace(/\W+/g, "-")}-done`, statement: `${name} done`, check: { kind: "human" } },
+        {
+          key: `${name.toLowerCase().replace(/\W+/g, "-")}-done`,
+          statement: `${name} done`,
+          check: { kind: "human" },
+        },
       ]),
       subjectProfile === null ? null : JSON.stringify(subjectProfile),
       status,

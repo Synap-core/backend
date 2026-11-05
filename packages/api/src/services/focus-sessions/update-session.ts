@@ -2827,8 +2827,7 @@ export async function updateFocusSession(
   let binding: string | undefined;
   let reboundSession: typeof updated | undefined;
   const latest = followedSession ?? updated;
-  const subjectArrived =
-    !existing.subjectEntityId && !!latest.subjectEntityId;
+  const subjectArrived = !existing.subjectEntityId && !!latest.subjectEntityId;
   const goalArrived = !existing.trackId && !!latest.trackId;
   if (
     params.followPlaybookId === undefined &&
