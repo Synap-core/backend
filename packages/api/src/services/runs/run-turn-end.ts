@@ -64,6 +64,7 @@ import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import { blockExpectedOutput } from "../focus-sessions/block-output.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
+import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
 
 const logger = createLogger({ module: "run-turn-end" });
 
@@ -79,6 +80,10 @@ export const TURN_HISTORY_MAX = 10;
 export const RUN_CONTINUE_SLOT_LABEL = "Keep the run going";
 
 const count = z.number().int().nonnegative();
+
+/** Bounds of a run checkpoint, the IS's own (`run-profile.ts`). */
+export const CHECKPOINT_MAX_RECORDS = 60;
+export const CHECKPOINT_MAX_LEFT_CHARS = 4_000;
 
 /**
  * The complete-run body. Every field optional: an IS that predates it sends
@@ -131,6 +136,28 @@ export const completeRunBodySchema = z
           .optional(),
       })
       .optional(),
+    /**
+     * A STOPPED run turn's checkpoint (IS `buildRunCheckpoint`): the records
+     * it touched, by FULL id, and its last answer (done / plan / left). The
+     * continuation notice carries it, so the next turn reads full ids instead
+     * of re-resolving prefixes (run 9d57a207, finding 7726269d). Lenient like
+     * `agentType`: an unusable checkpoint reads as absent, never a 400 that
+     * would drop the turn's outcome.
+     */
+    checkpoint: z
+      .object({
+        records: z
+          .array(
+            z.object({
+              id: z.string().uuid(),
+              tool: z.string().min(1).max(200),
+            })
+          )
+          .max(CHECKPOINT_MAX_RECORDS),
+        left: z.string().max(CHECKPOINT_MAX_LEFT_CHARS),
+      })
+      .optional()
+      .catch(undefined),
   })
   .refine((b) => b.outcome !== "stopped" || b.reason !== undefined, {
     message: "outcome 'stopped' needs a reason ('turn_budget' | 'max_steps')",
@@ -173,6 +200,8 @@ export interface RunTurnRecord {
   firstCall?: NonNullable<CompleteRunBody["turn"]>["firstCall"];
   /** What the pod decided for a stopped turn. */
   next?: "continue" | "ask";
+  /** How many records the turn's checkpoint named (the ids ride in the room). */
+  checkpointRecords?: number;
 }
 
 /** `metadata.runTurns` — one run's turn ledger. */
@@ -286,6 +315,9 @@ async function recordTurnEnd(
         : {}),
       ...(body.turn?.firstCall ? { firstCall: body.turn.firstCall } : {}),
       ...(decision ? { next: decision.next } : {}),
+      ...(body.checkpoint
+        ? { checkpointRecords: body.checkpoint.records.length }
+        : {}),
     };
     const next: RunTurnsState = {
       runId,
@@ -348,7 +380,10 @@ type RunRow = Pick<
   | "completedAt"
   | "sessionId"
   | "workspaceId"
->;
+> & {
+  /** The run's playbook: the continuation resolves its declared tools. */
+  playbookId?: string;
+};
 
 interface SessionRoom {
   id: string;
@@ -419,6 +454,31 @@ async function endUnattendedRun(p: {
   return "stopped";
 }
 
+/**
+ * The words of the continuation notice: why the run goes on, and the stopped
+ * turn's checkpoint as a fenced `run-checkpoint` JSON block — the records it
+ * touched by FULL id and what it said was left. The next turn reads this
+ * message, not the last turn's tool results.
+ */
+export function continuationNotice(p: {
+  continuation: number;
+  reason: RunStopReason | undefined;
+  checkpoint: CompleteRunBody["checkpoint"];
+}): string {
+  const head =
+    `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
+    `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
+    "Pick up from where it stopped; do not start over.";
+  if (!p.checkpoint) return head;
+  return (
+    `${head} Its checkpoint follows: the records it already touched, by full ` +
+    "id (use these ids as they are; never search for them again), and what it " +
+    "said was left.\n\n```run-checkpoint\n" +
+    JSON.stringify(p.checkpoint, null, 2) +
+    "\n```"
+  );
+}
+
 /** The continuation: a pod notice in the room, dispatched as the next turn. */
 async function continueRun(p: {
   run: RunRow;
@@ -428,12 +488,19 @@ async function continueRun(p: {
   /** The turn's id for idempotency (see `settleRunTurnEnd`). */
   turnRef: string;
   reason: RunStopReason | undefined;
+  checkpoint: CompleteRunBody["checkpoint"];
 }): Promise<boolean> {
   if (!p.session.channelId) return false;
-  const content =
-    `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
-    `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
-    "Pick up from where it stopped; do not start over.";
+  const content = continuationNotice(p);
+  // The continuation is a run turn too: the same declared tools as the
+  // kickoff (founder, 2026-11-05). Never throws (a failed read says so).
+  const run = p.run.playbookId
+    ? await resolveRunToolProfile({
+        playbookId: p.run.playbookId,
+        workspaceId: p.run.workspaceId ?? null,
+        userId: p.session.userId,
+      })
+    : null;
   try {
     // A POD notice (role system), not the person speaking: nobody typed this.
     const posted = await postChannelMessage({
@@ -451,6 +518,7 @@ async function continueRun(p: {
       sourceUserId: p.session.userId,
       focusSessionId: p.session.id,
       agentType: p.agentType,
+      run,
     });
   } catch (err) {
     logger.error(
@@ -587,6 +655,7 @@ export async function settleRunTurnEnd(p: {
       continuation: decision.continuation,
       turnRef,
       reason: body.reason,
+      checkpoint: body.checkpoint,
     });
     if (continued) return "continued";
     // No person to ask: a continuation that could not be dispatched leaves
