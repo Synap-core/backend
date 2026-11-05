@@ -23183,6 +23183,45 @@ export type SessionLiveness = {
 	reason: string;
 	status: "unavailable";
 };
+/**
+ * `via: "status_door"` — the write went through `moveStatus` (a declared
+ * lifecycle, kind or role), so it emits the transition the follow reads.
+ * Absent — the legacy plain-property `entities.update` fallback.
+ */
+export type StageSubjectStatusOutcome = {
+	property: string;
+	status: "written";
+	value: string;
+	via?: "status_door";
+} | {
+	property: string;
+	proposalId: string;
+	status: "proposed";
+	value: string;
+	via?: "status_door";
+} | {
+	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
+	status: "skipped";
+} | {
+	reason: string;
+	status: "failed";
+};
+export type SessionEndStatus = "cancelled" | "closed" | "failed";
+/** One thing the end tried to move, and what became of it. */
+export interface SessionEndMove {
+	entityId: string;
+	/** The session's subject, or a target still open at the close. */
+	as: "subject" | "target";
+	outcome: StageSubjectStatusOutcome;
+}
+/** What the close's end moves did, as the close result reports it. */
+export interface SessionEndMovesRecord {
+	/** The terminal status the session ended in. */
+	status: SessionEndStatus;
+	/** The value `onEnd[status]` names. */
+	value: string;
+	moves: SessionEndMove[];
+}
 export interface CancelRecordItem {
 	kind: "chat_turn" | "job" | "proposal";
 	id: string;
@@ -36959,6 +36998,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				criteria: unknown;
 				currentStage: string | null;
+				endMoves?: SessionEndMovesRecord | undefined;
 				expectedOutputs: unknown;
 				goal: string;
 				id: string;
@@ -38745,6 +38785,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					onFail?: {
 						toStage: string;
 					} | undefined;
+					tier?: "deep" | "quick" | "standard" | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -45426,6 +45467,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					onFail?: {
 						toStage: string;
 					} | undefined;
+					tier?: "deep" | "quick" | "standard" | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -46427,6 +46469,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					onFail?: {
 						toStage: string;
 					} | undefined;
+					tier?: "deep" | "quick" | "standard" | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -56928,6 +56971,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							onFail?: {
 								toStage: string;
 							} | undefined;
+							tier?: "deep" | "quick" | "standard" | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;
 						subjectProfile?: {

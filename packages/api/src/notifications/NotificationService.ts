@@ -50,6 +50,8 @@ import {
 } from "@synap-core/types/push";
 import {
   agentPushLimitApplies,
+  dueSoonBudgetApplies,
+  dueSoonPushesToday,
   agentPushesCountedToday,
   decidePush,
   derivePushFacts,
@@ -61,6 +63,7 @@ import {
   readPodPushSettings,
   recordPush,
   withinAgentPushLimit,
+  withinDueSoonBudget,
   withinPushCap,
 } from "./push-decision.js";
 import type {
@@ -917,6 +920,33 @@ export const NotificationService = {
           // only when it applies, so an exempt or forced push never waits on
           // it. A failed count skips the push, except a blocking ask (as for
           // unreadable settings above).
+          // The due-soon budget (rule 3b), BEFORE the cap: `answerBy` is the
+          // asking agent's field, so each agent breaks Focus at most
+          // PUSH_DUE_SOON_DAILY_PER_AGENT time(s) a day; past it the push is
+          // a normal one the cap below may hold back. A failed count keeps
+          // the push but drops its break-through (logged): never louder on
+          // an unread budget.
+          if (dueSoonBudgetApplies(decision)) {
+            try {
+              decision = withinDueSoonBudget(
+                decision,
+                await dueSoonPushesToday(
+                  input.userId,
+                  facts.agentUserId ?? null,
+                  await recipientTimezone(input.userId)
+                )
+              );
+            } catch (err) {
+              decision = withinDueSoonBudget(
+                decision,
+                Number.POSITIVE_INFINITY
+              );
+              logger.warn(
+                { err, type: input.type, notificationId: row.id },
+                "Due-soon budget unreadable — pushed as a normal push"
+              );
+            }
+          }
           if (pushCapApplies(decision)) {
             try {
               decision = withinPushCap(

@@ -7,12 +7,16 @@
  * `@synap-core/types/push` (`push.test.ts`).
  */
 import { describe, it, expect } from "vitest";
-import { PUSH_DAILY_CAP } from "@synap-core/types/push";
+import {
+  PUSH_DAILY_CAP,
+  PUSH_DUE_SOON_DAILY_PER_AGENT,
+} from "@synap-core/types/push";
 import {
   agentPushLimitApplies,
   decidePush,
   pushCapApplies,
   withinAgentPushLimit,
+  withinDueSoonBudget,
   withinPushCap,
 } from "./push-decision.js";
 
@@ -110,5 +114,30 @@ describe("an agent's own push limit", () => {
     });
     expect(agentPushLimitApplies(broke, AGENT, 0)).toBe(false);
     expect(withinAgentPushLimit(broke, 0, 5).push).toBe(true);
+  });
+});
+
+describe("the due-soon budget (review 5 Nov 2026): answerBy is the agent's own field", () => {
+  it("an agent's first due-soon ask of the day breaks through; past the budget it is a normal push", () => {
+    expect(PUSH_DUE_SOON_DAILY_PER_AGENT).toBe(1);
+    expect(withinDueSoonBudget(ask({ dueSoon: true }), 0)).toMatchObject({
+      dueSoon: true,
+    });
+    const spent = withinDueSoonBudget(ask({ dueSoon: true }), 1);
+    expect(spent).toEqual({
+      push: true,
+      category: "blocking-ask",
+      reason: "earned",
+    });
+    // A normal push again: the person's daily budget applies to it.
+    expect(pushCapApplies(spent)).toBe(true);
+    expect(withinPushCap(spent, PUSH_DAILY_CAP)).toMatchObject({
+      push: false,
+      reason: "over_cap",
+    });
+  });
+
+  it("leaves every other push as it was", () => {
+    expect(withinDueSoonBudget(ask(), 5)).toEqual(ask());
   });
 });
