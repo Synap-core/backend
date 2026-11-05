@@ -121,7 +121,9 @@ export function registerKeysRoutes(app: HubHono): void {
     }),
     async (c) => {
       const stale = refuseStaleDeviceSession(c);
-      if (stale) return stale;
+      // The step-up 403 is the Hub-wide refusal, not one of this route's
+      // typed responses.
+      if (stale) return stale as never;
       const keyId = c.get("apiKeyId");
       const userId = c.get("userId") as string;
 
@@ -428,7 +430,9 @@ function registerKeyRequestRoutes(app: HubHono): void {
     }),
     async (c) => {
       const stale = refuseStaleDeviceSession(c);
-      if (stale) return stale;
+      // The step-up 403 is the Hub-wide refusal, not one of this route's
+      // typed responses.
+      if (stale) return stale as never;
       const keyId = c.get("apiKeyId");
       if (!keyId)
         return c.json(
@@ -546,7 +550,9 @@ function registerKeyRequestRoutes(app: HubHono): void {
     }),
     async (c) => {
       const stale = refuseStaleDeviceSession(c);
-      if (stale) return stale;
+      // The step-up 403 is the Hub-wide refusal, not one of this route's
+      // typed responses.
+      if (stale) return stale as never;
       if (!c.get("apiKeyId"))
         return c.json(
           { error: "Collect a key with the API key that asked for it." },

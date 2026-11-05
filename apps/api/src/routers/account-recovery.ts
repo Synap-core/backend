@@ -388,9 +388,12 @@ export function createAccountRecoveryRouter(
 
   // ── Authenticated ─────────────────────────────────────────────────────
 
-  for (const path of ["/status", "/codes", "/cloud-trust"]) {
-    router.use(path, ...deps.authenticate);
-  }
+  // One literal path per line, so the tripwire
+  // `credential-doors-refuse-device-session` reads which routes a device
+  // session reaches (the real deps wire `appSessionMiddleware()`).
+  router.use("/status", ...deps.authenticate);
+  router.use("/codes", ...deps.authenticate);
+  router.use("/cloud-trust", ...deps.authenticate);
 
   interface Caller {
     account: PodAccount;

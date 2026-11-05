@@ -7,7 +7,8 @@
  * Contract:
  *   - The header is opt-in. Requests without `Idempotency-Key` pass through
  *     unchanged. Read-only methods (GET/HEAD/OPTIONS) are always passed through.
- *   - Cache key is `(userId, idempotencyKey, sha256(body))`. Bodies that differ
+ *   - Cache key is `(userId[, device], idempotencyKey, sha256(body))` (a
+ *     Synap app's device token adds its device). Bodies that differ
  *     under the same key produce different cache entries, so a buggy retry with
  *     a mutated body is NOT served a stale 200.
  *   - TTL is 24h. Only 2xx responses are cached. 4xx/5xx are intentionally
@@ -290,7 +291,12 @@ export function idempotencyMiddleware(
     }
     const bodyHash = createHash("sha256").update(bodyText).digest("hex");
 
-    const cacheKey = `idem:${principal}:${key}:${bodyHash}`;
+    // A Synap app's device token partitions by DEVICE too: another device of
+    // the same person (or one whose step-up has gone stale since) never gets
+    // an answer this device's request earned, e.g. a credential route's.
+    const deviceId = c.get("personDeviceId" as never) as string | undefined;
+    const partition = deviceId ? `${principal}#device:${deviceId}` : principal;
+    const cacheKey = `idem:${partition}:${key}:${bodyHash}`;
 
     // Cache lookup — fail OPEN on any error.
     let cached: CachedResponse | null = null;

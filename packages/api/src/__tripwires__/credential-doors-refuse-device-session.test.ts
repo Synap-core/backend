@@ -112,16 +112,24 @@ const CREDENTIAL_TABLES: Record<string, string> = {
   webhookSubscriptions: "webhook_subscriptions",
   secretShares: "secret_shares",
   resourceShares: "resource_shares",
+  // A personal ICS feed URL: its token is the capability, and it keeps
+  // serving every calendar entity the person reads after the token that
+  // minted it has expired (`rest/calendar-feed.ts`).
+  calendarFeedTokens: "calendar_feed_tokens",
+  // Recovery codes take the ACCOUNT over (`/api/account-recovery/codes`).
+  accountRecoveryCodes: "account_recovery_codes",
 };
 
 /**
  * Reading a secret's VALUE is a credential act too: a door that decrypts in
- * its own body and may hand the plaintext back (`secrets.reveal`). Matched
- * as a direct call whose name starts with `decrypt`. A door that decrypts
+ * its own body and may hand the plaintext back (`secrets.reveal`), or calls
+ * the vault's one resolver (`resolveVaultSecret`, which returns the
+ * plaintext: Hub `POST /vault/redeem`). Matched as a direct call whose name
+ * starts with `decrypt`, or is `resolveVaultSecret`. A door that decrypts
  * only to USE the value (call a provider, sign a request) and never returns
  * it is classified here, with why — a new one must be classified to pass.
  */
-const SECRET_READ_CALL = /^decrypt/;
+const SECRET_READ_CALL = /^(decrypt|resolveVaultSecret$)/;
 
 /**
  * Credential tables NO pod code writes today (only their schema exists).
@@ -208,6 +216,15 @@ const KNOWN_HUB_CREDENTIAL_DOORS = [
   "packages/api/src/routers/hub-protocol/rest/agent-users.ts POST /agent-users",
   "packages/api/src/routers/hub-protocol/rest/webhooks.ts POST /webhooks",
   "packages/api/src/routers/hub-protocol/rest/shares.ts POST /shares",
+  // Hands a secret's plaintext back (`resolveVaultSecret`).
+  "packages/api/src/routers/hub-protocol/rest/vault.ts POST /vault/redeem",
+  // Mint a bearer ICS URL that outlives the token.
+  "packages/api/src/routers/hub-protocol/rest/calendar-feed.ts POST /calendar/feed",
+  "packages/api/src/routers/hub-protocol/rest/calendar-feed.ts POST /calendar/feed/rotate",
+  // A tRPC door that returns a secret's plaintext.
+  "packages/api/src/routers/devplane.ts resolveEntitySecret",
+  // Account recovery, reached through its deps' `appSessionMiddleware()`.
+  "apps/api/src/routers/account-recovery.ts POST /codes",
 ];
 /** At least this many Hub REST routes are scanned (the real count is higher). */
 const HUB_ROUTE_FLOOR = 400;
@@ -233,6 +250,7 @@ const NARROWING_COLUMNS = new Set([
   "retiredAt",
   "deletedAt",
   "lastUsedAt",
+  "lastAccessedAt",
   "updatedAt",
   "replacedBy",
   "consumedAt",
@@ -273,6 +291,14 @@ const isHubFile = (rel: string) =>
 /** The Hono methods a Hub route is registered with. */
 const HUB_ROUTE_METHODS = /^(get|post|put|patch|delete|openapi)$/;
 const GUARDED_BUILDERS = new Set(["credentialProcedure"]);
+/**
+ * A door outside tRPC and Hub REST whose own check is the step-up, with why.
+ * Each must exist (checked below).
+ */
+const EQUIVALENT_GUARDS: Record<string, string> = {
+  guardCredentialChange:
+    "apps/api/src/routers/account-recovery.ts: refuses a session that is not privileged; a device session is privileged only while its step-up clock is within the 15-min privileged window (`sessionMarks`, account-recovery/policy.ts)",
+};
 const GUARD_MIDDLEWARE = "requireFreshAuthentication";
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
@@ -931,6 +957,98 @@ function hubRouteOf(node: ts.Node): {
 }
 
 /**
+ * Per file: the paths a router guards with a deps middleware list that the
+ * real deps fill with `appSessionMiddleware()`. Derived in three steps: (1) a
+ * variable typed `T` whose object literal has a property `p` = an array
+ * holding `appSessionMiddleware()`; (2) the file that declares `interface T`;
+ * (3) in it, `x.use("<path>", ...<any>.p)`.
+ */
+function deviceWiredPaths(a: Analysis): Map<string, Set<string>> {
+  const wiredProps = new Map<string, Set<string>>(); // T → props
+  const declaredIn = new Map<string, string>(); // T → file
+  for (const [rel, sf] of a.files) {
+    const visit = (n: ts.Node) => {
+      if (ts.isInterfaceDeclaration(n)) declaredIn.set(n.name.text, rel);
+      if (
+        ts.isVariableDeclaration(n) &&
+        n.type &&
+        n.initializer &&
+        ts.isObjectLiteralExpression(n.initializer)
+      ) {
+        for (const prop of n.initializer.properties) {
+          if (
+            ts.isPropertyAssignment(prop) &&
+            ts.isArrayLiteralExpression(prop.initializer) &&
+            prop.initializer.elements.some(
+              (e) =>
+                ts.isCallExpression(e) &&
+                e.expression.getText() === "appSessionMiddleware"
+            )
+          ) {
+            const t = n.type.getText();
+            wiredProps.set(
+              t,
+              (wiredProps.get(t) ?? new Set()).add(nameOf(prop)!)
+            );
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  const out = new Map<string, Set<string>>();
+  for (const [t, props] of wiredProps) {
+    const rel = declaredIn.get(t);
+    if (!rel) continue;
+    const paths = new Set<string>();
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === "use"
+      ) {
+        const path = literalText(n.arguments[0]);
+        const wires = n.arguments
+          .slice(1)
+          .some(
+            (arg) =>
+              ts.isSpreadElement(arg) &&
+              ts.isPropertyAccessExpression(arg.expression) &&
+              props.has(arg.expression.name.text)
+          );
+        if (path && wires) paths.add(path);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(a.files.get(rel)!);
+    out.set(rel, paths);
+  }
+  return out;
+}
+
+/** A route `x.<method>("<path>", …handlers)` whose path is device-wired. */
+function depsWiredRoute(
+  node: ts.Node,
+  paths: Set<string> | undefined
+): { method: string; path: string; handlers: ts.Node[] } | null {
+  if (
+    !paths ||
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !/^(get|post|put|patch|delete)$/.test(node.expression.name.text)
+  )
+    return null;
+  const path = literalText(node.arguments[0]);
+  if (!path || !paths.has(path)) return null;
+  return {
+    method: node.expression.name.text.toUpperCase(),
+    path,
+    handlers: node.arguments.slice(1),
+  };
+}
+
+/**
  * The names bound in `scope` to a tRPC caller (`x.createCaller(…)`, or
  * `getCaller(…)`, awaited or not): a call on one enters a procedure.
  */
@@ -971,6 +1089,7 @@ function trpcCallerNames(scope: ts.Node): Set<string> {
  */
 function doorsOf(a: Analysis, v: Verdicts): DoorVerdict[] {
   const out: DoorVerdict[] = [];
+  const depsWired = deviceWiredPaths(a);
   for (const [rel, sf] of a.files) {
     const visit = (node: ts.Node) => {
       // tRPC: any `name: <builder>…` or `const name = <builder>…`.
@@ -1039,13 +1158,44 @@ function doorsOf(a: Analysis, v: Verdicts): DoorVerdict[] {
       if (hub && !hub.skipped) {
         for (const scope of hub.handlers) {
           const callers = trpcCallerNames(scope);
+          const door = `${rel} ${hub.method} ${hub.path}`;
+          const read = secretRead(scope);
+          const readsSecret =
+            read && !(door in DECRYPTS_WITHOUT_RETURNING)
+              ? `reads a secret value (${read})`
+              : null;
+          const reachesAll = v.reachesAll(scope, rel, callers);
+          if (readsSecret) reachesAll.push(readsSecret);
           out.push({
-            door: `${rel} ${hub.method} ${hub.path}`,
-            reaches: v.reaches(scope, rel, callers) ?? "",
-            reachesAll: v.reachesAll(scope, rel, callers),
+            door,
+            reaches: v.reaches(scope, rel, callers) ?? readsSecret ?? "",
+            reachesAll,
             guarded: calledNames(scope, new Map(), new Map()).has(
               HUB_GUARD_CALL
             ),
+          });
+        }
+      }
+      // A router whose deps wire `appSessionMiddleware()` into a middleware
+      // list: `x.use("<path>", ...deps.<list>)` makes `<path>`'s handlers
+      // doors (account recovery).
+      const wired = depsWiredRoute(node, depsWired.get(rel));
+      if (wired) {
+        for (const scope of wired.handlers) {
+          const door = `${rel} ${wired.method} ${wired.path}`;
+          const read = secretRead(scope);
+          const reachesAll = v.reachesAll(scope, rel);
+          if (read) reachesAll.push(`reads a secret value (${read})`);
+          const called = calledNames(scope, new Map(), new Map());
+          out.push({
+            door,
+            reaches:
+              v.reaches(scope, rel) ??
+              (read ? `reads a secret value (${read})` : ""),
+            reachesAll,
+            guarded:
+              called.has(GUARD_CALL) ||
+              Object.keys(EQUIVALENT_GUARDS).some((g) => called.has(g)),
           });
         }
       }
@@ -1310,7 +1460,7 @@ describe("credential doors refuse a Synap app's device session", () => {
     // Nearly every path is read; an unreadable one ("?", a path built at run
     // time) is still a door, never skipped (the positive control below).
     expect(routes.filter((d) => / \?$/.test(d.door)).length).toBeLessThan(10);
-    const seen = new Map(hubDoors.map((d) => [d.door, d]));
+    const seen = new Map(allDoors.map((d) => [d.door, d]));
     for (const name of KNOWN_HUB_CREDENTIAL_DOORS) {
       const d = seen.get(name);
       expect(d, `${name} is no longer seen by the scan`).toBeDefined();
@@ -1330,6 +1480,83 @@ describe("credential doors refuse a Synap app's device session", () => {
     expect(calledNames(guard!.node, new Map(), new Map()).has(GUARD_CALL)).toBe(
       true
     );
+  });
+
+  it("every register*Routes mounted on the Hub app takes a HubHono (so the scan finds its routes)", () => {
+    const root = real.files.get(HUB_ROOT_FILE)!;
+    const registered = new Set<string>();
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isIdentifier(n.expression) &&
+        /^register\w+Routes$/.test(n.expression.text)
+      )
+        registered.add(n.expression.text);
+      ts.forEachChild(n, visit);
+    };
+    visit(root);
+    expect(registered.size).toBeGreaterThan(90);
+    const notHubHono = [...registered].filter((name) => {
+      const unit = real.units.find(
+        (u) => u.name === name && isHubFile(u.file) && u.file !== HUB_ROOT_FILE
+      );
+      const fn = unit?.node as ts.FunctionLikeDeclaration | undefined;
+      return fn?.parameters[0]?.type?.getText() !== "HubHono";
+    });
+    expect(notHubHono).toEqual([]);
+  });
+
+  it("account recovery's device-wired routes are doors; every equivalent guard exists", () => {
+    const seen = new Map(allDoors.map((d) => [d.door, d]));
+    for (const route of ["GET /status", "POST /codes", "PUT /cloud-trust"]) {
+      expect(
+        seen.has(`apps/api/src/routers/account-recovery.ts ${route}`),
+        route
+      ).toBe(true);
+    }
+    // The unauthenticated doors are not wired: no session reaches them.
+    expect(
+      seen.has("apps/api/src/routers/account-recovery.ts POST /redeem")
+    ).toBe(false);
+    for (const g of Object.keys(EQUIVALENT_GUARDS)) {
+      expect(verdicts.unitNames.has(g), g).toBe(true);
+    }
+  });
+
+  it("POSITIVE CONTROL — deps that wire appSessionMiddleware() make a router's routes doors", () => {
+    const sample = analyse([
+      {
+        rel: "apps/api/src/routers/__sample_deps__.ts",
+        code: `
+          export const sampleDeps: SampleDeps = {
+            authenticate: [appSessionMiddleware(), refuseGuestSession],
+          };
+        `,
+      },
+      {
+        rel: "apps/api/src/routers/__sample_router__.ts",
+        code: `
+          export interface SampleDeps { authenticate: MiddlewareHandler[] }
+          class CodeRepo { async replace(u) { await db.insert(apiKeys).values({ u }); } }
+          const repo = new CodeRepo();
+          export function createSampleRouter(deps: SampleDeps) {
+            const router = new Hono();
+            router.post("/open", async (c) => repo.replace("x"));
+            router.use("/mint", ...deps.authenticate);
+            router.use("/guarded", ...deps.authenticate);
+            router.post("/mint", async (c) => repo.replace("x"));
+            router.post("/guarded", async (c) => { await guardCredentialChange(c); return repo.replace("x"); });
+            return router;
+          }
+        `,
+      },
+    ]);
+    const flagged = unguarded(doorsOf(sample, judge(sample)))
+      .filter((d) => d.door.includes("__sample_router__"))
+      .map((d) => d.door);
+    expect(flagged).toEqual([
+      "apps/api/src/routers/__sample_router__.ts POST /mint",
+    ]);
   });
 
   it("POSITIVE CONTROL — an unguarded Hub route that mints a key is flagged", () => {
@@ -1366,6 +1593,8 @@ describe("credential doors refuse a Synap app's device session", () => {
               const caller = await getCaller(c);
               return caller.keys.generateApiKey({});
             });
+            // Hands a secret's plaintext back, unguarded.
+            app.post("/sample/redeem", async (c) => c.json({ value: await resolveVaultSecret("s", "u") }));
             // Not a Hub app: not a Hub route.
             other.post("/sample/elsewhere", async (c) => apiKeyService.generateApiKey("x"));
           }
@@ -1378,6 +1607,7 @@ describe("credential doors refuse a Synap app's device session", () => {
     expect(flagged.sort()).toEqual([
       "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST /sample/:id/mint",
       "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST /sample/mint",
+      "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST /sample/redeem",
       "packages/api/src/routers/hub-protocol/rest/__sample__.ts POST ?",
     ]);
   });

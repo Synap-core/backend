@@ -129,6 +129,12 @@ export type HubVariables = {
    * marks it on /trpc). Unset for a key, a delegation or a Kratos session.
    */
   sessionKind?: "person_device";
+  /**
+   * The device a DEVICE token belongs to (with `sessionKind`). Partitions the
+   * idempotency cache per device, so one device never replays another's
+   * answer (`_middleware/idempotency.ts`).
+   */
+  personDeviceId?: string;
 };
 
 /**

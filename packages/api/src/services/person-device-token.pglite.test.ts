@@ -161,6 +161,8 @@ import { applyVaultSecretGrant } from "./vault-secret-grant.js";
 import { mcpHttpApp } from "../routers/mcp/http-handler.js";
 import { hubAuthMiddleware } from "../routers/hub-protocol/_middleware/auth.js";
 import { registerWebhooksRoutes } from "../routers/hub-protocol/rest/webhooks.js";
+import { registerVaultRoutes } from "../routers/hub-protocol/rest/vault.js";
+import { registerCalendarFeedRoutes } from "../routers/hub-protocol/rest/calendar-feed.js";
 import type {
   HubHono,
   HubVariables,
@@ -647,6 +649,8 @@ describe("(c) /mcp refuses a device token; Hub REST takes it as the person", () 
       }
     });
     registerWebhooksRoutes(hub);
+    registerVaultRoutes(hub);
+    registerCalendarFeedRoutes(hub);
     const root = new Hono();
     root.route("/api/hub", hub);
     return root;
@@ -722,6 +726,34 @@ describe("(c) /mcp refuses a device token; Hub REST takes it as the person", () 
     expect(((await res.json()) as { reasonCode?: string }).reasonCode).not.toBe(
       STEP_UP_REQUIRED
     );
+  });
+
+  it("a secret's plaintext (POST /vault/redeem) needs a step-up from a stale device", async () => {
+    const s = await signIn("stale", STALE_MS);
+    const res = await hubCall("/vault/redeem", s.access, {
+      method: "POST",
+      body: JSON.stringify({ ref: `vault://${randomUUID()}/value` }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).reasonCode).toBe(STEP_UP_REQUIRED);
+  });
+
+  it("minting or rotating the calendar feed URL needs a step-up from a stale device; a fresh one mints", async () => {
+    const stale = await signIn("stale", STALE_MS);
+    for (const path of ["/calendar/feed", "/calendar/feed/rotate"]) {
+      const res = await hubCall(path, stale.access, { method: "POST" });
+      expect(res.status, path).toBe(403);
+      expect((await res.json()).reasonCode, path).toBe(STEP_UP_REQUIRED);
+    }
+    const none = await q<{ n: number }>(
+      `select count(*)::int as n from calendar_feed_tokens`
+    );
+    expect(none.rows[0]!.n).toBe(0);
+    const fresh = await signIn("fresh", MIN_MS);
+    const minted = await hubCall("/calendar/feed", fresh.access, {
+      method: "POST",
+    });
+    expect(minted.status).toBe(200);
   });
 
   it("a credential write deep in a service refuses a stale device too (the request's device scope)", async () => {

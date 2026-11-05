@@ -292,6 +292,7 @@ async function authenticatePersonDevice(
   c.set("userId", session.identity.id);
   c.set("scopes", [...PERSON_SESSION_SCOPES]);
   c.set("sessionKind", "person_device");
+  c.set("personDeviceId", session.device.id);
   const refused = await refuseGuestPrincipal(c);
   if (refused) return refused;
   return runAsDeviceSession(
