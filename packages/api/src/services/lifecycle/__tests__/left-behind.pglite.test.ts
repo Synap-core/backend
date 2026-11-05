@@ -205,7 +205,7 @@ async function target(
   result?: string
 ): Promise<void> {
   await q(
-    `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, user_id, created_at)
+    `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
      values (gen_random_uuid(),'session',$1,'entity',$2,'targets',$3::jsonb,$4,now())`,
     [
       sessionId,
