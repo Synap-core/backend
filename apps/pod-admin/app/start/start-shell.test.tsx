@@ -273,7 +273,7 @@ describe("/start reopens the step the person is at", () => {
     ]);
     // React's server renderer writes `checked` before `value` on an <input>.
     expect(html).toMatch(/checked="" value="content-os"/);
-    expect(html).toContain("Step 1 of 7");
+    expect(html).toContain(`Step 1 of ${START_STEP_IDS.length}`);
   });
 
   it("the intent step renders S1 in the Island frame", async () => {
@@ -281,7 +281,7 @@ describe("/start reopens the step the person is at", () => {
     const page = await StartPage({ searchParams: Promise.resolve({}) });
     const html = renderToStaticMarkup(page as ReactElement);
     expect(html).toContain("What should Synap run first?");
-    expect(html).toContain("Step 1 of 7");
+    expect(html).toContain(`Step 1 of ${START_STEP_IDS.length}`);
     expect(html).toContain("Signed in as");
     expect(html).toContain("Everything stays on your pod ·");
   });

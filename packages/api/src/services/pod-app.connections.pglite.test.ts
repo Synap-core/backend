@@ -245,6 +245,12 @@ beforeAll(async () => {
 beforeEach(async () => {
   // Every test starts with the pod's default policy (unverified apps allowed).
   await q(`delete from pod_settings`);
+  // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
+  // setting enforces, services/presence/mode.ts), so its sensitive approvals
+  // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
+  await h.client!.exec(
+    `insert into pod_settings (settings) values ('{"presence":{"mode":"report","changedBy":"test","changedAt":"2026-11-05T00:00:00.000Z"}}'::jsonb)`
+  );
 });
 
 const ctxOf = (userId: string, agentUserId?: string) =>
