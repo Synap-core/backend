@@ -258,3 +258,37 @@ describe("a lost dispatch claim says what really happened", () => {
     expect(err?.message).not.toMatch(/\.\.$/);
   });
 });
+
+describe("an executor that recorded its own outcome is not overwritten (a held send)", () => {
+  // Rule out: a message to someone not connected yet, which the executor
+  // kept PENDING and held (services/channels/held-sends.ts), relabelled
+  // APPROVAL_FAILED by the approval catch, so it would drop out of the
+  // conversation's drafts (CRM Messages contract b4f8c2cd, B).
+  it("keepRowAsRecorded: the caller still gets the error, nothing is recorded as a failure", async () => {
+    const { keepRowAsRecorded } = await import("../failure-classification.js");
+    proposalExecRegistry.register({
+      key: "*/*",
+      async execute() {
+        row.status = "pending"; // what the executor wrote (held)
+        throw keepRowAsRecorded(new Error("Couldn't apply — not connected."));
+      },
+    });
+    const err = await approve();
+    // The caller still gets the (classified) error.
+    expect(err).toBeTruthy();
+    expect(recorded).toEqual([]);
+    expect(row.status).toBe("pending");
+  });
+
+  it("without the mark the same error is recorded as a failure (the mark is what keeps it)", async () => {
+    proposalExecRegistry.register({
+      key: "*/*",
+      async execute() {
+        throw new Error("Couldn't apply — not connected.");
+      },
+    });
+    await approve();
+    expect(recorded).toHaveLength(1);
+    expect(row.status).toBe("approval_failed");
+  });
+});

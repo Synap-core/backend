@@ -294,6 +294,12 @@ export const PROTECTED_FIELDS_BY_TYPE: Readonly<
   ],
 };
 
+/**
+ * The fields of a `messaging.external.send` a key limited to spaces may still
+ * revise: the words, never the recipient or the account.
+ */
+export const MESSAGE_WORD_FIELDS: readonly string[] = ["body", "subject"];
+
 export const PROTECTED_ENVELOPE_FIELDS = [
   "sourceFile",
   "sourceId",
@@ -909,8 +915,20 @@ export async function mergeProposalRevision(
     // approval runs: a payload patch or a re-target passes no gate, so its
     // own proposal (filed in-grant) could be pointed outside the grant before
     // the person approves it (issue 314a6554). Every other key: unchanged.
+    // One exception: the WORDS of a message (its body and subject). Who it
+    // goes to, through which account, is pinned (`PROTECTED_FIELDS_BY_TYPE`,
+    // and the executor sends to the row's target), so rewording a draft
+    // cannot point it outside the grant (CRM Messages contract b4f8c2cd, D:
+    // the person edits the proposed draft in the message box, then sends).
+    const rewordsMessageOnly =
+      existing.proposalType === "messaging.external.send" &&
+      !!patch &&
+      Object.keys(patch.fields).every((k) => MESSAGE_WORD_FIELDS.includes(k)) &&
+      params.workspaceId === undefined &&
+      params.projectId === undefined;
     if (
       isFencedGrant(getRequestGrant()) &&
+      !rewordsMessageOnly &&
       ((patch && Object.keys(patch.fields).length > 0) ||
         params.workspaceId !== undefined ||
         params.projectId !== undefined)

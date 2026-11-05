@@ -137,11 +137,14 @@ function wireSkill(
 export function registerAgentSkillsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
 
+  // The served paths (`app.get` below): `/agent-skills/list` and
+  // `/agent-skills/get` were documented here but never served, while the
+  // served list and by-slug reads were in no spec at all.
   registerOpenApi(app, {
     method: "get",
-    path: "/agent-skills/list",
+    path: "/agent-skills",
     tags: ["Agent Skills"],
-    summary: "List all agent skills",
+    summary: "List the active, approved instruction skills you can load",
     request: {
       query: z.object({
         topic: z.string().optional(),
@@ -163,17 +166,36 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
 
   registerOpenApi(app, {
     method: "get",
-    path: "/agent-skills/get",
+    path: "/agent-skills/by-slug/{slug}",
     tags: ["Agent Skills"],
-    summary: "Get a single agent skill by slug",
+    summary: "Get one active, approved instruction skill by slug",
+    description:
+      "A slug may hold `/` (`rules/start-here`): send it URL-encoded (`rules%2Fstart-here`).",
     request: {
-      query: z.object({
-        slug: z.string().min(1),
-        workspaceId: z.string().uuid().optional(),
-      }),
+      params: z.object({ slug: z.string().min(1) }),
+      query: z.object({ workspaceId: z.string().uuid().optional() }),
     },
     responses: {
       200: { description: "Skill", schema: AgentSkillWireSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/agent-skills/{id}",
+    tags: ["Agent Skills"],
+    summary: "Get one active, approved instruction skill by id",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      query: z.object({ workspaceId: z.string().uuid().optional() }),
+    },
+    responses: {
+      200: { description: "Skill", schema: AgentSkillWireSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
     },
   });

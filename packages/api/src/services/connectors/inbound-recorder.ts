@@ -63,6 +63,7 @@ import { resolveExistingExternalUser } from "../external-user-mapping.js";
 import { accountHomeWorkspaceFor } from "./account-home-workspace.js";
 import { storedProviderId } from "./participant-lookup.js";
 import { emitMessageObservation } from "../../utils/emit-message-observation.js";
+import { withdrawDraftsSentOutside } from "../channels/held-sends.js";
 import {
   recordChannelOrigin,
   type ChannelOrigin,
@@ -1382,6 +1383,22 @@ export async function recordInboundMessage(
   });
 
   if (outbound) {
+    // A message the person sent from the provider itself closes the drafts
+    // of this conversation it replaces (CRM Messages contract b4f8c2cd, E).
+    // The echo of a pod send never does (held-sends.ts, the echo guard).
+    // Best effort: the message is recorded whatever happens here.
+    await withdrawDraftsSentOutside({
+      channelId,
+      sentAt,
+      messageId: inserted.id,
+      externalMessageId,
+      provider: args.provider,
+    }).catch((err) =>
+      logger.warn(
+        { err, channelId },
+        "outside send: the drafts it replaces could not be withdrawn"
+      )
+    );
     // The owner's own message, seen through the provider (sent from their
     // phone, or the provider's copy of a send the pod made before the
     // executor recorded it). Never `received`: an auto-reply rule must not

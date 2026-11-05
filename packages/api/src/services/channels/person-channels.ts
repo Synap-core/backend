@@ -15,6 +15,8 @@
  *
  * A proposed message is the pending `messaging.external.send` PROPOSAL filed
  * for the channel (`data.channelId`, founder decision 1), never a message row.
+ * A send whose approval FAILED stays listed with its reason, marked `failed`;
+ * a pending one that cannot go out yet is marked `held` (held-sends.ts).
  * The send door (`messaging.send`) files it with `data.channelId` = the
  * channel and `targetId` = the same channel.
  */
@@ -27,6 +29,7 @@ import {
   desc,
   eq,
   gt,
+  inArray,
   isNull,
   drizzleSql,
 } from "@synap/database";
@@ -43,6 +46,7 @@ import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { openLink } from "../../utils/deep-links.js";
+import { readHeld } from "./held-sends.js";
 
 /** The proposal type a proposed message is. */
 export const PROPOSED_MESSAGE_TYPE = "messaging.external.send";
@@ -70,12 +74,18 @@ export interface PodChannel {
   lastMessage: PodChannelLastMessage | null;
   /** Inbound messages after the last outbound one and the caller's last read. */
   unread: number;
-  /** Pending proposed messages the caller can read. */
+  /** Pending proposed messages the caller can read (held ones included). */
   pendingProposals: number;
+  /** Sends whose approval failed, kept in the conversation with their reason. */
+  failedSends: number;
 }
 
 export interface ProposedMessage {
   proposalId: string;
+  /** draft | held (not sendable yet) | failed (approved, did not go out). */
+  state: ProposedMessageState;
+  /** Why it is held or failed; null for a draft. */
+  reason: string | null;
   text: string;
   createdAt: string;
   draftedBy: { agentUserId: string; name: string | null } | null;
@@ -96,14 +106,48 @@ const str = (v: unknown): string | null =>
 const iso = (d: Date | string): string =>
   d instanceof Date ? d.toISOString() : new Date(d).toISOString();
 
-/** The pending proposed messages of a channel, through the proposal floor. */
-function proposedOnChannelWhere(userId: string, channelId: string) {
+/**
+ * A channel's proposed messages, through the proposal floor: the PENDING
+ * ones (held included) and, when asked, the sends whose approval FAILED
+ * (CRM Messages contract b4f8c2cd, B: a failed send stays in its
+ * conversation with its reason, never silently dropped).
+ */
+function proposedOnChannelWhere(
+  userId: string,
+  channelId: string,
+  withFailed = false
+) {
   return and(
     eq(proposals.proposalType, PROPOSED_MESSAGE_TYPE),
-    eq(proposals.status, "pending"),
+    withFailed
+      ? inArray(proposals.status, ["pending", "approval_failed"])
+      : eq(proposals.status, "pending"),
     drizzleSql`(${proposals.data} ->> 'channelId') = ${channelId}`,
     proposalUserFloor(userId)
   );
+}
+
+/**
+ * Where a proposed message stands: a `draft` waits for the person's
+ * approval; `held` waits too but cannot go out yet (not a connection, its
+ * `reason` names the next step); `failed` was approved and did not go out
+ * (its `reason` says why). A failed send is not a pending draft.
+ */
+export type ProposedMessageState = "draft" | "held" | "failed";
+
+/** The state and reason of one send proposal row. */
+export function proposedMessageState(row: {
+  status: string;
+  data: unknown;
+  rejectionReason: string | null;
+}): { state: ProposedMessageState; reason: string | null } {
+  if (row.status === "approval_failed") {
+    return { state: "failed", reason: row.rejectionReason ?? null };
+  }
+  const held = readHeld(row.data);
+  return held
+    ? { state: "held", reason: held.reason }
+    : { state: "draft", reason: null };
 }
 
 async function lastMessage(
@@ -224,10 +268,13 @@ export async function listPersonChannels(
   const out: PodChannel[] = [];
   for (const ch of rows) {
     const meta = (ch.metadata ?? {}) as Record<string, unknown>;
-    const [pending] = await database
-      .select({ n: count() })
+    const counts = await database
+      .select({ status: proposals.status, n: count() })
       .from(proposals)
-      .where(proposedOnChannelWhere(userId, ch.id));
+      .where(proposedOnChannelWhere(userId, ch.id, true))
+      .groupBy(proposals.status);
+    const countOf = (status: string) =>
+      Number(counts.find((r) => r.status === status)?.n ?? 0);
     out.push({
       id: ch.id,
       provider: ch.externalSource ?? null,
@@ -240,15 +287,17 @@ export async function listPersonChannels(
       },
       lastMessage: await lastMessage(database, ch.id),
       unread: await unreadCount(database, ch.id, userId, meta.unread === false),
-      pendingProposals: Number(pending?.n ?? 0),
+      pendingProposals: countOf("pending"),
+      failedSends: countOf("approval_failed"),
     });
   }
   return { status: "ok", entityId, channels: out };
 }
 
 /**
- * A channel's pending proposed messages, oldest first. `not_found` when the
- * caller cannot read the channel.
+ * A channel's proposed messages, oldest first: the pending ones (`draft` or
+ * `held`) and the failed sends (`failed`, with their reason). `not_found`
+ * when the caller cannot read the channel.
  */
 export async function listProposedMessages(
   args: { userId: string; channelId: string },
@@ -265,14 +314,16 @@ export async function listProposedMessages(
   const rows = await database
     .select({
       id: proposals.id,
+      status: proposals.status,
       data: proposals.data,
+      rejectionReason: proposals.rejectionReason,
       createdAt: proposals.createdAt,
       agentUserId: proposals.agentUserId,
       agentName: users.name,
     })
     .from(proposals)
     .leftJoin(users, eq(users.id, proposals.agentUserId))
-    .where(proposedOnChannelWhere(userId, channelId))
+    .where(proposedOnChannelWhere(userId, channelId, true))
     .orderBy(asc(proposals.createdAt), asc(proposals.id));
 
   return {
@@ -282,6 +333,7 @@ export async function listProposedMessages(
       const data = (r.data ?? {}) as Record<string, unknown>;
       return {
         proposalId: r.id,
+        ...proposedMessageState(r),
         text: str(data.body) ?? str(data.content) ?? str(data.text) ?? "",
         createdAt: iso(r.createdAt),
         draftedBy: r.agentUserId
