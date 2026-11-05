@@ -336,4 +336,20 @@ describe("what never runs on its own", () => {
     expect(err.code).toBe("NOT_FOUND");
     expect(await activeRules("no_such_action")).toEqual([]);
   });
+
+  it("an action a tool names (no skill of that name) is one the person can set", async () => {
+    const TOOL_ACTION = "hetzner_list_servers";
+    await q(`insert into tools (id, name) values ($1, $2)`, [
+      randomUUID(),
+      TOOL_ACTION,
+    ]);
+    const res = await caller(ALICE).setActionMode({
+      action: TOOL_ACTION,
+      mode: "auto",
+    });
+    expect(res).toMatchObject({ mode: "auto", changed: true });
+    expect(await activeRules(TOOL_ACTION)).toEqual([
+      { verdict: "auto", principal_kind: "any" },
+    ]);
+  });
 });

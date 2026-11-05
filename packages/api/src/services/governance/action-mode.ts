@@ -30,12 +30,7 @@ import {
   getRequestGrant,
   isFullAccessGrant,
 } from "@synap/database";
-import {
-  governanceRules,
-  proposals,
-  skills,
-  tools,
-} from "@synap/database/schema";
+import { governanceRules, proposals, skills } from "@synap/database/schema";
 import { capabilityVerbAllowsRuleWiden } from "@synap/governance-policy";
 import {
   actionRunModeOf,
@@ -44,6 +39,7 @@ import {
 import { activeRulePredicate } from "../../utils/governance-rule-reads.js";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { isAgentCaller } from "../library/agent-door.js";
+import { resolveTool } from "../tools/resolve-tool.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 
 /** One screen's actions, never a scan. */
@@ -143,12 +139,9 @@ async function assertActionExists(action: string): Promise<void> {
     .where(eq(skills.name, action))
     .limit(1);
   if (skill) return;
-  const [tool] = await db
-    .select({ id: tools.id })
-    .from(tools)
-    .where(eq(tools.name, action))
-    .limit(1);
-  if (tool) return;
+  // Through the one tools-by-name door: the rule is pod-wide, so a tool of
+  // that name in any space is the action it names (any row answers "exists").
+  if (await resolveTool(action, () => true)) return;
   throw new TRPCError({
     code: "NOT_FOUND",
     message: `No action named "${action}" on this pod.`,
