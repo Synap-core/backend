@@ -138,6 +138,9 @@ import {
   withDefaultUnblocks,
 } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
+// Type only: the writer behind it (move-status, the permission gate) is
+// imported lazily where the advance reports it.
+import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   closedRunRefusal,
   normalizeSessionTitle,
@@ -402,6 +405,14 @@ export type UpdateFocusSessionResult =
       subSessionsFiled?: string[];
       /** What `targets` did: which were added, which already were. */
       targets?: SessionTargetsWrite;
+      /**
+       * What a `currentStage` advance did to the session's subject, present
+       * whenever the entered stage declares a `subjectStatus`: written,
+       * proposed, failed, or skipped with why (`reportedSubjectMove`). The
+       * stage stands either way; a move that did not happen must reach the
+       * caller, who otherwise reads the advance as having moved the thing.
+       */
+      subjectMove?: StageSubjectStatusOutcome;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -2805,6 +2816,7 @@ export async function updateFocusSession(
   // `stageWrite: "caller"` because the stage rode along in the multi-field UPDATE
   // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
+  let subjectMove: StageSubjectStatusOutcome | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -2826,6 +2838,10 @@ export async function updateFocusSession(
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
     if (advance.paused) gatedStatus = "paused";
+    // What the advance did to the subject, whenever the entered stage asked
+    // for a move: a move that did not happen is never silent.
+    const { reportedSubjectMove } = await import("./stage-subject-status.js");
+    subjectMove = reportedSubjectMove(advance.subjectStatus);
   }
 
   // ── FOLLOW / RELEASE A PLAYBOOK ─────────────────────────────────────────────
@@ -2953,6 +2969,7 @@ export async function updateFocusSession(
     ...(followRefusal ? { followRefusal } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
+    ...(subjectMove ? { subjectMove } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),

@@ -123,6 +123,7 @@ import {
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import { sessionTargetsSchema } from "../../../services/focus-sessions/session-targets-wire.js";
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
+import type { StageSubjectStatusOutcome } from "../../../services/focus-sessions/stage-subject-status.js";
 import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
@@ -2688,6 +2689,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
       // `agentUserId` is threaded so the gate proposal carries agent provenance,
       // exactly as the MCP door does.
+      let subjectMove: StageSubjectStatusOutcome | undefined;
       if (updated && patch.currentStage !== undefined) {
         const { advanceSessionStage } =
           await import("../../../services/focus-sessions/advance-stage.js");
@@ -2709,6 +2711,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Report the status the ROW now holds — see the MCP door for why a
         // caller told "active" past an open gate is the dangerous answer.
         if (advance.paused) updated = { ...updated, status: "paused" };
+        // What the advance did to the subject (the MCP door's `subjectMove`).
+        const { reportedSubjectMove } =
+          await import("../../../services/focus-sessions/stage-subject-status.js");
+        subjectMove = reportedSubjectMove(advance.subjectStatus);
       }
 
       // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
@@ -2826,6 +2832,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(nudges ? { nudges } : {}),
         // What `targets` did: which were added, which already were.
         ...(targetsWrite ? { targets: targetsWrite } : {}),
+        // What a stage advance did to the subject, when the stage asked for a
+        // move: moved, waiting on a person, skipped or failed, with why.
+        ...(subjectMove ? { subjectMove } : {}),
         // What the follow DID — which playbook, which stage, how much
         // structure merged. Without it the caller must infer an attach from a
         // `playbookId` that appeared, and can never see a release's note.
@@ -3076,6 +3085,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ? { closedNotDone: result.closedNotDone }
           : {}),
         ...(result.waiting ? { waiting: result.waiting } : {}),
+        // What the end moved (`subjectProfile.onEnd`), each with why.
+        ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
