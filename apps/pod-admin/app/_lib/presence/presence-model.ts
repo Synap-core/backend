@@ -31,6 +31,7 @@ import {
   type PresenceProof,
   type PresenceRequestKind,
   type PresenceRefusalCode,
+  type SensitiveActionPath,
 } from "@synap-core/types/presence";
 
 /**
@@ -38,12 +39,15 @@ import {
  * pending agent key (its `agent/connect`); a request a door decides with no
  * proposal (`PRESENCE_REQUEST_KINDS`: a key or device request, an app
  * connection, an issuer, a catalog key, a skill, tool or MCP server turned
- * on); or the OAuth authorization a consent screen shows.
+ * on); a sensitive ACTION (`SENSITIVE_ACTIONS`, W3 slice 3: the exact input
+ * the call sends, which the pod digests); or the OAuth authorization a
+ * consent screen shows.
  */
 export type PresenceChallengeSubject =
   | { proposalId: string }
   | { pendingKeyId: string }
   | { request: { kind: PresenceRequestKind; id: string } }
+  | { action: { path: SensitiveActionPath; input: unknown } }
   | {
       oauthConsent: {
         clientId: string;
@@ -54,17 +58,26 @@ export type PresenceChallengeSubject =
     };
 
 /**
- * A subject, and how the dialog names what is approved when no proposal
- * does (a request subject): the page's own heading for it, through the
- * vocabulary door. A proposal is named by its own heading.
+ * A subject, and how the dialog names it:
+ *  - `label`: what is APPROVED when no proposal names it (a request
+ *    subject): the page's own heading for it, through the vocabulary door. A
+ *    proposal is named by its own heading.
+ *  - `doing`: what the person is DOING when it is a change of their own, not
+ *    an approval (a sensitive action, a passkey change, the mode switched
+ *    off): "To {doing}, confirm with your passkey". Only this browser can
+ *    prove it (Relay approves requests, it cannot sign this page's call), so
+ *    the dialog offers no Relay.
  */
-export type PresenceSubject = PresenceChallengeSubject & { label?: string };
+export type PresenceSubject = PresenceChallengeSubject & {
+  label?: string;
+  doing?: string;
+};
 
-/** The challenge input: the subject without the dialog's label. */
+/** The challenge input: the subject without the dialog's words. */
 export function challengeInput(
   subject: PresenceSubject
 ): PresenceChallengeSubject {
-  const { label: _label, ...input } = subject;
+  const { label: _label, doing: _doing, ...input } = subject;
   return input as PresenceChallengeSubject;
 }
 

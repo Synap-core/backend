@@ -46,6 +46,7 @@ import {
 import { ConfirmModal } from "../../../components/confirm-modal";
 import { DetailDrawer } from "../../../components/detail-drawer";
 import { toneTextClass } from "./mark-tone";
+import { useWidenCell } from "../../../../_lib/presence/use-sensitive-actions";
 
 export interface WhyTarget {
   row: MatrixRow;
@@ -122,7 +123,9 @@ function AgentWhy({
   const [result, setResult] = useState<NextRungOutcome | "failed" | null>(null);
   const [widening, setWidening] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
-  const widen = trpc.governanceRules.widenCell.useMutation();
+  // With the proof of presence (W3 slice 3): a sensitive action, one proof
+  // per cell widened.
+  const widen = useWidenCell();
   const revoke = trpc.governanceRules.revoke.useMutation({
     onSuccess: () => {
       addToast({ title: "Rule revoked", color: "default" });

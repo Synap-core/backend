@@ -6,8 +6,11 @@
  *   1. Recovery codes — the pod-held way back in (shown once, copy/download).
  *   2. Password — the Kratos settings flow's password group.
  *   3. Passkeys — the settings flow's passkey group; "Add a passkey" runs the
- *      ceremony (`lib/passkey.ts`). The invite page's Done screen sends a
- *      Synap-Cloud-only joiner here (`#passkeys`).
+ *      ceremony (`lib/passkey.ts`). With a passkey already, it first confirms
+ *      with it (`presence.authorizePasskeyChange`, W3 slice 3): Kratos'
+ *      guard refuses a new one without that grant (`passkey-add-model.ts`).
+ *      The invite page's Done screen sends a Synap-Cloud-only joiner here
+ *      (`#passkeys`).
  *   4. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`, the CP's
  *      claim-access hop), for a member who joined another way. OMITTED when
  *      Cloud sign-in is not wired here or the owner turned it off.
@@ -72,6 +75,14 @@ import {
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { initialFieldValues, KratosFields } from "../../_lib/kratos-fields";
 import { CopyButton, errorDetail } from "../../_lib/copy-button";
+import { trpc } from "../../../lib/trpc";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { PresenceDeclined } from "../../_lib/presence/presence-model";
+import { useAuthorizePasskeyChange } from "../../_lib/presence/use-factor-doors";
+import { en as securityEn, fr as securityFr } from "./copy";
+import { passkeyAddStep } from "./passkey-add-model";
+
+const SECURITY_CATALOGS = { en: securityEn, fr: securityFr };
 
 const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/security")}`;
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
@@ -617,8 +628,16 @@ export function passkeyCount(flow: KratosFlow): number {
 }
 
 function PasskeysCard() {
+  const t = useT(SECURITY_CATALOGS);
   const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
+  // A passkey change needs a grant from an existing factor (W3 slice 3).
+  const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
+  const devices = trpc.presence.devices.list.useQuery(undefined, {
+    retry: false,
+  });
+  const authorize = useAuthorizePasskeyChange();
+  const [grantedUntil, setGrantedUntil] = useState<number | null>(null);
   /** A fixed sentence; a caught error's own text goes behind "Copy details". */
   const [error, setError] = useState<{
     message: string;
@@ -644,6 +663,27 @@ function PasskeysCard() {
     void start();
   }, [start]);
 
+  // Step 1 when the person has a passkey: confirm with it; the pod holds the
+  // grant for one change. The new passkey is created on the next press.
+  const confirmFirst = async () => {
+    const userId = me.data?.id;
+    if (!userId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const grant = await authorize(userId);
+      setGrantedUntil(Date.now() + grant.expiresInSeconds * 1000);
+    } catch (err) {
+      if (!(err instanceof PresenceDeclined))
+        setError({
+          message: t("passkeys.grant.failed"),
+          detail: errorDetail(err),
+        });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const add = async () => {
     if (load.kind !== "ready") return;
     const flow = load.flow;
@@ -654,6 +694,8 @@ function PasskeysCard() {
     setNeedsReauth(false);
     try {
       const register = await createPasskey(createData);
+      // The guard redeems the grant whatever happens next: one proof, one try.
+      setGrantedUntil(null);
       const r = await submitSelfServiceFlow(flow, {
         method: "passkey",
         csrf_token: nodeValue(flow, "csrf_token") ?? "",
@@ -681,6 +723,11 @@ function PasskeysCard() {
   };
 
   const count = load.kind === "ready" ? passkeyCount(load.flow) : 0;
+  const step = passkeyAddStep({
+    passkeys: count,
+    deviceKeys: devices.isError ? null : (devices.data?.length ?? 0),
+    granted: grantedUntil !== null && Date.now() < grantedUntil,
+  });
   const canAdd =
     load.kind === "ready" &&
     nodeValue(load.flow, "passkey_create_data") !== null &&
@@ -706,7 +753,7 @@ function PasskeysCard() {
           ) : null
         }
       >
-        {load.kind === "loading" ? (
+        {load.kind === "loading" || devices.isLoading ? (
           <div className="h-12 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
         ) : load.kind === "failed" ? (
           <LoadFailed
@@ -740,23 +787,74 @@ function PasskeysCard() {
                 ) : null}
               </div>
             ) : null}
-            {canAdd ? (
+            {!canAdd ? (
+              <p className="text-[12.5px] text-foreground/65">
+                This browser can&apos;t create a passkey. Open this page on a
+                device that can.
+              </p>
+            ) : step === "devicesFailed" ? (
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-[12.5px] text-status-down">
+                  {t("passkeys.devicesFailed")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="flat"
+                  radius="md"
+                  onPress={() => void devices.refetch()}
+                >
+                  {t("passkeys.retry")}
+                </Button>
+              </div>
+            ) : step === "relayOnly" ? (
+              <p className="text-[12.5px] text-foreground/65">
+                {t("passkeys.relayOnly")}
+              </p>
+            ) : step === "create" ? (
+              <div className="flex flex-col items-start gap-2">
+                <p className="text-[12.5px] text-foreground/65">
+                  {t("passkeys.grant.ready")}
+                </p>
+                <Button
+                  size="sm"
+                  radius="md"
+                  color="primary"
+                  startContent={<KeyRound className="h-3.5 w-3.5" />}
+                  isLoading={busy}
+                  onPress={() => void add()}
+                >
+                  {t("passkeys.grant.create")}
+                </Button>
+              </div>
+            ) : step === "authorize" ? (
+              <div className="flex flex-col items-start gap-2">
+                <p className="text-[12.5px] text-foreground/65">
+                  {t("passkeys.grant.why")}
+                </p>
+                <Button
+                  size="sm"
+                  radius="md"
+                  variant="flat"
+                  startContent={<KeyRound className="h-3.5 w-3.5" />}
+                  isLoading={busy}
+                  isDisabled={!me.data?.id}
+                  onPress={() => void confirmFirst()}
+                >
+                  Add a passkey
+                </Button>
+              </div>
+            ) : (
               <Button
                 size="sm"
                 radius="md"
-                variant={count > 0 ? "flat" : "solid"}
-                color={count > 0 ? "default" : "primary"}
+                variant="solid"
+                color="primary"
                 startContent={<KeyRound className="h-3.5 w-3.5" />}
                 isLoading={busy}
                 onPress={() => void add()}
               >
                 Add a passkey
               </Button>
-            ) : (
-              <p className="text-[12.5px] text-foreground/65">
-                This browser can&apos;t create a passkey. Open this page on a
-                device that can.
-              </p>
             )}
           </div>
         )}

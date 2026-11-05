@@ -5,7 +5,8 @@
  *    message is a muted detail, never the headline;
  *  - no passkey on this pod: "Add a passkey" is the primary action;
  *  - a browser that cannot use a passkey: no primary action, no Try again;
- *  - Relay is offered only on a device the person enrolled;
+ *  - Relay is offered only on a device the person enrolled, and only for
+ *    what Relay can approve (never this page's own change, `inBrowserOnly`);
  *  - in a batch, the way out is "Stop here".
  */
 
@@ -33,6 +34,12 @@ export interface PresenceDialogInput {
   /** This browser can run `navigator.credentials.get`. */
   passkeySupported: boolean;
   progress?: { index: number; total: number };
+  /**
+   * The proof can only come from THIS browser: a change the page makes
+   * itself (a sensitive action, a passkey change, the mode switched off),
+   * which Relay cannot sign. Relay is then never offered.
+   */
+  inBrowserOnly?: boolean;
 }
 
 export interface PresenceDialogView {
@@ -84,7 +91,7 @@ export function presenceDialogView(
     };
   }
   const relayDevice =
-    phase.deviceKeys.length > 0
+    !input.inBrowserOnly && phase.deviceKeys.length > 0
       ? phase.deviceKeys[0]!.label.trim() || ""
       : null;
   if (!phase.passkey) {

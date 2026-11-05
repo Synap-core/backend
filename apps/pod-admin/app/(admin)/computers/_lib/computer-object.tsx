@@ -43,6 +43,7 @@ import {
   type FailureWording,
 } from "../../../_lib/object/load-failure";
 import { SubjectActivity } from "../../../_lib/object/subject-activity";
+import { useSetMachineRunsScripts } from "../../../_lib/presence/use-sensitive-actions";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
 import { ResourceRow, ResourceRowEmpty } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
@@ -116,7 +117,8 @@ export function ComputerObject({
   const [dialog, setDialog] = useState<null | "rename" | "lifetime">(null);
   const [proposalId, setProposalId] = useState<string | null>(null);
   const scripts = computer ? scriptsOwnerWords(computer, viewerId) : null;
-  const runsScripts = trpc.machines.setRunsScripts.useMutation({
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const runsScripts = useSetMachineRunsScripts({
     onSuccess: async (out) => {
       const whose = scripts?.whose ?? "its owner's";
       addToast({

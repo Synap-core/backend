@@ -38,6 +38,7 @@ import {
   type ListedKey,
 } from "./key-edit-model";
 import { KeySections, type KeyPlace } from "./key-sections";
+import { useSetKeyGrants } from "../../../_lib/presence/use-sensitive-actions";
 
 /** The grant is all this editor changes: a draft shell around it for the shared sections. */
 const asKeyDraft = (grant: ListedGrantDraft): KeyDraft => ({
@@ -149,7 +150,8 @@ function Editor({
   const [drafts, setDrafts] = useState<ListedGrantDraft[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const utils = trpc.useUtils();
-  const setGrants = trpc.apiKeys.setGrants.useMutation();
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const setGrants = useSetKeyGrants();
 
   const profiles = trpc.profiles.list.useQuery(undefined, {
     staleTime: 60_000,

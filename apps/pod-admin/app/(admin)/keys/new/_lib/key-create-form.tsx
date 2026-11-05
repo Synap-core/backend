@@ -23,6 +23,11 @@ import { redirectToLoginIfUnauthorized } from "../../../../../lib/auth-redirect"
 import { PageHeader, PageShell } from "../../../components/page-header";
 import { RevealKeyModal } from "../../_lib/key-modals";
 import {
+  useCreateKey,
+  useCreateServiceKey,
+  useCreateSystemKey,
+} from "../../../../_lib/presence/use-sensitive-actions";
+import {
   ChoiceCard,
   KeyReviewBar,
   KeySections,
@@ -127,9 +132,10 @@ export function KeyCreateForm() {
   } | null>(null);
 
   const utils = trpc.useUtils();
-  const create = trpc.apiKeys.create.useMutation();
-  const createSystem = trpc.apiKeys.createSystemKey.useMutation();
-  const createService = trpc.apiKeys.adminCreateServiceKey.useMutation();
+  // Each mint carries the proof of presence (W3 slice 3): sensitive actions.
+  const create = useCreateKey();
+  const createSystem = useCreateSystemKey();
+  const createService = useCreateServiceKey();
 
   const validation = validateKeyDraft(draft);
 

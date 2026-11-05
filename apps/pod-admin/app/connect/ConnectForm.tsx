@@ -23,6 +23,10 @@ import {
 } from "@synap-core/types/external-connect";
 import { ReceiverShell } from "../_lib/receiver-shell";
 import { trpc } from "../../lib/trpc";
+import {
+  useBeginMcpConnect,
+  useConnectIntegration,
+} from "../_lib/presence/use-sensitive-actions";
 
 const INTEGRATION_INFO: Record<
   IntegrationKind,
@@ -130,7 +134,8 @@ export function ConnectForm({
     (k) => k.isActive && k.hubId === `integration:${integration}`
   );
 
-  const connectMutation = trpc.apiKeys.connectIntegration.useMutation({
+  // Both mints carry the proof of presence (W3 slice 3): sensitive actions.
+  const connectMutation = useConnectIntegration({
     onSuccess: (data) => {
       // Use the server-returned podUrl (PUBLIC_URL) — not window.location.origin,
       // which would return the pod-admin subdomain instead of the API domain.
@@ -174,7 +179,7 @@ export function ConnectForm({
 
   // CP-MCP consent-code mint: records consent, returns a one-time code, and we
   // top-level-navigate to the CP callback with ONLY the code (never a key).
-  const beginMcpConnectMutation = trpc.apiKeys.beginMcpConnect.useMutation({
+  const beginMcpConnectMutation = useBeginMcpConnect({
     onSuccess: (data) => {
       if (!hasRedirect || !redirectIsAllowed) {
         setStep({
