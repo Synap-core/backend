@@ -13,7 +13,10 @@
  *   stop     an open or stale session ends `cancelled`, through the ONE close
  *            door (`completeFocusSession`), which also stops its in-flight work.
  *   rerun    a NEW session `spawned_from` this run, from its stored sources. A
- *            closed run stays closed (`closedRunRefusal`): there is no reopen.
+ *            closed run stays closed (`closedRunRefusal`); the one reopen is a
+ *            PERSON's, of a `cancelled` run, through tRPC `update` with
+ *            `status: "active"` (decision 3da00cda). It is not a verb here
+ *            yet: no surface offers it.
  *            Offered only when the session read says so (`rerun.available`,
  *            `assessRerunAvailability`), never re-derived here.
  *   wait_on  add a `session --blocked_by--> session` edge.

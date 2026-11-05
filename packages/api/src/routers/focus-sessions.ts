@@ -52,6 +52,7 @@ import {
 } from "@synap-core/types/focus-sessions";
 import {
   closedRunRefusal,
+  isCancelledRunReopen,
   isTerminalSessionStatus,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
@@ -2245,8 +2246,15 @@ export const focusSessionsRouter = router({
         throw lifecycleConflictError(expectedStatus, existing.status);
       }
 
-      // R8 — a closed run stays closed: never moved back to an open status.
-      const reopening = closedRunRefusal(existing.status, patch.status);
+      // R8 — a closed run stays closed: never moved back to an open status,
+      // except a PERSON reopening a cancelled run (decision 3da00cda). An
+      // agent key reads as its person, so `agentUserId` is what tells them
+      // apart (as `acceptFromTriage`).
+      const reopening = closedRunRefusal(
+        existing.status,
+        patch.status,
+        ctx.agentUserId ? "agent" : "person"
+      );
       if (reopening) {
         throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
       }
@@ -2315,6 +2323,40 @@ export const focusSessionsRouter = router({
       // structure with no per-stage server state, so there is nothing a
       // wholesale write can destroy.
       if (patch.stages !== undefined) set.stages = patch.stages;
+
+      // The person's reopen of a cancelled run funnels through the ONE reopen
+      // door (status + closedAt + the slots and run the cancel ended + the
+      // room line), the mirror of the close door below. The rest of the patch
+      // is then an ordinary field write on the reopened row.
+      if (isCancelledRunReopen(existing.status, patch.status)) {
+        const { reopenCancelledSession } =
+          await import("../services/focus-sessions/reopen-session.js");
+        const reopened = await reopenCancelledSession({
+          sessionId: input.id,
+          userId: ctx.userId,
+        }).catch((err: unknown) => {
+          // Left `cancelled` meanwhile: the door's own (raw) conflict.
+          const stale = err as {
+            code?: unknown;
+            expectedFrom?: string | null;
+            actual?: string | null;
+          };
+          if (stale?.code === "LIFECYCLE_STALE") {
+            throw lifecycleConflictError(
+              stale.expectedFrom ?? null,
+              stale.actual ?? null
+            );
+          }
+          throw err;
+        });
+        if (!reopened) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.id} not found`,
+          });
+        }
+        delete set.status;
+      }
 
       // Any terminal status via update funnels through completeFocusSession —
       // the ONE close door (pack + run close + ephemeral expiry + close event).

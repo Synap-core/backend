@@ -93,7 +93,9 @@ beforeEach(() => {
 });
 
 describe("tRPC focusSessions.update — a closed run stays closed", () => {
-  for (const from of ["closed", "cancelled", "failed"]) {
+  // `cancelled` is the one a PERSON may reopen (decision 3da00cda):
+  // `focus-sessions.reopen-cancelled.test.ts`.
+  for (const from of ["closed", "failed"]) {
     it(`refuses ${from} → active, and writes nothing`, async () => {
       findFirstSpy.mockResolvedValue(stored(from));
       await expect(
