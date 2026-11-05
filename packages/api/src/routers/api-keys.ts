@@ -5,6 +5,7 @@
  * SECURITY: Keys are displayed ONCE and never stored in plaintext.
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { presenceProofSchema } from "@synap-core/types/presence";
 import { assertPresenceForRequest } from "../services/presence/gate.js";
 import {
@@ -496,6 +497,7 @@ export const apiKeysRouter = router({
    * SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
   create: credentialProcedure
+    .input(presenceInput)
     .input(
       z
         .object({
@@ -685,6 +687,7 @@ export const apiKeysRouter = router({
    * Rotate an API key (create new, revoke old)
    */
   rotate: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -784,6 +787,7 @@ export const apiKeysRouter = router({
    * key is changed on the app's page, where its approved requests live.
    */
   setGrants: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -1037,6 +1041,7 @@ export const apiKeysRouter = router({
   getMachineDefaults: podAdminProcedure.query(() => readMachineDefaults()),
 
   setMachineDefaults: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(z.object({ keyTtlDays: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -1170,6 +1175,7 @@ export const apiKeysRouter = router({
    * Pod-admin only. Tied to the operator's userId for audit purposes.
    */
   createSystemKey: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(ServiceKeyInputSchema.refine(scopeOrUses, SCOPE_OR_USES))
     .mutation(async ({ input, ctx }) => {
@@ -1230,6 +1236,7 @@ export const apiKeysRouter = router({
    * Use this when provisioning credentials for external services via the connections UI.
    */
   adminCreateServiceKey: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       ServiceKeyInputSchema.extend({ workspaceId: z.string().uuid() }).refine(
@@ -1314,6 +1321,7 @@ export const apiKeysRouter = router({
    * audit 2026-10-28, F3); the server is the check a page edit cannot skip.
    */
   connectIntegration: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         integration: integrationKindSchema,
@@ -1513,6 +1521,7 @@ export const apiKeysRouter = router({
    * Minting on redeem (not here) means no plaintext key touches the browser.
    */
   beginMcpConnect: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         agentType: z.literal("claude-web"),
@@ -1782,6 +1791,7 @@ export const apiKeysRouter = router({
    * of the key (`userId = ctx.userId`).
    */
   createForWorkspace: workspaceProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       z

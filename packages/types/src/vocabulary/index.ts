@@ -3730,6 +3730,73 @@ export function resolveAgentReachLabel(
 }
 
 /**
+ * Can the pod get an agent working now, as a mark's words (the roster's
+ * `wake.state`, `agentUsers.roster`). Keyed by `AgentWakeState`;
+ * `agents/wake.ts` holds the compile-time floor that a new state cannot ship
+ * without its words.
+ */
+export const AGENT_WAKE_STATE_LABELS = {
+  awake: "Awake",
+  can_wake: "Can wake",
+  cant_wake: "Can't wake",
+} as const;
+
+/** A wake state's words; an unknown state humanizes rather than leaks. */
+export function resolveAgentWakeStateLabel(
+  state: string | null | undefined
+): string {
+  if (!state) return "";
+  return (
+    (AGENT_WAKE_STATE_LABELS as Readonly<Record<string, string>>)[state] ??
+    humanizeToken(state)
+  );
+}
+
+/**
+ * What gets (or would get) an agent working (`wake.how`): the pod itself, its
+ * connector's start, or the runner on its computer.
+ */
+export const AGENT_WAKE_HOW_LABELS = {
+  built_in: "Runs in Synap",
+  binding: "Started by its connector",
+  runner: "Started on its computer",
+} as const;
+
+/** A wake path's words; an unknown one humanizes rather than leaks. */
+export function resolveAgentWakeHowLabel(
+  how: string | null | undefined
+): string {
+  if (!how) return "";
+  return (
+    (AGENT_WAKE_HOW_LABELS as Readonly<Record<string, string>>)[how] ??
+    humanizeToken(how)
+  );
+}
+
+/** Why an agent can't be woken (`wake.why`), a few words each. */
+export const AGENT_WAKE_REFUSAL_LABELS = {
+  paused: "Paused",
+  binding_broken: "Connector broken",
+  no_template: "No agent template",
+  no_template_wake: "Starts only by hand",
+  no_computer: "No computer",
+  no_waker: "Nothing can start it yet",
+  computer_offline: "Computer offline",
+  wakes_off: "Waking is off",
+} as const;
+
+/** A wake refusal's words; an unknown one humanizes rather than leaks. */
+export function resolveAgentWakeRefusalLabel(
+  why: string | null | undefined
+): string {
+  if (!why) return "";
+  return (
+    (AGENT_WAKE_REFUSAL_LABELS as Readonly<Record<string, string>>)[why] ??
+    humanizeToken(why)
+  );
+}
+
+/**
  * What a COORDINATION POST says — one agent's typed message to another
  * session (`sessionPost.intent`, `@synap-core/types/agents` session-post).
  * A MARK, never a sentence: the change feed, the packet inbox and the room

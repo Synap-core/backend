@@ -215,6 +215,14 @@ export {
 // Export utilities for webhook handling
 export { syncUserFromKratos } from "./utils/kratos-sync.js";
 
+// Proof of presence (W3 slice 3): Kratos' settings guard asks these before a
+// passkey change by a person who already holds a proof factor.
+export {
+  hasProofFactor,
+  notifyFactorChanged,
+} from "./services/presence/factors.js";
+export { redeemPasskeyChangeGrant } from "./services/presence/passkey-change.js";
+
 // Export vault resolver utilities (used by ssh-proxy and other server-side consumers)
 export {
   isVaultReference,

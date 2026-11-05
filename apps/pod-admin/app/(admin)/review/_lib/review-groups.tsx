@@ -13,7 +13,7 @@
  *
  * Grouping is decided in `review-rows.ts` (pure, tested); this file only
  * draws it, with the console's own parts: `SectionCard`, `ResourceRow` (via
- * the page's `renderRow`), `FilterChips`, HeroUI `Card`/`Button`. Every
+ * the page's `renderRow`), `SegmentedChoice`, HeroUI `Card`/`Button`. Every
  * decision still opens where it always did — the dock or drawer
  * (`review-drawer.tsx`), or inline for How things work's diff.
  */
@@ -35,7 +35,7 @@ import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
 import { SectionCard } from "../../components/section-card";
 import { ResourceRow } from "../../components/resource-row";
-import { FilterChips } from "../../components/filter-chips";
+import { SegmentedChoice } from "../../components/segmented-choice";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import { Pill } from "../../../_lib/object/provenance-chips";
 import {
@@ -196,11 +196,11 @@ function PackageSection({
         <div className="flex flex-wrap items-center justify-end gap-2">
           {oneAction}
           {layouts.length > 1 && (
-            <FilterChips
+            <SegmentedChoice
               ariaLabel={`${resolveReviewPackageLabel(pkg)} layout`}
               className=""
               active={layout}
-              chips={layouts.map((l) => ({
+              options={layouts.map((l) => ({
                 key: l,
                 label: resolveReviewLayoutLabel(l),
               }))}

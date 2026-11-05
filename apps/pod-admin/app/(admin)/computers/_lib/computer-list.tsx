@@ -14,7 +14,7 @@ import { useSearchParams } from "next/navigation";
 import { Laptop } from "lucide-react";
 import { formatRelative } from "../../../../lib/format";
 import { CommandLine } from "../../../_lib/command-line";
-import { FilterChips } from "../../components/filter-chips";
+import { FilterChip, FilterRow } from "../../components/filter-chip";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -85,16 +85,27 @@ export function ComputerList({
 
   return (
     <>
-      <FilterChips<ComputerFilter>
-        param={FILTER_PARAM}
-        defaultKey="all"
-        active={filter}
-        ariaLabel="Filter computers by key"
-        chips={COMPUTER_FILTERS.map((f) => ({
-          key: f.key,
-          label: f.label,
-          count: ready ? counts[f.key] : undefined,
-        }))}
+      <FilterRow
+        filters={
+          <FilterChip<Exclude<ComputerFilter, "all">>
+            label="Key"
+            allLabel="All computers"
+            param={FILTER_PARAM}
+            value={filter === "all" ? null : filter}
+            allCount={ready ? counts.all : null}
+            options={COMPUTER_FILTERS.flatMap((f) =>
+              f.key === "all"
+                ? []
+                : [
+                    {
+                      id: f.key,
+                      label: f.label,
+                      count: ready ? counts[f.key] : null,
+                    },
+                  ]
+            )}
+          />
+        }
       />
 
       {ready && expired && (

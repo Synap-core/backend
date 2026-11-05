@@ -1082,3 +1082,5 @@ export * from "./seats.js";
 export * from "./server-owned-message-meta.js";
 // One agent's typed message to another session (the coordination post).
 export * from "./session-post.js";
+// Can the pod get an agent working now (the roster's `wake`), and its template.
+export * from "./wake.js";

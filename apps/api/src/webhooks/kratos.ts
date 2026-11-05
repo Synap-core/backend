@@ -40,6 +40,11 @@ import {
 } from "@synap/auth";
 import { createCloudTrustHookRouter } from "./kratos-cloud-trust.js";
 import {
+  hasProofFactor,
+  notifyFactorChanged,
+  redeemPasskeyChangeGrant,
+} from "@synap/api";
+import {
   findAccountByIdentity,
   readCloudTrust,
   recoveryCodeSummary,
@@ -196,6 +201,18 @@ kratosWebhookRouter.route(
             : 0;
         },
       }),
+    passkeyChange: {
+      hasProofFactor,
+      redeemGrant: redeemPasskeyChangeGrant,
+      notify: (identityId) =>
+        notifyFactorChanged({
+          userId: identityId,
+          change: "changed",
+          factor: "passkey",
+          label: null,
+          id: identityId,
+        }),
+    },
     logger,
   })
 );

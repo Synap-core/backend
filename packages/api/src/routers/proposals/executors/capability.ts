@@ -652,6 +652,9 @@ export function registerCapabilityExecutors(): void {
         db,
         authenticated: true as const,
         userId,
+        // capability.enable is a sensitive approval: its proof was checked
+        // by applyProposalApproval, so setApproved does not ask again.
+        presenceChecked: "applyProposalApproval",
         workspaceId: proposal.workspaceId ?? null,
       } as unknown as Context);
       for (const id of skillIds) {
@@ -665,6 +668,9 @@ export function registerCapabilityExecutors(): void {
           db,
           authenticated: true as const,
           userId,
+          // capability.enable is a sensitive approval: its proof was checked
+          // by applyProposalApproval, so setApproved does not ask again.
+          presenceChecked: "applyProposalApproval",
           workspaceId: proposal.workspaceId ?? null,
         } as unknown as Context);
         for (const id of toolIds) {

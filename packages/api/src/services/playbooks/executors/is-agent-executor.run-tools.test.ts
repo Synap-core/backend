@@ -98,6 +98,7 @@ describe("is-agent executor — the run's declared tools ride on the kickoff", (
       playbookId: "pb-package-ideas",
       workspaceId: "ws-1",
       userId: "user-1",
+      sessionId: "sess-1",
     });
     expect(triggerAutoRespond.mock.calls[0][0]).toMatchObject({
       run: {
@@ -113,6 +114,6 @@ describe("is-agent executor — the run's declared tools ride on the kickoff", (
     expect(resolveRunToolProfile).not.toHaveBeenCalled();
     expect(
       (triggerAutoRespond.mock.calls[0][0] as { run?: unknown }).run
-    ).toBeNull();
+    ).toBeUndefined();
   });
 });

@@ -40,7 +40,7 @@ import { trpc } from "../../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../../lib/auth-redirect";
 import { PageHeader, PageShell } from "../../../components/page-header";
 import { SectionCard } from "../../../components/section-card";
-import { FilterChips } from "../../../components/filter-chips";
+import { SegmentedChoice } from "../../../components/segmented-choice";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -89,11 +89,11 @@ export function ReviewSettings() {
               {t("groupBy.unread")}
             </p>
           ) : (
-            <FilterChips
+            <SegmentedChoice
               ariaLabel={t("groupBy.title")}
               className=""
               active={prefs.groupBy}
-              chips={REVIEW_GROUP_BYS.map((g) => ({
+              options={REVIEW_GROUP_BYS.map((g) => ({
                 key: g,
                 label: resolveReviewGroupByLabel(g),
               }))}
@@ -114,13 +114,13 @@ export function ReviewSettings() {
                 <span className="min-w-0 flex-1 text-[13px] font-medium text-foreground">
                   {resolveReviewPackageLabel(pkg)}
                 </span>
-                <FilterChips
+                <SegmentedChoice
                   ariaLabel={t("layout.aria", {
                     name: resolveReviewPackageLabel(pkg),
                   })}
                   className=""
                   active={prefs.layoutOf(pkg)}
-                  chips={REVIEW_PACKAGE_LAYOUTS[pkg].map((l) => ({
+                  options={REVIEW_PACKAGE_LAYOUTS[pkg].map((l) => ({
                     key: l,
                     label: resolveReviewLayoutLabel(l),
                   }))}
@@ -161,7 +161,7 @@ function LanguageSetting() {
   });
   return (
     <SectionCard title={t("language.title")} hint={t("language.hint")}>
-      <FilterChips
+      <SegmentedChoice
         ariaLabel={t("language.title")}
         className=""
         // The pick shows while the pod saves it; a refused one falls back.
@@ -170,7 +170,7 @@ function LanguageSetting() {
             ? setLocale.variables.locale
             : locale
         }
-        chips={SUPPORTED_LOCALES.map((l) => ({
+        options={SUPPORTED_LOCALES.map((l) => ({
           key: l,
           label: t(`language.${l}`),
         }))}

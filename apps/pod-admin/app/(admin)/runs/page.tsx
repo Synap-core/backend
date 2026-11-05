@@ -37,7 +37,7 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { FilterChips } from "../components/filter-chips";
+import { FilterChip, FilterRow } from "../components/filter-chip";
 import {
   failingBoardComplete,
   flowHealthPill,
@@ -92,11 +92,18 @@ function RunsInner() {
   return (
     <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
-      <FilterChips
-        param="filter"
-        defaultKey="all"
-        active={filter}
-        chips={RUN_FILTERS}
+      <FilterRow
+        filters={
+          <FilterChip
+            label="Show"
+            allLabel="All runs"
+            param="filter"
+            value={filter === "all" ? null : filter}
+            options={RUN_FILTERS.flatMap((f) =>
+              f.key === "all" ? [] : [{ id: f.key, label: f.label }]
+            )}
+          />
+        }
       />
       {listInput ? (
         <RunFeed

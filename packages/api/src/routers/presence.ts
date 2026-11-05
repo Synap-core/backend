@@ -24,6 +24,11 @@ import {
   PRESENCE_REQUEST_KINDS,
   oauthConsentId,
   presenceRequestSubject,
+  presenceActionDigest,
+  presenceActionSubject,
+  presenceProofSchema,
+  SENSITIVE_ACTIONS,
+  type SensitiveActionPath,
   type PresenceRequestKind,
   PRESENCE_ENROLL_FRESH_SECONDS,
   PRESENCE_EXPIRED,
@@ -43,7 +48,15 @@ import {
   presenceDeviceKeys,
 } from "@synap/database";
 
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
+import {
+  assertMayEnrollDeviceKey,
+  notifyFactorChanged,
+} from "../services/presence/factors.js";
+import { PASSKEY_CHANGE_GRANT_SECONDS } from "../services/presence/passkey-change.js";
+import { missingSince, readPresenceMode } from "../services/presence/mode.js";
+import { changePresenceMode } from "../services/presence/mode-change.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { kratosCredentialTime } from "../utils/device-session.js";
@@ -115,6 +128,18 @@ export const presenceRouter = router({
           }),
         }),
         z.object({
+          // A sensitive ACTION (slice 3): the exact input the call will send.
+          action: z.object({
+            path: z.enum(
+              Object.keys(SENSITIVE_ACTIONS) as [
+                SensitiveActionPath,
+                ...SensitiveActionPath[],
+              ]
+            ),
+            input: z.unknown(),
+          }),
+        }),
+        z.object({
           oauthConsent: z.object({
             clientId: z.string().min(1).max(512),
             redirectUri: z.string().min(1).max(2048),
@@ -133,6 +158,11 @@ export const presenceRouter = router({
       } else if ("pendingKeyId" in input) {
         const proposal = await openAgentConnectProposal(input.pendingKeyId);
         subject = proposal?.id ?? input.pendingKeyId;
+      } else if ("action" in input) {
+        subject = presenceActionSubject(
+          input.action.path,
+          await presenceActionDigest(input.action.path, input.action.input)
+        );
       } else if ("request" in input) {
         // The deciding door checks who may decide the request; a challenge
         // only names it, and is this person's own.
@@ -198,6 +228,63 @@ export const presenceRouter = router({
       };
     }),
 
+  /**
+   * The pod's proof-of-presence mode, for pod admin → Security: what is in
+   * force, where it comes from, and what `enforce` would have refused in the
+   * last 30 days (the `presence.missing` events).
+   */
+  mode: podAdminProcedure.query(async () => {
+    const state = await readPresenceMode();
+    return { ...state, missingLast30d: await missingSince(30) };
+  }),
+
+  /**
+   * Switch the mode. ON (`enforce`) is free: it only takes power away. OFF
+   * (`report`) needs a proof of presence for `presence_mode:report`, is
+   * recorded (`presence.mode_changed`) and announced to every pod admin. An
+   * operator env floor (`SYNAP_PRESENCE_PROOF=enforce`) cannot be switched
+   * off here.
+   */
+  setMode: podAdminProcedure
+    .input(
+      z.object({
+        mode: z.enum(["enforce", "report"]),
+        presence: presenceProofSchema.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      return changePresenceMode({
+        userId: ctx.userId,
+        mode: input.mode,
+        proof: input.presence ?? null,
+      });
+    }),
+
+  /**
+   * Before a passkey change in Kratos' settings flow (adding or removing one)
+   * when the person already has a factor (founder decision 2): an existing
+   * factor proves `passkey_change:<their user id>`. The consumed challenge is
+   * the grant the settings guard redeems: one change per proof, within
+   * PASSKEY_CHANGE_GRANT_SECONDS. The person's first passkey needs no grant.
+   */
+  authorizePasskeyChange: protectedProcedure
+    .input(z.object({ presence: presenceProofSchema }))
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      const verdict = await assertPresenceForRequest({
+        userId: ctx.userId,
+        kind: "passkey_change",
+        id: ctx.userId,
+        proof: input.presence,
+        door: "presence.authorizePasskeyChange",
+      });
+      return {
+        authorized: verdict !== null,
+        expiresInSeconds: PASSKEY_CHANGE_GRANT_SECONDS,
+      };
+    }),
+
   devices: router({
     /** The person's device keys (never the key material), newest first. */
     list: protectedProcedure.query(async ({ ctx }) => {
@@ -256,6 +343,12 @@ export const presenceRouter = router({
           label: z.string().trim().min(1).max(LABEL_MAX),
           publicKey: z.string().regex(/^[A-Za-z0-9_-]{40,400}$/),
           signature: z.string().regex(/^[A-Za-z0-9_-]{16,400}$/),
+          /**
+           * A proof from an EXISTING factor, for `device_enroll:<fingerprint
+           * of publicKey>`, when the person already has one (founder decision
+           * 2): a stolen session alone never adds a key it controls.
+           */
+          presence: presenceProofSchema.optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
@@ -296,6 +389,13 @@ export const presenceRouter = router({
             )
           );
         }
+        // An existing factor approves the new one; the person's first factor
+        // rests on the fresh sign-in `enrollChallenge` checked.
+        await assertMayEnrollDeviceKey({
+          userId: ctx.userId,
+          publicKey: input.publicKey,
+          proof: input.presence ?? null,
+        });
         const [spent] = await db
           .update(presenceChallenges)
           .set({ consumedAt: new Date(), method: "device_key" })
@@ -327,6 +427,13 @@ export const presenceRouter = router({
           workspaceId: null,
           data: { label: input.label },
         });
+        await notifyFactorChanged({
+          userId: ctx.userId,
+          change: "added",
+          factor: "device_key",
+          label: input.label,
+          id: row!.id,
+        });
         return { id: row!.id };
       }),
 
@@ -345,7 +452,10 @@ export const presenceRouter = router({
               isNull(presenceDeviceKeys.revokedAt)
             )
           )
-          .returning({ id: presenceDeviceKeys.id });
+          .returning({
+            id: presenceDeviceKeys.id,
+            label: presenceDeviceKeys.label,
+          });
         if (!ended) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -360,6 +470,13 @@ export const presenceRouter = router({
           userId: ctx.userId,
           workspaceId: null,
           data: {},
+        });
+        await notifyFactorChanged({
+          userId: ctx.userId,
+          change: "removed",
+          factor: "device_key",
+          label: ended.label,
+          id: ended.id,
         });
         return { revoked: true };
       }),

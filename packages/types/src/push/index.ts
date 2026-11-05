@@ -287,6 +287,10 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "pod.resource_warning": "system",
   "system.intelligence_degraded": "system",
   "system.issuer_pending_approval": "system",
+  // A sign-in factor (passkey, device key) was added or removed: if it was
+  // not you, something you own is broken into (W3 slice 3).
+  "security.factor_changed": "work-broke",
+  "security.presence_mode_changed": "work-broke",
   // Not a 10-second decision: in-app / Home only.
   "connector.sync.failed": null,
   "inbox.mention": null,

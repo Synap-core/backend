@@ -24,6 +24,11 @@ export const presenceChallenges = pgTable(
     nonce: text("nonce").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    /**
+     * A `passkey_change:<user>` proof redeemed by Kratos' settings guard
+     * (0401): one proof, one passkey change.
+     */
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
     /** How it was answered: `passkey` | `device_key`. */
     method: text("method"),
     deviceKeyId: uuid("device_key_id"),

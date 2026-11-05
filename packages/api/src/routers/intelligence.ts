@@ -6,6 +6,7 @@
  * (agents, tools, memory, skills, executions, proposals).
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import {
   router,
@@ -1594,6 +1595,7 @@ export const intelligenceRouter = router({
    * credential, so it also takes the step-up.
    */
   registerCustomService: workspaceProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       z.object({

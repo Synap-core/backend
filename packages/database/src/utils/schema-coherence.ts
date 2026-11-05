@@ -1370,6 +1370,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "public_key",
     addedBy: "0398_presence.sql",
   },
+  // A passkey change redeems its proof once (0401); absence means Kratos'
+  // settings guard would 42703 on every passkey change.
+  {
+    table: "presence_challenges",
+    column: "redeemed_at",
+    addedBy: "0401_presence_redeemed.sql",
+  },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
   {
