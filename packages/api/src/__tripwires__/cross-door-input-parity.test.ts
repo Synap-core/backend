@@ -781,6 +781,13 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "Withheld by design: synap_ask_person only files ONE owed ask (expectedOutputs, built by the door); editing the session it lands on is synap_update_session's job, so an ask can never retitle, move, re-stage or close that work.",
   })),
+  {
+    service: "update-focus-session",
+    param: "bindOnFirstSubject",
+    door: "routers/mcp/handlers/ask-person.ts:synap_ask_person",
+    reason:
+      "Withheld by design: the flag re-runs the facts only when THIS call's own subjectEntityId is the session's first subject (`rebindOnSubjectArrival`, bind-on-facts.ts), and synap_ask_person never sends a subject (it is in ASK_PERSON_WITHHELD above), so an ask can never bind a playbook to the work it is filed on.",
+  },
   // ── `suppressProposal`: the same reason at all three doors ────────────────
   // It is not a missing feature; it is a parameter no client may ever hold.
   {

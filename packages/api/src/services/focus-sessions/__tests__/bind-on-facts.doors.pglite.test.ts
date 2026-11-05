@@ -464,7 +464,7 @@ describe("M1: only an AI door's own subject re-runs the facts", () => {
       sessionId: agentSession,
       subjectEntityId: await entityOf(FINDING_PROFILE, BUILDER),
     });
-    expect(find(out, "binding")).toEqual(
+    expect(find(out, "binding"), JSON.stringify(out)).toEqual(
       expect.stringContaining(FIX_FINDING.id)
     );
     const row = await rowOf(agentSession);
@@ -490,7 +490,7 @@ describe("M2: a goal arriving does not use up the one re-resolve", () => {
     );
     expect(find(filed, "binding")).toBeUndefined();
     const afterGoal = await rowOf(id);
-    expect(afterGoal.track_id).toBe(h.track);
+    expect(afterGoal.track_id, JSON.stringify(filed)).toBe(h.track);
     expect(afterGoal.metadata.bindRecheckedAt).toBeUndefined();
 
     const out = await mcp(
@@ -714,7 +714,9 @@ describe("(g) a playbook that grants capabilities stays a proposal (real floor)"
       sessionId: id,
       followPlaybookId: CAP_PLAYBOOK,
     });
-    expect(find(out, "followRefusal")).toEqual(expect.stringMatching(/widen/i));
+    expect(find(out, "followRefusal"), JSON.stringify(out)).toEqual(
+      expect.stringMatching(/widen/i)
+    );
     expect((await rowOf(id)).playbook_id).toBeNull();
     expect(await runsOf(id)).toEqual([]);
   });
