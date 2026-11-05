@@ -163,6 +163,8 @@ import { hubAuthMiddleware } from "../routers/hub-protocol/_middleware/auth.js";
 import { registerWebhooksRoutes } from "../routers/hub-protocol/rest/webhooks.js";
 import { registerVaultRoutes } from "../routers/hub-protocol/rest/vault.js";
 import { registerCalendarFeedRoutes } from "../routers/hub-protocol/rest/calendar-feed.js";
+import { registerProposalsRoutes } from "../routers/hub-protocol/rest/proposals.js";
+import { httpStatusForTrpcError } from "../routers/hub-protocol/rest/_shared.js";
 import type {
   HubHono,
   HubVariables,
@@ -651,6 +653,23 @@ describe("(c) /mcp refuses a device token; Hub REST takes it as the person", () 
     registerWebhooksRoutes(hub);
     registerVaultRoutes(hub);
     registerCalendarFeedRoutes(hub);
+    registerProposalsRoutes(hub);
+    // A route that errors for a reason of its own, no step-up involved.
+    hub.post("/fails-otherwise", (c) =>
+      c.json({ error: "That name is taken.", code: "NAME_TAKEN" }, 409)
+    );
+    // A route that maps its own errors, dropping the refusal's code.
+    hub.post("/maps-its-own-errors", (c) => {
+      try {
+        assertFreshAuthentication();
+        return c.json({ passed: true });
+      } catch (err) {
+        return c.json(
+          { error: (err as Error).message },
+          httpStatusForTrpcError(err)
+        );
+      }
+    });
     const root = new Hono();
     root.route("/api/hub", hub);
     return root;
@@ -754,6 +773,73 @@ describe("(c) /mcp refuses a device token; Hub REST takes it as the person", () 
       method: "POST",
     });
     expect(minted.status).toBe(200);
+  });
+
+  it("a route that maps its own errors still answers the full step-up shape (the ONE Hub mapper)", async () => {
+    const stale = await signIn("stale", STALE_MS);
+    const res = await hubCall("/maps-its-own-errors", stale.access, {
+      method: "POST",
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: STEP_UP_REQUIRED,
+      reasonCode: STEP_UP_REQUIRED,
+    });
+    const fresh = await signIn("fresh", MIN_MS);
+    expect(
+      (await hubCall("/maps-its-own-errors", fresh.access, { method: "POST" }))
+        .status
+    ).toBe(200);
+  });
+
+  it("CONTROL — a stale device's request that errors for another reason keeps its own answer (only a refused step-up is rewritten)", async () => {
+    const stale = await signIn("stale", STALE_MS);
+    const res = await hubCall("/fails-otherwise", stale.access, {
+      method: "POST",
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "That name is taken.",
+      code: "NAME_TAKEN",
+    });
+  });
+
+  it("POST /proposals/:id/approve of a pod-wide governance change answers a stale device the full step-up shape", async () => {
+    // The pod owner, on a device whose real sign-in is past the window.
+    const code = await consent(OWNER, { signedInAgoMs: STALE_MS });
+    const { status, body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: "owner's phone",
+    });
+    expect(status).toBe(200);
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, created_by)
+         values ($1, null, 'settings', 'pod', 'settings.update', '{}'::jsonb, 'pending', $2)`,
+      [proposalId, OWNER]
+    );
+    const res = await hubCall(
+      `/proposals/${proposalId}/approve`,
+      body.access_token,
+      { method: "POST", body: JSON.stringify({ expectedRevision: 0 }) }
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: STEP_UP_REQUIRED,
+      reasonCode: STEP_UP_REQUIRED,
+    });
+    const row = await q<{ status: string }>(
+      `select status from proposals where id = $1`,
+      [proposalId]
+    );
+    expect(row.rows[0]!.status).toBe("pending");
   });
 
   it("a credential write deep in a service refuses a stale device too (the request's device scope)", async () => {

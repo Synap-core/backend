@@ -73,7 +73,11 @@ import {
 } from "../../../access/guest-containment.js";
 import { reportNoPodAccess } from "../../../access/pod-access.js";
 import { reportRunnerState } from "../../../services/focus-sessions/session-runners.js";
-import { runAsDeviceSession } from "../../../utils/device-session.js";
+import {
+  runAsDeviceSession,
+  STEP_UP_REFUSAL_BODY,
+  type DeviceSessionFacts,
+} from "../../../utils/device-session.js";
 import type { HubVariables } from "../rest/_shared.js";
 import { hubAuthSkipped, hubRelativePath } from "./auth-skip.js";
 
@@ -295,10 +299,27 @@ async function authenticatePersonDevice(
   c.set("personDeviceId", session.device.id);
   const refused = await refuseGuestPrincipal(c);
   if (refused) return refused;
-  return runAsDeviceSession(
-    { id: session.device.id, authTime: session.device.authTime },
-    () => next()
-  );
+  const device: DeviceSessionFacts = {
+    id: session.device.id,
+    authTime: session.device.authTime,
+  };
+  return runAsDeviceSession(device, async () => {
+    await next();
+    // The ONE Hub mapper for a step-up refusal. A route that maps errors
+    // itself (`POST /proposals/:id/approve` reaching the approval floor, a
+    // service guard behind `getCaller`) would otherwise answer its own 403
+    // or 500 without the code the app steps up on. Any route, any mapping:
+    // when this request was refused a step-up and answers an error, it
+    // answers the step-up.
+    if (device.stepUpRefused && c.res.status >= 400) {
+      c.res = new Response(JSON.stringify(STEP_UP_REFUSAL_BODY), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      });
+      // Hono carries the old response's headers over: not its length.
+      c.res.headers.delete("content-length");
+    }
+  });
 }
 
 /** The explicit full access the `is_internal` key is minted with (provision.ts). */

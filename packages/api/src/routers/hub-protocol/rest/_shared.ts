@@ -17,8 +17,8 @@ import { TRPCError } from "@trpc/server";
 import { refusalCodeInCause } from "../../../utils/trpc-cause-code.js";
 import {
   assertFreshAuthentication,
+  STEP_UP_REFUSAL_BODY,
   STEP_UP_REQUIRED,
-  STEP_UP_REQUIRED_MESSAGE,
 } from "../../../utils/device-session.js";
 import {
   db,
@@ -170,14 +170,7 @@ export function refuseStaleDeviceSession(
     // Duck-typed (never `instanceof TRPCError`: see `httpStatusForTrpcError`).
     const cause = (err as { cause?: { reasonCode?: unknown } } | null)?.cause;
     if (cause?.reasonCode !== STEP_UP_REQUIRED) throw err;
-    return c.json(
-      {
-        error: STEP_UP_REQUIRED_MESSAGE,
-        code: STEP_UP_REQUIRED,
-        reasonCode: STEP_UP_REQUIRED,
-      },
-      403
-    );
+    return c.json(STEP_UP_REFUSAL_BODY, 403);
   }
 }
 
