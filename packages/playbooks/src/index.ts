@@ -1038,6 +1038,15 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
+ * How much model a stage's work needs — ADVISORY. `deep` = architecture or
+ * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
+ * a smaller model can do. An executor MAY map it to a model; nothing reads it
+ * yet, and absent means "no preference" (the executor's own default).
+ */
+export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
+export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
+
+/**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
  * (progress-only). The active stage's `key` is stored on
@@ -1127,6 +1136,12 @@ export interface PlaybookStage {
    * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
    */
   onFail?: PlaybookStageOnFail;
+  /**
+   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
+   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
+   * a model later. Never a control: a stage with or without it runs the same.
+   */
+  tier?: PlaybookStageTier;
 }
 
 /**

@@ -598,10 +598,20 @@ export function facetInWorkspaceLensWhere(
   userId: string,
   lens: string | string[]
 ): SQL {
+  return inArray(
+    entityIdColumn,
+    liveFacetEntityIdsInSpaces(lensSpacesImIn(userId, lens))
+  );
+}
+
+/**
+ * The lens workspace(s) the caller is a MEMBER of: the lens ∩ the caller's
+ * `workspace_members` rows. A forged lens of a space the caller is not in
+ * keys nothing.
+ */
+function lensSpacesImIn(userId: string, lens: string | string[]) {
   const ids = Array.isArray(lens) ? lens : [lens];
-  // The caller must be a member of the LENS workspace the facet is in: the
-  // spaces are the lens ∩ the caller's memberships.
-  const lensSpacesImIn = db
+  return db
     .select({ id: workspaceMembers.workspaceId })
     .from(workspaceMembers)
     .where(
@@ -610,7 +620,29 @@ export function facetInWorkspaceLensWhere(
         inArray(workspaceMembers.workspaceId, ids)
       )
     );
-  return inArray(entityIdColumn, liveFacetEntityIdsInSpaces(lensSpacesImIn));
+}
+
+/**
+ * The ROLE form of `facetInWorkspaceLensWhere`: what wears a role in the lens
+ * space(s) the caller is a member of, in BOTH forms `roleInSpacesWhere`
+ * covers: (a) a live facet stamped in the space, or (b) a pod-wide entity
+ * wearing a live POD-WIDE facet whose role is granted to the space (decision
+ * B). Use it for "the people of this space" (a lead list, a space's
+ * conversations): `facetInWorkspaceLensWhere` alone drops every pod-wide
+ * lead, whose facet carries no workspace. Same self-gating on the caller's
+ * membership of the lens space; still a narrow, ANDed with the read floor.
+ */
+export function roleInWorkspaceLensWhere(
+  workspaceIdColumn: AnyPgColumn,
+  entityIdColumn: AnyPgColumn,
+  userId: string,
+  lens: string | string[]
+): SQL {
+  return roleInSpacesWhere(
+    workspaceIdColumn,
+    entityIdColumn,
+    lensSpacesImIn(userId, lens)
+  );
 }
 
 /**

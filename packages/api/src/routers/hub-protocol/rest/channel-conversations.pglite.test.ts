@@ -17,6 +17,8 @@
  *     space with a channel or an open send, paged without loss or overlap;
  *   - someone else's person (a facet in another space) listed, or a space
  *     the key may not read answered;
+ *   - a lead whose role facet is POD-WIDE (granted to the space) left out,
+ *     or a pod-wide role the space was not granted let in;
  *   - a held draft or a failed send missing from the list, or shown as a
  *     plain draft;
  *   - the person's typed message lost when they are not reachable (it is
@@ -684,6 +686,110 @@ describe("GET /channels/conversations — every person in one read", () => {
         )
       ).status
     ).toBe(400);
+  });
+});
+
+// Most leads on a real pod wear a POD-WIDE role facet (no workspace) whose
+// role is granted to the CRM space, not a facet stamped in it; their LinkedIn
+// channel is stamped wherever the connector filed it (the Pod Admin space on
+// the founder's pod). The door must list them as the CRM's own lead lists do
+// (`roleInSpacesWhere`), and still keep out a pod-wide role the space was
+// never granted.
+describe("GET /channels/conversations — pod-wide leads", () => {
+  const ROLE_INVESTOR = randomUUID();
+  const POD_LEAD = randomUUID();
+  const POD_INVESTOR = randomUUID();
+  const CH_POD_LEAD = randomUUID();
+  const CH_POD_INVESTOR = randomUUID();
+
+  beforeAll(async () => {
+    await q(
+      `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id)
+       values ($1,'investor','Investor','role','workspace','workspace',true,'{}'::jsonb,null)`,
+      [ROLE_INVESTOR]
+    );
+    // The lead role is granted to CRM; the investor role to OTHER only.
+    await q(
+      `insert into profile_workspace_access (profile_id, workspace_id, granted_at) values ($1,$2,now()), ($3,$4,now())`,
+      [ROLE_LEAD, CRM, ROLE_INVESTOR, OTHER]
+    );
+    for (const [id, title, role, channel, chat] of [
+      [POD_LEAD, "Paul Podlead", ROLE_LEAD, CH_POD_LEAD, "chat-podlead"],
+      [
+        POD_INVESTOR,
+        "Ivy Investor",
+        ROLE_INVESTOR,
+        CH_POD_INVESTOR,
+        "chat-investor",
+      ],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+         values ($1,$2,null,$3,'person',$4,'{}'::jsonb,'{}'::jsonb)`,
+        [id, OWNER, PERSON_KIND, title]
+      );
+      // A POD-WIDE facet: no workspace.
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties)
+         values ($1,$2,$3,$4,null,'{}'::jsonb)`,
+        [randomUUID(), id, role, OWNER]
+      );
+      // The channel stamped in ANOTHER space than the one asked about.
+      await q(
+        `insert into channels (id, user_id, workspace_id, title, channel_type, scope, status,
+           context_object_type, context_object_id, external_source, external_channel_id, external_id, metadata, ai_reaction_mode, updated_at)
+         values ($1,$2,$3,null,'external','workspace','active','entity',$4,'linkedin',$5,$5,$6::jsonb,'when_confident',$7)`,
+        [
+          channel,
+          OWNER,
+          OTHER,
+          id,
+          chat,
+          JSON.stringify({ accountId: ACCOUNT }),
+          T(0),
+        ]
+      );
+      await q(
+        `insert into messages (id, channel_id, role, author_type, message_category, content, user_id,
+           timestamp, hash, ephemeral, direction, delivery_status, external_source, external_message_id)
+         values ($1,$2,'user','external','chat',$3,$4,$5,$6,false,'inbound',null,'linkedin',$7)`,
+        [
+          randomUUID(),
+          channel,
+          `${title} says hi`,
+          OWNER,
+          T(7),
+          `hash-${randomUUID()}`,
+          `ext-${randomUUID()}`,
+        ]
+      );
+    }
+  });
+
+  it("lists a person whose POD-WIDE role is granted to the space, with their channel stamped in another space", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const { conversations } = await page(key, `workspaceId=${CRM}`);
+      const lead = conversations.find((c) => c.person.id === POD_LEAD);
+      expect(lead).toMatchObject({
+        person: { name: "Paul Podlead" },
+        channelIds: [CH_POD_LEAD],
+        lastMessage: { text: "Paul Podlead says hi", direction: "inbound" },
+        unread: 1,
+      });
+      const waiting = await page(key, `workspaceId=${CRM}&needsYou=true`);
+      expect(waiting.conversations.map((c) => c.person.id)).toContain(POD_LEAD);
+    }
+  });
+
+  it("SECURITY: a person whose pod-wide role is NOT granted to the space is never listed", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const { conversations } = await page(key, `workspaceId=${CRM}`);
+      expect(conversations.map((c) => c.person.id)).not.toContain(POD_INVESTOR);
+      expect(JSON.stringify(conversations)).not.toContain("Ivy Investor");
+    }
+    // The space the role IS granted to lists them (the owner's full key).
+    const other = await page("full", `workspaceId=${OTHER}`);
+    expect(other.conversations.map((c) => c.person.id)).toContain(POD_INVESTOR);
   });
 });
 
