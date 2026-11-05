@@ -31,7 +31,7 @@ import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { kindIcon } from "../../../_lib/object/kind-icon";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { PageHeader, PageShell } from "../../components/page-header";
-import { FilterChips } from "../../components/filter-chips";
+import { FilterChip, FilterRow } from "../../components/filter-chip";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -242,13 +242,22 @@ export function SessionsPage() {
     <PageShell>
       <PageHeader title={SESSIONS_TITLE} description={SESSIONS_DESCRIPTION} />
 
-      <FilterChips
-        param={SEGMENT_PARAM}
-        defaultKey="running"
-        active={segment}
-        ariaLabel="Show"
-        chips={SESSION_SEGMENTS.map((s) => ({ ...s, count: counts[s.key] }))}
-        onSelect={() => setSettledLimit(PAGE_STEP)}
+      <FilterRow
+        filters={
+          <FilterChip<SessionSegment>
+            label="Show"
+            allLabel={null}
+            param={SEGMENT_PARAM}
+            defaultValue="running"
+            value={segment}
+            options={SESSION_SEGMENTS.map((s) => ({
+              id: s.key,
+              label: s.label,
+              count: counts[s.key],
+            }))}
+            onChange={() => setSettledLimit(PAGE_STEP)}
+          />
+        }
       />
 
       {segment === "running" && split.stuck.length > 0 && (

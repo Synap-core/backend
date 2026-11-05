@@ -45,7 +45,7 @@ import {
 import { ResponsiveTable } from "../components/responsive-table";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
-import { FilterChips } from "../components/filter-chips";
+import { FilterChip, FilterRow } from "../components/filter-chip";
 import {
   neverRanCallout,
   RULE_FILTERS,
@@ -243,20 +243,26 @@ function RulesInner() {
         actions={<ExitLink exit={appExit} label="Create in app" />}
       />
 
-      <FilterChips
-        param="filter"
-        defaultKey="active"
-        active={filter}
-        chips={RULE_FILTERS.map((f) => ({
-          key: f.key,
-          label: f.label,
-          count:
-            loading || rules.isError
-              ? undefined
-              : counting
-                ? "…"
-                : counts[f.key],
-        }))}
+      <FilterRow
+        filters={
+          <FilterChip
+            label="Show"
+            allLabel={null}
+            param="filter"
+            defaultValue="active"
+            value={filter}
+            options={RULE_FILTERS.map((f) => ({
+              id: f.key,
+              label: f.label,
+              count:
+                loading || rules.isError
+                  ? null
+                  : counting
+                    ? "…"
+                    : counts[f.key],
+            }))}
+          />
+        }
       />
 
       {callout && !loading && !ruleDrain.draining && (

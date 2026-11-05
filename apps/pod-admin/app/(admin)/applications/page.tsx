@@ -27,7 +27,7 @@ import { navHref, navLabel } from "../../../lib/console-nav";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { formatRelative } from "../../../lib/format";
-import { FilterChips } from "../components/filter-chips";
+import { FilterChip, FilterRow } from "../components/filter-chip";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import {
   ResourceRow,
@@ -150,23 +150,21 @@ function ApplicationsInner() {
         }
       />
 
-      <FilterChips<ViaFilter>
-        param="via"
-        defaultKey="all"
-        active={via}
-        ariaLabel="How it connects"
-        chips={[
-          {
-            key: "all",
-            label: "All",
-            count: loading ? undefined : rows.length,
-          },
-          ...APP_VIAS.map((v) => ({
-            key: v,
-            label: VIA_LABEL[v],
-            count: loading ? undefined : counts[v],
-          })),
-        ]}
+      <FilterRow
+        filters={
+          <FilterChip
+            label="How it connects"
+            allLabel="All apps"
+            param="via"
+            value={via === "all" ? null : via}
+            allCount={loading ? null : rows.length}
+            options={APP_VIAS.map((v) => ({
+              id: v,
+              label: VIA_LABEL[v],
+              count: loading ? null : counts[v],
+            }))}
+          />
+        }
       />
 
       <div className="flex flex-col gap-4">
