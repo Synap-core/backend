@@ -1410,6 +1410,37 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "informational",
   },
   {
+    // W3 slice 3 (founder decision 2): a passkey or a Relay device key was
+    // added to or removed from the person's account. Every device hears it, so
+    // a factor an AI or a thief added does not go unseen.
+    type: "security.factor_changed",
+    category: "system",
+    label: "Sign-in factor changed",
+    icon: "shield-alert",
+    priority: "high",
+    titleTemplate: "{{what}} {{verb}} your account",
+    bodyTemplate:
+      "{{label}}. If it wasn't you, remove it in pod admin, Security.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    needsYou: "informational",
+  },
+  {
+    // W3 slice 3: a pod admin switched the proof of presence OFF (back to
+    // report mode, which needed their own proof). Every pod admin hears it.
+    type: "security.presence_mode_changed",
+    category: "system",
+    label: "Approvals in person turned off",
+    icon: "shield-alert",
+    priority: "high",
+    titleTemplate: "Approvals no longer need you in person",
+    bodyTemplate:
+      "A pod admin switched it off. Sensitive approvals now pass on a signed-in session. Turn it back on in pod admin, Security.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    needsYou: "informational",
+  },
+  {
     type: "workspace.invite",
     category: "system",
     label: "Workspace Invite",

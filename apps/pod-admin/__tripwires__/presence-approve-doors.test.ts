@@ -69,6 +69,16 @@ const DOORS: Record<string, RegExp> = {
     /\btrustedIssuers\s*\.\s*approve\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "REST /skills/:id/approve": /\/api\/hub\/skills\/[^`"'\s]*\/approve\b/,
   "REST /tools/:id/approve": /\/api\/hub\/tools\/[^`"'\s]*\/approve\b/,
+  // W3 slice 3: a skill born ON, the mode switched off, a passkey change, and
+  // a second device key each take a proof (no pod-admin page calls them yet).
+  "tRPC skills.create":
+    /\bskills\s*\.\s*create\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC presence.setMode":
+    /\bpresence\s*\.\s*setMode\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC presence.authorizePasskeyChange":
+    /\bpresence\s*\.\s*authorizePasskeyChange\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC presence.devices.enroll":
+    /\bdevices\s*\.\s*enroll\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
 };
 
 /**
@@ -125,7 +135,21 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
     doors: ["tRPC marketplace.sources.approveKeyChange"],
   },
   "mcp-servers.ts": { inputs: 1, doors: ["tRPC mcpServers.setApproved"] },
-  "skills.ts": { inputs: 1, doors: ["tRPC skills.setApproved"] },
+  // Slice 3: skills.create also takes a proof, for a skill born ON.
+  "skills.ts": {
+    inputs: 2,
+    doors: ["tRPC skills.setApproved", "tRPC skills.create"],
+  },
+  // Slice 3: presence.setMode (back to report), presence.authorizePasskeyChange
+  // and presence.devices.enroll (a second factor) take a proof themselves.
+  "presence.ts": {
+    inputs: 3,
+    doors: [
+      "tRPC presence.setMode",
+      "tRPC presence.authorizePasskeyChange",
+      "tRPC presence.devices.enroll",
+    ],
+  },
   "tools.ts": { inputs: 1, doors: ["tRPC tools.setApproved"] },
   "trusted-issuers.ts": { inputs: 1, doors: ["tRPC trustedIssuers.approve"] },
 };

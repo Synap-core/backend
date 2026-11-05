@@ -26,13 +26,17 @@ import {
   PRESENCE_REQUEST_KINDS,
   PRESENCE_REQUIRED,
   presenceActorLabel,
+  presenceActionDigest,
+  presenceActionSubject,
   presenceRequestSubject,
   type PresenceRequestKind,
+  sensitiveActionReason,
   sensitiveApprovalReason,
   type PresenceProof,
   type SensitiveReason,
 } from "@synap-core/types/presence";
 import { isUuid } from "@synap-core/types/property-render";
+import { readPresenceMode } from "./mode.js";
 import { db, eq, users, EventRepository, sql } from "@synap/database";
 
 import {
@@ -45,15 +49,6 @@ const logger = createLogger({ module: "presence-gate" });
 
 const PRESENCE_PROVED_EVENT = "presence.proved";
 const PRESENCE_MISSING_EVENT = "presence.missing";
-
-type PresenceMode = "enforce" | "report";
-
-/** The pod's rollout mode. Read per call so a deploy can flip it. */
-function presenceMode(): PresenceMode {
-  return process.env.SYNAP_PRESENCE_PROOF?.trim() === "enforce"
-    ? "enforce"
-    : "report";
-}
 
 export interface GatedProposal {
   id: string;
@@ -128,11 +123,14 @@ async function checkPresence(args: {
   // `proposalId` names the subject on the wire (a proposal id, or the request
   // `<kind>:<id>`): the client asks `presence.challenge` for exactly that.
   if (!proof) {
-    if (reason === "as_person" || presenceMode() === "enforce") {
+    if (
+      reason === "as_person" ||
+      (await readPresenceMode()).mode === "enforce"
+    ) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message:
-          "Confirm it is you: this approval needs Face ID, Touch ID or your passkey.",
+          "Confirm it is you: this needs Face ID, Touch ID or your passkey.",
         cause: { reasonCode: PRESENCE_REQUIRED, proposalId: subject },
       });
     }
@@ -237,5 +235,32 @@ export async function assertPresenceForRequest(args: {
     proof: args.proof,
     door: args.door,
     requestedFrom: args.requestedFrom ?? null,
+  });
+}
+
+/**
+ * The gate of a sensitive ACTION (W3 slice 3, founder decision 1): a tRPC
+ * procedure in `SENSITIVE_ACTIONS` that creates, rotates or widens a
+ * credential or a governance rule directly. The proof names THIS call:
+ * `action:<path>:<digest of the raw input>`. Same modes and refusals as the
+ * other gates. Returns null for a path that is not sensitive.
+ */
+export async function assertPresenceForAction(args: {
+  userId: string;
+  path: string;
+  /** The call's RAW input (before validation), presence included. */
+  input: unknown;
+  proof?: PresenceProof | null;
+}): Promise<PresenceVerdict | null> {
+  const reason = sensitiveActionReason(args.path);
+  if (!reason) return null;
+  const digest = await presenceActionDigest(args.path, args.input);
+  return checkPresence({
+    userId: args.userId,
+    subject: presenceActionSubject(args.path, digest),
+    what: args.path,
+    reason,
+    proof: args.proof,
+    door: args.path,
   });
 }

@@ -68,6 +68,9 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   // turning a tool or skill on is sensitive).
   "skill/create": "setup",
   "skill/update": "setup",
+  // A pack's verbs and tools turned ON by approval (its executor turns them
+  // on through skills/tools.setApproved, which then trust this proof).
+  "capability.enable": "setup",
   "apiKey/create": "setup",
   "vault/grant": "setup",
   "vault/vault.request": "setup",
@@ -252,6 +255,20 @@ export const PRESENCE_REQUEST_KINDS = {
   trusted_issuer: "governance",
   /** marketplace.approveKeyChange: trusting a catalog source's new signing key. */
   marketplace_key: "governance",
+  /**
+   * presence.devices.enroll when the person already has a factor (founder
+   * decision 2, 4 Nov): an EXISTING factor approves the new device key. The id
+   * is `presenceKeyFingerprint(<the new key's SPKI DER, base64url>)`.
+   */
+  device_enroll: "setup",
+  /**
+   * presence.authorizePasskeyChange: an existing factor approves ONE change
+   * to the person's passkeys (adding one, or removing one) in Kratos' settings
+   * flow, whose guard redeems it. The id is the person's own user id.
+   */
+  passkey_change: "setup",
+  /** presence.setMode back to `report`: switching the proof off. The id is `report`. */
+  presence_mode: "governance",
 } as const satisfies Record<string, SensitiveReason>;
 
 export type PresenceRequestKind = keyof typeof PRESENCE_REQUEST_KINDS;
@@ -276,12 +293,18 @@ export async function oauthConsentId(params: {
   codeChallenge?: string | null;
   state?: string | null;
 }): Promise<string> {
-  const text = [
-    params.clientId,
-    params.redirectUri,
-    params.codeChallenge ?? "",
-    params.state ?? "",
-  ].join("\n");
+  return sha256Hex(
+    [
+      params.clientId,
+      params.redirectUri,
+      params.codeChallenge ?? "",
+      params.state ?? "",
+    ].join("\n")
+  );
+}
+
+/** Hex SHA-256 of a UTF-8 string (Web Crypto: the same in a browser and on the pod). */
+async function sha256Hex(text: string): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(text)
@@ -289,4 +312,108 @@ export async function oauthConsentId(params: {
   return [...new Uint8Array(digest)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+/** The id of a device key being enrolled: hex SHA-256 of its SPKI DER (base64url) as sent. */
+export function presenceKeyFingerprint(publicKey: string): Promise<string> {
+  return sha256Hex(publicKey);
+}
+
+/**
+ * The sensitive ACTIONS (founder decision 1, 4 Nov): tRPC procedures that
+ * create, rotate or widen a credential or a governance rule directly, with no
+ * proposal to approve. Keyed by the procedure PATH. The pod's step-up
+ * middleware (`requireFreshAuthentication`, so `credentialProcedure`) reads
+ * this list: a listed call needs a proof of presence bound to the call itself
+ * (`presenceActionSubject`). Clients read it to prove up front. The tripwire
+ * `presence-gate-every-door` classifies every credential door as here or
+ * everyday.
+ */
+export const SENSITIVE_ACTIONS = {
+  "apiKeys.create": "setup",
+  "apiKeys.rotate": "setup",
+  "apiKeys.setGrants": "setup",
+  "apiKeys.connectIntegration": "setup",
+  "apiKeys.beginMcpConnect": "setup",
+  "apiKeys.createSystemKey": "setup",
+  "apiKeys.adminCreateServiceKey": "setup",
+  "apiKeys.createForWorkspace": "setup",
+  "apiKeys.setMachineDefaults": "setup",
+  // A key or a client an app or AI service holds, or what it may do.
+  "apps.issueKey": "setup",
+  "apps.setWriteMode": "setup",
+  "apps.setRedirectUris": "setup",
+  "apps.setSignInPolicy": "setup",
+  "intelligenceRegistry.register": "setup",
+  "intelligenceRegistry.update": "setup",
+  "intelligenceRegistry.rotateKey": "setup",
+  "intelligence.registerCustomService": "setup",
+  // A computer's key: how long it lives, whether it runs scripts, whose it is.
+  "machines.setKeyTtl": "setup",
+  "machines.setRunsScripts": "setup",
+  "machines.setBelongsTo": "setup",
+  // A secret's value, shown to the session.
+  "secretsVault.reveal": "setup",
+  // An agent's role, capabilities and whether its writes need a proposal.
+  "agentUsers.create": "governance",
+  "agentUsers.update": "governance",
+  "agentUsers.setPosture": "governance",
+  // A connection's `auto` rule; an outside issuer's trust.
+  "connectors.setKeepSyncing": "governance",
+  "trustedIssuers.adminRegister": "governance",
+  "governanceRules.create": "governance",
+  "governanceRules.widenCell": "governance",
+  "governanceRules.proposeNextRung": "governance",
+  "governanceRules.setReversibleDefault": "governance",
+  "governanceRules.setOwnOrganiseDefault": "governance",
+  "govConfig.set": "governance",
+} as const satisfies Record<string, SensitiveReason>;
+
+export type SensitiveActionPath = keyof typeof SENSITIVE_ACTIONS;
+
+/** Is this tRPC path a sensitive action? */
+export function sensitiveActionReason(path: string): SensitiveReason | null {
+  return (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[path] ?? null;
+}
+
+/**
+ * JSON with object keys sorted at every level, so the client and the pod
+ * serialize the same input to the same text. `undefined` members are dropped
+ * and a Date becomes its ISO string, as `JSON.stringify` does.
+ */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const src = v as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(src)
+          .sort()
+          .map((k) => [k, src[k]])
+      );
+    }
+    return v;
+  });
+}
+
+/**
+ * The digest that binds a proof to ONE call: hex SHA-256 of
+ * `<path>\n<canonical JSON of the input without its presence>`. The client
+ * computes it over the exact input it sends; the pod over the raw input it
+ * received.
+ */
+export async function presenceActionDigest(
+  path: string,
+  input: unknown
+): Promise<string> {
+  let body: unknown = input ?? null;
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const { presence: _presence, ...rest } = body as Record<string, unknown>;
+    body = rest;
+  }
+  return sha256Hex(`${path}\n${canonicalJson(body)}`);
+}
+
+/** The challenge subject of a sensitive action: `action:<path>:<digest>`. */
+export function presenceActionSubject(path: string, digest: string): string {
+  return `action:${path}:${digest}`;
 }

@@ -14,6 +14,7 @@
  *   connectors.entitySources — Get external links for an entity (local DB)
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import {
   router,
@@ -1317,6 +1318,7 @@ export const connectorsRouter = router({
    * user's or a deleted row; PRECONDITION_FAILED before any import was approved.
    */
   setKeepSyncing: credentialProcedure
+    .input(presenceInput)
     .input(z.object({ connectionId: z.string().min(1), enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const outcome = await setConnectionKeepSyncing({

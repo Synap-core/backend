@@ -89,12 +89,15 @@ def body(h):
 
 for method in ("password", "passkey", "profile", "oidc"):
     hooks = ((st.get("after") or {}).get(method) or {}).get("hooks") or []
-    guard = [h for h in hooks if h.get("hook") == "web_hook" and h["config"]["url"].endswith("/settings/guard")]
+    # The passkey hook names its method (W3 slice 3: a passkey change by a
+    # person who holds a proof factor needs a redeemed proof).
+    want = "http://backend:4000/api/webhooks/kratos/settings/guard" + ("?method=passkey" if method == "passkey" else "")
+    guard = [h for h in hooks if h.get("hook") == "web_hook" and h["config"]["url"].split("?")[0].endswith("/settings/guard")]
     check(len(guard) == 1, f"settings.{method}: one Cloud-trust guard")
     if guard:
         g = guard[0]["config"]
         check(g.get("can_interrupt") is True, f"settings.{method}: guard is BLOCKING (pre-persist)")
-        check(g["url"] == "http://backend:4000/api/webhooks/kratos/settings/guard", f"settings.{method}: mounted URL")
+        check(g["url"] == want, f"settings.{method}: mounted URL")
         check(g["headers"].get("X-Webhook-Secret") == "test-secret", f"settings.{method}: secret header")
         b = body(guard[0])
         check("identity_id: ctx.identity.id" in b and "ory_kratos_session" in b, f"settings.{method}: body forwards identity + session cookie")

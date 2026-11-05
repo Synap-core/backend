@@ -13,6 +13,16 @@ const h = vi.hoisted(() => ({
   auditLog: vi.fn(),
 }));
 
+// The proof-of-presence mode (W3 slice 3) is a pod setting read from the
+// database this file mocks: follow the env, as before the setting existed.
+vi.mock("../services/presence/mode.js", () => ({
+  readPresenceMode: async () => ({
+    mode: process.env.SYNAP_PRESENCE_PROOF === "enforce" ? "enforce" : "report",
+    source: "default",
+    changedBy: null,
+    changedAt: null,
+  }),
+}));
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {

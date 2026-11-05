@@ -12,6 +12,7 @@
  * file `settings.update` proposals for the human to approve).
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import { router, assertPodAdmin, credentialProcedure } from "../trpc.js";
 import {
@@ -45,16 +46,19 @@ const setInput = z.object({
 });
 
 export const govConfigRouter = router({
-  set: credentialProcedure.input(setInput).mutation(async ({ ctx, input }) => {
-    await assertPodAdmin(ctx.userId);
-    const { store, ...spec } = input;
-    return applyGovConfigChange({
-      store,
-      op: "set",
-      spec: spec as GovConfigSpec,
-      createdBy: ctx.userId,
-    });
-  }),
+  set: credentialProcedure
+    .input(presenceInput)
+    .input(setInput)
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      const { store, ...spec } = input;
+      return applyGovConfigChange({
+        store,
+        op: "set",
+        spec: spec as GovConfigSpec,
+        createdBy: ctx.userId,
+      });
+    }),
 
   revoke: credentialProcedure
     .input(
