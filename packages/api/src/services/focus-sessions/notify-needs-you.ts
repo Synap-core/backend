@@ -56,6 +56,12 @@ import {
   quickAnswerPushBody,
   type PushTarget,
 } from "@synap-core/types/push";
+import {
+  NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL,
+  loudestNeedsYouPriority,
+  needsYouPriority,
+} from "@synap-core/types/needs-you";
+import type { NotificationPriority } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { NOTIFICATION_REGISTRY } from "../../notifications/registry.js";
@@ -80,6 +86,33 @@ export function sessionNeedsYouGroupKey(sessionId: string): string {
 /** One relay-awaiting-tap push per slot per window. */
 function relayAwaitsTapGroupKey(sessionId: string, label: string): string {
   return `${sessionNeedsYouGroupKey(sessionId)}:relay:${normalizeExpectedLabel(label) ?? label}`;
+}
+
+/**
+ * The level the `session.needs_you` row is stamped with: the loudest P-level
+ * (`needsYouPriority`) of the asks it announces, on the EXISTING
+ * `notifications.priority` scale. Read as the headline: the agent just handed
+ * these over, and the asking itself is not work (`rule.ts`). The row's class
+ * can move later (the read derives it live); this stamp is the level at
+ * filing, for display. `undefined` = the registry's default.
+ */
+export function needsYouNotificationPriority(
+  slots: readonly ExpectedOutput[],
+  now: Date = new Date()
+): NotificationPriority | undefined {
+  const loudest = loudestNeedsYouPriority(
+    slots.map((s) =>
+      needsYouPriority(
+        {
+          needsYouClass: "needs_you",
+          urgency: s.ask?.urgency,
+          answerBy: s.ask?.answerBy,
+        },
+        now
+      )
+    )
+  );
+  return loudest ? NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL[loudest] : undefined;
 }
 
 /** Longest `why` / question quoted in the notification body. */
@@ -260,8 +293,13 @@ export async function notifySessionNeedsYou(p: {
         ? { ...asked, quickAnswer: null, body: undefined }
         : asked;
 
+    const priority =
+      p.reason.kind === "slots"
+        ? needsYouNotificationPriority(fresh)
+        : undefined;
     const id = await NotificationService.create({
       type: SESSION_NEEDS_YOU_NOTIFICATION_TYPE,
+      ...(priority ? { priority } : {}),
       // The session's OWNER — for an agent key that is its operator.
       userId: p.recipientUserId ?? session.userId,
       workspaceId: session.workspaceId ?? null,

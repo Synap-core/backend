@@ -30,9 +30,10 @@
  *                   batches and never reads as broken.
  *
  * The triage ORDER ("sorted by what blocks the most") is
- * {@link orderNeedsYouByBlocking}: JUDGEMENTS FIRST (a rank inside the
- * `decision` bucket, never a fifth filter — the four counts stay the Inbox's
- * four), then the buckets. It is the Inbox's reading only: a lens section
+ * {@link orderNeedsYouByBlocking}: a P0 row (due within the hour) first, then
+ * JUDGEMENTS (a rank inside the `decision` bucket, never a fifth filter — the
+ * four counts stay the Inbox's four), then the buckets, louder priority first
+ * inside each. It is the Inbox's reading only: a lens section
  * keeps the server's order (`needsYouRows` never sorts).
  */
 
@@ -41,6 +42,7 @@ import {
   JUDGEMENT_NOTIFICATION_TYPES,
 } from "../lens/classes.js";
 import { isSwipeSafe, type ProposalIntentInput } from "../proposals/intent.js";
+import { needsYouPriorityRank, type NeedsYouPriority } from "./priority.js";
 
 /** The four Inbox filters, in the order the filter control lists them. */
 export const NEEDS_YOU_BUCKETS = [
@@ -68,6 +70,12 @@ export interface BucketableSignal {
   target?: { kind: string; id: string } | null;
   /** In the Review later fold, out of the headline (stamped by the pod). */
   reviewLater?: boolean;
+  /**
+   * The pod-derived priority P0-P3 (`needsYouPriority`, `./priority.ts`) — a
+   * RANK KEY of the triage order, never a filter: the needs-you rule decides
+   * which rows are here.
+   */
+  priority?: NeedsYouPriority | null;
 }
 
 /**
@@ -203,11 +211,19 @@ function triageRank<T extends BucketableSignal>(
   return isJudgementSignal(row.signal) ? -1 : BUCKET_RANK[row.bucket];
 }
 
+/** Due within the hour (or overdue): ahead of everything, judgements too. */
+function isP0(s: BucketableSignal): boolean {
+  return s.priority === "P0";
+}
+
 /**
- * Sort by what blocks the most: judgements first, then bucket rank, then rows
- * that stop a session's work before free-standing ones, then the SERVER's
- * order (newest first) — a STABLE sort, so two rows the rule cannot tell
- * apart keep the order the pod gave them.
+ * Sort by what blocks the most: a P0 row first (founder, 2026-11-04: only
+ * "due within the hour" breaks through), then judgements, then bucket rank,
+ * then the pod-derived PRIORITY inside a bucket (P1 before P2 before P3; a row
+ * with none reads P1, so it keeps its place), then rows that stop a session's
+ * work before free-standing ones, then the SERVER's order (newest first) — a
+ * STABLE sort, so two rows the rule cannot tell apart keep the order the pod
+ * gave them.
  */
 export function orderNeedsYouByBlocking<T extends BucketableSignal>(
   rows: readonly NeedsYouBucketed<T>[]
@@ -216,7 +232,10 @@ export function orderNeedsYouByBlocking<T extends BucketableSignal>(
     .map((row, index) => ({ row, index }))
     .sort(
       (a, b) =>
+        Number(isP0(b.row.signal)) - Number(isP0(a.row.signal)) ||
         triageRank(a.row) - triageRank(b.row) ||
+        needsYouPriorityRank(a.row.signal.priority) -
+          needsYouPriorityRank(b.row.signal.priority) ||
         Number(blocksASession(b.row.signal)) -
           Number(blocksASession(a.row.signal)) ||
         a.index - b.index

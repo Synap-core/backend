@@ -1113,6 +1113,11 @@ describe("runner state (0384)", () => {
     );
     try {
       expect(await as(() => reportRunnerState(), "idle")).toBe(1);
+      // Two reports are two moments: the stamp's report must be NEWER than the
+      // idle one (millisecond precision), as the test above spaces them. In
+      // the same millisecond it is not fresher and the throttle holds it —
+      // CI run 41931656036 hit exactly that, twice.
+      await new Promise((r) => setTimeout(r, 5));
       expect(await stamp(sessionId, "busy")).toBe(true);
       await new Promise((r) => setTimeout(r, 50));
       expect(heard.filter((p) => p === sessionId)).toEqual([]);
