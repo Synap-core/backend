@@ -127,11 +127,12 @@ import {
   loadSessionProcess,
   type SessionProcess,
 } from "@synap/jobs/utils/session-process.js";
-import {
-  applySessionEndMoves,
-  endMoveActor,
-  type SessionEndMovesRecord,
-} from "./session-end-moves.js";
+// Types only, statically: the end-move writer itself is loaded where it runs
+// (below). A static import put `move-status` → `permission-check` on this
+// module's graph and closed an import cycle through `permission-check`, so a
+// suite that mocks the permission gate got the REAL one inside `moveStatus`
+// (entities.app-role-write.pglite.test.ts, CI run 42040717470).
+import type { SessionEndMovesRecord } from "./session-end-moves.js";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
@@ -955,6 +956,8 @@ export async function completeFocusSession(
   let endMoves: SessionEndMovesRecord | undefined;
   if (updated && endProcess) {
     try {
+      const { applySessionEndMoves, endMoveActor } =
+        await import("./session-end-moves.js");
       endMoves = await applySessionEndMoves({
         session: {
           id: sessionId,
