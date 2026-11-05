@@ -42,6 +42,16 @@ describe("grantLines", () => {
     expect(lines.join(" ")).not.toMatch(/facet|entity\.|\+\d+ more/);
   });
 
+  // Rules out: "Add to my pod"'s permission read as "Install Packages", a
+  // word the person never sees for a template (L7, package.install).
+  it("package.install reads as installing templates", () => {
+    const lines = grantLines(draft("package.install"));
+    expect(lines).toEqual([
+      `${verb("install")} ${resolveObjectNounPlural("template")}`,
+    ]);
+    expect(lines.join(" ")).not.toMatch(/package/i);
+  });
+
   it("uses the pod's own name for a kind when it has one", () => {
     expect(
       grantLines(draft("entity.public-contract.read"), {

@@ -17,9 +17,11 @@
  * `workspaces.ensureTemplate` already does.
  */
 import {
+  getRequestGrant,
   preflightWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
+import { grantHoldsAction } from "../../access/grant-door-fence.js";
 import type { z } from "zod";
 import type { PackageApplySchema } from "../../routers/hub-protocol/rest/packages.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -100,6 +102,25 @@ export type ProposeTemplateApplyResult =
   | { kind: "granted" };
 
 /**
+ * The named permission an app asks for to PROPOSE installing a template into
+ * the person's pod (L7 "Add to my pod", focus plan b5e5cbfc; research
+ * 1993e7ed §5): `package.install`, requested in the app's `synap_requests`
+ * and ticked by the person on the consent screen ("Install Templates"). It
+ * never applies anything: a key holding it, on an AGENT's write (an app's own
+ * agent), files a fresh install as ONE pending proposal the person approves
+ * (`proposeBeyondGrant`), where its grant alone (no `workspace.create`)
+ * would refuse it. Held on any scope, whatever it is pinned to: an app's
+ * grant is always pinned to spaces, and a fresh install has no space yet.
+ */
+export const PACKAGE_INSTALL_PERMISSION = "package.install" as const;
+
+/** Does the calling key's grant hold `package.install` (see above)? */
+function keyMayProposeInstall(): boolean {
+  const grant = getRequestGrant();
+  return !!grant && grantHoldsAction(grant, "package", "install");
+}
+
+/**
  * File the template apply through `checkPermissionOrPropose`. The FULL body
  * is stored as `definition`, so the approve executor re-runs the apply from
  * it. A slug some space already holds is a template UPDATE of that space
@@ -111,7 +132,8 @@ export type ProposeTemplateApplyResult =
  * agents (governance rung 2.09) and `workspace/update` is an ADMIN action.
  * An update stays a proposal even when the agent's key grant leaves out
  * `workspace.update` (`proposeBeyondGrant`); a create beyond the grant is
- * denied.
+ * denied, unless the key holds `package.install` (PACKAGE_INSTALL_PERMISSION):
+ * then it is filed for the person's approval too.
  */
 export async function proposeTemplateApply(input: {
   userId: string;
@@ -137,8 +159,9 @@ export async function proposeTemplateApply(input: {
     // preset: "Space administration") ASKS for a template update instead of
     // being refused (founder, 2026-11-02): a pending proposal the person
     // approves; the key itself still cannot apply it. A fresh install
-    // (`workspace.create`) stays refused.
-    proposeBeyondGrant: isUpdate,
+    // (`workspace.create`) stays refused, unless the key holds the named
+    // permission `package.install` (an app asking to "Add to my pod").
+    proposeBeyondGrant: isUpdate || keyMayProposeInstall(),
     data: {
       name:
         existingSpace?.name ??

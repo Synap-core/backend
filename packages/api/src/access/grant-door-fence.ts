@@ -145,8 +145,10 @@ function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
 /**
  * Does one live scope grant `<subject>.<action>`, whatever it is pinned to?
  * For a qualified subject, on at least one qualifier (an intent, a kind).
+ * Also read by the template-apply filing (`package.install`,
+ * services/template-apply/propose.ts).
  */
-function grantHoldsAction(
+export function grantHoldsAction(
   grant: KeyGrant,
   subject: string,
   action: string

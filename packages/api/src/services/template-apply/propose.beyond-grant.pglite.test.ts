@@ -20,7 +20,12 @@
  *  - a fresh install (`workspace.create`) by the same key stays DENIED —
  *    rules out the exception reaching beyond template updates;
  *  - the agent credential cannot approve it (`refuseAgentProposalApprover`);
- *    the person's approval runs the template update and marks it approved.
+ *    the person's approval runs the template update and marks it approved;
+ *  - an APP's key holding the named permission `package.install` (pinned to
+ *    a space, as every app grant is) files a fresh install as ONE pending
+ *    `workspace/create` proposal and creates no space — rules out "Add to my
+ *    pod" being refused, or applied without the person; with no agent on the
+ *    request it stays DENIED.
  *
  * Faked (their own suites pin them): layer-1 reconcile and preflight, layer 2
  * (`applyPackagePostWorkspace`), the catalog resolve, delivery side effects.
@@ -176,7 +181,11 @@ import {
 } from "../../routers/proposals/execution-registry.js";
 import { registerWorkspaceExecutors } from "../../routers/proposals/executors/workspace.js";
 import { refuseAgentProposalApprover } from "../../routers/proposals/review-authority.js";
-import { proposeTemplateApply, type PackageApplyBody } from "./propose.js";
+import {
+  PACKAGE_INSTALL_PERMISSION,
+  proposeTemplateApply,
+  type PackageApplyBody,
+} from "./propose.js";
 
 const OWNER = randomUUID();
 const AGENT = randomUUID();
@@ -352,6 +361,63 @@ describe("a template update beyond the key's grant is filed for the person's app
     expect(rows.map((s) => s.id)).toEqual([SPACE]);
     // The template apply ran on it (it wrote the space's template state).
     expect(await spaceSettings()).not.toEqual({});
+  });
+});
+
+describe("an app holding package.install asks to install a template (Add to my pod)", () => {
+  const APP_AGENT = randomUUID();
+  const PACK = "creator-pack";
+  /** An app's grant: pinned to the space the person gave, plus the ask. */
+  const APP_GRANT = grantOfScope({
+    permissions: ["entity.read", PACKAGE_INSTALL_PERMISSION],
+    workspaceIds: [SPACE],
+  });
+  const asApp = <T>(agentUserId: string | undefined, fn: () => Promise<T>) =>
+    runWithGrant(APP_GRANT, () => runWithActingAgent(agentUserId, fn));
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, email, user_type, created_by_user_id) values ($1, $2, 'agent', $3)`,
+      [APP_AGENT, "creator-site@x.test", OWNER]
+    );
+  });
+
+  it("a fresh install is ONE pending workspace/create proposal by the app's agent, and no space yet", async () => {
+    const filed = await asApp(APP_AGENT, () =>
+      proposeTemplateApply({
+        userId: OWNER,
+        agentUserId: APP_AGENT,
+        body: body(PACK),
+      })
+    );
+    expect(filed.kind).toBe("proposed");
+    const row = await proposalRow((filed as { proposalId: string }).proposalId);
+    expect(row).toMatchObject({
+      status: "pending",
+      agent_user_id: APP_AGENT,
+      target_type: "workspace",
+      proposal_type: "create",
+    });
+    const inner = (row!.data as { data: Record<string, unknown> }).data;
+    expect(inner).toMatchObject({
+      packageSlug: PACK,
+      source: "packages.apply",
+    });
+    const { rows } = await q<{ id: string }>(
+      `select id from workspaces where package_slug = $1`,
+      [PACK]
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("with no agent on the request, the same grant is still refused", async () => {
+    const filed = await asApp(undefined, () =>
+      proposeTemplateApply({ userId: OWNER, body: body(PACK) })
+    );
+    expect(filed).toEqual({
+      kind: "denied",
+      reason: expect.stringContaining('"workspace.create"'),
+    });
   });
 });
 
