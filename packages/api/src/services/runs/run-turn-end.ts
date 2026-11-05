@@ -183,16 +183,14 @@ export const completeRunBodySchema = z
      */
     checkpoint: z
       .object({
-        records: z
-          .array(z.unknown())
-          .transform((records) =>
-            records
-              .flatMap((r) => {
-                const one = checkpointRecordSchema.safeParse(r);
-                return one.success ? [one.data] : [];
-              })
-              .slice(0, CHECKPOINT_MAX_RECORDS)
-          ),
+        records: z.array(z.unknown()).transform((records) =>
+          records
+            .flatMap((r) => {
+              const one = checkpointRecordSchema.safeParse(r);
+              return one.success ? [one.data] : [];
+            })
+            .slice(0, CHECKPOINT_MAX_RECORDS)
+        ),
         left: z
           .string()
           .transform((left) => left.slice(0, CHECKPOINT_MAX_LEFT_CHARS)),

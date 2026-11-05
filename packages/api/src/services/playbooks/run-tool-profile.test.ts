@@ -55,7 +55,10 @@ const capabilities: Registry["capabilities"] = [
   {
     id: "tool-fireflies",
     name: "fireflies",
-    verbs: [{ id: "fireflies_import_last_meeting" }, { id: "fireflies_search" }],
+    verbs: [
+      { id: "fireflies_import_last_meeting" },
+      { id: "fireflies_search" },
+    ],
   },
   {
     id: "skill-ibis",

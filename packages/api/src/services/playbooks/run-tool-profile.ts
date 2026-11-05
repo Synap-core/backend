@@ -144,7 +144,9 @@ export function readStageGrants(
   if (!currentStage || !Array.isArray(stages)) return [];
   const stage = stages.find(
     (s): s is { key: string; grants?: unknown } =>
-      !!s && typeof s === "object" && (s as { key?: unknown }).key === currentStage
+      !!s &&
+      typeof s === "object" &&
+      (s as { key?: unknown }).key === currentStage
   );
   if (!stage || !Array.isArray(stage.grants)) return [];
   return stage.grants.filter(
@@ -188,7 +190,9 @@ export function foldRunVerbs(
 ): string[] {
   const candidates = [
     ...granted,
-    ...intents.flatMap((intent) => (index.get(intent) ?? []).map((m) => m.verbId)),
+    ...intents.flatMap((intent) =>
+      (index.get(intent) ?? []).map((m) => m.verbId)
+    ),
   ];
   const verbs: string[] = [];
   const seen = new Set<string>();
@@ -241,10 +245,7 @@ export async function resolveRunToolProfile(
       deps.readGrants({ playbookId: input.playbookId, userId: input.userId }),
       input.sessionId ? deps.readCurrentStage(input.sessionId) : null,
     ]);
-    intents = boundIntents([
-      ...readRequiredIntents(playbook),
-      ...taskIntents,
-    ]);
+    intents = boundIntents([...readRequiredIntents(playbook), ...taskIntents]);
     const allGrants = [
       ...grants,
       ...readStageGrants(playbook.stages, currentStage),
