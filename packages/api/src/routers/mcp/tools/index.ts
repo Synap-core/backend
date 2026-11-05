@@ -408,6 +408,10 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     expectedOutputs: buildOutputSlotsJsonSchema(
       "What this stage must produce: each { kind, label, relationToSubject? }."
     ),
+    tier: deriveJsonSchema(
+      playbookStageSchema.shape.tier.unwrap(),
+      "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+    ),
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
@@ -440,7 +444,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
   items: {
     type: "object",
     properties: {

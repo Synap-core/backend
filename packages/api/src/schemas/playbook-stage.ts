@@ -25,9 +25,11 @@ import {
   AWAITED_GATE_PROPOSAL_TYPES,
   type AwaitedGateProposalType,
   MAX_STAGE_LESSONS,
+  PLAYBOOK_STAGE_TIERS,
   STAGE_LESSON_MAX_CHARS,
   type PlaybookStage,
   type PlaybookStageCategory,
+  type PlaybookStageTier,
   type StageGateProposalType,
 } from "@synap/playbooks";
 import type { TrackStageDeclaration } from "@synap-core/types/units";
@@ -43,6 +45,14 @@ export const playbookStageCategorySchema = z.enum(
     PlaybookStageCategory,
     ...PlaybookStageCategory[],
   ]
+);
+
+/**
+ * The advisory model tiers, as a zod enum derived from the contract package's
+ * list so the door cannot drift from the type.
+ */
+export const playbookStageTierSchema = z.enum(
+  PLAYBOOK_STAGE_TIERS as readonly [PlaybookStageTier, ...PlaybookStageTier[]]
 );
 
 /**
@@ -194,6 +204,12 @@ export const playbookStageSchema = z.looseObject({
   onFail: z
     .strictObject({ toStage: z.string().trim().min(1).max(200) })
     .optional(),
+  /**
+   * Advisory model tier — see `PlaybookStage.tier`. Closed set: a typo
+   * ("fast", "Deep") is refused at the door rather than stored as a tier no
+   * executor will ever map.
+   */
+  tier: playbookStageTierSchema.optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -244,6 +260,10 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // The failed-gate return path is applied by the SESSION run's gate
   // (`stage-on-fail.ts`); a track's gate holds and resumes explicitly.
   "onFail",
+  // Advisory model choice for a session RUN's executor; a track stage session
+  // is started by the tracks service, which does not pick a model, and nothing
+  // consumes the tier yet.
+  "tier",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =

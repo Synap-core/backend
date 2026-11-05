@@ -205,6 +205,33 @@ describe("playbookStageSchema — stage.domain (W2a)", () => {
   });
 });
 
+describe("playbookStageSchema — stage.tier (advisory model tier)", () => {
+  it("accepts deep, standard and quick, and keeps absent absent", () => {
+    for (const tier of ["deep", "standard", "quick"]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, tier });
+      expect(r.success && r.data.tier).toBe(tier);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success).toBe(true);
+    expect(none.success && "tier" in none.data).toBe(false);
+  });
+
+  it("refuses anything outside the closed set", () => {
+    for (const bad of ["fast", "Deep", "", " quick", null, 1, ["quick"]]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, tier: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, tier: "quick" },
+    ]);
+    expect(r.success && r.data[0].tier).toBe("quick");
+  });
+});
+
 describe("a declared slot's `ask` is parsed at the playbook write doors", () => {
   const slot = (ask: unknown) => ({ kind: "decision", label: "Region", ask });
 
