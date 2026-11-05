@@ -27,10 +27,11 @@ import { validateFlowDefinition } from "./validate-flow.js";
  */
 
 // From this dir (packages/api/src/services/automations) up to the monorepo root
-// (Code/synap), then into the CP repo's capability-templates directory.
-const CP_TEMPLATES_DIR = join(
+// (Code/synap), then into the catalog home's capability templates (the CP's
+// copy was retired: control-plane-api 2c755f8e, 5 Nov 2026).
+const CATALOG_TEMPLATES_DIR = join(
   import.meta.dirname,
-  "../../../../../../synap-control-plane-api/src/seeds/capability-templates"
+  "../../../../../../synap-app/packages/workspace-templates/capabilities"
 );
 
 interface SeededAutomation {
@@ -46,10 +47,13 @@ interface SeededCapability {
   automations?: SeededAutomation[];
 }
 
+/** A catalog manifest ({apiVersion, kind, meta, spec}): `spec` is the capability. */
 function loadSeed(file: string): SeededCapability {
-  return JSON.parse(
-    readFileSync(join(CP_TEMPLATES_DIR, file), "utf8")
-  ) as SeededCapability;
+  return (
+    JSON.parse(readFileSync(join(CATALOG_TEMPLATES_DIR, file), "utf8")) as {
+      spec: SeededCapability;
+    }
+  ).spec;
 }
 
 /**
@@ -58,7 +62,7 @@ function loadSeed(file: string): SeededCapability {
  * coverage, and every new seed inherited that hole by default. Reading the
  * directory means a seed is covered the moment it exists.
  */
-const SEED_FILES = readdirSync(CP_TEMPLATES_DIR)
+const SEED_FILES = readdirSync(CATALOG_TEMPLATES_DIR)
   .filter((f) => f.endsWith(".capability.json"))
   .filter((f) => (loadSeed(f).automations?.length ?? 0) > 0)
   .sort();
