@@ -119,6 +119,7 @@ import {
 } from "../messaging/post-message.js";
 import { findNewestSlotThreadSeed } from "./slot-thread.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
+import { runTurnForAnswer } from "../runs/run-turn-end.js";
 import { resolveAgentReach } from "../agent-dispatch/agent-binding.js";
 import { agentsOperatedBy } from "../agent-presence.js";
 import { wakeExternalAgent } from "../agent-dispatch/wake-external-agent.js";
@@ -545,13 +546,24 @@ async function wake(p: {
     });
     return sent.status === "sent";
   }
+  // In a LIVE run's room the woken turn is a run turn: the run's declared
+  // tools (and, for the answer to "Keep the run going", its checkpoint), the
+  // one resolver the kickoff and the automatic continuation use.
+  const runTurn = await runTurnForAnswer({
+    sessionId: p.sessionId,
+    userId: p.ownerId,
+    slotLabel: p.slotLabel,
+  });
   return triggerAutoRespond({
     channelId: p.channelId,
     userMessageId: p.messageId,
-    content: p.content,
+    content: runTurn.checkpointWords
+      ? `${p.content}\n\n${runTurn.checkpointWords}`
+      : p.content,
     sourceUserId: p.ownerId,
     focusSessionId: p.sessionId,
     agentType: p.target.agentType,
+    ...(runTurn.run ? { run: runTurn.run } : {}),
   });
 }
 
