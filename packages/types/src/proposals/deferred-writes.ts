@@ -19,7 +19,6 @@
  * words come through).
  */
 
-import type { EnumTone } from "../property-render/enum-tone.js";
 import {
   buildObjectActionTitle,
   normalizeObjectKind,
@@ -180,21 +179,6 @@ export function readDeferredOutcomes(
 }
 
 // ── Reading the writes (every review surface) ───────────────────────────────
-
-/**
- * What each stored outcome MEANS, as a tone name (never a colour): the mark a
- * surface draws beside a replayed write. A `Record` over the outcome union, so
- * a new outcome cannot ship without its tone.
- */
-export const DEFERRED_OUTCOME_TONE: Readonly<
-  Record<DeferredOutcome, EnumTone>
-> = {
-  applied: "positive",
-  proposed: "pending",
-  refused: "negative",
-  skipped_by_reviewer: "neutral",
-  rejected: "negative",
-};
 
 /** One kept write, as a reviewer reads it. */
 export interface DeferredWriteRow {

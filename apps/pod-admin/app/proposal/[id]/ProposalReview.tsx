@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { CardBody, CardHeader, Chip, Spinner } from "@heroui/react";
+import { CardBody, CardHeader, Spinner } from "@heroui/react";
 import { ShieldCheck } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../lib/exit-link";
+import { StatusPill } from "../../(admin)/components/status-pill";
+import { statusPillFor } from "../../(admin)/components/status-tone";
 import { trpc } from "../../../lib/trpc";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -21,20 +22,6 @@ import { afterDecisionShown } from "./proposal-session-model";
 import { proposalPageT } from "./copy";
 import { requestReadFailure } from "./request-read-failure";
 import { RequestUnreadable } from "./RequestUnreadable";
-
-const STATUS_COLOR: Record<
-  string,
-  "default" | "success" | "danger" | "warning"
-> = {
-  pending: "warning",
-  approval_failed: "warning",
-  approved: "success",
-  auto_approved: "success",
-  rejected: "danger",
-  reverted: "default",
-  withdrawn: "default",
-  expired: "default",
-};
 
 export function ProposalReview({
   proposalId,
@@ -123,6 +110,7 @@ export function ProposalReview({
   }
 
   const status = reviewStatus(p);
+  const statusPill = statusPillFor(status);
   /* The heading names what APPROVING WILL DO, so the verb is imperative —
      "Create workspace", not "Created workspace". Until 2026-09-06 this printed
      `p.proposalType` verbatim, so the highest-stakes page in the product, the
@@ -144,13 +132,12 @@ export function ProposalReview({
             {heading}
           </h1>
         </div>
-        <Chip
-          color={STATUS_COLOR[status] ?? "default"}
-          variant="flat"
-          size="sm"
-        >
-          {resolveStatusLabel(status)}
-        </Chip>
+        {/* The one status door (`statusPillFor`): the tone every console
+            pill and app chip paints `status` with, never a table of this
+            page's own (it painted `rejected` red, `approval_failed` amber). */}
+        {statusPill && (
+          <StatusPill kind={statusPill.kind} label={statusPill.label} />
+        )}
       </CardHeader>
 
       {/* Clips nothing, so the decision bar pins to the window. */}
