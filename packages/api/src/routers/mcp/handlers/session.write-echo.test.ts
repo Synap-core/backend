@@ -271,7 +271,9 @@ describe("synap_start_session echoes, with the keys", () => {
     ]);
     // Keys only, never the statements the agent sent.
     expect(r.session.criteria).toEqual(["tsc"]);
-    for (const f of LEFT_OUT.filter((f) => f !== "criteria"))
+    // The fixture row is staged: the start names the stage keys, in order.
+    expect(r.session.stages).toEqual(["plan", "build"]);
+    for (const f of LEFT_OUT.filter((f) => f !== "criteria" && f !== "stages"))
       expect(r.session).not.toHaveProperty(f);
   });
 
