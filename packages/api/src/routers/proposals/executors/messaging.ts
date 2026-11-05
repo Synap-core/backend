@@ -413,7 +413,9 @@ async function executeChannelSend(args: {
     const hold = heldReason as string | null;
     if (hold === null) throw err;
     await holdPendingSend(input.proposalId, heldSend(hold));
-    throw keepRowAsRecorded(err);
+    throw keepRowAsRecorded(
+      err instanceof Error ? err : new Error(String(err))
+    );
   }
   const done = sent as Awaited<ReturnType<typeof sendExternalMessage>> | null;
 

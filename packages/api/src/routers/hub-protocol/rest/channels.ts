@@ -41,7 +41,6 @@ import {
 
 import { resolveOrCreateExternalChannel } from "../../../services/connectors/inbound-recorder.js";
 import { listProposedMessages } from "../../../services/channels/person-channels.js";
-import { registerChannelConversationsRoutes } from "./channel-conversations.js";
 import { sessionContextStampRefusal } from "../../../services/focus-sessions/session-context-stamp.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { sessionReadableWhere } from "../../../access/session-visibility.js";
@@ -146,10 +145,6 @@ async function resolveDiscordChannelForWrite(
 }
 
 export function registerChannelsRoutes(app: HubHono): void {
-  // A space's conversations and the person's own send (CRM Messages contract):
-  // GET /channels/conversations, POST /channels/:channelId/send.
-  registerChannelConversationsRoutes(app);
-
   // ── GET /channels ────────────────────────────────────────────────────────
   registerOpenApi(app, {
     method: "get",

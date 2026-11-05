@@ -32,6 +32,7 @@ import {
   isNull,
   or,
   drizzleSql,
+  ProposalStatus,
 } from "@synap/database";
 import {
   channelMembers,
@@ -56,7 +57,10 @@ export const SPACE_CONVERSATIONS_DEFAULT_LIMIT = 50;
 export const SPACE_CONVERSATIONS_MAX_LIMIT = 100;
 const LAST_MESSAGE_CHARS = 200;
 const FIRST_LINE_CHARS = 160;
-const OPEN_SEND_STATUSES = ["pending", "approval_failed"];
+const OPEN_SEND_STATUSES: ProposalStatus[] = [
+  ProposalStatus.PENDING,
+  ProposalStatus.APPROVAL_FAILED,
+];
 
 export interface SpaceConversation {
   person: {

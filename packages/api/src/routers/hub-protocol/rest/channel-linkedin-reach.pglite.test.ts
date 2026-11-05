@@ -66,6 +66,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
+import { registerChannelConversationsRoutes } from "./channel-conversations.js";
 import { registerChannelsRoutes } from "./channels.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
@@ -271,6 +272,8 @@ beforeEach(async () => {
 function app() {
   const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   hub.use("/*", hubAuthMiddleware as never);
+  // As the served app wires them: the static /channels/<word> routes first.
+  registerChannelConversationsRoutes(hub);
   registerChannelsRoutes(hub);
   const root = new Hono();
   root.route("/api/hub", hub);
