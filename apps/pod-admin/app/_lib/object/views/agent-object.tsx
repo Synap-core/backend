@@ -46,6 +46,7 @@ import {
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { useSetAgentPosture } from "../../presence/use-sensitive-actions";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { formatRelative } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
@@ -358,7 +359,8 @@ export function AgentGovernance({
     { agentUserId },
     { staleTime: 60_000, retry: false }
   );
-  const setPosture = trpc.agentUsers.setPosture.useMutation({
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const setPosture = useSetAgentPosture({
     onSuccess: (res) => {
       void utils.agentUsers.governance.invalidate({ agentUserId });
       addToast({

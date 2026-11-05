@@ -13,6 +13,7 @@ import { trpc } from "../../../../lib/trpc";
 import { readableError } from "../../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { FormModal } from "../../components/form-modal";
+import { useSetMachineKeyTtl } from "../../../_lib/presence/use-sensitive-actions";
 import { days, validKeyTtl, type ComputerLike } from "./computer-model";
 
 /** The failure in words a person can act on, else a plain fallback. */
@@ -101,7 +102,8 @@ export function ComputerKeyLifetimeModal({
   );
   const [draft, setDraft] = useState(String(computer.effectiveKeyTtlDays));
   const [error, setError] = useState<string | null>(null);
-  const setTtl = trpc.machines.setKeyTtl.useMutation({
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const setTtl = useSetMachineKeyTtl({
     onSuccess: async (_res, input) => {
       await utils.machines.invalidate();
       addToast({

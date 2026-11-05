@@ -76,6 +76,7 @@ import type { ActionRunMode } from "@synap-core/types/governance-rules";
 import { ToolRuns } from "./tool-runs";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
+import { useSetActionMode } from "../../presence/use-sensitive-actions";
 import type { ObjectFrame } from "./object-frame";
 
 export function CapabilityObject({
@@ -172,7 +173,8 @@ export function CapabilityObject({
     { enabled: actionNames.length > 0, retry: false }
   );
   const [modeRefusals, setModeRefusals] = useState<Record<string, string>>({});
-  const setMode = trpc.governanceRules.setActionMode.useMutation({
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const setMode = useSetActionMode({
     onSuccess: (_res, input) => {
       setModeRefusals(({ [input.action]: _dropped, ...rest }) => rest);
       void utils.governanceRules.actionModes.invalidate();

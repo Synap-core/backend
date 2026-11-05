@@ -95,4 +95,16 @@ describe("presenceDialogView", () => {
       }).status
     ).toEqual({ note: "That confirmation took too long." });
   });
+  it("a change this page makes itself never offers Relay, even with an enrolled phone", () => {
+    for (const passkey of [true, false]) {
+      const shared = {
+        phase: ready({ passkey, label: ["iPhone"] }),
+        passkeySupported: true,
+      };
+      expect(presenceDialogView(shared).relayDevice).toBe("iPhone");
+      expect(
+        presenceDialogView({ ...shared, inBrowserOnly: true }).relayDevice
+      ).toBeNull();
+    }
+  });
 });

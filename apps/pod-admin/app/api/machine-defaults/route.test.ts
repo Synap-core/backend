@@ -21,14 +21,12 @@ vi.mock("../../../lib/pod-trpc", () => ({
   },
 }));
 
-import { PUT } from "./route";
+import * as route from "./route";
 
-const put = (body: unknown) =>
-  PUT(
+const get = () =>
+  route.GET(
     new Request("http://pod-admin.test/api/machine-defaults", {
-      method: "PUT",
-      headers: { "content-type": "application/json", cookie: "s=1" },
-      body: JSON.stringify(body),
+      headers: { cookie: "s=1" },
     })
   );
 
@@ -37,26 +35,27 @@ beforeEach(() => {
   calls.length = 0;
 });
 
-describe("PUT /api/machine-defaults", () => {
-  it("sets the pod default computer key lifetime", async () => {
-    const res = await put({ keyTtlDays: 30, extra: true });
+describe("GET /api/machine-defaults", () => {
+  it("reads the pod default computer key lifetime", async () => {
+    const res = await get();
     expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ keyTtlDays: 90 });
     expect(calls).toEqual([
-      { path: "apiKeys.setMachineDefaults", input: { keyTtlDays: 30 } },
+      { path: "apiKeys.getMachineDefaults", input: undefined },
     ]);
   });
 
   it("tells signed out (401) from a pod that could not say (503)", async () => {
     session = "none";
-    expect((await put({ keyTtlDays: 30 })).status).toBe(401);
+    expect((await get()).status).toBe(401);
     session = "unavailable";
-    expect((await put({ keyTtlDays: 30 })).status).toBe(503);
+    expect((await get()).status).toBe(503);
     expect(calls).toEqual([]);
   });
+});
 
-  it("refuses a non-integer without calling the pod", async () => {
-    expect((await put({ keyTtlDays: "30" })).status).toBe(400);
-    expect((await put({ keyTtlDays: 30.5 })).status).toBe(400);
-    expect(calls).toEqual([]);
+describe("no PUT: changing it is a sensitive action (W3 slice 3)", () => {
+  it("the proxy forwards no write, so the change carries its proof of presence", () => {
+    expect(Object.keys(route).sort()).toEqual(["GET", "dynamic"]);
   });
 });

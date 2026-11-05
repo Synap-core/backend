@@ -17,129 +17,17 @@
  * and nothing else.
  */
 
-import { useCallback, useRef, useState } from "react";
-import type { PresenceProof } from "@synap-core/types/presence";
 import { trpc } from "../../../lib/trpc";
-import { approveWithPresence, type PresenceSubject } from "./presence-model";
-import { usePresence } from "./presence-provider";
-import type { ApproveError } from "./use-approve";
+import {
+  labelled,
+  usePresenceDoor,
+  type DoorHandlers,
+  type DoorLabel,
+  type InputFor,
+  type Resolves,
+} from "./use-presence-door";
 
-/** The part of a tRPC mutation hook these doors use. */
-interface DoorMutation<I, O> {
-  mutateAsync: (input: I) => Promise<O>;
-  isPending: boolean;
-  isSuccess: boolean;
-  error: unknown;
-  reset: () => void;
-}
-
-type InputOf<M> = M extends DoorMutation<infer I, unknown> ? I : never;
-type OutputOf<M> = M extends DoorMutation<never, infer O> ? O : never;
-/** What the tRPC hook `H` resolves with. */
-type Resolves<H extends (...args: never[]) => unknown> = OutputOf<
-  ReturnType<H>
->;
-
-/** The input the tRPC hook `H`'s door takes, without `presence`. */
-type InputFor<H extends (...args: never[]) => unknown> = DoorInput<
-  ReturnType<H>
->;
-
-/** The door's input; `presence` is this hook's to add. */
-type DoorInput<M> = Omit<InputOf<M>, "presence">;
-
-/** Per-call handlers, like a tRPC `mutate(input, {onSuccess, onError})`. */
-export interface DoorHandlers<O, I = never> {
-  onSuccess?: (result: O, input: I) => void;
-  onError?: (error: ApproveError, input: I) => void;
-}
-
-/**
- * Wrap one door: `subjectOf(input)` names the request when this call needs
- * a proof (an approval, a turn-on), or null when it needs none.
- */
-function usePresenceDoor<M extends DoorMutation<never, unknown>>(
-  mutation: M,
-  subjectOf: (input: DoorInput<M>) => PresenceSubject | null,
-  defaults: DoorHandlers<OutputOf<M>, DoorInput<M>> = {}
-) {
-  const { prove } = usePresence();
-  const [running, setRunning] = useState(false);
-  // The input of the call in flight (or the last one), like `variables`.
-  const [variables, setVariables] = useState<DoorInput<M> | undefined>();
-  const latest = useRef({ mutation, subjectOf, defaults, prove });
-  latest.current = { mutation, subjectOf, defaults, prove };
-
-  const mutateAsync = useCallback(
-    async (
-      input: DoorInput<M>,
-      handlers: DoorHandlers<OutputOf<M>, DoorInput<M>> = {}
-    ) => {
-      const { mutation, subjectOf, defaults, prove } = latest.current;
-      const send = (presence?: PresenceProof) =>
-        mutation.mutateAsync(
-          (presence ? { ...input, presence } : input) as never
-        ) as Promise<OutputOf<M>>;
-      const subject = subjectOf(input);
-      setRunning(true);
-      setVariables(input);
-      let result: OutputOf<M>;
-      try {
-        result = subject
-          ? await approveWithPresence({
-              subject,
-              prove,
-              upFront: true,
-              attempt: send,
-            })
-          : await send();
-      } catch (err) {
-        (handlers.onError ?? defaults.onError)?.(err as ApproveError, input);
-        throw err;
-      } finally {
-        setRunning(false);
-      }
-      (handlers.onSuccess ?? defaults.onSuccess)?.(result, input);
-      return result;
-    },
-    []
-  );
-  const mutate = useCallback(
-    (
-      input: DoorInput<M>,
-      handlers?: DoorHandlers<OutputOf<M>, DoorInput<M>>
-    ) => {
-      mutateAsync(input, handlers).catch(() => undefined); // `onError` has it.
-    },
-    [mutateAsync]
-  );
-  return {
-    mutate,
-    mutateAsync,
-    isPending: running || mutation.isPending,
-    isSuccess: mutation.isSuccess,
-    // The pod's last refusal, typed as the wrapped hook's own error.
-    error: mutation.error as M["error"],
-    variables,
-    reset: mutation.reset,
-  };
-}
-
-/**
- * What the dialog calls the request: the page's own heading for it (through
- * the vocabulary door), fixed or per call (a list deciding many).
- */
-export type DoorLabel<I> =
-  string | null | undefined | ((input: I) => string | null);
-
-function labelled<I>(
-  subject: PresenceSubject,
-  label: DoorLabel<I>,
-  input: I
-): PresenceSubject {
-  const text = typeof label === "function" ? label(input) : label;
-  return text ? { ...subject, label: text } : subject;
-}
+export type { DoorHandlers, DoorLabel } from "./use-presence-door";
 
 /** `apiKeys.decideKeyRequest`: a key the CLI asked for, minted as the person. */
 export function useDecideKeyRequest(label?: DoorLabel<{ requestId: string }>) {

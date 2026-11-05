@@ -57,6 +57,7 @@ import {
 } from "../../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import { RequestRules } from "./request-rules";
+import { useCreateGovernanceRule } from "../../../../_lib/presence/use-sensitive-actions";
 import { PodDefaults } from "./pod-defaults";
 
 const CATALOGS = { en, fr };
@@ -196,7 +197,8 @@ function HandOffRules() {
     if (err) redirectToLoginIfUnauthorized(err);
   }, [agents.error, rules.error]);
 
-  const create = trpc.governanceRules.create.useMutation();
+  // With the proof of presence (W3 slice 3): a sensitive action.
+  const create = useCreateGovernanceRule();
   const revoke = trpc.governanceRules.revoke.useMutation();
   const [pending, setPending] = useState<string | null>(null);
 
