@@ -141,6 +141,7 @@ import {
 } from "../services/playbooks/run-playbook.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
 import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
@@ -3240,6 +3241,14 @@ export const playbooksRouter = router({
           message: `Playbook ${input.playbookId} not found`,
         });
       }
+      // A key that is not an agent is still bounded by its grant: choosing who
+      // runs a playbook is part of running it, the same grant `remember` on
+      // `playbooks.run` rides on (`playbook.run`).
+      await assertKeyMayWrite({
+        subjectType: "playbook",
+        action: "run",
+        workspaceId: playbook.workspaceId ?? null,
+      });
       if (
         input.choice.executor === "is-agent" &&
         playbook.executor === "external-agent"
