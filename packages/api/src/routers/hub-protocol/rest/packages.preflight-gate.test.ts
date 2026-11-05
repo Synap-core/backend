@@ -338,3 +338,45 @@ describe("POST /packages/{preflight,apply} — a body the schema refuses", () =>
     expect(res.status).toBe(400);
   });
 });
+
+/**
+ * L7 "Add to my pod": an app that may ask to install a package
+ * (`package.install`, pinned to a space as every app grant is) previews what
+ * it asks for. It gets what the package brings, and the pod's parts (the
+ * target space, the kinds it would reuse, the rows an update would change)
+ * said withheld, never read. A key that reads them still gets the whole
+ * answer (the other rows of this file run with no grant).
+ */
+describe("POST /packages/preflight — an app holding package.install", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("answers what the package brings, and withholds the pod's parts without reading them", async () => {
+    const { grantOfScope, runWithGrant } = await import("@synap/database");
+    const appGrant = grantOfScope({
+      permissions: ["entity.read", "package.install"],
+      workspaceIds: ["w1"],
+    });
+    const res = await runWithGrant(appGrant, () =>
+      buildApp().request("/packages/preflight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          _meta: { slug: "creator-pack" },
+          profiles: [
+            { slug: "client", displayName: "Client", profileKind: "kind" },
+          ],
+        }),
+      })
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.pod).toMatchObject({ status: "withheld" });
+    expect(json.contents).toBeTruthy();
+    expect(json).not.toHaveProperty("profiles");
+    expect(json).not.toHaveProperty("apply");
+    expect(json).not.toHaveProperty("dataChanges");
+    // Nothing of the pod was read for it.
+    expect(mockComposeTarget).not.toHaveBeenCalled();
+    expect(mockPreflight).not.toHaveBeenCalled();
+  });
+});

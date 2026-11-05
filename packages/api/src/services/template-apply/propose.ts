@@ -17,11 +17,9 @@
  * `workspaces.ensureTemplate` already does.
  */
 import {
-  getRequestGrant,
   preflightWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
-import { grantHoldsAction } from "../../access/grant-door-fence.js";
 import type { z } from "zod";
 import type { PackageApplySchema } from "../../routers/hub-protocol/rest/packages.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -102,23 +100,20 @@ export type ProposeTemplateApplyResult =
   | { kind: "granted" };
 
 /**
- * The named permission an app asks for to PROPOSE installing a template into
- * the person's pod (L7 "Add to my pod", focus plan b5e5cbfc; research
- * 1993e7ed §5): `package.install`, requested in the app's `synap_requests`
- * and ticked by the person on the consent screen ("Install Templates"). It
- * never applies anything: a key holding it, on an AGENT's write (an app's own
- * agent), files a fresh install as ONE pending proposal the person approves
- * (`proposeBeyondGrant`), where its grant alone (no `workspace.create`)
- * would refuse it. Held on any scope, whatever it is pinned to: an app's
- * grant is always pinned to spaces, and a fresh install has no space yet.
+ * The named permission an app asks for to install a template into the
+ * person's pod (L7 "Add to my pod", focus plan b5e5cbfc; research 1993e7ed
+ * section 5): `package.install`, requested in the app's `synap_requests` and
+ * ticked by the person on the consent screen. It permits THIS act at rung 0
+ * (the key's grant) in place of the broader `workspace.create` /
+ * `workspace.update`; every later rung runs as for any write, by the rule of
+ * how an app's token acts (`podAppActsAs`, routers/oauth/config.ts): a Synap
+ * app acts as the PERSON, whose own click applies directly within what they
+ * consented to; every other app acts as its own AGENT, whose install is
+ * floored to a proposal (governance rung 2.09, `workspace/create`) the person
+ * approves. The space pin holds for an update of a space; a fresh install
+ * makes a new space, which no pin names (`namedPermissionPermits`).
  */
 export const PACKAGE_INSTALL_PERMISSION = "package.install" as const;
-
-/** Does the calling key's grant hold `package.install` (see above)? */
-function keyMayProposeInstall(): boolean {
-  const grant = getRequestGrant();
-  return !!grant && grantHoldsAction(grant, "package", "install");
-}
 
 /**
  * File the template apply through `checkPermissionOrPropose`. The FULL body
@@ -132,8 +127,8 @@ function keyMayProposeInstall(): boolean {
  * agents (governance rung 2.09) and `workspace/update` is an ADMIN action.
  * An update stays a proposal even when the agent's key grant leaves out
  * `workspace.update` (`proposeBeyondGrant`); a create beyond the grant is
- * denied, unless the key holds `package.install` (PACKAGE_INSTALL_PERMISSION):
- * then it is filed for the person's approval too.
+ * denied. A key holding `package.install` (PACKAGE_INSTALL_PERMISSION) is
+ * permitted the install at rung 0, then governed like any write.
  */
 export async function proposeTemplateApply(input: {
   userId: string;
@@ -159,9 +154,14 @@ export async function proposeTemplateApply(input: {
     // preset: "Space administration") ASKS for a template update instead of
     // being refused (founder, 2026-11-02): a pending proposal the person
     // approves; the key itself still cannot apply it. A fresh install
-    // (`workspace.create`) stays refused, unless the key holds the named
-    // permission `package.install` (an app asking to "Add to my pod").
-    proposeBeyondGrant: isUpdate || keyMayProposeInstall(),
+    // (`workspace.create`) stays refused.
+    proposeBeyondGrant: isUpdate,
+    // `package.install` permits this act at rung 0 (see above).
+    grantNamedPermission: {
+      subject: "package",
+      action: "install",
+      workspaceId: body.targetWorkspaceId ?? existingSpace?.id ?? null,
+    },
     data: {
       name:
         existingSpace?.name ??
@@ -207,7 +207,7 @@ export async function proposeTemplateApply(input: {
  * spaces it requires (the template resolver, which works offline). A read
  * that fails leaves its keys unread, never "needs nothing".
  */
-async function resolvePackageContents(
+export async function resolvePackageContents(
   body: PackageApplyBody
 ): Promise<PackageContentsSummary> {
   const connections = new Map<

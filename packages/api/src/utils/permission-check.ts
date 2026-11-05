@@ -149,7 +149,10 @@ import type { RaiseProposalCapRequest } from "../services/proposals/recommend-ra
 import { propertyLinkLevel } from "./profile-schema-write-access.js";
 import { profileOwnershipRequirement } from "./profile-pod-wide-fields.js";
 import { isPodAdmin } from "./workspace-role.js";
-import { grantWriteDenial } from "./grant-write-check.js";
+import {
+  grantWriteDenial,
+  type NamedGrantPermission,
+} from "./grant-write-check.js";
 import {
   decideAgentPolicy,
   findMatchingPattern,
@@ -1006,6 +1009,15 @@ export interface PermissionCheckBaseOpts {
    */
   grantWorkspaceId?: string | null;
   /**
+   * A NAMED permission that also permits this write at rung 0 (the key's
+   * grant), when the door's act is narrower than its gate subject/action:
+   * `package.install` for a template apply (`workspace.create` /
+   * `workspace.update`), set by `proposeTemplateApply`. Rung 0 only: every
+   * rung after it runs unchanged, so a person's key applies and an agent's
+   * proposes (`grant-write-check.ts` `namedPermissionPermits`).
+   */
+  grantNamedPermission?: NamedGrantPermission;
+  /**
    * The workspace a proposal or auto-approve receipt is FILED in, when it is
    * not the governance home: a shared role's row names no space, so its write
    * is filed in the space the key's grant was checked in. RECORD ONLY: no rung
@@ -1580,6 +1592,7 @@ async function evaluatePermission(
       opts.grantWorkspaceId !== undefined ? opts.grantWorkspaceId : workspaceId,
     projectId,
     data: data as Record<string, unknown> | undefined,
+    namedPermission: opts.grantNamedPermission,
   });
   const beyondGrant =
     !!grantDenied && !!opts.proposeBeyondGrant && !!agentUserId;

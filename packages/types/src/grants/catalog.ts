@@ -120,13 +120,10 @@ export function grantSubjectSpec(
  * The vocabulary key of a subject the catalog does not offer, when that is not
  * the subject itself. A facet is a ROLE to the person ("Users see Role, not
  * Facet"); granted by an explicit pattern (`facet.create`), it still reads as
- * one. A package is a TEMPLATE to the person: `package.install`, the
- * permission an app asks for to propose installing one ("Add to my pod"),
- * reads "Install Templates".
+ * one.
  */
 const UNOFFERED_SUBJECT_NOUNS: Readonly<Record<string, string>> = {
   facet: "role",
-  package: "template",
 };
 
 /** The vocabulary key a subject is named by (`event` → `activity`). */

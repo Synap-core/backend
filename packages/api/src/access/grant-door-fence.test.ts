@@ -22,6 +22,7 @@ import {
   isUnboundedFullAccess,
   mcpToolAllowed,
   ownerWideDoorAllowed,
+  packagePreflightReadable,
   restDoorAllowed,
   sessionPacketReadable,
   TRPC_KEY_MUTATION_DOORS,
@@ -317,9 +318,31 @@ describe("POST reads declared in R1 (were open as writes)", () => {
   it("POST /packages/preflight reads what GET /workspaces reads (finding 634bbbfc)", () => {
     expect(hubRouteClass("POST", "/packages/preflight")).toBe("read");
     expect(restDoorAllowed("POST", "/packages/preflight", COMPUTER)).toBe(true);
+    expect(packagePreflightReadable(COMPUTER)).toBe(true);
     for (const grant of [PINNED, APP, DOC_ONLY, key({ permissions: [] })]) {
       expect(restDoorAllowed("POST", "/packages/preflight", grant)).toBe(false);
     }
+  });
+  // Rules out: an app that may ask to install a package refused the preview
+  // of what it asks for (L7 "Add to my pod"), and that app reading the pod's
+  // parts of it (the kinds, spaces and rows an install would touch).
+  it("POST /packages/preflight admits a key holding package.install, with the pod's parts withheld", () => {
+    const APP_INSTALL = key({
+      permissions: ["entity.read", "package.install"],
+      workspaceIds: ["w1"],
+    });
+    expect(restDoorAllowed("POST", "/packages/preflight", APP_INSTALL)).toBe(
+      true
+    );
+    expect(packagePreflightReadable(APP_INSTALL)).toBe(false);
+    // Another package verb is not the ask.
+    expect(
+      restDoorAllowed(
+        "POST",
+        "/packages/preflight",
+        key({ permissions: ["package.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(false);
   });
   it("POST /focus-sessions/:id/recall needs every subject recall reads, unnarrowed", () => {
     const path = `/focus-sessions/${U}/recall`;

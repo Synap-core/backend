@@ -22,10 +22,14 @@
  *  - the agent credential cannot approve it (`refuseAgentProposalApprover`);
  *    the person's approval runs the template update and marks it approved;
  *  - an APP's key holding the named permission `package.install` (pinned to
- *    a space, as every app grant is) files a fresh install as ONE pending
- *    `workspace/create` proposal and creates no space — rules out "Add to my
- *    pod" being refused, or applied without the person; with no agent on the
- *    request it stays DENIED.
+ *    a space, as every app grant is) is permitted the install at rung 0, then
+ *    governed as its token acts (`podAppActsAs`): as the app's AGENT, ONE
+ *    pending `workspace/create` proposal and no space (rules out "Add to my
+ *    pod" refused, or applied without the person); as the PERSON (a Synap
+ *    app, no agent), granted: the person's own click applies (rules out the
+ *    person-acting app getting nothing from it). The space pin still holds
+ *    for an UPDATE of a space it does not name, and a bare `*` pinned to a
+ *    space is not the ask.
  *
  * Faked (their own suites pin them): layer-1 reconcile and preflight, layer 2
  * (`applyPackagePostWorkspace`), the catalog resolve, delivery side effects.
@@ -364,16 +368,20 @@ describe("a template update beyond the key's grant is filed for the person's app
   });
 });
 
-describe("an app holding package.install asks to install a template (Add to my pod)", () => {
+describe("an app holding package.install may install a template (Add to my pod)", () => {
   const APP_AGENT = randomUUID();
   const PACK = "creator-pack";
   /** An app's grant: pinned to the space the person gave, plus the ask. */
-  const APP_GRANT = grantOfScope({
-    permissions: ["entity.read", PACKAGE_INSTALL_PERMISSION],
-    workspaceIds: [SPACE],
-  });
-  const asApp = <T>(agentUserId: string | undefined, fn: () => Promise<T>) =>
-    runWithGrant(APP_GRANT, () => runWithActingAgent(agentUserId, fn));
+  const appGrant = (workspaceIds: string[]) =>
+    grantOfScope({
+      permissions: ["entity.read", PACKAGE_INSTALL_PERMISSION],
+      workspaceIds,
+    });
+  const asApp = <T>(
+    grant: ReturnType<typeof appGrant>,
+    agentUserId: string | undefined,
+    fn: () => Promise<T>
+  ) => runWithGrant(grant, () => runWithActingAgent(agentUserId, fn));
 
   beforeAll(async () => {
     await q(
@@ -382,8 +390,8 @@ describe("an app holding package.install asks to install a template (Add to my p
     );
   });
 
-  it("a fresh install is ONE pending workspace/create proposal by the app's agent, and no space yet", async () => {
-    const filed = await asApp(APP_AGENT, () =>
+  it("as the app's agent: ONE pending workspace/create proposal, and no space yet", async () => {
+    const filed = await asApp(appGrant([SPACE]), APP_AGENT, () =>
       proposeTemplateApply({
         userId: OWNER,
         agentUserId: APP_AGENT,
@@ -410,9 +418,27 @@ describe("an app holding package.install asks to install a template (Add to my p
     expect(rows).toEqual([]);
   });
 
-  it("with no agent on the request, the same grant is still refused", async () => {
-    const filed = await asApp(undefined, () =>
+  it("as the person (a Synap app, no agent): granted, the person's own click applies", async () => {
+    const filed = await asApp(appGrant([SPACE]), undefined, () =>
       proposeTemplateApply({ userId: OWNER, body: body(PACK) })
+    );
+    expect(filed).toEqual({ kind: "granted" });
+  });
+
+  it("the space pin still holds for an update of a space it does not name", async () => {
+    const filed = await asApp(appGrant([randomUUID()]), undefined, () =>
+      proposeTemplateApply({ userId: OWNER, body: body(SLUG) })
+    );
+    expect(filed).toEqual({
+      kind: "denied",
+      reason: expect.stringContaining('"workspace.update"'),
+    });
+  });
+
+  it("a bare * pinned to a space is not the ask", async () => {
+    const filed = await runWithGrant(
+      grantOfScope({ permissions: ["*"], workspaceIds: [SPACE] }),
+      () => proposeTemplateApply({ userId: OWNER, body: body(PACK) })
     );
     expect(filed).toEqual({
       kind: "denied",

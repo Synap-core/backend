@@ -34,7 +34,9 @@ import {
 import {
   admitTemplateApply,
   proposeTemplateApply,
+  resolvePackageContents,
 } from "../../../services/template-apply/propose.js";
+import { packagePreflightReadable } from "../../../access/grant-door-fence.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
 import { resolvePreflightComposeTarget } from "../../../services/preflight-compose-target.js";
 import {
@@ -50,6 +52,7 @@ import {
   ProjectRepository,
   EventRepository,
   findWorkspaceIdentityConflict,
+  getRequestGrant,
   pendingTemplateDataChanges,
   dataChangeConsent,
   runConsentedDataChanges,
@@ -618,6 +621,22 @@ export function registerPackagesRoutes(app: HubHono): void {
     const read = await readPackageBody(c);
     if (!read.ok) return read.res;
     const { raw, body } = read;
+    // A key the fence admitted on `package.install` alone (an app asking to
+    // "Add to my pod"): what the package itself brings (no pod read, no
+    // connection state), and the pod's parts said withheld, never empty.
+    if (!packagePreflightReadable(getRequestGrant())) {
+      return c.json(
+        {
+          contents: await resolvePackageContents(body),
+          pod: {
+            status: "withheld",
+            reason:
+              "This key does not read the spaces, kinds and records an install would touch: only what the package brings is shown. The person sees the rest when they approve.",
+          },
+        },
+        200
+      );
+    }
     const composeTarget = await resolvePreflightComposeTarget({
       definition: body,
       userId,

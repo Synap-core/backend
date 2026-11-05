@@ -38,7 +38,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
 import { entities, profiles } from "@synap/database/schema";
 import { grantRequestKey, grantRequestKeys } from "@synap/governance-policy";
-import { permits, type GrantRequest } from "@synap/governance-policy/grants";
+import {
+  patternMatches,
+  permits,
+  type GrantRequest,
+} from "@synap/governance-policy/grants";
 
 export interface GrantWriteInput {
   subjectType: string;
@@ -46,6 +50,48 @@ export interface GrantWriteInput {
   workspaceId?: string | null;
   projectId?: string | null;
   data?: Record<string, unknown> | null;
+  /**
+   * A NAMED permission that also permits this write (`namedPermissionPermits`):
+   * the door's own act, asked for by name, when the gate's subject/action is
+   * broader than what the person consented to. Set by the template-apply
+   * filing (`package.install`, services/template-apply/propose.ts).
+   */
+  namedPermission?: NamedGrantPermission;
+}
+
+/** A door's named permission (`<subject>.<action>`) and the space it lands in. */
+export interface NamedGrantPermission {
+  subject: string;
+  action: string;
+  /** The space the write lands in; null = it makes a new one. */
+  workspaceId: string | null;
+}
+
+/**
+ * Does one scope hold the named permission for this write? Only a pattern
+ * that NAMES the subject counts (`package.install`, `package.*`), never a bare
+ * `*`: a key pinned to one space with `*` was never asked about this act. The
+ * scope's space pin holds when the write lands in a space it names; a write
+ * that makes a NEW space has none to check, so the pin cannot narrow it (the
+ * person ticked the permission in the spaces they gave, and an app's grant is
+ * always pinned). A scope pinned to projects or objects never holds it (fail
+ * closed: a new space belongs to neither).
+ */
+export function namedPermissionPermits(
+  grant: KeyGrant,
+  named: NamedGrantPermission
+): boolean {
+  return grant.scopes.some((scope) => {
+    if (scope.projectIds || scope.entityIds) return false;
+    const holds = scope.permissions.some(
+      (p) =>
+        p.split(".")[0] === named.subject &&
+        patternMatches(p, { subject: named.subject, action: named.action })
+    );
+    if (!holds) return false;
+    if (!scope.workspaceIds || named.workspaceId === null) return true;
+    return scope.workspaceIds.includes(named.workspaceId);
+  });
 }
 
 /**
@@ -154,6 +200,11 @@ export async function grantWriteDenial(
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<string | null> {
   if (!grant) return null;
+  if (
+    input.namedPermission &&
+    namedPermissionPermits(grant, input.namedPermission)
+  )
+    return null;
   // A door folded onto another action (`entity/transition` → update) is also
   // permitted by a pattern naming the door itself (`grantRequestKeys`).
   const actions = grantRequestKeys(input.subjectType, input.action).map(
