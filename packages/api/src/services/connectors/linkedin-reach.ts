@@ -24,6 +24,12 @@
  * Recording `connected` releases the person's HELD sends (their pending
  * messages that could not go out while they were not a connection,
  * `services/channels/held-sends.ts`): they are sendable from then on.
+ *
+ * A fourth writer, on demand: the person's "measure reach" door (Hub
+ * `POST /channels/linkedin-reach/:personId`, `services/channels/
+ * linkedin-reach-read.ts`) reads their profile once and records the fact,
+ * and fills `linkedinProviderId` when none is stored
+ * (`fillLinkedinProviderId`).
  */
 
 import { createLogger } from "@synap-core/core";
@@ -189,4 +195,37 @@ export async function recordLinkedinReach(
   // Connected: the messages held for them are sendable now (held-sends.ts).
   if (next.connection === "connected") await releaseHeldSends(entityId);
   return next;
+}
+
+export const LINKEDIN_PROVIDER_ID_PROPERTY = "linkedinProviderId";
+
+/**
+ * Store the LinkedIn member id a profile read answered as the person's
+ * `linkedinProviderId`, only when none is stored (a person's or a capture's
+ * value is never overwritten). Same write as the reach fact: a fact synced
+ * from LinkedIn, no `entity.update` emit (see the module doc). The caller
+ * registers the `linkedin:<id>` identity signal (`recordProviderId`), which
+ * the property itself only registers through the entity update door.
+ * Returns true when it wrote. Throws only on a database failure.
+ */
+export async function fillLinkedinProviderId(
+  entityId: string,
+  providerId: string
+): Promise<boolean> {
+  const id = providerId.trim();
+  if (!id) return false;
+  const rows = await db
+    .update(entities)
+    .set({
+      properties: drizzleSql`coalesce(${entities.properties}, '{}'::jsonb) || ${JSON.stringify({ [LINKEDIN_PROVIDER_ID_PROPERTY]: id })}::jsonb`,
+    })
+    .where(
+      and(
+        eq(entities.id, entityId),
+        isNull(entities.deletedAt),
+        drizzleSql`coalesce(${entities.properties} ->> ${LINKEDIN_PROVIDER_ID_PROPERTY}, '') = ''`
+      )
+    )
+    .returning({ id: entities.id });
+  return rows.length > 0;
 }

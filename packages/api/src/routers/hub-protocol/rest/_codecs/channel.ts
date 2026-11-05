@@ -255,3 +255,24 @@ export const ChannelSendResponseSchema = z
     reason: z.string().optional(),
   })
   .openapi("ChannelSendResponse");
+
+/** POST /channels/linkedin-reach/{personId} answer. */
+export const LinkedinReachResponseSchema = z
+  .object({
+    reach: z
+      .enum(["none", "pending", "connected", "ignored"])
+      .nullable()
+      .describe(
+        "The person's LinkedIn reach stored after the read (`linkedinConnection`); null when LinkedIn said nothing about it."
+      ),
+    invitedAt: z
+      .string()
+      .nullable()
+      .describe("When the pending request was sent, when known."),
+    providerId: z
+      .string()
+      .describe(
+        "LinkedIn's member id for the person (stored as `linkedinProviderId` when none was)."
+      ),
+  })
+  .openapi("LinkedinReachResponse");

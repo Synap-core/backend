@@ -668,6 +668,17 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // an app's outward run always files a proposal (the capability gate). So it
   // is admitted only for a key holding some `capability … run`.
   [/^\/capabilities\/execute\/?$/, NARROWED("capability", [], "run")],
+  // Measure one person's LinkedIn reach (`readLinkedinReach`, services/
+  // channels/linkedin-reach-read.ts, finding 491ba787). It writes, but only
+  // machine-written system facts no editor or agent writes (the reach fact,
+  // an empty `linkedinProviderId`, the `linkedin:<id>` identity signal), from
+  // one provider read: the daily sweep's writes, for one person, now. The
+  // person is read through `entityReadVisibleWhere` (the key's grant ANDed;
+  // a person it does not reach is a 404) and must be the caller's own; the
+  // read spends the owner's LinkedIn lookup budget. Admitted for a key
+  // holding `channel.read` (the person's messaging consent, as the
+  // conversations door that shows reach).
+  [route("/channels/linkedin-reach/:id"), NARROWED("channel", [])],
 ];
 
 /**

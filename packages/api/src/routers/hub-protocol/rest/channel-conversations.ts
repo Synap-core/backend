@@ -21,6 +21,16 @@
  *        approve right, an agent never sends here. Someone not reachable yet
  *        (not a LinkedIn connection) keeps the text as a HELD draft:
  *        `{status: 'held'}`, never an error that loses it.
+ *
+ *   POST /channels/linkedin-reach/{personId}
+ *        measure one person's LinkedIn reach now (finding 491ba787): one
+ *        profile read with the owner's LinkedIn account, the reach fact and
+ *        the member id recorded on the person (`readLinkedinReach`,
+ *        services/channels/linkedin-reach-read.ts). Machine-written system
+ *        facts and a provider read, like the daily sweep: no proposal. On
+ *        the fence as a POST read, `NARROWED("channel")`: the person is read
+ *        through the caller's floor and the key's grant (404 otherwise). A
+ *        failed read writes nothing and answers its error.
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
@@ -39,6 +49,7 @@ import {
   readSendOutcome,
 } from "../../../services/channels/person-send.js";
 import { listSpaceConversations } from "../../../services/channels/space-conversations.js";
+import { readLinkedinReach } from "../../../services/channels/linkedin-reach-read.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -46,6 +57,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   ChannelSendRequestSchema,
   ChannelSendResponseSchema,
+  LinkedinReachResponseSchema,
   SpaceConversationsQuerySchema,
   SpaceConversationsResponseSchema,
 } from "./_codecs/channel.js";
@@ -157,6 +169,151 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error({ err, workspaceId }, "GET /channels/conversations");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  // ── POST /channels/linkedin-reach/:personId ──────────────────────────────
+  // Static segment first: registered before any `/channels/:id/…` POST.
+  registerOpenApi(app, {
+    method: "post",
+    path: "/channels/linkedin-reach/:personId",
+    tags: ["Channels"],
+    summary: "Measure a person's LinkedIn reach now",
+    description:
+      "Reads the person's LinkedIn profile once with the owner's connected " +
+      "LinkedIn account (from its daily lookup budget) and records what it " +
+      "says on the person: `linkedinConnection` (a 1st-degree connection is " +
+      "`connected`, which makes their held messages sendable; a profile that " +
+      "only says 'not connected' keeps a stored fact) and `linkedinProviderId` " +
+      "when none is stored. Answers the reach stored after the read. A read " +
+      "that fails writes nothing.",
+    request: { params: z.object({ personId: uuidPathParam }) },
+    responses: {
+      200: {
+        description: "The reach recorded",
+        schema: LinkedinReachResponseSchema,
+      },
+      400: { description: "Invalid personId", schema: ErrorSchema },
+      403: {
+        description: "Forbidden, or the person is not the caller's own",
+        schema: ErrorSchema,
+      },
+      404: {
+        description: "No person the caller reads, or no such LinkedIn member",
+        schema: ErrorSchema,
+      },
+      409: {
+        description:
+          "Nothing to read with: no connected LinkedIn account (or two), or no LinkedIn id or profile URL on the person",
+        schema: ErrorSchema,
+      },
+      429: {
+        description: "Today's LinkedIn profile lookups are spent",
+        schema: ErrorSchema,
+      },
+      502: { description: "The LinkedIn read failed", schema: ErrorSchema },
+      503: {
+        description: "No messaging service reads LinkedIn profiles",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/channels/linkedin-reach/:personId", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const personId = c.req.param("personId");
+    if (!z.string().uuid().safeParse(personId).success) {
+      return c.json({ error: "Invalid personId" }, 400);
+    }
+    try {
+      const r = await readLinkedinReach({ userId, personId });
+      switch (r.status) {
+        case "measured":
+          return c.json(
+            {
+              reach: r.reach,
+              invitedAt: r.invitedAt,
+              providerId: r.providerId,
+            },
+            200
+          );
+        case "not_found":
+          return c.json({ error: "Person not found" }, 404);
+        case "not_owner":
+          return c.json(
+            {
+              error:
+                "Only the person's owner can measure their LinkedIn reach, with their own LinkedIn account.",
+              code: "NOT_OWNER",
+            },
+            403
+          );
+        case "unconfigured":
+          return c.json(
+            {
+              error:
+                "No messaging service on this pod reads LinkedIn profiles.",
+              code: "UNCONFIGURED",
+            },
+            503
+          );
+        case "no_account":
+          return c.json(
+            {
+              error:
+                r.accounts === 0
+                  ? "Connect a LinkedIn account first."
+                  : "Several LinkedIn accounts are connected: the pod does not guess which one reads.",
+              code: "NO_ACCOUNT",
+            },
+            409
+          );
+        case "no_identifier":
+          return c.json(
+            {
+              error:
+                "No LinkedIn id or profile URL on this person: add their LinkedIn profile URL first.",
+              code: "NO_IDENTIFIER",
+            },
+            409
+          );
+        case "no_budget":
+          return c.json(
+            {
+              error:
+                "Today's LinkedIn profile lookups are spent. Try again tomorrow.",
+              code: "NO_BUDGET",
+            },
+            429
+          );
+        case "not_on_linkedin":
+          return c.json(
+            { error: "LinkedIn has no such member.", code: "NOT_ON_LINKEDIN" },
+            404
+          );
+        case "failed":
+          return c.json(
+            {
+              error: `The LinkedIn read failed; nothing was recorded. ${r.error}`,
+              code: "PROVIDER_FAILED",
+            },
+            502
+          );
+      }
+    } catch (err) {
+      logger.error({ err, personId }, "POST /channels/linkedin-reach/:id");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err) as never
