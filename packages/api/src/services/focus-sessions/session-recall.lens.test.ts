@@ -64,3 +64,22 @@ describe("selectRecalled — the session's focus is a preference, via lensAffini
     expect(got.map((i) => i.entityId)).toEqual(["a", "b"]);
   });
 });
+
+describe("selectRecalled — recall keeps the pod-wide stop list, not the playbook matcher's", () => {
+  // "agent", "session", "goal" are Synap's own domain words. The playbook
+  // matcher drops them as generic (GENERIC_WORK_WORDS); recall must not, or
+  // this query would turn into an empty lexical query and recall nothing.
+  it("a query made of 'agent need goal per session' still matches lexically", () => {
+    const got = selectRecalled({
+      query: "Agents need goals per session",
+      candidates: [
+        cand("hit", { semantic: null, text: "Agents need goals per session" }),
+      ],
+      excludeIds: new Set(),
+      focus: null,
+      now: NOW,
+    });
+    expect(got.map((i) => i.entityId)).toEqual(["hit"]);
+    expect(got[0]!.reason).toMatch(/^Mentions /);
+  });
+});

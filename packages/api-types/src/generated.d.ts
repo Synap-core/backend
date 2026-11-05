@@ -12903,11 +12903,13 @@ export interface KnownSourceHash {
  * An intent term is weighted by how RARE it is in THIS candidate pool, using
  * the pod's ONE IDF formula (`rarityWeight`, `utils/term-match.ts`). Measured
  * defect it fixes: the intent "design and build a feature … fix MCP discovery
- * gaps" ranked "CRM Hygiene" first on the words "agent" and "each" — "each"
- * sits in 7 of the 20 live candidates — and the flat 3-points-per-word sum tied it with
- * "AI Dev Session" (which alone says "build"), the tie then going to whichever
- * was edited last. A word most candidates share is weak evidence; a word only
- * one candidate has is strong evidence. The pool is whatever the caller
+ * gaps" ranked "CRM Hygiene" first on generic words shared by many candidates
+ * ("agent", "each": "each" sat in 7 of the 20 live candidates) — and the flat
+ * 3-points-per-word sum tied it with "AI Dev Session" (which alone says
+ * "build"), the tie then going to whichever candidate was edited last. The most generic of those words are now
+ * stopped outright (`GENERIC_WORK_WORDS`, this ranker only); rarity weighs the
+ * rest. A word most candidates share is weak evidence; a word only one
+ * candidate has is strong evidence. The pool is whatever the caller
  * passes, so pass it AFTER every gate (rows a caller cannot see must never
  * move the ranking — same rule as `rankByTerms`).
  *

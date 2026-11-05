@@ -24,11 +24,13 @@
  * An intent term is weighted by how RARE it is in THIS candidate pool, using
  * the pod's ONE IDF formula (`rarityWeight`, `utils/term-match.ts`). Measured
  * defect it fixes: the intent "design and build a feature … fix MCP discovery
- * gaps" ranked "CRM Hygiene" first on the words "agent" and "each" — "each"
- * sits in 7 of the 20 live candidates — and the flat 3-points-per-word sum tied it with
- * "AI Dev Session" (which alone says "build"), the tie then going to whichever
- * was edited last. A word most candidates share is weak evidence; a word only
- * one candidate has is strong evidence. The pool is whatever the caller
+ * gaps" ranked "CRM Hygiene" first on generic words shared by many candidates
+ * ("agent", "each": "each" sat in 7 of the 20 live candidates) — and the flat
+ * 3-points-per-word sum tied it with "AI Dev Session" (which alone says
+ * "build"), the tie then going to whichever candidate was edited last. The most generic of those words are now
+ * stopped outright (`GENERIC_WORK_WORDS`, this ranker only); rarity weighs the
+ * rest. A word most candidates share is weak evidence; a word only one
+ * candidate has is strong evidence. The pool is whatever the caller
  * passes, so pass it AFTER every gate (rows a caller cannot see must never
  * move the ranking — same rule as `rankByTerms`).
  *
@@ -129,9 +131,26 @@ const WEIGHT = {
   anyKind: 0.5,
 } as const;
 
-/** Words too common to be evidence of intent. */
+/** Words too common to be evidence of anything. Pod-wide: `tokenize` is also
+ * the lexical tokenizer of session recall, so this list is exactly main's. */
 const STOPWORDS: ReadonlySet<string> = new Set(
   "the and for with this that from into your you our are was were will have has had not but can all any its about when then than them they what which who how why also just more some such only very".split(
+    " "
+  )
+);
+
+/**
+ * The generic vocabulary of describing work itself ("every work session binds
+ * to one playbook", "one ask routes to the right…"): measured on a live start,
+ * these rode back as the matched evidence of the top candidates. Applied ONLY
+ * by the playbook ranker (`rankRouteCandidates`); session recall and every
+ * other `tokenize` caller keep the pod-wide list, because "agent", "session"
+ * and "goal" are Synap's own domain words there. Plurals are listed because the
+ * check runs on the raw word, before stemming. Domain nouns such as "token",
+ * "fix" or "backend" are deliberately NOT here.
+ */
+const GENERIC_WORK_WORDS: ReadonlySet<string> = new Set(
+  "per one every each work works need needs ask asks right session sessions bind binds agent agents goal goals".split(
     " "
   )
 );
@@ -144,10 +163,14 @@ function stem(word: string): string {
 }
 
 /** Stem → the first original word it came from (for the human reason). */
-export function tokenize(text: string | null | undefined): Map<string, string> {
+export function tokenize(
+  text: string | null | undefined,
+  extraStopwords?: ReadonlySet<string>
+): Map<string, string> {
   const out = new Map<string, string>();
   for (const raw of (text ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-    if (raw.length < 3 || STOPWORDS.has(raw)) continue;
+    if (raw.length < 3 || STOPWORDS.has(raw) || extraStopwords?.has(raw))
+      continue;
     const s = stem(raw);
     if (!out.has(s)) out.set(s, raw);
   }
@@ -191,7 +214,7 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   intentText?: string | null;
   candidates: readonly C[];
 }): RankedRoute<C>[] {
-  const intent = tokenize(input.intentText);
+  const intent = tokenize(input.intentText, GENERIC_WORK_WORDS);
   const facets = new Set(input.entity.facetSlugs ?? []);
 
   // Each candidate's own words, once — the rarity pass and the scoring pass
@@ -199,7 +222,7 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   const own =
     intent.size > 0
       ? input.candidates.map((c) =>
-          tokenize([c.name, ...(c.text ?? [])].join(" "))
+          tokenize([c.name, ...(c.text ?? [])].join(" "), GENERIC_WORK_WORDS)
         )
       : [];
   // Rarity of each intent stem over THIS pool (the ONE IDF formula).
