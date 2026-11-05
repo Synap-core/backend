@@ -32,7 +32,9 @@
  * another URL), every `redirect_uri` is https on the SAME ORIGIN as the
  * client_id (Synap policy, stricter than the draft: the code can only ever go
  * back to the domain that is the app's identity), and the client is public
- * (`token_endpoint_auth_method` "none", no `client_secret*`).
+ * (`token_endpoint_auth_method` "none", no `client_secret*`). One exception:
+ * a document declaring the `person` scope (a native app signing a person in,
+ * config.ts) may also list RFC 8252 native redirects (`nativeRedirectRule`).
  */
 
 import { createHash } from "node:crypto";
@@ -52,8 +54,12 @@ import {
   ClientMetadataError,
   assertClientMetadataUrl,
 } from "./client-id-url.js";
-import { OAUTH_SUPPORTED_SCOPES, normalizeRequestedScopes } from "./config.js";
-import { parseScopeParam } from "./protocol.js";
+import {
+  OAUTH_SUPPORTED_SCOPES,
+  PERSON_SCOPE,
+  normalizeRequestedScopes,
+} from "./config.js";
+import { nativeRedirectRule, parseScopeParam } from "./protocol.js";
 import {
   findClient,
   upsertCimdClient,
@@ -107,7 +113,10 @@ class ClientMetadataFetchError extends ClientMetadataError {}
 export interface ValidatedClientMetadataDocument {
   clientName: string;
   redirectUris: string[];
-  /** `scope` ∩ the scopes this AS supports (`mcp.*`). */
+  /**
+   * `scope` ∩ the scopes this AS supports (`mcp.*`), or exactly `["person"]`
+   * for a document that signs a person in (`PERSON_SCOPE`).
+   */
   scopes: string[];
   /** `synap_requests[].permission`, grant grammar. */
   requestedPermissions: string[];
@@ -283,7 +292,38 @@ export function validateClientMetadataDocument(
     }
   }
 
-  // ── redirect_uris: https, same origin as the client_id ───────────────────
+  // ── what it may ask for ──────────────────────────────────────────────────
+  if (d.scope !== undefined && typeof d.scope !== "string") {
+    throw new ClientMetadataError("scope must be a space-delimited string");
+  }
+  const declaredScopes = normalizeRequestedScopes(
+    parseScopeParam(d.scope as string | undefined)
+  );
+  // A client that signs a person in (`person`, config.ts): its token is the
+  // person, so it is nothing else besides — no `mcp.*` key, no pod-app grant.
+  const signsInPerson = declaredScopes.includes(PERSON_SCOPE);
+  if (
+    signsInPerson &&
+    Array.isArray(d.synap_requests) &&
+    d.synap_requests.length > 0
+  ) {
+    throw new ClientMetadataError(
+      `a document that declares the "${PERSON_SCOPE}" scope signs a person in and cannot also declare synap_requests`
+    );
+  }
+  const scopes = signsInPerson
+    ? [PERSON_SCOPE]
+    : [
+        ...new Set(
+          declaredScopes.filter((s) =>
+            (OAUTH_SUPPORTED_SCOPES as readonly string[]).includes(s)
+          )
+        ),
+      ];
+
+  // ── redirect_uris: https, same origin as the client_id; a client that
+  // signs a person in may also name a native one (RFC 8252: loopback, or a
+  // private-use scheme), `nativeRedirectRule` ─────────────────────────────
   if (!Array.isArray(d.redirect_uris) || d.redirect_uris.length === 0) {
     throw new ClientMetadataError(
       "redirect_uris is required and must be a non-empty array"
@@ -295,7 +335,9 @@ export function validateClientMetadataDocument(
     );
   }
   const redirectUris = d.redirect_uris.map((u) =>
-    sameOriginHttpsUrl(u, origin, "redirect_uri")
+    signsInPerson && typeof u === "string" && nativeRedirectRule(u)
+      ? u
+      : sameOriginHttpsUrl(u, origin, "redirect_uri")
   );
 
   // ── display + links ──────────────────────────────────────────────────────
@@ -320,18 +362,6 @@ export function validateClientMetadataDocument(
       ? null
       : sameOriginHttpsUrl(d.initiate_login_uri, origin, "initiate_login_uri");
   // `logo_uri` is deliberately ignored: no remote logo for unverified apps (T7).
-
-  // ── what it may ask for ──────────────────────────────────────────────────
-  if (d.scope !== undefined && typeof d.scope !== "string") {
-    throw new ClientMetadataError("scope must be a space-delimited string");
-  }
-  const scopes = [
-    ...new Set(
-      normalizeRequestedScopes(
-        parseScopeParam(d.scope as string | undefined)
-      ).filter((s) => (OAUTH_SUPPORTED_SCOPES as readonly string[]).includes(s))
-    ),
-  ];
 
   const requestedPermissions: string[] = [];
   // A permission listed twice keeps its first entry's reason.

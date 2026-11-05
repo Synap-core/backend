@@ -16,13 +16,16 @@ import {
   FIRST_PARTY_CLIENTS,
   FIRST_PARTY_CLIENT_IDS,
   isFirstPartyClientId,
+  personDeviceClient,
 } from "./config.js";
 import {
   DcrError,
   clientAcceptsRedirect,
   matchFirstPartyRedirect,
+  nativeRedirectRule,
   validateDcrRequest,
 } from "./protocol.js";
+import type { StoredClient } from "./store.js";
 import { resolveFirstPartyClientName } from "@synap-core/types/vocabulary";
 
 const DESKTOP = FIRST_PARTY_CLIENTS["synap-desktop"].redirects;
@@ -147,6 +150,79 @@ describe("the registry is closed and named", () => {
           ["mcp.read"]
         )
       ).toThrow(DcrError);
+    }
+  });
+});
+
+// ─── A client registered by its document, `person` (config.ts) ───────────────
+
+describe("personDeviceClient — a `person` document's redirects become rules", () => {
+  const row = (scopes: string[]): StoredClient => ({
+    clientId: "https://apps.example.com/oauth/clients/desktop.json",
+    clientKind: "cimd",
+    clientName: "Example Desktop",
+    redirectUris: [
+      "http://127.0.0.1/oauth/callback",
+      "com.example.desktop:/oauth/callback",
+      "https://apps.example.com/oauth/callback",
+    ],
+    scopes,
+    requestedPermissions: [],
+    createdAt: new Date(0),
+  });
+
+  it("is a device client whose loopback matches any port, the rest exactly", () => {
+    const client = personDeviceClient(row(["person"]))!;
+    expect(client.clientKind).toBe("first_party");
+    expect(client.scopes).toEqual([]);
+    for (const ok of [
+      "http://127.0.0.1:53999/oauth/callback",
+      "http://[::1]:1/oauth/callback",
+      "com.example.desktop:/oauth/callback",
+      "https://apps.example.com/oauth/callback",
+    ]) {
+      expect(clientAcceptsRedirect(client, ok), ok).toBe(true);
+    }
+    for (const bad of [
+      "http://127.0.0.1/oauth/callback", // no port: a listener always has one
+      "http://localhost:53999/oauth/callback",
+      "http://127.0.0.1:53999/oauth/callback/x",
+      "com.example.desktop:/oauth/callback/x",
+      "https://apps.example.com/oauth/callback?x=1",
+    ]) {
+      expect(clientAcceptsRedirect(client, bad), bad).toBe(false);
+    }
+  });
+
+  it("CONTROL — a document without person stays itself (null), as does any non-document client", () => {
+    expect(personDeviceClient(row(["mcp.read"]))).toBeNull();
+    expect(
+      personDeviceClient({ ...row(["person"]), clientKind: "dcr" })
+    ).toBeNull();
+    expect(personDeviceClient(null)).toBeNull();
+  });
+
+  it("nativeRedirectRule reads loopback and reverse-DNS schemes, nothing else", () => {
+    expect(nativeRedirectRule("http://127.0.0.1/cb")).toEqual({
+      kind: "loopback",
+      path: "/cb",
+    });
+    expect(nativeRedirectRule("live.synap.relay:/oauth/callback")).toEqual({
+      kind: "private-scheme",
+      uri: "live.synap.relay:/oauth/callback",
+    });
+    for (const no of [
+      "http://127.0.0.1:80/cb",
+      "http://127.0.0.1",
+      "http://127.0.0.1/",
+      "http://127.0.0.1//cb",
+      "https://127.0.0.1/cb",
+      "http://user@127.0.0.1/cb",
+      "javascript:/alert",
+      "Com.Example.App:/cb",
+      "com.example.app:cb",
+    ]) {
+      expect(nativeRedirectRule(no), no).toBeNull();
     }
   });
 });
