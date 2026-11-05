@@ -76,13 +76,12 @@ import {
 import {
   resolveGrantedCapabilities,
   getLinksFor,
-  createLinks,
 } from "../links/links-service.js";
+import { writeSessionTargets } from "../focus-sessions/session-targets.js";
 import { workerIrreversibleSendCeiling } from "./worker-send-ceiling.js";
 import {
   WORKER_BATCH_LIMIT,
   WORKER_SKIP_REASONS,
-  WORKER_TARGET_ROLE,
   type WorkerSkipReason,
 } from "@synap-core/types/workers";
 import { resolveExecutor } from "./executors/registry.js";
@@ -1298,19 +1297,14 @@ async function executeSingleRun(
   });
 
   // The batch's TARGETS, born with the session (before any agent can act on
-  // them): one `session --targets--> entity` edge per thing, no result yet.
+  // them): one `session --targets--> entity` edge per thing, no result yet,
+  // through THE writer every door that declares targets uses.
   if (session && batch && batch.targetIds.length > 0) {
-    await createLinks(
-      batch.targetIds.map((entityId) => ({
-        workspaceId: input.workspaceId,
-        fromType: "session" as const,
-        fromId: session.id,
-        toType: "entity" as const,
-        toId: entityId,
-        linkType: "targets" as const,
-        metadata: { role: WORKER_TARGET_ROLE },
-      }))
-    );
+    await writeSessionTargets({
+      sessionId: session.id,
+      workspaceId: input.workspaceId,
+      entityIds: batch.targetIds,
+    });
   }
 
   // A run born owing the person something (a playbook step declared

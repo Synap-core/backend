@@ -645,6 +645,22 @@ export function registerFocusSessionExecutors(): void {
         }
       }
 
+      // Create-time TARGETS carried through the proposal, written through THE
+      // writer the direct path uses. Re-floored on the principal the proposal
+      // was filed for (the ids were authored by the proposer, as the blockers
+      // above): an entity that principal can no longer see is refused and
+      // said, never linked.
+      const targetIds = readProposedTargets(innerData.targets);
+      if (created && targetIds.length > 0) {
+        const refusal = await applyProposedTargets({
+          sessionId: created.id,
+          workspaceId: created.workspaceId ?? null,
+          floorUserId: proposal.subjectUserId ?? null,
+          targets: targetIds,
+        });
+        if (refusal) lineageRefusals.push(refusal);
+      }
+
       // Gate 2: mint work channel if none (parity with createFocusSession).
       if (created && !created.channelId) {
         const { ensureSessionChannel } =
@@ -1010,6 +1026,22 @@ export function registerFocusSessionExecutors(): void {
             agentId: innerData.addAgentId,
             userId: session.userId,
           });
+        }
+
+        // TARGETS. Carried by both proposing doors (`update-session.ts`, the
+        // Hub PATCH) in the same hunk as this arm; re-floored at approval on
+        // the session's OWN owner (visible, session still in flight) and
+        // written through THE writer every door uses.
+        const proposedTargets = readProposedTargets(innerData.targets);
+        if (proposedTargets.length > 0) {
+          const refusal = await applyProposedTargets({
+            sessionId,
+            workspaceId: session.workspaceId ?? null,
+            floorUserId: session.userId,
+            sessionStatus: session.status,
+            targets: proposedTargets,
+          });
+          if (refusal) outputRefusals.push(refusal);
         }
 
         // SPACE MOVE — floored above, applied here: the session, its room and
@@ -1541,3 +1573,43 @@ async function applyProposedOutputMutations(
  * lost its pointer on approval. Everything server-owned stays refused.
  */
 const AddOutputSchema = addOutputWireSchema;
+
+/** The `targets` a proposal carried: entity ids, as the doors floored them. */
+function readProposedTargets(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((id): id is string => typeof id === "string")
+    : [];
+}
+
+/**
+ * Write an approved proposal's TARGETS through THE writer the direct doors
+ * use (`session-targets.ts`), after the same floors again: weeks may pass
+ * between filing and approval. Returns the refusal to report, or null.
+ */
+async function applyProposedTargets(args: {
+  sessionId: string;
+  workspaceId: string | null;
+  floorUserId: string | null;
+  sessionStatus?: string;
+  targets: string[];
+}): Promise<string | null> {
+  if (!args.floorUserId) {
+    return `Targets ${args.targets.join(", ")} were not added: the proposal records no owner (subject_user_id).`;
+  }
+  const { checkSessionTargets, writeSessionTargets } =
+    await import("../../../services/focus-sessions/session-targets.js");
+  const refusal = await checkSessionTargets({
+    userId: args.floorUserId,
+    targets: args.targets,
+    ...(args.sessionStatus !== undefined
+      ? { sessionStatus: args.sessionStatus }
+      : {}),
+  });
+  if (refusal) return `Targets were not added: ${refusal.message}`;
+  await writeSessionTargets({
+    sessionId: args.sessionId,
+    workspaceId: args.workspaceId,
+    entityIds: args.targets,
+  });
+  return null;
+}
