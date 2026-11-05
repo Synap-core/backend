@@ -140,6 +140,7 @@ import { resolveKeyIdentity } from "../access/key-identity.js";
 import { apiKeyService } from "./api-keys.js";
 import { attachGrantsOrRevoke } from "./key-grant.js";
 import { grantsForApprovedRequests, revokeApp } from "./app-connect.js";
+import { registerPlaybooksRoutes } from "../routers/hub-protocol/rest/playbooks.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const DOC = "/.well-known/synap-client.json";
@@ -170,9 +171,12 @@ const READ = "entity.person.read";
 const CREATE = "entity.person.create";
 const APPROVE = "proposal.approve";
 /** What every client's document declares (a review verb: Synap apps only). */
+/** Who runs a playbook (run choice v3): read the playbook, run it. */
+const PLAYBOOK_READ = "playbook.read";
+const PLAYBOOK_RUN = "playbook.run";
 const DECLARED: Record<string, string[]> = {
-  [VERIFIED]: [READ, CREATE, APPROVE],
-  [UNVERIFIED]: [READ, CREATE],
+  [VERIFIED]: [READ, CREATE, APPROVE, PLAYBOOK_READ, PLAYBOOK_RUN],
+  [UNVERIFIED]: [READ, CREATE, PLAYBOOK_READ, PLAYBOOK_RUN],
   [LOOKALIKE]: [READ, CREATE],
   [DEVPLANE]: [READ, CREATE, DECISIONS],
 };
@@ -917,5 +921,92 @@ describe("a pod-wide read: asked in the document, ticked once, held with no spac
       "Content OS:entity.person.create",
       "Content OS:entity.person.read",
     ]);
+  });
+});
+
+// ─── who runs a playbook: the signed-in site is the person (run choice v3) ──
+
+describe("remembering who runs a playbook: a Synap site signed in as the person applies; an app on its own asks (D7)", () => {
+  const PLAYBOOK = randomUUID();
+  const RUN_CHOICE_GRANT = [
+    { permission: READ, workspaceId: CONTENT },
+    { permission: PLAYBOOK_READ, workspaceId: CONTENT },
+    { permission: PLAYBOOK_RUN, workspaceId: CONTENT },
+  ];
+  /** The real Hub door: auth, then the served PUT /playbooks/:id/run-choice. */
+  const putRunChoice = (bearer: string) => {
+    const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    hub.use("/*", hubAuthMiddleware as never);
+    registerPlaybooksRoutes(hub);
+    const root = new Hono();
+    root.route("/api/hub", hub);
+    return root.request(`/api/hub/playbooks/${PLAYBOOK}/run-choice`, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ choice: { executor: "is-agent" } }),
+    });
+  };
+  const choiceEdges = () =>
+    q(
+      `select from_type from links where link_type = 'assigned_to' and to_id = $1`,
+      [PLAYBOOK]
+    ).then((r) => r.rows);
+
+  beforeAll(async () => {
+    // The edge's unique key (ON CONFLICT in `createLink`), as the migrations make it.
+    await q(
+      `create unique index if not exists links_edge_uq on links (from_type, from_id, to_type, to_id, link_type)`
+    );
+    await q(
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, executor, status, metadata, params, input_strategy, channel_spec, expected_outputs, stages, criteria, created_at, updated_at)
+       values ($1, $2, $3, 'Package ideas', 'Package the bank', 'is-agent', 'active', '{}'::jsonb, '[]'::jsonb, '{"kind":"none"}'::jsonb, '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, now(), now())`,
+      [PLAYBOOK, CONTENT, OWNER]
+    );
+    // What a Synap AI choice is stored from: the IS agents registry row.
+    await q(
+      `insert into agents (id, name, agent_slug, active, owner_type) values ($1, 'Meta', 'meta', true, 'system')`,
+      [randomUUID()]
+    );
+  }, 60_000);
+
+  it("Content Studio signed in as the person (synap_acts_as person): the choice applies, no proposal", async () => {
+    const body = await connect(OWNER, VERIFIED, RUN_CHOICE_GRANT);
+    expect(body.synap_acts_as).toBe("person");
+    const res = await putRunChoice(body.access_token);
+    const answer = (await res.json()) as any;
+    expect(res.status, JSON.stringify(answer)).toBe(200);
+    expect(answer).toMatchObject({
+      status: "applied",
+      proposalId: null,
+      runChoice: { stored: { executor: "is-agent" }, ask: false },
+    });
+    expect(await choiceEdges()).toEqual([{ from_type: "agent" }]);
+  });
+
+  it("an app acting on its own (its ask-first agent): a playbook/set_run_choice proposal, nothing stored", async () => {
+    await q(
+      `delete from links where link_type = 'assigned_to' and to_id = $1`,
+      [PLAYBOOK]
+    );
+    const body = await connect(OWNER, UNVERIFIED, RUN_CHOICE_GRANT);
+    expect(body.synap_acts_as).toBe("agent");
+    const res = await putRunChoice(body.access_token);
+    const answer = (await res.json()) as any;
+    expect(res.status, JSON.stringify(answer)).toBe(202);
+    expect(answer).toMatchObject({ status: "proposed", runChoice: null });
+    const [filed] = (
+      await q<{ target_type: string; proposal_type: string }>(
+        `select target_type, proposal_type from proposals where id = $1`,
+        [answer.proposalId]
+      )
+    ).rows;
+    expect(filed).toEqual({
+      target_type: "playbook",
+      proposal_type: "set_run_choice",
+    });
+    expect(await choiceEdges()).toEqual([]);
   });
 });
