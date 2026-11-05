@@ -256,12 +256,40 @@ describe("onboarding start reads (real procedures, PGlite)", () => {
       const intent = row!.progress.values.start.intent;
       expect(intent).toMatchObject({ slug: "crm", source: "here", keep: "me" });
       expect(intent.at).not.toBe("t0");
-      // `relay:` ids survive; start ids are the model's prefix (crm has 3 views).
+      // `relay:` ids survive; start ids are the model's prefix. The defaults
+      // step comes next, then views (crm has 3).
       expect(row!.progress.completedActionIds).toEqual([
         "relay:tools",
         "start:intent",
       ]);
-      expect(row!.progress.currentActionId).toBe("start:views");
+      expect(row!.progress.currentActionId).toBe("start:defaults");
+      await caller(ADMIN).recordStartStep({ step: "defaults", patch: {} });
+      const after = await progressOf(ADMIN);
+      expect(after!.progress.values.start.defaults.at).toEqual(
+        expect.any(String)
+      );
+      expect(after!.progress.completedActionIds).toEqual([
+        "relay:tools",
+        "start:intent",
+        "start:defaults",
+      ]);
+      expect(after!.progress.currentActionId).toBe("start:views");
+    });
+
+    it("the defaults step records nothing but going past it", async () => {
+      await caller(ADMIN).recordStartStep({
+        step: "intent",
+        patch: { slug: "crm", source: "here" },
+      });
+      await expect(
+        caller(ADMIN).recordStartStep({
+          step: "defaults",
+          patch: { presence: "report" },
+        })
+      ).rejects.toBeTruthy();
+      expect(
+        (await progressOf(ADMIN))!.progress.values.start.defaults
+      ).toBeUndefined();
     });
 
     it("a start with one view skips the views step", async () => {
@@ -269,9 +297,11 @@ describe("onboarding start reads (real procedures, PGlite)", () => {
         step: "intent",
         patch: { slug: "content-os", source: "here" },
       });
+      await caller(ADMIN).recordStartStep({ step: "defaults", patch: {} });
       const row = await progressOf(ADMIN);
       expect(row!.progress.completedActionIds).toEqual([
         "start:intent",
+        "start:defaults",
         "start:views",
       ]);
       expect(row!.progress.currentActionId).toBe("start:path");
@@ -288,6 +318,13 @@ describe("onboarding start reads (real procedures, PGlite)", () => {
         step: "intent",
         patch: { slug: "crm", source: "here" },
       });
+      await expect(
+        caller(ADMIN).recordStartStep({
+          step: "views",
+          patch: { profile: "deal", view: "a", type: "kanban" },
+        })
+      ).rejects.toMatchObject({ code: "CONFLICT" }); // defaults is next
+      await caller(ADMIN).recordStartStep({ step: "defaults", patch: {} });
       await expect(
         caller(ADMIN).recordStartStep({
           step: "path",

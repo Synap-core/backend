@@ -11,12 +11,18 @@
  * the ONE list), plus every request the CLI filed AS THE PERSON
  * (`data.asPerson`). Everything else passes untouched.
  *
- * Rollout (`SYNAP_PRESENCE_PROOF`): `enforce` refuses a sensitive approval
- * with no proof; anything else (`report`, the default until Relay, desktop and
- * pod admin send proofs) lets it through and records `presence.missing`. A
- * request filed as the person ALWAYS needs the proof, whatever the mode: it is
- * new, and it is the founder's condition (an AI never acts as the person). A
- * proof that is sent is ALWAYS verified, in every mode.
+ * The mode (`mode.ts`: the pod setting, `enforce` by default, the operator
+ * env floor): `enforce` refuses a sensitive approval with no proof; `report`
+ * (an admin's explicit choice) lets it through and records
+ * `presence.missing`. A request filed as the person ALWAYS needs the proof,
+ * whatever the mode: it is new, and it is the founder's condition (an AI
+ * never acts as the person). A proof that is sent is ALWAYS verified, in
+ * every mode.
+ *
+ * A person with NO proof factor is refused like anyone else, and the refusal
+ * says how to add one: their first passkey and their first Relay device key
+ * need no proof (`factors.ts`, the Kratos settings guard), so the way back in
+ * is always open.
  */
 
 import { randomUUID } from "node:crypto";
@@ -40,6 +46,7 @@ import { readPresenceMode } from "./mode.js";
 import { db, eq, users, EventRepository, sql } from "@synap/database";
 
 import {
+  hasProofFactor,
   PresenceError,
   verifyAndConsumePresence,
   type PresenceVerdict,
@@ -105,6 +112,34 @@ async function record(
   });
 }
 
+/** The refusal's sentence: what it needs, and how to add one when none is held. */
+export const PRESENCE_REQUIRED_MESSAGE =
+  "Confirm it is you: this needs Face ID, Touch ID or your passkey.";
+export const PRESENCE_NO_FACTOR_HINT =
+  "You have none yet: add a passkey in pod admin under Security, or set up Relay on your phone. The first one needs no approval.";
+
+/**
+ * The words of a PRESENCE_REQUIRED refusal. When the person holds no factor
+ * at all, it says how to add the first one. The refusal stands either way:
+ * a failed factor read only loses the hint (logged), never the refusal.
+ */
+export async function presenceRequiredMessage(
+  userId: string,
+  sentence: string = PRESENCE_REQUIRED_MESSAGE
+): Promise<string> {
+  try {
+    if (!(await hasProofFactor(userId))) {
+      return `${sentence} ${PRESENCE_NO_FACTOR_HINT}`;
+    }
+  } catch (err) {
+    logger.warn(
+      { err, userId },
+      "could not read the person's proof factors for the refusal's hint"
+    );
+  }
+  return sentence;
+}
+
 /**
  * The one check behind both gates: a proof for `subject`, or (report mode) the
  * missing one recorded. `subject` is a proposal id or `<kind>:<id>`; `what` is
@@ -129,8 +164,7 @@ async function checkPresence(args: {
     ) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message:
-          "Confirm it is you: this needs Face ID, Touch ID or your passkey.",
+        message: await presenceRequiredMessage(userId),
         cause: { reasonCode: PRESENCE_REQUIRED, proposalId: subject },
       });
     }

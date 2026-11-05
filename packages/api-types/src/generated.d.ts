@@ -24236,6 +24236,7 @@ export interface StartFirstSessionResult {
 }
 declare const START_STEP_IDS: readonly [
 	"start:intent",
+	"start:defaults",
 	"start:views",
 	"start:path",
 	"start:setup",
@@ -44491,7 +44492,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: string;
 					userId: string;
 				} | null;
-				next: "start:agent" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
+				next: "start:agent" | "start:defaults" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
 				starts: StartCard[] | undefined;
 				steps: StartStepState[];
 			};

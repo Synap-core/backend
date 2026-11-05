@@ -847,6 +847,9 @@ const startPatchSchemas = {
     slug: z.string().min(1).max(200),
     source: z.enum(["cloud", "here"]),
   }),
+  // Going past the defaults step records only that: each switch was written
+  // by its own setting's door (presence.setMode, governanceRules.*, ...).
+  defaults: z.object({}).strict(),
   views: z.object({
     profile: z.string().min(1).max(200),
     view: z.string().min(1).max(200),
@@ -860,6 +863,7 @@ const startPatchSchemas = {
 type RecordableStep = keyof typeof startPatchSchemas;
 const START_VALUE_KEY: Record<RecordableStep, string> = {
   intent: "intent",
+  defaults: "defaults",
   views: "view",
   path: "path",
   setup: "setup",
