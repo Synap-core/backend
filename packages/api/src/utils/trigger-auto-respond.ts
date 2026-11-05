@@ -64,7 +64,7 @@ export async function triggerAutoRespond(params: {
    * verbs only (founder, 2026-11-05). A person chatting in the run room is
    * not a run turn and gets the normal agent.
    */
-  run?: RunToolProfile | null;
+  run?: RunToolProfile;
 }): Promise<boolean> {
   const channel = await db.query.channels.findFirst({
     where: eq(channels.id, params.channelId),

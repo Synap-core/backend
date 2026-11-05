@@ -22,9 +22,13 @@
  *     The lifecycle property is not repeated when it equals `status`; a
  *     `title` property equal to the title is not repeated; secrets and nested
  *     objects never ride in a list;
- *   - `omitted`: the property keys that were left out, so nothing is
- *     unreachable — name them in `fields` (returned whole, never truncated),
- *     or read the one object.
+ *   - `omitted`: the property keys and the columns ({@link LEAN_NAMED_COLUMNS})
+ *     that were left out, so nothing is unreachable — name them in `fields`
+ *     (returned whole, never truncated), or read the one object;
+ *   - `truncated`: property key → its full item count, for a list cut to its
+ *     first {@link LEAN_LIST_ARRAY_CAP} items. The count rides BESIDE the
+ *     data, never inside it: a marker string in a list of entity ids would be
+ *     written back as an id by an agent that updates from what it read.
  */
 
 import { db as defaultDb, ProfileResolutionService } from "@synap/database";
@@ -41,7 +45,7 @@ export const ENTITY_STRING_CAP = 120;
 export const LEAN_LIST_MAX_PROPERTIES = 8;
 
 /** At most this many items of a list-of-scalars property (e.g. tags). */
-const LEAN_LIST_ARRAY_CAP = 10;
+export const LEAN_LIST_ARRAY_CAP = 10;
 
 export function capString(value: string, cap: number): string {
   return value.length > cap
@@ -76,6 +80,14 @@ const LEAN_ROW_COLUMNS = [
   "updatedAt",
   "lastInteractionAt",
 ] as const;
+
+/**
+ * Columns a lean row leaves out but NAMES in `omitted` when THIS row has one
+ * (a document body, facets), so a caller knows it is there and can ask for it
+ * in `fields`. Columns every row carries (`createdAt`, `profileId`) are named
+ * once, in {@link ENTITIES_LEAN_NOTE}, not on each of fifty rows.
+ */
+export const LEAN_NAMED_COLUMNS = ["documentId", "facets"] as const;
 
 const SELECT_INPUT_TYPES: ReadonlySet<string> = new Set([
   "select",
@@ -159,10 +171,7 @@ function rankOf(def: LeanPropertyDef | undefined, value: unknown): Rank {
 function leanValue(value: unknown): unknown {
   if (typeof value === "string") return capString(value, ENTITY_STRING_CAP);
   if (Array.isArray(value) && value.length > LEAN_LIST_ARRAY_CAP) {
-    return [
-      ...value.slice(0, LEAN_LIST_ARRAY_CAP),
-      `…[truncated: ${value.length} items total]`,
-    ];
+    return value.slice(0, LEAN_LIST_ARRAY_CAP);
   }
   return value;
 }
@@ -218,15 +227,23 @@ export function toLeanListRow(
     if (f === "properties" || f === "systemData") continue;
     if (f in row && row[f] !== null && row[f] !== undefined) out[f] = row[f];
   }
+  const omitted: string[] = LEAN_NAMED_COLUMNS.filter(
+    (col) => !fields.has(col) && !isEmpty(row[col])
+  );
 
   const props =
     row.properties && typeof row.properties === "object"
       ? (row.properties as Record<string, unknown>)
       : {};
   const defBySlug = new Map((shape?.defs ?? []).map((d) => [d.slug, d]));
-  const candidates: Array<{ key: string; rank: number; order: number }> = [];
-  const omitted: string[] = [];
+  const candidates: Array<{
+    key: string;
+    rank: number;
+    displayOrder: number;
+    storage: number;
+  }> = [];
   const picked: Record<string, unknown> = {};
+  const truncated: Record<string, number> = {};
   let storage = 0;
   for (const [key, value] of Object.entries(props)) {
     storage++;
@@ -248,18 +265,30 @@ export function toLeanListRow(
     candidates.push({
       key,
       rank,
-      order: (def?.displayOrder ?? 10_000) * 10_000 + storage,
+      // An undeclared key sorts after every declared one.
+      displayOrder: def?.displayOrder ?? Number.MAX_SAFE_INTEGER,
+      storage,
     });
   }
-  candidates.sort((a, b) => a.rank - b.rank || a.order - b.order);
+  candidates.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      a.displayOrder - b.displayOrder ||
+      a.storage - b.storage
+  );
   for (const [i, c] of candidates.entries()) {
     if (i < LEAN_LIST_MAX_PROPERTIES) {
-      picked[c.key] = leanValue(props[c.key]);
+      const value = props[c.key];
+      picked[c.key] = leanValue(value);
+      if (Array.isArray(value) && value.length > LEAN_LIST_ARRAY_CAP) {
+        truncated[c.key] = value.length;
+      }
     } else {
       omitted.push(c.key);
     }
   }
   if (Object.keys(picked).length > 0) out.properties = picked;
+  if (Object.keys(truncated).length > 0) out.truncated = truncated;
   if (omitted.length > 0) out.omitted = omitted;
   return out;
 }
@@ -267,7 +296,9 @@ export function toLeanListRow(
 export const ENTITIES_LEAN_NOTE =
   "Lean rows: id, title, kind, status (+ statusCategory/statusLabel) and the kind's selected " +
   `properties (at most ${LEAN_LIST_MAX_PROPERTIES}; strings over ${ENTITY_STRING_CAP} chars end in ` +
-  "'…[truncated: N chars total]'). `omitted` names each row's property keys left out: pass them in " +
+  `'…[truncated: N chars total]'; a list over ${LEAN_LIST_ARRAY_CAP} items keeps its first ${LEAN_LIST_ARRAY_CAP} and ` +
+  "`truncated` gives its full count). `omitted` names each row's property keys and columns (documentId, facets) " +
+  "left out; createdAt and profileId are left out of every row. Pass any of them in " +
   "fields to get them whole, or read one object by its id (synap_get_entity). " +
   "detail:'full' (MCP) or projection=full (Hub REST) returns every row unprojected.";
 
@@ -296,9 +327,8 @@ export async function projectLeanEntityList(
   rows: ReadonlyArray<Record<string, unknown>>,
   options: LeanListOptions & { source?: LeanShapeSource } = {}
 ): Promise<Array<Record<string, unknown>>> {
-  const source =
-    options.source ??
-    (new ProfileResolutionService(defaultDb) as unknown as LeanShapeSource);
+  const source: LeanShapeSource =
+    options.source ?? new ProfileResolutionService(defaultDb);
   const profileIds = [
     ...new Set(
       rows
@@ -306,12 +336,12 @@ export async function projectLeanEntityList(
         .filter((id): id is string => typeof id === "string")
     ),
   ];
-  const lifecycles =
+  const lifecycles: Awaited<
+    ReturnType<LeanShapeSource["getEffectiveLifecycles"]>
+  > =
     profileIds.length > 0
       ? await source.getEffectiveLifecycles(profileIds)
-      : (new Map() as Awaited<
-          ReturnType<LeanShapeSource["getEffectiveLifecycles"]>
-        >);
+      : new Map();
   const shapes = new Map<string, Promise<LeanKindShape>>();
   const shapeOf = (row: Record<string, unknown>) => {
     const profileId = row.profileId;

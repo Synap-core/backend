@@ -134,7 +134,8 @@ export class IsAgentExecutor implements Executor {
     }
 
     // The run's declared tools (founder, 2026-11-05): the IS gives this turn
-    // the run core tools plus only the capabilities the playbook and its space
+    // the run core tools plus only the capabilities the playbook grants (its
+    // `grants`, the active stage's) and those serving what it and its space
     // declare. Never throws: a failed read comes back `capabilitiesRead:
     // "failed"`, and the IS tells the agent so.
     const run = ctx.playbookId
@@ -142,8 +143,9 @@ export class IsAgentExecutor implements Executor {
           playbookId: ctx.playbookId,
           workspaceId: ctx.workspaceId,
           userId: ctx.userId,
+          sessionId: ctx.sessionId,
         })
-      : null;
+      : undefined;
 
     // CANONICAL IS kickoff — the SAME pg-boss A2AI_TRIGGER path the threads REST
     // route uses (resolveIntelligenceService + getBoss().send), NOT a side-channel

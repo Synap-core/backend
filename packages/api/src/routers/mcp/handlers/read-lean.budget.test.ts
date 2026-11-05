@@ -68,7 +68,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
 
 import { readHandlers } from "./read.js";
 import type { McpToolContext } from "./shared.js";
-import { ENTITY_STRING_CAP } from "./read-lean.js";
+import { ENTITY_STRING_CAP } from "../../../services/entity-lean-list.js";
 
 // ── Fixture: mirrors the live pod (117 profiles, 15 workspaces, 409+ relation
 // rows of which 22 pod-wide; 50 notes with long bodies). Deterministic. ──────

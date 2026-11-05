@@ -3994,6 +3994,15 @@ export type SkillKind = "builtin" | "code" | "declarative" | "instruction";
 export type ProviderVerbSpec = {
 	baseUrlOverride?: string;
 	body?: Record<string, unknown>;
+	/**
+	 * The name of ONE call parameter whose object value is passed through whole:
+	 * merged over `body` for a POST/PUT/PATCH, and form-encoded into the query
+	 * string (bracket nesting) for a GET/HEAD/DELETE. For a generic verb whose
+	 * fields are the provider's own (e.g. Stripe's `stripe_api_write`), where
+	 * `body`'s fixed keys cannot name them. A JSON-object string is accepted; any
+	 * other value is refused before the call.
+	 */
+	bodyFrom?: string;
 	expand?: {
 		/** Bounded parallelism for the detail fan-out (default 5). */
 		concurrency?: number;
@@ -4030,7 +4039,13 @@ export type ProviderVerbSpec = {
 		clampMax?: number;
 		clampMin?: number;
 		default?: unknown;
-		encode?: "uri";
+		/**
+		 * How the value enters `pathTemplate`. `"uri"`: one segment, fully
+		 * percent-encoded (an id). `"path"`: a relative path of several
+		 * segments, each encoded, an empty / "." / ".." segment refused (a
+		 * generic verb's resource path stays under the template's prefix).
+		 */
+		encode?: "path" | "uri";
 		required?: boolean;
 	}>;
 	/** Path with `{{param}}` interpolation, e.g. "/calendar/v3/calendars/{{calendarId}}/events". */

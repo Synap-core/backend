@@ -22,11 +22,8 @@ import {
   ENTITY_STRING_CAP,
 } from "../../../services/entity-lean-list.js";
 
-/**
- * The entity-row projection lives in `services/entity-lean-list.ts` (one door
- * for MCP `synap_get_entities` and Hub REST `GET /users/:userId/entities`).
- */
-export { ENTITY_STRING_CAP };
+// The entity-row projection lives in `services/entity-lean-list.ts` (one door
+// for MCP `synap_get_entities` and Hub REST `GET /users/:userId/entities`).
 
 /** Profile description cap in the digest. Live p90 = 110 chars, max = 151. */
 export const PROFILE_DESCRIPTION_CAP = 120;
