@@ -320,16 +320,21 @@ function find(obj: unknown, key: string): unknown {
   return undefined;
 }
 
+/**
+ * One MCP call. `as` is the agent by default; `null` is a person's own key
+ * (no agent). Not `undefined`: a default parameter would turn that back into
+ * the agent.
+ */
 async function mcp(
   tool: "synap_start_session" | "synap_update_session",
   args: Record<string, unknown>,
-  agentUserId: string | undefined = AGENT
+  as: string | null = AGENT
 ): Promise<Record<string, unknown>> {
   const res = await sessionHandlers[tool]!({
     toolName: tool,
     args,
     userId: USER,
-    agentUserId,
+    agentUserId: as ?? undefined,
     apiKeyScopes: ["mcp.read", "mcp.write"],
   } as never);
   const text = (res.content as Array<{ type: string; text: string }>)[0]!.text;
@@ -399,6 +404,12 @@ beforeAll(async () => {
     await q(
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
       [randomUUID(), ws, USER]
+    );
+    // The agent works in the person's spaces: without a membership every
+    // agent update is a JOIN request instead of the write under test.
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor')`,
+      [randomUUID(), ws, AGENT]
     );
   }
   for (const [id, slug] of [
@@ -483,24 +494,22 @@ describe("M2: a goal arriving does not use up the one re-resolve", () => {
   it("goal first, subject later: binds at the subject", async () => {
     const id = await mcpStart();
     h.track = randomUUID();
+    // The person files the goal (an agent's goal filing is always its own
+    // proposal, never applied here); the subject is then the agent's own.
     const filed = await mcp(
       "synap_update_session",
       { sessionId: id, trackId: h.track },
-      undefined
+      null
     );
     expect(find(filed, "binding")).toBeUndefined();
     const afterGoal = await rowOf(id);
     expect(afterGoal.track_id, JSON.stringify(filed)).toBe(h.track);
     expect(afterGoal.metadata.bindRecheckedAt).toBeUndefined();
 
-    const out = await mcp(
-      "synap_update_session",
-      {
-        sessionId: id,
-        subjectEntityId: await entityOf(FINDING_PROFILE, BUILDER),
-      },
-      undefined
-    );
+    const out = await mcp("synap_update_session", {
+      sessionId: id,
+      subjectEntityId: await entityOf(FINDING_PROFILE, BUILDER),
+    });
     expect(find(out, "binding")).toEqual(
       expect.stringContaining(FIX_FINDING.id)
     );
