@@ -110,6 +110,12 @@ import {
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
 import {
+  checkSessionTargets,
+  normalizeSessionTargets,
+  writeSessionTargets,
+  type SessionTargetsWrite,
+} from "./session-targets.js";
+import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
   type BlockGuidance,
@@ -224,6 +230,14 @@ export interface UpdateFocusSessionParams {
    * the same `isOutputRefVisible` predicate an output's ref goes through.
    */
   subjectEntityId?: string | null;
+  /**
+   * ADD things this session works on as a batch (`session-targets.ts`): entity
+   * ids the caller can see, while the session is in flight. ADD-ONLY and
+   * idempotent (a target's end is its result, never an unlink); the same
+   * `session --targets--> entity` edge a worker's batch writes. Carried on the
+   * proposal when the update is proposed, written at approval.
+   */
+  targets?: string[];
   /**
    * FILE the session into a project, or UNFILE it with an explicit `null`.
    * Omitted leaves it alone. The target is floored through
@@ -384,6 +398,8 @@ export type UpdateFocusSessionResult =
        * when it carried none. A PROPOSED filing carries them on its proposal.
        */
       subSessionsFiled?: string[];
+      /** What `targets` did: which were added, which already were. */
+      targets?: SessionTargetsWrite;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -2077,6 +2093,21 @@ export async function updateFocusSession(
     }
   }
 
+  // THE SAME FLOOR for the TARGETS (`session-targets.ts`): entities the caller
+  // can see, on a session still in flight. An empty list asks for nothing.
+  if (params.targets !== undefined) {
+    const targets = normalizeSessionTargets(params.targets);
+    params = { ...params, targets: targets.length > 0 ? targets : undefined };
+    if (targets.length > 0) {
+      const refusal = await checkSessionTargets({
+        userId,
+        targets,
+        sessionStatus: existing.status,
+      });
+      if (refusal) return { status: "denied", reason: refusal.message };
+    }
+  }
+
   // THE SAME FLOOR for a filing target: a project the caller cannot see is
   // refused here, not laundered into a proposal. `null` unfiles and names
   // nothing, so it skips.
@@ -2429,6 +2460,8 @@ export async function updateFocusSession(
           ...(params.subjectEntityId !== undefined
             ? { subjectEntityId: params.subjectEntityId }
             : {}),
+          // Same reason: the executor writes them on approval.
+          ...(params.targets ? { targets: params.targets } : {}),
           ...(criteriaChange ? { criteria: params.criteria } : {}),
           // A PERSON's filing (an agent's took its own door above, or was
           // granted there) — the fields and their display-only names.
@@ -2656,6 +2689,17 @@ export async function updateFocusSession(
     });
   }
 
+  // The TARGETS, after the row write, through THE writer a worker's batch
+  // uses (in the session's space as this write left it).
+  let targetsWrite: SessionTargetsWrite | undefined;
+  if (params.targets) {
+    targetsWrite = await writeSessionTargets({
+      sessionId,
+      workspaceId: updated.workspaceId ?? null,
+      entityIds: params.targets,
+    });
+  }
+
   // A relay this write made stale (the ask changed, or the slot left the
   // person) leaves its room question too, so nobody confirms it there.
   if (mutatesOutputs && existing.channelId) {
@@ -2853,6 +2897,7 @@ export async function updateFocusSession(
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
+    ...(targetsWrite ? { targets: targetsWrite } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),

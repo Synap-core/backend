@@ -33796,6 +33796,11 @@
                     "items": { "type": "string", "format": "uuid" },
                     "maxItems": 20
                   },
+                  "targets": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "uuid" },
+                    "maxItems": 100
+                  },
                   "forceCreate": { "type": "boolean" }
                 },
                 "required": ["userId", "goal"]
@@ -36836,6 +36841,11 @@
                   "subjectEntityId": {
                     "type": ["string", "null"],
                     "format": "uuid"
+                  },
+                  "targets": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "uuid" },
+                    "maxItems": 100
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
                   "criteria": {

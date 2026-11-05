@@ -23333,6 +23333,13 @@ export interface SessionTwinCandidate {
 	 */
 	score: number;
 }
+/** What a write did with each id. */
+export interface SessionTargetsWrite {
+	/** Newly working on these (a new edge, or an input edge promoted). */
+	added: string[];
+	/** Already targets of this session: nothing written. */
+	already: string[];
+}
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	/**
@@ -37351,6 +37358,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentSessionId?: string | undefined;
 				projectId?: string | null | undefined;
 				subjectEntityId?: string | null | undefined;
+				targets?: string[] | undefined;
 				templateId?: string | undefined;
 				title?: string | null | undefined;
 				trackId?: string | null | undefined;
@@ -37415,6 +37423,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
 				subjectEntityId: string | null;
+				targets?: SessionTargetsWrite | undefined;
 				templateId: string | null;
 				title: string | null;
 				trackId: string | null;
@@ -38705,6 +38714,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
+				targets?: string[] | undefined;
 				title?: string | null | undefined;
 				trackId?: string | null | undefined;
 				trackStage?: string | null | undefined;

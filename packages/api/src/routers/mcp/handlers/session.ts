@@ -73,6 +73,7 @@ import {
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { SESSION_TARGETS_MAX } from "../../../services/focus-sessions/session-targets-wire.js";
 
 /** One line, not a transcript — mirrors the tool schema's `maxLength`. */
 const SUSPENDED_INTENT_MAX = 400;
@@ -281,6 +282,25 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
     { code: "BAD_REQUEST" }
   );
 }
+
+/**
+ * `targets` on start / update: entity UUIDs (at most `SESSION_TARGETS_MAX`).
+ * Absent or empty ⇒ undefined; anything else malformed ⇒ "invalid", refused
+ * in words (the tool schema is advisory to the client).
+ */
+function readTargetsArg(raw: unknown): string[] | undefined | "invalid" {
+  if (raw === undefined || raw === null) return undefined;
+  if (
+    !Array.isArray(raw) ||
+    raw.length > SESSION_TARGETS_MAX ||
+    !raw.every((id) => typeof id === "string" && isUuid(id))
+  ) {
+    return "invalid";
+  }
+  return raw.length > 0 ? (raw as string[]) : undefined;
+}
+
+const TARGETS_ARG_ERROR = `targets must be an array of at most ${SESSION_TARGETS_MAX} entity UUIDs — the things this session works on as a batch.`;
 
 /**
  * The playbook a session starts from, off the MCP wire: a playbook UUID, or
@@ -541,6 +561,12 @@ export const sessionHandlers: McpHandlerMap = {
           "blockedBySessionIds must be an array of at most 20 session UUIDs — sessions you own that this one waits on.",
       });
     }
+    // The batch it works on: entity handles, refused here in words. The
+    // visibility floor is the service's (`createFocusSession`).
+    const targetsArg = readTargetsArg(args.targets);
+    if (targetsArg === "invalid") {
+      return ok({ error: TARGETS_ARG_ERROR });
+    }
     const suspendedIntentArg = args.suspendedIntent;
     if (
       suspendedIntentArg !== undefined &&
@@ -666,6 +692,7 @@ export const sessionHandlers: McpHandlerMap = {
         blockedBySessionIds: Array.isArray(blockedByArg)
           ? (blockedByArg as string[])
           : [],
+        ...(targetsArg ? { targets: targetsArg } : {}),
         forceCreate: args.forceCreate === true,
       });
     } catch (err) {
@@ -1620,6 +1647,10 @@ export const sessionHandlers: McpHandlerMap = {
         error: `expectedStatus must be one of ${SESSION_STATUSES.join(" | ")}.`,
       });
     }
+    const updateTargets = readTargetsArg(args.targets);
+    if (updateTargets === "invalid") {
+      return reply({ error: TARGETS_ARG_ERROR });
+    }
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -1664,6 +1695,8 @@ export const sessionHandlers: McpHandlerMap = {
         : typeof args.subjectEntityId === "string"
           ? { subjectEntityId: args.subjectEntityId }
           : {}),
+      // Validated above (entity UUIDs); the floors are the service's.
+      ...(updateTargets ? { targets: updateTargets } : {}),
       // NARROWED like the subject: `null` unfiles, a string files, anything
       // else leaves it. The floor and the always-propose rule for an agent live
       // in `updateFocusSession`.
@@ -1781,6 +1814,7 @@ export const sessionHandlers: McpHandlerMap = {
           status: "updated",
           session: result.session,
           ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
+          ...(result.targets ? { targets: result.targets } : {}),
           ...(result.completeOutput
             ? { completeOutput: result.completeOutput }
             : {}),

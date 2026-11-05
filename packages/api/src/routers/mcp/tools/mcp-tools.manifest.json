@@ -2361,6 +2361,15 @@
             "format": "uuid",
             "description": "Optional UUID of this session's PARENT — this session is a child: a detour (something blocked the parent's work and this clears it) or a planned sub-session of a larger piece of work. Records `session --spawned_from--> session`; the parent stays OPEN and lists its children (closing a child never closes the parent, and the parent never auto-closes). Must be a session you own; if it cannot be linked, the result's `parentLink` says why. The child does NOT inherit the parent's governance settings."
           },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 100,
+            "description": "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already)."
+          },
           "blockedBySessionIds": {
             "type": "array",
             "items": {
@@ -5323,6 +5332,15 @@
           "followStageKey": {
             "type": ["string", "null"],
             "description": "Only with followPlaybookId: which stage this work is ALREADY in, by the stage `key` (optional). OMIT IT unless you know — the session then sits in no stage, which is honest; it is never guessed and never set to the first stage. A key the playbook does not declare is refused, with the valid keys listed."
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 100,
+            "description": "ADD entity UUIDs this session works on as a batch (as start's `targets`; add-only, idempotent: a target ends with a result, never removed). Each must be an entity you can see; the session must be active, paused or forming. Reported on `targets` (added | already)."
           },
           "addBlockedBySessionIds": {
             "type": "array",
