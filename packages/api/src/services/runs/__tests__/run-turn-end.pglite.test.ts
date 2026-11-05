@@ -575,7 +575,7 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     });
     expect(done).toEqual({ code: 200, json: { status: "completed" } });
     expect((await runRow(runId)).status).toBe("completed");
-    const turn = (await ledger(sessionId)).firstTurn as Record<string, unknown>;
+    const turn = (await ledger(sessionId)).firstTurn;
     expect(turn).toMatchObject({ spentInputTokens: 9_000 });
     expect(turn).not.toHaveProperty("model");
     expect(turn).not.toHaveProperty("cacheReadInputTokens");
