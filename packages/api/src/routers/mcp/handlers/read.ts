@@ -18,10 +18,12 @@ import {
 import {
   toProfileDigest,
   compactRelationTypes,
-  toLeanEntity,
   PROFILES_DIGEST_NOTE,
-  ENTITIES_LEAN_NOTE,
 } from "./read-lean.js";
+import {
+  ENTITIES_LEAN_NOTE,
+  projectLeanEntityList,
+} from "../../../services/entity-lean-list.js";
 import {
   ASK_DETAILS,
   synthesizeAnswer,
@@ -351,9 +353,17 @@ export const readHandlers: McpHandlerMap = {
         ...(note ? { note } : {}),
       });
     }
+    // `fields`: extra property keys or columns the caller names, returned
+    // whole — a lean row never makes a value unreachable.
+    const fields = Array.isArray(args.fields)
+      ? (args.fields as unknown[]).filter(
+          (f): f is string => typeof f === "string" && f.length > 0
+        )
+      : undefined;
     return ok({
-      entities: (result as unknown as Array<Record<string, unknown>>).map(
-        toLeanEntity
+      entities: await projectLeanEntityList(
+        result as unknown as Array<Record<string, unknown>>,
+        fields ? { fields } : {}
       ),
       count: result.length,
       ...paging,
