@@ -97,13 +97,13 @@ const NARROWED = (
   subject: string,
   full: readonly string[],
   action = "read",
-  orReadsFull = false
+  opts: { orReadsFull?: boolean } = {}
 ): FencedReadDoor => ({
   bound: "narrowed",
   subject,
   full,
   action,
-  ...(orReadsFull ? { orReadsFull } : {}),
+  ...(opts.orReadsFull ? { orReadsFull: true } : {}),
 });
 const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
@@ -747,7 +747,9 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // said withheld (L7 "Add to my pod").
   [
     /^\/packages\/preflight\/?$/,
-    NARROWED("package", PACKAGE_PREFLIGHT_SUBJECTS, "install", true),
+    NARROWED("package", PACKAGE_PREFLIGHT_SUBJECTS, "install", {
+      orReadsFull: true,
+    }),
   ],
   // "Recall again" (`recallSessionAgain`): runs the session's recall as its
   // OWNER, pod-wide (`retrieve()`, the engine behind `synap_ask`), and writes

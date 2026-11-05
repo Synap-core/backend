@@ -668,7 +668,7 @@ export function registerPackagesRoutes(app: HubHono): void {
           pod: {
             status: "withheld",
             reason:
-              "This key does not read the spaces, kinds and records an install would touch: only what the package brings is shown. The person sees the rest when they approve.",
+              "Shows what installing adds. You see the rest when you approve it.",
           },
         },
         200
