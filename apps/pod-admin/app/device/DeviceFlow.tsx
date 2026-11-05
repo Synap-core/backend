@@ -34,6 +34,12 @@ import {
   type DeviceRead,
   type DeviceRequest,
 } from "./device-model";
+import { usePresence } from "../_lib/presence/presence-provider";
+import type { ProvePresence } from "../_lib/presence/presence-model";
+import {
+  sendDeviceDecision,
+  type DeviceDecisionBody,
+} from "../_lib/presence/device-decision";
 import {
   ApprovedView,
   DeniedView,
@@ -77,23 +83,21 @@ async function readDevice(code: string): Promise<DeviceRead> {
   });
 }
 
-/** Send the decision. Returns the pod's refusal, or null when it landed. */
+/**
+ * Send the decision. Returns the pod's refusal, or null when it landed. An
+ * approval asks for the proof of presence (`sendDeviceDecision`); without a
+ * `prove`, the pod's PRESENCE_REQUIRED is the refusal shown.
+ */
 export async function sendDecision(
   decision: DeviceDecision,
-  post: typeof fetch = fetch
+  post: typeof fetch = fetch,
+  prove: ProvePresence = async () => null
 ): Promise<string | null> {
-  try {
-    const res = await post("/api/device", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(decision),
-    });
-    if (res.ok) return null;
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    return body.error ?? `Error (${res.status})`;
-  } catch {
-    return "Could not reach this pod.";
-  }
+  return sendDeviceDecision({
+    decision: decision as DeviceDecisionBody,
+    post,
+    prove,
+  });
 }
 
 export function DeviceFlow({
@@ -106,6 +110,7 @@ export function DeviceFlow({
   identity?: string;
 }) {
   const router = useRouter();
+  const { prove } = usePresence();
   const [code, setCode] = useState<string | null>(
     initialDeviceCode(initialCode)
   );
@@ -171,7 +176,7 @@ export function DeviceFlow({
             });
       setBusy(kind);
       setError(null);
-      const refused = await sendDecision(decision);
+      const refused = await sendDecision(decision, fetch, prove);
       setBusy(null);
       if (refused) {
         setError(refused);
@@ -179,7 +184,7 @@ export function DeviceFlow({
       }
       setRead(decidedRead(read.request, kind));
     },
-    [read, code, agents, actions, reuseId, computerName, agentWriteMode]
+    [read, code, agents, actions, reuseId, computerName, agentWriteMode, prove]
   );
 
   const stage = deviceStage(code, read);

@@ -22,11 +22,11 @@ import {
 } from "@heroui/react";
 import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import type { trpc } from "../../../../lib/trpc";
+import type { useApproveIssuer } from "../../../_lib/presence/use-request-doors";
 
 /** A scope `trustedIssuers.approve` accepts. */
 export type TrustedIssuerScope = Parameters<
-  ReturnType<typeof trpc.trustedIssuers.approve.useMutation>["mutateAsync"]
+  ReturnType<typeof useApproveIssuer>["mutateAsync"]
 >[0]["allowedScopes"][number];
 
 export const ISSUER_SCOPES = [

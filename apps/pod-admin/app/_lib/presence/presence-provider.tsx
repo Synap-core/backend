@@ -58,6 +58,7 @@ import { presenceT } from "./copy";
 import { presenceDialogView } from "./dialog-model";
 import {
   PresenceDeclined,
+  challengeInput,
   type PresenceProgress,
   type PresenceSubject,
   type ProvePresence,
@@ -96,11 +97,10 @@ interface PresenceContextValue {
   prove: ProvePresence;
 }
 
+// Outside the provider (a test, an island page) nobody can prove here: the
+// call goes without a proof and the pod decides, as with no usable passkey.
 const PresenceContext = createContext<PresenceContextValue>({
-  prove: () =>
-    Promise.reject(
-      new Error("Proof of presence is not available on this page.")
-    ),
+  prove: async () => null,
 });
 
 /** The person's proof of presence, asked through the one dialog. */
@@ -215,7 +215,7 @@ function PresenceDialog({
   read.current = async (current: Ask, note: string | null, mayPass = false) => {
     setPhase(current, { kind: "reading" });
     try {
-      const challenge = await readChallenge(current.subject);
+      const challenge = await readChallenge(challengeInput(current.subject));
       if (
         mayPass &&
         (challenge.passkey === null || !isPasskeyAssertionSupported())
@@ -316,7 +316,10 @@ function PresenceDialog({
         </ModalHeader>
         <ModalBody className="gap-3 text-[13px] text-foreground/85">
           {challenge ? (
-            <ApprovingWhat proposalId={challenge.proposalId} />
+            <ApprovingWhat
+              proposalId={challenge.proposalId}
+              label={ask?.subject.label}
+            />
           ) : (
             <p>{t("action.unnamed")}</p>
           )}
@@ -405,7 +408,20 @@ const TONE = {
 } as const;
 
 /** "To approve “<heading>”…": the request's heading, as its own page names it. */
-function ApprovingWhat({ proposalId }: { proposalId: string }) {
+function ApprovingWhat({
+  proposalId,
+  label,
+}: {
+  proposalId: string;
+  /** The page's heading for a request no proposal names. */
+  label?: string;
+}) {
+  const t = presenceT();
+  if (label) return <p>{t("action", { action: label })}</p>;
+  return <ProposalHeading proposalId={proposalId} />;
+}
+
+function ProposalHeading({ proposalId }: { proposalId: string }) {
   const t = presenceT();
   const query = trpc.proposals.get.useQuery(
     { proposalId },

@@ -14,23 +14,27 @@
  *   1. a DEFINITION of one of the rule functions outside this folder, or in
  *      two files of it. The hunted names are read from the rule modules'
  *      own `export function` lines, never hand-listed;
- *   2. a status→tone-bucket TABLE: a file with at least
- *      {@link TABLE_MIN_ROWS} lines mapping a status word (a key of the units
- *      `STATUS_TONE` table) to an enum tone bucket literal.
+ *   2. a status→tone TABLE: a file with at least {@link TABLE_MIN_ROWS}
+ *      lines mapping a status word (a key of the units `STATUS_TONE` table)
+ *      to a tone name: an enum tone bucket, a unit tone, or a HeroUI chip
+ *      colour (`danger`, `default`, …). Only `units/state.ts`, the table's
+ *      home, may hold one. Pod-admin's proposal page kept such a table of
+ *      HeroUI colours (6 rows) that painted `rejected` red and
+ *      `approval_failed` amber, beside the units table reading them calm
+ *      and red (Wave 1 step 4).
  *
  * WHAT IT CANNOT SEE (measured, not implied): a copy under another function
- * name, a table that maps words to unit tones instead of buckets (that is
- * `STATUS_TONE`'s own domain), a table with fewer rows than the threshold
- * (the largest legitimate one, `proposals/deferred-writes.ts`, has 2; the
- * removed `ENUM_TONE_MAP` had 16), and any copy in another repo — app-bases,
- * browser and relay each need their own guard, since backend CI does not
- * check them out.
+ * name, a table with fewer rows than the threshold (the largest legitimate
+ * ones have 3: `focus-sessions/scorecard.ts` maps verdicts to its own tone
+ * set; the removed `ENUM_TONE_MAP` had 16), a table keyed by a word the units
+ * table does not hold, and any copy in another repo — app-bases, browser and
+ * relay each need their own guard, since backend CI does not check them out.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { STATUS_TONE } from "../units/state.js";
+import { STATUS_TONE, UNIT_TONES } from "../units/state.js";
 
 const HERE = import.meta.dirname;
 const ROOT = join(HERE, "../../../..");
@@ -59,7 +63,20 @@ const CODE = /\.(?:[cm]?ts|tsx)$/;
 const TEST = /\.(?:test|spec)\.[cm]?tsx?$/;
 
 const TABLE_MIN_ROWS = 4;
-const BUCKETS = ["positive", "negative", "neutral"];
+/** The one home of a status→tone table. */
+const TABLE_HOME = "packages/types/src/units/state.ts";
+/** Tone names a status word may be mapped to: buckets, unit tones, HeroUI chip colours. */
+const TONE_NAMES = [
+  ...new Set([
+    "positive",
+    "negative",
+    "neutral",
+    ...UNIT_TONES,
+    "danger",
+    "default",
+    "secondary",
+  ]),
+];
 
 function walk(dir: string, out: string[]): void {
   for (const name of readdirSync(dir)) {
@@ -90,15 +107,19 @@ export function definedRules(src: string, names: string[]): string[] {
   );
 }
 
-/** Lowercase status words; a key that is also a bucket name is no evidence. */
+/**
+ * Lowercase status words; a key that is also a tone name (`success`, `error`)
+ * is no evidence: a tone→tone map (`enum-tone.ts`) is rendering, not a table.
+ */
+const TONE_KEYS = new Set(TONE_NAMES.map((t) => t.toLowerCase()));
 const STATUS_WORDS = new Set(
-  Object.keys(STATUS_TONE).filter((w) => !BUCKETS.includes(w))
+  Object.keys(STATUS_TONE).filter((w) => !TONE_KEYS.has(w))
 );
 
-/** How many lines map a status word to an enum tone bucket. */
+/** How many lines map a status word to a tone name. */
 export function toneTableRows(src: string): number {
   const row = new RegExp(
-    `^\\s*["']?([A-Za-z_ -]+)["']?\\s*:\\s*["'](?:${BUCKETS.join("|")})["']`,
+    `^\\s*["']?([A-Za-z_ -]+)["']?\\s*:\\s*["'](?:${TONE_NAMES.join("|")})["']`,
     "gm"
   );
   let rows = 0;
@@ -141,6 +162,27 @@ describe("one copy of the property-render rules", () => {
         'const T = {\n  won: "positive",\n  lost: "negative",\n  "in progress": "positive",\n  rejected: "negative",\n};'
       )
     ).toBe(4);
+    // A HeroUI chip-colour table and a unit-tone table count too; a
+    // tone→tone map does not.
+    expect(
+      toneTableRows(
+        'const C = {\n  pending: "warning",\n  approval_failed: "warning",\n  approved: "success",\n  rejected: "danger",\n  reverted: "default",\n};'
+      )
+    ).toBe(5);
+    expect(
+      toneTableRows(
+        'const T = {\n  failed: "error",\n  draft: "textMuted",\n};'
+      )
+    ).toBe(2);
+    expect(
+      toneTableRows(
+        'const M = {\n  success: "positive",\n  error: "negative",\n};'
+      )
+    ).toBe(0);
+    // The home table is seen (so its exemption is not vacuous).
+    expect(
+      toneTableRows(readFileSync(join(ROOT, TABLE_HOME), "utf8"))
+    ).toBeGreaterThanOrEqual(TABLE_MIN_ROWS);
     // Non-vacuity: the walk reached both trees.
     expect(files.some((f) => rel(f).startsWith("apps/pod-admin/"))).toBe(true);
     expect(files.length).toBeGreaterThan(500);
@@ -166,8 +208,9 @@ describe("one copy of the property-render rules", () => {
     expect(Object.keys(where).sort()).toEqual(names);
   });
 
-  it("no status→tone-bucket table: the tone comes from resolveStatusTone", () => {
+  it("no status→tone table: the tone comes from resolveStatusTone", () => {
     const tables = files
+      .filter((f) => rel(f) !== TABLE_HOME)
       .map((f) => [rel(f), toneTableRows(readFileSync(f, "utf8"))] as const)
       .filter(([, rows]) => rows >= TABLE_MIN_ROWS);
     expect(

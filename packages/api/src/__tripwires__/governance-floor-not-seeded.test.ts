@@ -141,6 +141,14 @@ describe("tripwire: DEFAULT_AUTO_APPROVE floor is never materialized as governan
         // pattern `@reversible` (a CLASS, never a floor entry): no action list
         // to diff, createdBy = the admin (`user:<id>`).
         "packages/database/src/utils/reversible-default.ts",
+        // `writeActionMode` — a person's run mode for ONE tool action
+        // (`governanceRules.setActionMode`, the tool page and "Approve
+        // always"; refuses an AI's credential and a scoped key). ONE row,
+        // `targetKind: "capability"` naming a verb id: the floor holds
+        // `action` patterns only, so there is nothing to diff (host-seed.ts
+        // diffs only an `action` target for the same reason). createdBy = the
+        // person (`user:<id>`). Classified 2026-11-05 (backend#814).
+        "packages/api/src/services/governance/action-mode.ts",
       ].map((p) => p.split("/").join(sep))
     );
 

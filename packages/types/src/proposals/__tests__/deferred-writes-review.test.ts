@@ -1,13 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFERRED_OUTCOMES,
-  DEFERRED_OUTCOME_TONE,
   deriveDeferredWritesReview,
   describeHeldWritesProposal,
   heldWritesPackName,
   isHeldWritesProposal,
+  type DeferredOutcome,
   type DeferredWrite,
 } from "../deferred-writes.js";
+import { getEnumTone, type EnumTone } from "../../property-render/index.js";
 import {
   buildObjectActionTitle,
   resolveObjectNoun,
@@ -143,12 +144,23 @@ describe("deriveDeferredWritesReview", () => {
     expect(deriveDeferredWritesReview(null)).toBeNull();
   });
 
-  it("every outcome has a tone", () => {
+  it("each outcome's mark comes from the one status tone table", () => {
+    // The tone a review surface paints (pod-admin `statusPillFor`) is
+    // `getEnumTone(outcome)`. There used to be a table of this module's own
+    // that painted `rejected` red where every other surface read it calm.
+    const expected: Record<DeferredOutcome, EnumTone> = {
+      applied: "positive",
+      proposed: "pending",
+      // A door said no: a failure, red.
+      refused: "negative",
+      // A person's decision, never a failure.
+      rejected: "neutral",
+      skipped_by_reviewer: "neutral",
+    };
+    expect(Object.keys(expected).sort()).toEqual([...DEFERRED_OUTCOMES].sort());
     for (const o of DEFERRED_OUTCOMES) {
-      expect(DEFERRED_OUTCOME_TONE[o]).toBeTruthy();
+      expect([o, getEnumTone(o)]).toEqual([o, expected[o]]);
     }
-    expect(DEFERRED_OUTCOME_TONE.applied).toBe("positive");
-    expect(DEFERRED_OUTCOME_TONE.refused).toBe("negative");
   });
 });
 
