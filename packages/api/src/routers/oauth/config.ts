@@ -16,6 +16,10 @@ import {
   isValidScope,
   type ApiKeyScope,
 } from "@synap/database/schema";
+import {
+  GRANT_SUBJECT_CATALOG,
+  assertPermissions,
+} from "@synap-core/types/grants";
 import { resolveFirstPartyClientName } from "@synap-core/types/vocabulary";
 
 import {
@@ -228,6 +232,27 @@ export function resolveFirstPartyClient(
  * client acts on.
  */
 export const OAUTH_SUPPORTED_SCOPES = ["mcp.read", "mcp.write"] as const;
+
+/**
+ * What a pod APP (website client, CIMD) may ask a person for in its metadata
+ * document's `synap_requests`: `<subject>.<action>` for every subject x action
+ * the grant catalog offers a person to give. Derived from
+ * `GRANT_SUBJECT_CATALOG`, the catalog the consent screen draws its ticks from,
+ * and checked by `assertPermissions`, the check `client-metadata.ts` runs on
+ * every request, so this list never drifts from what the server accepts. It is
+ * a SUBSET of the grammar (a valid pattern outside it, `vault.redeem` or `*`,
+ * is still accepted), not a second grammar.
+ *
+ * Deliberately NOT in `scopes_supported`: an app's `scope` parameter is
+ * narrowed to `OAUTH_SUPPORTED_SCOPES` (client-metadata.ts), so advertising
+ * these there would invite a request the server drops. Advertised as the
+ * `synap_app_permissions` extension instead.
+ */
+export const OAUTH_APP_PERMISSIONS: readonly string[] =
+  GRANT_SUBJECT_CATALOG.flatMap((spec) =>
+    spec.actions.map((action) => `${spec.subject}.${action}`)
+  );
+assertPermissions(OAUTH_APP_PERMISSIONS);
 
 /** Granted when a client registers or authorizes without naming any scope. */
 export const OAUTH_DEFAULT_SCOPES = ["mcp.read", "mcp.write"] as const;

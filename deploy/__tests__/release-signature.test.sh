@@ -60,6 +60,19 @@ if [ -n "${STUB_DOCKER_RC:-}" ]; then
   echo "docker: Error response from daemon: Head \"https://ghcr.io/v2/sigstore/cosign/cosign/manifests/sha256:f194\": dial tcp: lookup ghcr.io: no such host." >&2
   exit "$STUB_DOCKER_RC"
 fi
+# The image runs as its nonroot user (uid 65532), neither owner nor group of
+# anything on the host: like it, read the mount only through "other" bits.
+src=""; prev=""; files=()
+for a in "$@"; do
+  [ "$prev" = --mount ] && { src="${a#*src=}"; src="${src%%,*}"; }
+  case "$a" in /release/*) files+=("${a#/release/}") ;; esac
+  prev="$a"
+done
+[ -n "$src" ] && [ -n "$(find "$src" -maxdepth 0 -perm -005 2>/dev/null)" ] \
+  || { echo "Error: open /release/${files[${#files[@]}-1]}: permission denied" >&2; exit 1; }
+for f in "${files[@]}"; do
+  [ -n "$(find "$src/$f" -maxdepth 0 -perm -004 2>/dev/null)" ] || { echo "Error: open /release/$f: permission denied" >&2; exit 1; }
+done
 [ "${STUB_COSIGN_RESULT:-ok}" = ok ] && { echo "Verified OK" >&2; exit 0; }
 echo "Error: none of the expected identities matched what was in the certificate" >&2
 exit 1
@@ -91,7 +104,9 @@ run() {
   rm -f "$TMP/rel/channel-fast/release.json.sigstore.json"
   [ "$with_bundle" = 1 ] && echo '{"bundle":"fake"}' > "$TMP/rel/channel-fast/release.json.sigstore.json"
   cp "$TMP/rel/channel-fast/release.json" "$md/manifest.json"
-  ( cd "$w" && export PATH="$TMP/$dir:$SYS_PATH" STUB_REL="$TMP/rel" STUB_COSIGN_ARGS="$TMP/args" STUB_DOCKER_ARGS="$TMP/dargs" \
+  # STUB_UMASK: a hardened host (umask 077/027): the manifest's dir and every file it fetches are not world-readable
+  [ -n "${STUB_UMASK:-}" ] && chmod 0700 "$md" && chmod 0600 "$md/manifest.json"
+  ( [ -n "${STUB_UMASK:-}" ] && umask "$STUB_UMASK"; cd "$w" && export PATH="$TMP/$dir:$SYS_PATH" STUB_REL="$TMP/rel" STUB_COSIGN_ARGS="$TMP/args" STUB_DOCKER_ARGS="$TMP/dargs" \
       STUB_COSIGN_RESULT="$res" SYNAP_RELEASE_BASE_URL="https://rel.test" STUB_DOCKER_RC="${STUB_DOCKER_RC:-}"
     [ -n "$mode" ] && export SYNAP_RELEASE_VERIFY="$mode"
     set +u -e   # synap's own options (set -e, no -u)
@@ -129,13 +144,18 @@ run dockeronly enforce 1 ok "sub:dir" ; expect "enforce: no cosign, docker → v
 dargs="$(tr '\n' ' ' < "$TMP/dargs" 2>/dev/null)"
 for want in "run --rm" "--read-only" "--cap-drop ALL" "--security-opt no-new-privileges" \
             "--tmpfs /home/nonroot:uid=65532,gid=65532" \
-            "--mount type=bind,src=$TMP/work/sub:dir,dst=/release,readonly" \
+            "--mount type=bind,src=$TMP/work/sub:dir/.cosign." ",dst=/release,readonly" \
             "ghcr.io/sigstore/cosign/cosign:" "verify-blob" "--certificate-identity-regexp" \
             "--certificate-oidc-issuer https://token.actions.githubusercontent.com" \
             "--bundle /release/manifest.json.sigstore.json /release/manifest.json"; do
   grep -qF -- "$want" <<<"$dargs" && ok "docker cosign called with $want" || bad "docker cosign args lack '$want': $dargs"
 done
 grep -qE '(^| )-v ' <<<"$dargs" && bad "docker cosign still uses -v (a ':' in the path breaks it): $dargs" || ok "docker cosign uses --mount, never -v"
+ls -A "$TMP/work/sub:dir" | grep -q '^\.cosign\.' && bad "the cosign staging directory was left behind" || ok "the cosign staging directory is removed after the check"
+# A hardened host (umask 077): the manifest's own directory and files are not
+# readable by the image's nonroot user; the check must still verify (CP ticket 2e10228f).
+STUB_UMASK=077 run dockeronly enforce 1 ok
+expect "enforce: no cosign, docker, umask 077 → still verified (the container reads its own world-readable copy)" 0 "signature verified"
 run dockeronly enforce 1 fail; expect "enforce: no cosign, docker, bad signature → refused" 1 "refused: the signature does not verify"
 # docker could not run the container (daemon down, pull failed: 125/126/127):
 # still fails closed, but it is NOT a bad signature and must not read as one.

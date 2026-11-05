@@ -796,6 +796,19 @@ export interface AgentConversationRef {
 	 */
 	resumeCommand: string;
 }
+/** Harnesses a person can start with a command (the registry's `launch`). */
+export type AgentLaunchHarness = Extract<(typeof AGENT_HARNESSES)[number], {
+	launch: unknown;
+}>["slug"];
+export interface AgentLaunchRef {
+	harness: AgentLaunchHarness;
+	/**
+	 * The shell command that opens a new conversation, on the agent's computer.
+	 * Rendered by the pod from the registry's template and validated values
+	 * only, so it is safe to show and copy as-is.
+	 */
+	command: string;
+}
 declare const MODEL_PROVIDERS: readonly [
 	{
 		readonly label: "Anthropic";
@@ -1086,6 +1099,13 @@ declare const GOAL_CONVERTIBLE_KINDS: readonly [
 	"okr"
 ];
 export type GoalConvertibleKind = (typeof GOAL_CONVERTIBLE_KINDS)[number];
+declare const NEEDS_YOU_PRIORITIES: readonly [
+	"P0",
+	"P1",
+	"P2",
+	"P3"
+];
+export type NeedsYouPriority = (typeof NEEDS_YOU_PRIORITIES)[number];
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
@@ -8591,6 +8611,33 @@ export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
  *   - `ended`     — it had grants and none is live: it may touch NOTHING.
  */
 export type KeyAccess = "ended" | "granted" | "ungranted";
+declare const COMPUTER_BELONGS_TO: readonly [
+	"person",
+	"agent",
+	"shared"
+];
+export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
+/**
+ * Where a run ran, DERIVED at read time from what already exists (a box run's
+ * lease, a session's runner row, an agent's computer, an agent's reach), never
+ * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
+ *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
+ *     an agent the pod runs);
+ *   - `computer`: a computer ran it — `computer` names it;
+ *   - `outside`: an agent outside the pod with no computer of record.
+ * `null` on the run = nothing records where (a box run still queued, a session
+ * nobody worked yet): unknown, never "the pod".
+ */
+export type RunWhereKind = "computer" | "outside" | "pod";
+export interface RunWhere {
+	kind: RunWhereKind;
+	/** Set when `kind` is `computer`. */
+	computer: {
+		belongsTo: ComputerBelongsTo | null;
+		id: string;
+		name: string;
+	} | null;
+}
 declare const CONNECTION_NOTIFY_LEVELS: readonly [
 	"everything",
 	"problems",
@@ -10618,6 +10665,79 @@ export interface PackageDataChange {
 	affected: number | null;
 	/** Never run by an update: an operator step. */
 	destructive: boolean;
+	/**
+	 * What changes, drawn as before → after (finding 4e4b2858). Absent when the
+	 * op has no from → to shape, or its dry run failed: `sentence` then says it.
+	 */
+	preview?: DataChangePreview;
+}
+/**
+ * A name the pod shows for a kind slug, a field key or a stored value: its
+ * label (the profile's display name, the property def's label, the option's
+ * label), else the raw token. `key` is always the raw token.
+ */
+export interface DataChangeLabel {
+	key: string;
+	label: string;
+}
+/** A kind's name, with its plural for counts ("31 posts"). */
+export interface DataChangeKindLabel extends DataChangeLabel {
+	plural: string;
+}
+/** A capped list of record titles (the pod sends at most 25), and how many more. */
+export interface DataChangeSamples {
+	titles: string[];
+	more: number;
+}
+/** One side of a change: the kind, what on it is selected, how many. */
+export interface DataChangeSide {
+	kind: DataChangeKindLabel;
+	/** The status the records sit at, or the field the change reads or writes. */
+	detail: {
+		as: "field" | "status";
+		label: DataChangeLabel;
+	} | null;
+	count: number;
+}
+/**
+ * Records the change looks at and leaves as they are, grouped by why.
+ * `fieldsSet`: they already hold a value under each of `fields` (a post
+ * already dated, in a series and a campaign stays a post).
+ */
+export interface DataChangeKeptGroup {
+	reason: "fieldsSet";
+	fields: DataChangeLabel[];
+	count: number;
+	samples: DataChangeSamples;
+}
+declare const DATA_CHANGE_PREVIEW_KINDS: readonly [
+	"rekind",
+	"renameField",
+	"renameKind",
+	"translateValues"
+];
+export type DataChangePreviewKind = (typeof DATA_CHANGE_PREVIEW_KINDS)[number];
+/**
+ * One data change as before → after. `from.count` records change (the
+ * engine's own dry-run count); `kept.count` more are looked at and left as
+ * they are, so `from.count + kept.count` is everything the change looked at.
+ */
+export interface DataChangePreview {
+	change: DataChangePreviewKind;
+	from: DataChangeSide;
+	to: DataChangeSide;
+	/** Titles of the records that change. */
+	samples: DataChangeSamples;
+	/** translateValues only: each old value, the new one, and how many hold it. */
+	values?: Array<{
+		count: number;
+		from: DataChangeLabel;
+		to: DataChangeLabel;
+	}>;
+	kept: {
+		count: number;
+		groups: DataChangeKeptGroup[];
+	} | null;
 }
 /** One compared field of one installed row. */
 export interface PackageUpdateField {
@@ -13706,6 +13826,9 @@ export type SlotAsk = ({
 	mode: "provide";
 	provide: SlotAskProvide;
 }) & {
+	answerBy?: string;
+	consequence?: string;
+	dedupeKey?: string;
 	/**
 	 * "What I looked at" (trust ladder rung 1, a PREPARED question): at most 8
 	 * objects the agent read before asking. Stored as `{kind, id}` — the agent's
@@ -13714,6 +13837,7 @@ export type SlotAsk = ({
 	 * the viewer's access floor; a ref the viewer cannot see is dropped there.
 	 */
 	lookedAt?: SlotAskLookedAt[];
+	reversible?: boolean;
 	/** How much is at stake: high and medium draw a mark, low draws nothing. */
 	risk?: "high" | "low" | "medium";
 	/**
@@ -13723,7 +13847,17 @@ export type SlotAsk = ({
 	 * waits for the person's tap.
 	 */
 	stakes?: SlotAskStakes;
+	/**
+	 * The TICKET fields (mirror of `ticketFields`, `@synap-core/types/ask`):
+	 * the asker's urgency HINT (it only lowers the pod-derived priority), the
+	 * instant the answer is needed by (ISO-8601 with offset), what the answer
+	 * does and whether that can be undone, and the asker's own dedupe handle
+	 * (same asker + same key = the same open ask, updated).
+	 */
+	urgency?: SlotAskUrgency;
 };
+/** Mirrors `ASK_URGENCIES` (@synap-core/types/ask). */
+export type SlotAskUrgency = "today" | "whenever";
 /** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
 export type SlotAskStakes = "commitment" | "routine";
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
@@ -14175,6 +14309,16 @@ export type BranchTreeNode = {
 	channel: Channel;
 	children: BranchTreeNode[];
 };
+/** The object a conversation belongs to: an `/open/<type>/<id>` address. */
+export interface ChannelLinkedObject {
+	/** The open grammar's kind (`session`, `entity`, `document`, `channel`, …). */
+	type: string;
+	id: string;
+	/** Its name, when the reader may read it; null otherwise. */
+	title: string | null;
+	/** Which rule found it. */
+	via: "context" | "parent" | "session_room";
+}
 export interface SearchResult {
 	id: string;
 	collection: string;
@@ -14308,33 +14452,6 @@ export interface SessionActivityWire {
 	live: SessionActivityLive;
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
-}
-declare const COMPUTER_BELONGS_TO: readonly [
-	"person",
-	"agent",
-	"shared"
-];
-export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
-/**
- * Where a run ran, DERIVED at read time from what already exists (a box run's
- * lease, a session's runner row, an agent's computer, an agent's reach), never
- * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
- *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
- *     an agent the pod runs);
- *   - `computer`: a computer ran it — `computer` names it;
- *   - `outside`: an agent outside the pod with no computer of record.
- * `null` on the run = nothing records where (a box run still queued, a session
- * nobody worked yet): unknown, never "the pod".
- */
-export type RunWhereKind = "computer" | "outside" | "pod";
-export interface RunWhere {
-	kind: RunWhereKind;
-	/** Set when `kind` is `computer`. */
-	computer: {
-		belongsTo: ComputerBelongsTo | null;
-		id: string;
-		name: string;
-	} | null;
 }
 /**
  * Which ledger a run came from.
@@ -15451,11 +15568,13 @@ export interface ProposalExecutorResult {
 	joined?: boolean;
 	approvalRun?: ApprovalRunView;
 }
-declare const PRESENCE_REQUIRED: "PRESENCE_REQUIRED";
-declare const PRESENCE_INVALID: "PRESENCE_INVALID";
-declare const PRESENCE_EXPIRED: "PRESENCE_EXPIRED";
-declare const PRESENCE_USED: "PRESENCE_USED";
-export type PresenceRefusalCode = typeof PRESENCE_REQUIRED | typeof PRESENCE_INVALID | typeof PRESENCE_EXPIRED | typeof PRESENCE_USED;
+declare const PRESENCE_REFUSAL_CODES: readonly [
+	"PRESENCE_REQUIRED",
+	"PRESENCE_INVALID",
+	"PRESENCE_EXPIRED",
+	"PRESENCE_USED"
+];
+export type PresenceRefusalCode = (typeof PRESENCE_REFUSAL_CODES)[number];
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
@@ -20826,6 +20945,33 @@ export interface RailPin {
 	 */
 	title?: string;
 }
+export type YourApp = {
+	/** `space:<workspaceId>`. */
+	key: string;
+	kind: "space";
+	name: string;
+	workspaceId: string;
+} | {
+	/** The rail pin key (`kind:<slug>` or `view:<viewId>`). */
+	key: string;
+	kind: "surface";
+	name: string;
+	profileSlug: string;
+	viewId: string | null;
+} | {
+	documentId: string;
+	/** The rail pin key (`doc:<documentId>`). */
+	key: string;
+	kind: "document";
+	name: string;
+} | {
+	entityId: string;
+	/** `website:<entityId>`. */
+	key: string;
+	kind: "website";
+	name: string;
+	url: string;
+};
 export type PublishResult = {
 	proposalId: string;
 	status: "proposed";
@@ -21237,6 +21383,77 @@ declare const ASSIGNMENT_TARGETS: readonly [
 	"workspace"
 ];
 export type AssignmentTarget = (typeof ASSIGNMENT_TARGETS)[number];
+/**
+ * Why a NAMED agent cannot take the work:
+ *   wrong_reach  the pod cannot hand it this work that way (an external agent
+ *                named for an IS turn, a pull agent named for a dispatch run);
+ *   not_owned    not the person's agent (dispatch / pod) or does not act for
+ *                them (pull);
+ *   not_member   the pool is a room and the agent is not in it;
+ *   paused       a person paused it.
+ */
+export type RouteRefusal = "not_member" | "not_owned" | "paused" | "wrong_reach";
+export interface HandoffComputer {
+	/** The computer's own principal; `null` when it is only a key label. */
+	agentUserId: string | null;
+	name: string;
+	/**
+	 * Whose computer it is (`users.computer_belongs_to`, 0388): `person`,
+	 * `agent` or `shared`. `null` when the computer is only a key label (no
+	 * principal holds the fact).
+	 */
+	belongsTo: ComputerBelongsTo | null;
+}
+/** What a hand-off from the calling agent would do right now. */
+export type HandOffPreview = "asks_you" | "blocked" | "direct";
+export interface HandoffAgent {
+	agentUserId: string;
+	name: string | null;
+	agentType: string | null;
+	computer: HandoffComputer | null;
+	reach: AgentReach;
+	/** What `route()` admits when a hand-off NAMES this agent for you. */
+	canTakeYourWork: boolean;
+	/** Why not, in `route()`'s words; `null` when it can. */
+	whyNot: RouteRefusal | null;
+	/**
+	 * pull: it called the pod within `PULL_LIVE_WINDOW_MS`; dispatch: its
+	 * binding resolves without an error; pod: the pod runs it itself.
+	 */
+	live: boolean;
+	paused: boolean;
+	lastSeenAt: string | null;
+	/**
+	 * The newest call a process RUNNING this agent made (`X-Synap-Runner`,
+	 * 0385); `null` = no runner ever said so. `live` does not read it yet.
+	 */
+	servedAt: string | null;
+	/**
+	 * A pull agent on a computer that nothing runs now: `true` = a runner served
+	 * it, but not within `PULL_LIVE_WINDOW_MS`; `false` = served within it;
+	 * `null` = not measured (no runner ever stamped any of its keys) or not
+	 * applicable (a dispatch or pod agent, or a pull agent on no computer):
+	 * `false` is never said of an agent nobody measured. A presence fact, never
+	 * a route refusal.
+	 */
+	nobodyRuns: boolean | null;
+	/**
+	 * The command that opens this agent on its `computer`, rendered by the pod
+	 * from its harness's launch template (`resolveAgentLaunch`); `null` when
+	 * its harness has none. Never a command an agent wrote.
+	 */
+	open: AgentLaunchRef | null;
+	/** direct = lands on the roster now; asks_you = the person approves first. */
+	handOff: HandOffPreview;
+	/** Why it asks or is blocked (the resolver's or the route's words). */
+	handOffReason: string | null;
+}
+export interface HandoffRoster {
+	agents: HandoffAgent[];
+	computers: Array<HandoffComputer & {
+		agents: number;
+	}>;
+}
 export interface SetAgentJobResult {
 	agentUserId: string;
 	role: string | null;
@@ -24777,6 +24994,14 @@ export interface Signal {
 	 */
 	needsYouClass?: NeedsYouClass;
 	/**
+	 * THE priority P0-P3 (`needsYouPriority`, `@synap-core/types/needs-you`),
+	 * DERIVED by the pod from the rule's class and, on an `owed-slot`, its ask's
+	 * `answerBy` (due within the hour = P0) and `urgency` (`whenever` only
+	 * lowers it). An agent never nominates it. On an `owed-slot` and on a
+	 * classified `proposal-cluster`; absent elsewhere.
+	 */
+	priority?: NeedsYouPriority;
+	/**
 	 * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
 	 * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
 	 */
@@ -25827,6 +26052,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revokedKeyCount: number;
 			};
 		}>;
+		roster: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: HandoffRoster;
+		}>;
 		setAssignment: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId: string;
@@ -26604,6 +26834,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				belongsTo?: "agent" | "person" | "shared" | null | undefined;
 				computerName?: string | null | undefined;
 				decision: "approve" | "deny";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 				reuseComputerId?: string | null | undefined;
 				userCode: string;
@@ -26629,6 +26881,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					templateId?: string | null | undefined;
 					uses: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[];
 				} | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 			};
 			meta: object;
@@ -26649,6 +26923,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
 				maxAge?: string | number | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
@@ -26965,6 +27261,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		approveRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 			};
 			meta: object;
@@ -29280,6 +29598,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setToolEnabled: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				enabled: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				skillId: string;
 			};
 			meta: object;
@@ -31488,6 +31828,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} & {
 					objectName: string | null;
 				})[] | undefined;
+				linkedObject: ChannelLinkedObject | null;
 			};
 		}>;
 		getChannelContext: import("@trpc/server").TRPCQueryProcedure<{
@@ -32767,7 +33108,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		set: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				kind: "account" | "agent" | "app" | "channel" | "model" | "tool" | "webhook";
+				kind: "account" | "agent" | "app" | "channel" | "machine" | "model" | "tool" | "webhook";
 				notify?: "everything" | "nothing" | "problems" | undefined;
 				pinned?: boolean | undefined;
 			};
@@ -35700,6 +36041,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		blockOutput: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				ask?: {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -35711,8 +36055,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						recommended?: boolean | undefined;
 					} | undefined;
 					prompt?: string | undefined;
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 					yes?: {
 						description?: string | undefined;
 						label?: string | undefined;
@@ -35720,6 +36066,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 				} | {
 					allowOther?: boolean | undefined;
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -35744,9 +36093,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					}[];
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					form: {
 						fields: {
 							constraints?: {
@@ -35769,19 +36123,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "form";
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "act";
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
 					steps?: string[] | undefined;
+					urgency?: "today" | "whenever" | undefined;
 					url?: string | undefined;
 				} | {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -35797,8 +36161,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "secret";
 						name: string;
 					};
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | null | undefined;
 				blockedReason: "capability" | "credential" | "decision" | "permission" | "physical" | "policy";
 				expectedLabel: string;
@@ -36160,6 +36526,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					answerPickedUpAt?: string | undefined;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -36171,8 +36540,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -36180,6 +36551,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -36204,9 +36578,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -36229,19 +36608,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -36257,8 +36646,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					askCause?: {
 						at?: string | undefined;
@@ -37294,6 +37685,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					answerPickedUpAt?: string | undefined;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37305,8 +37699,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -37314,6 +37710,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37338,9 +37737,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -37363,19 +37767,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37391,8 +37805,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					askCause?: {
 						at?: string | undefined;
@@ -37535,6 +37951,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						icon?: string | undefined;
 						ask?: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37546,8 +37965,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 							} | undefined;
 							prompt?: string | undefined;
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -37555,6 +37976,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37579,9 +38003,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							form: {
 								fields: {
 									constraints?: {
@@ -37604,19 +38033,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37632,8 +38071,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -40466,6 +40907,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		approveMcp: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				serviceId: string;
 			};
 			meta: object;
@@ -41488,6 +41951,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					id: string;
 					keyFingerprint: string;
+					presence?: {
+						challengeId: string;
+						keyId: string;
+						kind: "device_key";
+						signature: string;
+					} | {
+						challengeId: string;
+						credential: {
+							authenticatorAttachment?: string | null | undefined;
+							clientExtensionResults?: Record<string, unknown> | undefined;
+							id: string;
+							rawId: string;
+							response: {
+								authenticatorData: string;
+								clientDataJSON: string;
+								signature: string;
+								userHandle?: string | null | undefined;
+							};
+							type: "public-key";
+						};
+						kind: "passkey";
+					} | undefined;
 				};
 				meta: object;
 				output: {
@@ -41702,6 +42187,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -43635,6 +44142,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43646,8 +44156,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -43655,6 +44167,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43679,9 +44194,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -43704,19 +44224,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43732,8 +44262,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -43776,6 +44308,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						icon?: string | undefined;
 						ask?: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43787,8 +44322,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 							} | undefined;
 							prompt?: string | undefined;
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -43796,6 +44333,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43820,9 +44360,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							form: {
 								fields: {
 									constraints?: {
@@ -43845,19 +44390,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43873,8 +44428,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -44566,6 +45123,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44577,8 +45137,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -44586,6 +45148,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44610,9 +45175,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -44635,19 +45205,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44663,8 +45243,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -44699,6 +45281,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						icon?: string | undefined;
 						ask?: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44710,8 +45295,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 							} | undefined;
 							prompt?: string | undefined;
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -44719,6 +45306,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44743,9 +45333,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							form: {
 								fields: {
 									constraints?: {
@@ -44768,19 +45363,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44796,8 +45401,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -45340,6 +45947,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			};
 		}>;
+		yourApps: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				apps: YourApp[];
+			};
+		}>;
 	}>>;
 	presence: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -45376,6 +45990,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			} | {
 				pendingKeyId: string;
+			} | {
+				request: {
+					id: string;
+					kind: "app_connection_request" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "skill" | "tool" | "trusted_issuer";
+				};
+			} | {
+				oauthConsent: {
+					clientId: string;
+					codeChallenge?: string | null | undefined;
+					redirectUri: string;
+					state?: string | null | undefined;
+				};
 			};
 			meta: object;
 			output: {
@@ -45398,6 +46024,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userVerification: "required";
 				} | null;
 				proposalId: string;
+				subject: string;
 			};
 		}>;
 		devices: import("@trpc/server").TRPCBuiltRouter<{
@@ -50291,6 +50918,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -52335,6 +52984,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -52772,6 +53443,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				expectedStatus?: "approved" | "pending" | "rejected" | "revoked" | undefined;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -54747,6 +55440,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						expectedOutputs?: {
 							[x: string]: unknown;
 							ask?: {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54758,8 +55454,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									recommended?: boolean | undefined;
 								} | undefined;
 								prompt?: string | undefined;
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 								yes?: {
 									description?: string | undefined;
 									label?: string | undefined;
@@ -54767,6 +55465,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							} | {
 								allowOther?: boolean | undefined;
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54791,9 +55492,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								form: {
 									fields: {
 										constraints?: {
@@ -54816,19 +55522,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "form";
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "act";
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
 								steps?: string[] | undefined;
+								urgency?: "today" | "whenever" | undefined;
 								url?: string | undefined;
 							} | {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54844,8 +55560,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "secret";
 									name: string;
 								};
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
@@ -54889,6 +55607,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								label: string;
 								icon?: string | undefined;
 								ask?: {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54900,8 +55621,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										recommended?: boolean | undefined;
 									} | undefined;
 									prompt?: string | undefined;
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 									yes?: {
 										description?: string | undefined;
 										label?: string | undefined;
@@ -54909,6 +55632,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									} | undefined;
 								} | {
 									allowOther?: boolean | undefined;
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54933,9 +55659,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									form: {
 										fields: {
 											constraints?: {
@@ -54958,19 +55689,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "form";
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "act";
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
 									steps?: string[] | undefined;
+									urgency?: "today" | "whenever" | undefined;
 									url?: string | undefined;
 								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54986,8 +55727,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "secret";
 										name: string;
 									};
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | null | undefined;
 								relationToSubject?: string | undefined;
 								optional?: boolean | undefined;

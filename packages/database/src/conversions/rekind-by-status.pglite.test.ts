@@ -339,8 +339,10 @@ describe("content-os.post-at-idea-into-idea (rekindByStatus)", () => {
   it("is deferred at boot and says what it does in one sentence", () => {
     const op = CONVERSION_MANIFEST.ops.find((o) => o.opKey === KEY);
     expect(op?.deferAtBoot).toBe(true);
+    // With no labels read (the slug words): the labels' version, and the
+    // preview, are data-change-preview.pglite.test.ts.
     expect(describeConversionOp(op!)).toBe(
-      'Turn each "post" at "Idea" into a "idea" at "New", keeping it and its links; one with a "publish-date", a "post-series", a "post-campaign" stays a "post".'
+      "post at Idea become idea at New, keeping each record, its content, links and history. One with a publish-date, post-series or post-campaign already set stays a post."
     );
   });
 });

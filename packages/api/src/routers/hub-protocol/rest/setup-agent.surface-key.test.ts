@@ -299,6 +299,30 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
     );
   });
 
+  it("W3: a request as the person names the computer from ITS key, never from the body", async () => {
+    callerKey(true);
+    // The computer's own key record, as `synap init` enrolled it.
+    validateApiKey.mockResolvedValue({
+      id: "caller-key",
+      userId: AGENT,
+      linkedUserId: HUMAN,
+      isActive: true,
+      scope: ["hub-protocol.read", "hub-protocol.write"],
+      instanceId: "inst-1",
+      instanceLabel: "Antoine's MacBook",
+    });
+    const res = await connect({
+      asPerson: true,
+      instanceLabel: "Someone else's PC",
+    });
+    expect(res.status).toBe(200);
+    expect(fileAgentConnectProposal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asPerson: { instanceLabel: "Antoine's MacBook" },
+      })
+    );
+  });
+
   it.each(["agent", "app"] as const)(
     "Q-D1: an AI's own key (%s) connects no other AI — 403, nothing provisioned",
     async (kind) => {
@@ -309,4 +333,26 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
       expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
     }
   );
+});
+
+describe("POST /setup/agent — the Synap account and OAuth instances are not this door's (review bf96d410, lane B)", () => {
+  it.each(["mcp:cp-user:pod-1:chatgpt", "oauth:client-a:user-1", "MCP:x"])(
+    "instanceId %s → 400, nothing provisioned",
+    async (instanceId) => {
+      callerKey(false);
+      const res = await connect({ instanceId });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain("instanceId");
+      expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+    }
+  );
+
+  it("a computer's own instance id still connects (control)", async () => {
+    callerKey(false);
+    const res = await connect({ instanceId: "devbox-3f9a" });
+    expect(res.status).toBe(200);
+    expect(provisionSurfaceAgentKey).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: "devbox-3f9a" })
+    );
+  });
 });

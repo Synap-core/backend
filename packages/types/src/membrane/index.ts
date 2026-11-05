@@ -2,9 +2,10 @@
  * `@synap-core/types/membrane` — the ONE connection state + action rule for
  * everything plugged into the pod that a person meets on Connected.
  *
- * Seven kinds — app, agent, account, channel, tool, model, webhook — used to
- * derive their standing seven different ways (app-view, agent marks, connector
- * card status, tool / channel / provider marks, three local key-status copies).
+ * Eight kinds — app, agent, account, channel, tool, model, webhook, machine
+ * (a computer) — used to derive their standing their own ways (app-view, agent
+ * marks, connector card status, tool / channel / provider marks, three local
+ * key-status copies, a computers section drawing its own rows).
  * Each kind now maps its OWN wire shape onto nine shared states, and each state
  * carries exactly one primary action, so every surface (desktop, phone, Pod
  * admin) tells the reader the same next step.
@@ -24,6 +25,11 @@ import {
 } from "../agents/index.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
 import {
+  platformLabel,
+  seenLine,
+  type ComputerKeyState,
+} from "../computers/index.js";
+import {
   CONNECTION_NOTIFY_LABELS,
   type CONNECTION_STATE_LABELS,
   resolveActionLabel,
@@ -40,6 +46,7 @@ export const CONNECTION_KINDS = [
   "tool",
   "model",
   "webhook",
+  "machine",
 ] as const;
 export type ConnectionKind = (typeof CONNECTION_KINDS)[number];
 
@@ -191,8 +198,8 @@ export function resolveConnectionAction(
 
 /**
  * The danger verb that ends a WORKING connection, by kind: keys are revoked
- * (app), sign-ins are disconnected (agent, account, channel), configuration
- * is removed (tool, model, webhook).
+ * (app, machine), sign-ins are disconnected (agent, account, channel),
+ * configuration is removed (tool, model, webhook).
  */
 export const CONNECTION_END_ACTION = {
   app: "revoke",
@@ -202,6 +209,7 @@ export const CONNECTION_END_ACTION = {
   tool: "remove",
   model: "remove",
   webhook: "remove",
+  machine: "revoke",
 } as const satisfies Record<ConnectionKind, ConnectionAction>;
 
 /** What ending a connection DOES: the line beside its danger action, and the sentence inside its confirm. */
@@ -967,4 +975,65 @@ export function resolveWebhookConnectionState(
   if (!w.active) return "off";
   if (w.lastDeliveryStatus === "failed") return "failing";
   return isQuiet(w.lastTriggeredAt, now) ? "quiet" : "ready";
+}
+
+// ── Machine (a computer) ────────────────────────────────────────────────────
+
+/**
+ * What the computer rule reads — any `machines.list` row (`MachineView`,
+ * `@synap/api` `services/machine-roster.ts`) satisfies it. A computer is the
+ * `machine` agent user (computers plan v2 §0.1); its presence is its own
+ * key's last use ("last seen", plan §3 S3), never whether an agent on it is
+ * running.
+ */
+export interface MachineConnectionLike {
+  /** The computer's newest key (the live one when there is one); null = none. */
+  key: { state: ComputerKeyState } | null;
+  /** Newest `last_used_at` over the computer's own keys; null = never seen. */
+  lastSeenAt?: string | Date | null;
+  platform?: string | null;
+}
+
+/**
+ * Order: revoked (its key revoked, or it holds none: it can no longer reach
+ * the pod) → needs sign-in (its key expired: "Key expired", reconnect ON the
+ * computer) → setting up (a live key, never seen: approved, not called yet) →
+ * quiet (not seen in the window) → ready. An EXPIRING key is ready: the
+ * computer renews it on its own at `synap login`, so it is not the person's
+ * to act on (the key read, `computerKeyRead`, says how long it has).
+ */
+export function resolveMachineConnectionState(
+  m: MachineConnectionLike,
+  now: number = Date.now()
+): ConnectionState {
+  const key = m.key?.state ?? "none";
+  if (key === "revoked" || key === "none") return "revoked";
+  if (key === "expired") return "needs_signin";
+  if (ms(m.lastSeenAt) === null) return "setting_up";
+  return isQuiet(m.lastSeenAt, now) ? "quiet" : "ready";
+}
+
+export function resolveMachineConnection(
+  m: MachineConnectionLike,
+  opts: ConnectionViewOptions & { now?: number } = {}
+): ConnectionView {
+  return connectionView(
+    "machine",
+    resolveMachineConnectionState(m, opts.now),
+    opts
+  );
+}
+
+/**
+ * A computer's ONE facts line on its row: "macOS · Seen 3 min ago". The words
+ * are the computer rule's (`platformLabel`, `seenLine`, `../computers`); the
+ * surface formats the time in its own clock words (`relative`).
+ */
+export function machineConnectionLine(
+  m: Pick<MachineConnectionLike, "lastSeenAt" | "platform">,
+  relative: (at: Date | string) => string
+): string {
+  const os = platformLabel(m.platform);
+  const seen = seenLine(m.lastSeenAt, relative);
+  return os ? `${os} · ${seen}` : seen;
 }

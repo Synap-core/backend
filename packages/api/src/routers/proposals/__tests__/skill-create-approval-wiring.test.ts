@@ -370,6 +370,9 @@ describe("ONE APPROVAL: a person approving the create turns the skill on (decisi
         skillId: "skill-1",
         approved: true,
         agentUserId: null,
+        // skill/create is a sensitive approval (W3): its proof was checked
+        // by applyProposalApproval, so the enable door does not ask again.
+        presenceChecked: "applyProposalApproval",
       },
     ]);
     // Through the door, never a raw `approved` write of its own.

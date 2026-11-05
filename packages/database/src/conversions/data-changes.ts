@@ -35,6 +35,16 @@ import {
   type RunSummary,
 } from "./engine.js";
 import { selectManifestOps } from "./select.js";
+import type { DataChangePreview } from "@synap-core/types/package-updates";
+import {
+  SLUG_WORDS,
+  buildDataChangePreview,
+  joinDescription,
+  opTerms,
+  previewLines,
+  readDataChangeWords,
+  type DataChangeWords,
+} from "./data-change-preview.js";
 
 // ─── Which profiles an op touches ───────────────────────────────────────────
 
@@ -196,67 +206,84 @@ export function affectedFromCounts(counts: OpCounts): number {
 
 // ─── Plain-words description ────────────────────────────────────────────────
 
-/** One sentence a person reads before agreeing. Exhaustive over op types. */
-export function describeConversionOp(op: ConversionOp): string {
+/**
+ * One sentence a person reads before agreeing. Exhaustive over op types. Told
+ * in `w`'s words: labels when the caller read them (`readDataChangeWords`),
+ * raw slugs by default.
+ */
+export function describeConversionOp(
+  op: ConversionOp,
+  w: DataChangeWords = SLUG_WORDS
+): string {
+  const kind = (slug: string) => w.kind(slug).label;
+  const field = (slug: string, key: string) => w.field(slug, key).label;
   switch (op.op) {
     case "declareKind":
-      return `Make sure "${op.slug}" stays a kind of thing.`;
+      return `Make sure "${kind(op.slug)}" stays a kind of thing.`;
     case "seedKindProfile":
-      return `Add the kind "${op.slug}".`;
+      return `Add the kind "${kind(op.slug)}".`;
     case "convertToFacet":
-      return `Turn every "${op.slug}" into a "${op.targetKindSlug}" that wears the "${op.slug}" role.`;
+      return `Turn every "${kind(op.slug)}" into a "${kind(op.targetKindSlug)}" that wears the "${kind(op.slug)}" role.`;
     case "convertToKind":
-      return `Turn every "${op.fromKindSlug}" wearing the "${op.slug}" role back into a "${op.slug}".`;
+      return `Turn every "${kind(op.fromKindSlug)}" wearing the "${kind(op.slug)}" role back into a "${kind(op.slug)}".`;
     case "mergeInto":
-      return `Merge ${op.fromSlugs.map((s) => `"${s}"`).join(", ")} into "${op.intoSlug}".`;
+      return `Merge ${op.fromSlugs.map((s) => `"${kind(s)}"`).join(", ")} into "${kind(op.intoSlug)}".`;
     case "keep":
     case "extractNonEntity":
-      return `Record a decision about "${op.slug}" (no data changes).`;
+      return `Record a decision about "${kind(op.slug)}" (no data changes).`;
     case "dedupeProfileRows":
-      return `Merge the duplicate "${op.slug}" kinds into one.`;
+      return `Merge the duplicate "${kind(op.slug)}" kinds into one.`;
     case "dedupeRelationDefs":
       return op.slug
         ? `Merge the duplicate copies of the "${op.slug}" link into one.`
         : "Merge duplicate copies of links into one.";
     case "reconcileEntityScope":
       return op.slug
-        ? `Make every "${op.slug}" visible in all spaces, as its kind says.`
+        ? `Make every "${kind(op.slug)}" visible in all spaces, as its kind says.`
         : "Make things whose kind is pod-wide visible in all spaces.";
     case "reconcileFacetScope":
       return op.slug
-        ? `Make the "${op.slug}" role visible in all spaces.`
+        ? `Make the "${kind(op.slug)}" role visible in all spaces.`
         : "Make pod-wide roles visible in all spaces.";
     case "remapPropertyValues":
       // In place (sourceKey === targetKey) nothing is moved or removed: only
       // the old values are translated.
       return op.sourceKey === op.targetKey
-        ? `Translate the old "${op.sourceKey}" values of each "${op.slug}" to the new ones.`
-        : `Move each "${op.slug}"'s "${op.sourceKey}" onto "${op.targetKey}", translating the values, then remove "${op.sourceKey}".`;
+        ? `Translate the old "${field(op.slug, op.sourceKey)}" values of each "${kind(op.slug)}" to the new ones.`
+        : `Move each "${kind(op.slug)}"'s "${field(op.slug, op.sourceKey)}" onto "${field(op.slug, op.targetKey)}", translating the values, then remove "${field(op.slug, op.sourceKey)}".`;
     case "moveBasePropertyToFacet":
-      return `Move each "${op.slug}"'s "${op.sourceKey}" onto its "${op.facetSlug}" role.`;
+      return `Move each "${kind(op.slug)}"'s "${field(op.slug, op.sourceKey)}" onto its "${kind(op.facetSlug)}" role.`;
     case "renamePropertyKey":
-      return `Rename the "${op.sourceKey}" field of each "${op.slug}" to "${op.targetKey}".`;
+      return `Rename the "${field(op.slug, op.sourceKey)}" field of each "${kind(op.slug)}" to "${field(op.slug, op.targetKey)}".`;
     case "remapFacetPropertyValues":
       return op.sourceKey === op.targetKey
-        ? `Translate the old "${op.sourceKey}" values of the "${op.slug}" role to the new ones.`
-        : `Move the "${op.slug}" role's "${op.sourceKey}" onto "${op.targetKey}", translating the values.`;
+        ? `Translate the old "${field(op.slug, op.sourceKey)}" values of the "${kind(op.slug)}" role to the new ones.`
+        : `Move the "${kind(op.slug)}" role's "${field(op.slug, op.sourceKey)}" onto "${field(op.slug, op.targetKey)}", translating the values.`;
     case "foldRoleIntoStatus":
-      return `Retire the "${op.slug}" role: record it as a status on ${op.targets
-        .map((t) => `"${t.role}"`)
+      return `Retire the "${kind(op.slug)}" role: record it as a status on ${op.targets
+        .map((t) => `"${kind(t.role)}"`)
         .join(" or ")} instead.`;
     case "renameProfile":
-      return `Rename the kind "${op.slug}" to "${op.toSlug}".`;
+      return `Rename the kind "${kind(op.slug)}" to "${op.displayName ?? kind(op.toSlug)}".`;
     case "projectLifecycleColumns":
       return "Fill in each thing's lifecycle status from the value it already holds.";
     case "foldBookingDealIntoLead":
-      return `Turn each untouched booked-call "${op.slug}" into a "${op.lead.role}" at "${op.lead.status}" on its person, linking the call; edited ones are kept.`;
+      return `Turn each untouched booked-call "${kind(op.slug)}" into a "${kind(op.lead.role)}" at "${op.lead.status}" on its person, linking the call; edited ones are kept.`;
     case "rekindByStatus": {
-      const skip = op.skipWhenSet ?? [];
+      const from = w.kind(op.slug);
+      const to = w.kind(op.toSlug);
+      const at = w.value(op.slug, op.status.key, op.status.value).label;
+      const starts = w.value(
+        op.toSlug,
+        op.targetStatus.key,
+        op.targetStatus.value
+      ).label;
+      const skip = (op.skipWhenSet ?? []).map((k) => field(op.slug, k));
       return (
-        `Turn each "${op.slug}" at "${op.status.value}" into a "${op.toSlug}" at "${op.targetStatus.value}", keeping it and its links` +
+        `${from.plural} at ${at} become ${to.plural} at ${starts}, keeping each record, its content, links and history.` +
         (skip.length > 0
-          ? `; one with ${skip.map((k) => `a "${k}"`).join(", ")} stays a "${op.slug}".`
-          : ".")
+          ? ` One with a ${orList(skip)} already set stays a ${from.label}.`
+          : "")
       );
     }
     default: {
@@ -266,14 +293,26 @@ export function describeConversionOp(op: ConversionOp): string {
   }
 }
 
+/** "A, B or C". */
+function orList(words: readonly string[]): string {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
+}
+
 // ─── Pending changes for a template ─────────────────────────────────────────
 
 /** One pending data change, as `synap templates update` shows it. */
 export interface TemplateDataChange {
   /** The manifest op key — what `acceptDataChanges` names. */
   opKey: string;
-  /** One plain sentence. */
+  /**
+   * What it does, in plain words with labels: short lines (the first says the
+   * change, the last what moves and how many), else one sentence when there
+   * is no preview. `synap market update` prints it as it is.
+   */
   description: string;
+  /** The change as before → after, when the op has that shape and was measured. */
+  preview?: DataChangePreview;
   /**
    * How many things the op would change, pod-wide (`affectedFromCounts` of the
    * engine's own dry run). `null` when the dry run FAILED — unmeasured, never
@@ -323,7 +362,9 @@ function operatorCommandFor(opKey: string): string {
 export async function pendingTemplateDataChanges(
   sql: Sql,
   profileSlugs: Iterable<string>,
-  manifest: ConversionManifest = CONVERSION_MANIFEST
+  manifest: ConversionManifest = CONVERSION_MANIFEST,
+  /** Test seam: how labels are read (a failure answers slugs, never throws). */
+  readWords: typeof readDataChangeWords = readDataChangeWords
 ): Promise<TemplateDataChange[]> {
   const wanted = new Set(profileSlugs);
   if (wanted.size === 0) return [];
@@ -363,9 +404,17 @@ export async function pendingTemplateDataChanges(
     const counts = failed ? {} : result.counts;
     const affected = failed ? null : affectedFromCounts(counts);
     if (affected === 0) continue;
+    const words = await readWordsOrSlugs(readWords, sql, op);
+    const preview =
+      affected === null
+        ? undefined
+        : await buildDataChangePreview(sql, op, counts, affected, words);
     changes.push({
       opKey: op.opKey,
-      description: describeConversionOp(op),
+      description: preview
+        ? joinDescription(previewLines(preview))
+        : describeConversionOp(op, words),
+      ...(preview ? { preview } : {}),
       affected,
       destructive,
       counts,
@@ -376,6 +425,24 @@ export async function pendingTemplateDataChanges(
     });
   }
   return changes;
+}
+
+/** The op's words; a reader that throws answers slugs (the count still shows). */
+async function readWordsOrSlugs(
+  readWords: typeof readDataChangeWords,
+  sql: Sql,
+  op: ConversionOp
+): Promise<DataChangeWords> {
+  try {
+    return await readWords(sql, opTerms(op));
+  } catch (err) {
+    console.warn(
+      `[data-changes] could not read the words of ${op.opKey}; showing slugs: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return SLUG_WORDS;
+  }
 }
 
 // ─── Consent ────────────────────────────────────────────────────────────────

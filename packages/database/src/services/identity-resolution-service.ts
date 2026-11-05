@@ -60,6 +60,11 @@ export type StrongSignalType =
   // ONLY (see URL_IDENTITY_KINDS). A namespace of its own, never `website`: a
   // bookmark of acme.com must not resolve to the company Acme.
   | "url"
+  // A page address AT a publish instant — `properties.url` + `publishedAt` on
+  // an observation kind (PUBLISHED_URL_IDENTITY_KINDS: signal_item). One
+  // changelog URL carries many releases, so the address alone is not the
+  // item; value `<url> <publishedAt>`, normalized by normalizeIdentitySignal.
+  | "url_at"
   // Opaque provider-scoped id (`${provider}:${externalId}`). Registered by the
   // external-link idempotency door; read by EntityUpsertService's strong path.
   // Not derived from any property key — case must be PRESERVED (see normalize).
@@ -177,6 +182,25 @@ function legacyUrlSignalValue(value: string): string {
   return value.trim().toLowerCase().replace(/\/$/, "");
 }
 
+/** The two halves of a `url_at` value (`<url> <publishedAt>`). */
+function splitUrlAt(value: string): { url: string; publishedAt: string } {
+  const v = value.trim();
+  const at = v.indexOf(" ");
+  return at < 0
+    ? { url: v, publishedAt: "" }
+    : { url: v.slice(0, at), publishedAt: v.slice(at + 1).trim() };
+}
+
+/**
+ * A publish date as identity: the instant (ISO, UTC) when it parses, so
+ * `2026-11-01T10:00:00Z` and `2026-11-01T11:00:00+01:00` are one item; the
+ * trimmed text otherwise (never rejected, never guessed).
+ */
+function publishedInstant(value: string): string {
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? value.trim() : new Date(ms).toISOString();
+}
+
 /**
  * Normalize a strong signal value to its canonical stored form — the SINGLE
  * door for signal normalization, so a lookup and a write agree byte-for-byte.
@@ -205,6 +229,13 @@ export function normalizeIdentitySignal(type: string, value: string): string {
     case "url":
       // A page address: path and query case is significant (`?v=dQw4…`).
       return canonicalizeUrl(v);
+
+    case "url_at": {
+      // `<url> <publishedAt>`: a URL holds no raw space, so the first space
+      // splits them. Each half takes its own canonical form.
+      const { url, publishedAt } = splitUrlAt(v);
+      return `${canonicalizeUrl(url)} ${publishedInstant(publishedAt)}`;
+    }
 
     case "github_username":
     case "twitter_handle":
@@ -242,6 +273,9 @@ export const IDENTITY_SIGNAL_PROPERTY_KEYS: Record<StrongSignalType, string[]> =
     // Consequence: an entity UPDATE that changes a bookmark's url does not
     // re-register (mutate.ts gates on this map). Creates always register.
     url: [],
+    // EMPTY for the same reason: `url` + `publishedAt` are identity only on a
+    // PUBLISHED_URL_IDENTITY_KINDS entity.
+    url_at: [],
     // A provider's own id for the person, stored on a property and registered
     // as `<provider>:<id>` (PROVIDER_ID_PROPERTY_KEYS): writing one re-registers
     // the atom. Any other external_id is derived from (provider, externalId)
@@ -267,9 +301,10 @@ export function providerExternalId(provider: string, id: string): string {
 }
 
 /**
- * Kinds whose `properties.url` IS the subject's identity: the system capture
- * hierarchy `bookmark` → `website` / `article` / `signal_item` (every profile
- * seeded with `parentSlug: "bookmark"` in `ensure-system-profiles.ts`; the
+ * Kinds whose `properties.url` IS the subject's identity: the PAGE kinds of the
+ * system capture hierarchy, `bookmark` → `website` / `article` (every profile
+ * seeded with `parentSlug: "bookmark"` in `ensure-system-profiles.ts`, minus
+ * the observation kinds of PUBLISHED_URL_IDENTITY_KINDS; the
  * `url-identity-kinds` test derives that set from the seeder and fails if the
  * two drift). A person's or a task's `url` is just a link the subject mentions,
  * so it is NOT an identity atom there.
@@ -281,6 +316,19 @@ export const URL_IDENTITY_KINDS: ReadonlySet<string> = new Set([
   "bookmark",
   "website",
   "article",
+]);
+
+/**
+ * Kinds whose subject is a page AT a publish instant — an OBSERVATION of
+ * external content, not the page: identity is `url` + `publishedAt` (the
+ * `url_at` atom), as an event's is title + start (`event-identity.ts`). One
+ * changelog URL carries many releases; by url alone, each new release merged
+ * onto the oldest item and overwrote its url, publishedAt and topics while its
+ * title and body stayed old (CP ticket 7f7f9264). Without a `publishedAt` such
+ * an item has no strong identity (the same-name path still runs). Never in
+ * URL_IDENTITY_KINDS: a bookmark of a page is not a feed item seen on it.
+ */
+export const PUBLISHED_URL_IDENTITY_KINDS: ReadonlySet<string> = new Set([
   "signal_item",
 ]);
 
@@ -338,6 +386,21 @@ export function extractIdentitySignals(
     /^https?:\/\//i.test(url.trim())
   ) {
     signals.push({ type: "url", value: url });
+  }
+
+  const publishedAt = properties.publishedAt;
+  if (
+    opts?.kind &&
+    PUBLISHED_URL_IDENTITY_KINDS.has(opts.kind) &&
+    typeof url === "string" &&
+    /^https?:\/\//i.test(url.trim()) &&
+    typeof publishedAt === "string" &&
+    publishedAt.trim().length > 0
+  ) {
+    signals.push({
+      type: "url_at",
+      value: `${url.trim()} ${publishedAt.trim()}`,
+    });
   }
 
   const twitter = properties.twitterHandle ?? properties["twitter-handle"];
@@ -411,7 +474,7 @@ export const EXPLICIT_SIGNAL_ALIASES: ReadonlyMap<string, StrongSignalType> =
     for (const [atom, keys] of Object.entries(
       IDENTITY_SIGNAL_PROPERTY_KEYS
     ) as Array<[StrongSignalType, string[]]>) {
-      if (atom === "url") continue;
+      if (atom === "url" || atom === "url_at") continue;
       map.set(atom, atom);
       for (const k of keys) map.set(k, atom);
     }
@@ -572,7 +635,12 @@ export async function resolveIdentity(
       ),
       columns: { entityId: true },
     });
-    const ownerIds = [...new Set(signalRows.map((r) => r.entityId))];
+    const ownerIds = [
+      ...new Set([
+        ...signalRows.map((r) => r.entityId),
+        ...(await legacyUrlAtOwners(db, normalizedSignals)),
+      ]),
+    ];
 
     if (ownerIds.length > 0) {
       // A signal pointing at a deleted/missing row is ignored (falls through).
@@ -729,6 +797,54 @@ export async function resolveIdentity(
     candidates,
     crossKindCandidates,
   };
+}
+
+/**
+ * Read-compat for observation items registered before the `url_at` atom: they
+ * own a plain `url` atom (the page address alone). Such an owner answers a
+ * `url_at` lookup only when it is an observation kind AND its own `url` and
+ * `publishedAt` give the same canonical pair — never on the address alone,
+ * which is the merge the atom exists to stop. Writes store `url_at` only.
+ */
+async function legacyUrlAtOwners(
+  db: Db,
+  normalizedSignals: ReadonlyArray<{ type: string; value: string }>
+): Promise<string[]> {
+  const wanted = new Set(
+    normalizedSignals.filter((s) => s.type === "url_at").map((s) => s.value)
+  );
+  if (wanted.size === 0) return [];
+  const urls = [...wanted].map((v) => splitUrlAt(v).url);
+  const rows = await db.query.entityIdentitySignals.findMany({
+    where: and(
+      eq(entityIdentitySignals.signalType, "url"),
+      inArray(entityIdentitySignals.signalValue, urls)
+    ),
+    columns: { entityId: true },
+  });
+  if (rows.length === 0) return [];
+  const owners = await db.query.entities.findMany({
+    where: and(
+      inArray(
+        entities.id,
+        rows.map((r) => r.entityId)
+      ),
+      inArray(entities.type, [...PUBLISHED_URL_IDENTITY_KINDS]),
+      isNull(entities.deletedAt)
+    ),
+    columns: { id: true, type: true, properties: true },
+  });
+  return owners
+    .filter((o) =>
+      extractIdentitySignals((o.properties ?? {}) as Record<string, unknown>, {
+        kind: o.type,
+      }).some(
+        (s) =>
+          s.type === "url_at" &&
+          wanted.has(normalizeIdentitySignal(s.type, s.value))
+      )
+    )
+    .map((o) => o.id);
 }
 
 /**

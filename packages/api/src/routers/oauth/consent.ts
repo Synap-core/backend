@@ -22,6 +22,8 @@
  * to sign in again.
  */
 
+import { oauthConsentId, type PresenceProof } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../../services/presence/gate.js";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
@@ -795,6 +797,8 @@ export interface OAuthDecisionInput extends AuthorizeParams {
   approved?: AppApprovedRequest[];
   /** App sign-in only: `appSignIn.fingerprint` of the screen the person saw. */
   appSignInFingerprint?: string | null;
+  /** Proof of presence (W3) for this authorization (`presence.challenge` `oauthConsent`). */
+  presence?: PresenceProof | null;
 }
 
 /**
@@ -884,6 +888,30 @@ export async function decideOAuthAuthorization(
     throw new PodCredentialRequiredError(req.client.clientName);
   }
 
+  // Proof of presence (W3): connecting an app or an AI client is setup, and
+  // this consent approves it in the same call, so the proof names this
+  // authorization (its parameters, `oauthConsentId`) — checked here, where the
+  // client's KIND is known from the pod's own record, never from the input,
+  // before any code or app exists. "Sign in with Synap" (`app`: an app signing
+  // the person in, no AI and no key) is unchanged.
+  if (req.client.clientKind !== "app") {
+    await assertPresenceForRequest({
+      userId: caller.id,
+      kind: "oauth_consent",
+      // The VALIDATED request: the same values the browser read from the
+      // authorize URL, now known to be present and to name this client.
+      id: await oauthConsentId({
+        clientId: req.client.clientId,
+        redirectUri: req.redirectUri,
+        codeChallenge: req.codeChallenge,
+        state: req.state,
+      }),
+      proof: input.presence ?? null,
+      door: "oauth.consent",
+      requestedFrom: req.client.clientName,
+    });
+  }
+
   // A pod app: the consent files AND approves its `app/connect` request (F9)
   // before any code exists; the code then redeems to THAT approved app.
   let appId: string | null = null;
@@ -909,6 +937,8 @@ export async function decideOAuthAuthorization(
       podWide: req.client.requestedPodWide ?? [],
       approved: input.approved ?? [],
       ctx,
+      // Checked above, for this authorization (a pod app is never `app`).
+      presenceChecked: "oauth.consent",
     });
     appId = connected.appId;
     scopes = [...new Set((input.approved ?? []).map((r) => r.permission))];

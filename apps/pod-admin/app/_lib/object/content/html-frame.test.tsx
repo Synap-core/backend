@@ -239,3 +239,64 @@ describe("a page whose code is on a CDN (the one frame policy, R3)", () => {
     expect(iframes(out)).toHaveLength(1);
   });
 });
+
+describe("Full size (the browser's full screen, on the frame's box)", () => {
+  const section = (
+    page: string,
+    opts: { tooLarge?: boolean; initialView?: "page" | "source" } = {}
+  ) =>
+    html(
+      <HtmlPageSection
+        title="Content"
+        html={page}
+        bytes={page.length}
+        tooLarge={opts.tooLarge ?? false}
+        workspaceId="ws-1"
+        source={prepareContent(page, "source")}
+        sourceBody={(p) => <pre>{p.text}</pre>}
+        initialView={opts.initialView}
+      />
+    );
+
+  it("a running page offers Full size, and it is still the one frame, same sandbox", () => {
+    const out = section(PAGE);
+    expect(out).toContain("Full size");
+    const frames = iframes(out);
+    expect(frames).toHaveLength(1);
+    expect(attr(frames[0]!, "sandbox")).toBe("allow-scripts");
+    // The box goes full screen, never the frame: the frame delegates nothing.
+    expect(attr(frames[0]!, "allow")).toBe("");
+    expect(attr(frames[0]!, "allowfullscreen")).toBeNull();
+  });
+
+  it("is not offered for the source, a page too large to run, or a page on a CDN", () => {
+    expect(section(PAGE, { initialView: "source" })).not.toContain("Full size");
+    expect(section(PAGE, { tooLarge: true })).not.toContain("Full size");
+    const cdn =
+      '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script><canvas></canvas>';
+    expect(section(cdn)).not.toContain("Full size");
+  });
+
+  it("says it in French in the French catalog locale", () => {
+    setAmbientCatalogLocale("fr");
+    try {
+      expect(section(PAGE)).toContain("Plein écran");
+    } finally {
+      setAmbientCatalogLocale("en");
+    }
+  });
+
+  it("a filled frame keeps the same isolation, and drops only the inline height", () => {
+    const inline = iframes(
+      html(<SandboxedFrame srcDoc="<p>x</p>" title="Q3" />)
+    )[0]!;
+    const filled = iframes(
+      html(<SandboxedFrame srcDoc="<p>x</p>" title="Q3" fill />)
+    )[0]!;
+    for (const name of ["sandbox", "allow", "referrerpolicy", "title"]) {
+      expect(attr(filled, name)).toBe(attr(inline, name));
+    }
+    expect(attr(inline, "class")).toContain("min-h-[420px]");
+    expect(attr(filled, "class")).toBe("block h-full w-full bg-white");
+  });
+});

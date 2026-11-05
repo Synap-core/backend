@@ -1029,7 +1029,7 @@
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Design principles: state as a mark, OMIT/INVITE/EXPLAIN/REASSURE, doors, bounded lists, outcomes first, one primary action, disclosure, colour and depth.",
+    "summary": "Design principles: state as a mark, OMIT/INVITE/EXPLAIN/REASSURE, doors, bounded lists, outcomes first, one primary action, disclosure, colour and depth, one chip per filter, step-by-step choices, everything follows the status.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

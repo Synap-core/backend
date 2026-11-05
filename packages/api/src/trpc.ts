@@ -21,7 +21,9 @@ import { isPodAdmin } from "./utils/workspace-role.js";
 import "@synap/database"; // Fix TS2742: inferred type portability
 import {
   isSynapLikeError,
+  isCodedRefusal,
   isDbDomainError,
+  mapCodedRefusalToTRPC,
   mapDbErrorToTRPC,
   mapSetupRequiredToTRPC,
   statusCodeToTRPCCode,
@@ -57,7 +59,9 @@ const logger = createLogger({ module: "trpc" });
  *   2. TRPCError        → pass through unchanged
  *   3. SynapError-like  → map statusCode → tRPC code
  *   4. DB domain errors → map to NOT_FOUND / BAD_REQUEST / CONFLICT
- *   5. Unknown          → INTERNAL_SERVER_ERROR
+ *   5. Coded refusal    → a plain Error whose `code` is a tRPC code key keeps
+ *                         that code and its message (`isCodedRefusal`)
+ *   6. Unknown          → INTERNAL_SERVER_ERROR
  *
  * Exported so the error-shape seam can be exercised end-to-end without a db or
  * a full server (see `__tests__/setup-required-trpc.test.ts`).
@@ -94,6 +98,10 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
         });
       }
       if (isDbDomainError(cause)) throw mapDbErrorToTRPC(cause);
+      // A service's coded refusal (`Object.assign(new Error(msg), { code:
+      // "BAD_REQUEST" })`), shared with the Hub REST and MCP doors that read
+      // `err.code` themselves: keep its code and its sentence here too.
+      if (isCodedRefusal(cause)) throw mapCodedRefusalToTRPC(cause);
     }
 
     return result;
@@ -119,6 +127,10 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
     // @synap/database domain exceptions (ProfileNotFoundError, etc.)
     if (isDbDomainError(error)) {
       throw mapDbErrorToTRPC(error);
+    }
+
+    if (isCodedRefusal(error)) {
+      throw mapCodedRefusalToTRPC(error);
     }
 
     // Truly unexpected — the errorFormatter (`init-trpc.ts`) logs it and, in

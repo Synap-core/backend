@@ -2308,6 +2308,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "channel/bind": "disruptive", // scope: wires a room to a bridge
   "channel/create_branch": "disruptive", // struct: a new room the person must see
   "channel/create_external": "disruptive", // effect: an outside channel
+  "channel/delete_external": "disruptive", // destroy: the mirrored conversation and its messages
   "channel/merge_branch": "disruptive", // destroy (merge)
   "channel/unbind": "disruptive", // scope
   "command/execute": "disruptive", // effect: a shell (2.06)
@@ -2344,6 +2345,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   // (founder 2026-10-18: an agent only PROPOSES Library organisation); classed
   // disruptive so no `@reversible` class rule can widen it either.
   "library/organize": "disruptive",
+  "messaging/delete_account": "disruptive", // destroy: removes the account at the provider
   "messaging/import_history": "disruptive", // effect: reads every chat of an account into people's channels
   "playbook/archive": "disruptive", // destroy
   "playbook/create": "disruptive", // struct (2.09)
@@ -2573,6 +2575,11 @@ export const GATE_WRITE_DOORS = {
   "channel/bind": "gate",
   "channel/create_branch": "gate",
   "channel/create_external": "gate",
+  // `DELETE /messaging/channels/:id` (2026-11-04, finding 6a6bcb5f): unlinking
+  // an external conversation deletes its channel and every mirrored message.
+  // `delete` is a DESTRUCTIVE_ACTIONS token, so an agent's ask always proposes;
+  // approving deletes it as the approver (`routers/proposals/executors/messaging.ts`).
+  "channel/delete_external": "gate",
   "channel/merge_branch": "gate",
   "channel/unbind": "gate",
   "command/execute": "gate",
@@ -2637,6 +2644,11 @@ export const GATE_WRITE_DOORS = {
   // `POST /messaging/accounts/:id/import-history` (founder, 2026-11-03): an
   // agent ASKS for an account's history import; the person's approval queues
   // it (`routers/proposals/executors/messaging.ts`).
+  // `DELETE /messaging/accounts/:id` (2026-11-04, finding 6a6bcb5f): an
+  // agent ASKS to disconnect the person's account at the provider (reconnecting
+  // needs the person's own login); approving disconnects it as the approver,
+  // who must own it (`routers/proposals/executors/messaging.ts`).
+  "messaging/delete_account": "gate",
   "messaging/import_history": "gate",
   "playbook/archive": "gate",
   "playbook/create": "gate",

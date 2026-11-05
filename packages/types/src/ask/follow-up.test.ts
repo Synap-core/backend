@@ -166,10 +166,12 @@ describe("the answer: the path through the tree", () => {
 
 describe("the card", () => {
   it("draws high and medium risk, nothing for low or none", () => {
+    // A UnitTone (`error`), never the off-scale `danger` (needsYouRisk).
     expect(askRiskView(DEPLOY)).toEqual({
       level: "high",
       label: "High risk",
-      tone: "danger",
+      tone: "error",
+      glyph: "alert",
     });
     expect(askRiskView({ risk: "medium" })?.tone).toBe("warning");
     expect(askRiskView({ risk: "low" })).toBeNull();

@@ -59,6 +59,7 @@ import {
   type AskAnswerValue,
   type AskCause,
   type AskSnapshot,
+  type AskUrgency,
   type PendingRelayedAnswer,
 } from "@synap-core/types/ask";
 import type {
@@ -69,6 +70,7 @@ import type {
   SlotAskCause,
   SlotAskLookedAtKind,
   SlotAskSnapshot,
+  SlotAskUrgency,
   SlotPendingRelay,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
@@ -595,6 +597,9 @@ const _pendingRelayParity: _Mutual<SlotPendingRelay, PendingRelayedAnswer> =
   true;
 const _askCauseParity: _Mutual<SlotAskCause, AskCause> = true;
 void _askCauseParity;
+// The ask's urgency hint, mirrored by hand in `@synap/playbooks`.
+const _urgencyParity: _Mutual<SlotAskUrgency, AskUrgency> = true;
+void _urgencyParity;
 void _provenanceParity;
 void _pendingRelayParity;
 void _askParity;

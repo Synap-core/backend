@@ -66,6 +66,7 @@ import {
   keyCountsLine,
   originLine,
   reachErrorSentence,
+  viaSynapAccount,
   type AgentRowView,
 } from "../../../(admin)/agents/_lib/agent-roster";
 import { FactsGrid, type Fact } from "../facts-grid";
@@ -124,7 +125,7 @@ export function agentFacts(
 ): Fact[] {
   const row = view.row;
   const reach = resolveAgentReachMark(row);
-  const origin = originLine(row.origin);
+  const origin = originLine(row.origin, row.hostSeat);
   const owner = ownerName(row.createdByUserId);
   const computerHref = hostComputerHref(row);
   return [
@@ -622,11 +623,20 @@ export function AgentActions({
               {pending > 0 ? `, ${pending} waiting` : ""}). It stops reaching
               the pod immediately.
             </p>
-            <p className="mt-2">
-              The agent stays listed with its history and governance. Running{" "}
-              <code>synap init</code> on its computer again connects it with a
-              fresh key.
-            </p>
+            {viaSynapAccount(row) ? (
+              <p className="mt-2">
+                It reaches the pod through your Synap account: its key is cut
+                here, and the AI client stops reaching this pod. The agent stays
+                listed with its history and governance. Connecting the client to
+                your Synap account again gives it a fresh key.
+              </p>
+            ) : (
+              <p className="mt-2">
+                The agent stays listed with its history and governance. Running{" "}
+                <code>synap init</code> on its computer again connects it with a
+                fresh key.
+              </p>
+            )}
           </>
         }
         confirmLabel="Disconnect"

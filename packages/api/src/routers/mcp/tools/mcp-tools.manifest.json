@@ -7,7 +7,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "THE recall door, for what you cannot already name. Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. COST: an answer (detail full or brief, the default) runs a model and spends this key's AI budget, far smaller than its read budget; detail:'sources' runs no model and is a plain read. READ DIRECTLY WHEN YOU CAN: you have the id → synap_get_entity / synap_get_document / synap_get_session; you know the kind → synap_get_entities; you want what links to it → synap_get_graph; your open work → synap_orient. Never ask for something one of those returns. Ask when you do not know where the data is, before a non-trivial task or a question about the user's life, work, projects or preferences (the pod is their source of truth, prefer it over your assumptions), and before creating anything, to check what already exists (detail:'sources' is enough for that). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.",
+      "description": "THE recall door, for what you cannot already name (it asks the POD; to ask the PERSON, use synap_ask_person). Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. COST: an answer (detail full or brief, the default) runs a model and spends this key's AI budget, far smaller than its read budget; detail:'sources' runs no model and is a plain read. READ DIRECTLY WHEN YOU CAN: you have the id → synap_get_entity / synap_get_document / synap_get_session; you know the kind → synap_get_entities; you want what links to it → synap_get_graph; your open work → synap_orient. Never ask for something one of those returns. Ask when you do not know where the data is, before a non-trivial task or a question about the user's life, work, projects or preferences (the pod is their source of truth, prefer it over your assumptions), and before creating anything, to check what already exists (detail:'sources' is enough for that). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1760,6 +1760,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -1891,6 +1917,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "options"]
@@ -1996,6 +2048,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "form"]
@@ -2053,6 +2131,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -2150,6 +2254,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "provide"]
@@ -2396,6 +2526,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -2527,6 +2683,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "options"]
@@ -2632,6 +2814,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "form"]
@@ -2689,6 +2897,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -2786,6 +3020,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "provide"]
@@ -3042,6 +3302,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -3173,6 +3459,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "options"]
@@ -3278,6 +3590,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "form"]
@@ -3335,6 +3673,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -3432,6 +3796,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "provide"]
@@ -3683,6 +4073,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -3814,6 +4230,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "options"]
@@ -3919,6 +4361,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "form"]
@@ -3976,6 +4444,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -4073,6 +4567,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "provide"]
@@ -4241,6 +4761,32 @@
                         "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                         "type": "string",
                         "enum": ["routine", "commitment"]
+                      },
+                      "urgency": {
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "type": "string",
+                        "enum": ["today", "whenever"]
+                      },
+                      "answerBy": {
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "type": "string",
+                        "maxLength": 40
+                      },
+                      "consequence": {
+                        "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "reversible": {
+                        "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                        "type": "boolean"
+                      },
+                      "dedupeKey": {
+                        "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
                       }
                     },
                     "required": ["mode"]
@@ -4372,6 +4918,32 @@
                         "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                         "type": "string",
                         "enum": ["routine", "commitment"]
+                      },
+                      "urgency": {
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "type": "string",
+                        "enum": ["today", "whenever"]
+                      },
+                      "answerBy": {
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "type": "string",
+                        "maxLength": 40
+                      },
+                      "consequence": {
+                        "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "reversible": {
+                        "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                        "type": "boolean"
+                      },
+                      "dedupeKey": {
+                        "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
                       }
                     },
                     "required": ["mode", "options"]
@@ -4477,6 +5049,32 @@
                         "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                         "type": "string",
                         "enum": ["routine", "commitment"]
+                      },
+                      "urgency": {
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "type": "string",
+                        "enum": ["today", "whenever"]
+                      },
+                      "answerBy": {
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "type": "string",
+                        "maxLength": 40
+                      },
+                      "consequence": {
+                        "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "reversible": {
+                        "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                        "type": "boolean"
+                      },
+                      "dedupeKey": {
+                        "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
                       }
                     },
                     "required": ["mode", "form"]
@@ -4534,6 +5132,32 @@
                         "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                         "type": "string",
                         "enum": ["routine", "commitment"]
+                      },
+                      "urgency": {
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "type": "string",
+                        "enum": ["today", "whenever"]
+                      },
+                      "answerBy": {
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "type": "string",
+                        "maxLength": 40
+                      },
+                      "consequence": {
+                        "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "reversible": {
+                        "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                        "type": "boolean"
+                      },
+                      "dedupeKey": {
+                        "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
                       }
                     },
                     "required": ["mode"]
@@ -4631,6 +5255,32 @@
                         "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                         "type": "string",
                         "enum": ["routine", "commitment"]
+                      },
+                      "urgency": {
+                        "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                        "type": "string",
+                        "enum": ["today", "whenever"]
+                      },
+                      "answerBy": {
+                        "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                        "type": "string",
+                        "maxLength": 40
+                      },
+                      "consequence": {
+                        "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "reversible": {
+                        "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                        "type": "boolean"
+                      },
+                      "dedupeKey": {
+                        "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
                       }
                     },
                     "required": ["mode", "provide"]
@@ -5008,6 +5658,721 @@
           }
         },
         "required": ["sessionId", "disposition"]
+      }
+    },
+    {
+      "name": "synap_ask_person",
+      "annotations": {
+        "title": "Ask the person",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. Every ask still notifies as today until push levels ship. `dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "ONE line: what you need from the person ('Publish the launch post today?'). The card's heading."
+          },
+          "ask": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "confirm"
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "yes": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": {
+                        "type": "string",
+                        "maxLength": 140
+                      },
+                      "recommended": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "no": {
+                    "type": "object",
+                    "properties": {
+                      "label": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "description": {
+                        "type": "string",
+                        "maxLength": 140
+                      },
+                      "recommended": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "lookedAt": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "entity",
+                            "document",
+                            "view",
+                            "automation",
+                            "playbook"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["kind", "id"]
+                    }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                },
+                "required": ["mode"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "choose"
+                  },
+                  "options": {
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "value": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "icon": {
+                          "type": "string",
+                          "maxLength": 64
+                        },
+                        "recommended": {
+                          "type": "boolean"
+                        },
+                        "description": {
+                          "type": "string",
+                          "maxLength": 140
+                        },
+                        "caution": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 60
+                        },
+                        "followUp": {
+                          "type": "object",
+                          "properties": {
+                            "prompt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            "options": {
+                              "minItems": 2,
+                              "maxItems": 4,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "value": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "icon": {
+                                    "type": "string",
+                                    "maxLength": 64
+                                  },
+                                  "recommended": {
+                                    "type": "boolean"
+                                  },
+                                  "description": {
+                                    "type": "string",
+                                    "maxLength": 140
+                                  },
+                                  "caution": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 60
+                                  }
+                                },
+                                "required": ["label"],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": ["prompt", "options"]
+                        }
+                      },
+                      "required": ["label"]
+                    }
+                  },
+                  "allowOther": {
+                    "type": "boolean"
+                  },
+                  "lookedAt": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "entity",
+                            "document",
+                            "view",
+                            "automation",
+                            "playbook"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["kind", "id"]
+                    }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                },
+                "required": ["mode", "options"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "form"
+                  },
+                  "form": {
+                    "type": "object",
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "fields": {
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "key": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "label": {
+                              "type": "string",
+                              "maxLength": 200
+                            },
+                            "type": {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            "constraints": {
+                              "type": "object",
+                              "properties": {
+                                "enum": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "min": {
+                                  "type": "number"
+                                },
+                                "max": {
+                                  "type": "number"
+                                },
+                                "pattern": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": {
+                              "type": "boolean"
+                            },
+                            "help": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["key", "label", "type"]
+                        }
+                      }
+                    },
+                    "required": ["fields"]
+                  },
+                  "lookedAt": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "entity",
+                            "document",
+                            "view",
+                            "automation",
+                            "playbook"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["kind", "id"]
+                    }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                },
+                "required": ["mode", "form"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "act"
+                  },
+                  "url": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "steps": {
+                    "maxItems": 7,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  },
+                  "lookedAt": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "entity",
+                            "document",
+                            "view",
+                            "automation",
+                            "playbook"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["kind", "id"]
+                    }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                },
+                "required": ["mode"]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "provide"
+                  },
+                  "provide": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "connection"
+                          },
+                          "service": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          }
+                        },
+                        "required": ["kind", "service"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "file"
+                          },
+                          "accept": {
+                            "maxItems": 10,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 100
+                            }
+                          }
+                        },
+                        "required": ["kind"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "const": "secret"
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          }
+                        },
+                        "required": ["kind", "name"]
+                      }
+                    ]
+                  },
+                  "lookedAt": {
+                    "maxItems": 8,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "entity",
+                            "document",
+                            "view",
+                            "automation",
+                            "playbook"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "required": ["kind", "id"]
+                    }
+                  },
+                  "risk": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"]
+                  },
+                  "stakes": {
+                    "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
+                    "type": "string",
+                    "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  }
+                },
+                "required": ["mode", "provide"]
+              }
+            ],
+            "description": "HOW the person answers: confirm (yes/no; mark the one you recommend), choose (1-8 options, at most ONE recommended, each with a one-line consequence), form (a small flat form; never a secret), act (a task in the world, with steps and a url; they answer 'I did this'), provide (connection | file | secret, through the vault — never typed in chat). Prefer confirm/choose for a decision. May carry `risk`, `stakes` ('commitment' for deploy, spend, publish, delete: their own tap is then required) and `lookedAt`."
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "ONE line: why it needs the person (what is missing), never a repeat of the question."
+          },
+          "unblocks": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "ONE line: what moves once they answer ('the EU launch deploy')."
+          },
+          "blockedReason": {
+            "type": "string",
+            "enum": [
+              "credential",
+              "permission",
+              "capability",
+              "policy",
+              "decision",
+              "physical"
+            ],
+            "description": "What kind of thing unblocks you. Default from the ask: decision (confirm/choose/form), physical (act, a file), credential (a secret or a connection)."
+          },
+          "ref": {
+            "description": "Where to go for it: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} in the pod, or {\"url\":\"https://...\"}. Refused if you cannot see the object.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "view",
+                      "cell",
+                      "document",
+                      "entity",
+                      "automation",
+                      "playbook"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": ["url"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "urgency": {
+            "type": "string",
+            "enum": ["today", "whenever"],
+            "description": "A hint: today (default) | whenever. It can only LOWER the priority the pod derives: 'whenever' ranks the ask lower. It still notifies as today until push levels ship."
+          },
+          "answerBy": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "When you need the answer: ISO-8601 with its offset ('2026-11-05T17:00:00Z'). Due within the hour, it is their top priority."
+          },
+          "consequence": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "ONE line: what the answer will DO ('Publishes the post to LinkedIn')."
+          },
+          "reversible": {
+            "type": "boolean",
+            "description": "Whether what the answer does can be undone. Omit when you do not know."
+          },
+          "dedupeKey": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Your own handle for this ask: the same key again UPDATES your open ask (wherever it was filed) instead of adding a second one."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: a session of yours, still open, to file it on. Omit it: the ask lands where this conversation's writes are grouped, else on your standing asks session."
+          }
+        },
+        "required": ["question", "ask"]
       }
     },
     {
@@ -5645,6 +7010,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode"]
@@ -5776,6 +7167,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode", "options"]
@@ -5881,6 +7298,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode", "form"]
@@ -5938,6 +7381,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode"]
@@ -6035,6 +7504,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode", "provide"]
@@ -6255,6 +7750,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -6386,6 +7907,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "options"]
@@ -6491,6 +8038,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "form"]
@@ -6548,6 +8121,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -6645,6 +8244,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "provide"]
@@ -6945,6 +8570,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode"]
@@ -7076,6 +8727,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode", "options"]
@@ -7181,6 +8858,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode", "form"]
@@ -7238,6 +8941,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode"]
@@ -7335,6 +9064,32 @@
                                 "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                                 "type": "string",
                                 "enum": ["routine", "commitment"]
+                              },
+                              "urgency": {
+                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                                "type": "string",
+                                "enum": ["today", "whenever"]
+                              },
+                              "answerBy": {
+                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                                "type": "string",
+                                "maxLength": 40
+                              },
+                              "consequence": {
+                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "reversible": {
+                                "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                                "type": "boolean"
+                              },
+                              "dedupeKey": {
+                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
                               }
                             },
                             "required": ["mode", "provide"]
@@ -7588,6 +9343,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -7719,6 +9500,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "options"]
@@ -7824,6 +9631,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "form"]
@@ -7881,6 +9714,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode"]
@@ -7978,6 +9837,32 @@
                           "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                           "type": "string",
                           "enum": ["routine", "commitment"]
+                        },
+                        "urgency": {
+                          "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                          "type": "string",
+                          "enum": ["today", "whenever"]
+                        },
+                        "answerBy": {
+                          "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "consequence": {
+                          "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "reversible": {
+                          "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                          "type": "boolean"
+                        },
+                        "dedupeKey": {
+                          "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
                         }
                       },
                       "required": ["mode", "provide"]
@@ -10539,6 +12424,32 @@
                     "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                     "type": "string",
                     "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
                   }
                 },
                 "required": ["mode"]
@@ -10670,6 +12581,32 @@
                     "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                     "type": "string",
                     "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
                   }
                 },
                 "required": ["mode", "options"]
@@ -10775,6 +12712,32 @@
                     "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                     "type": "string",
                     "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
                   }
                 },
                 "required": ["mode", "form"]
@@ -10832,6 +12795,32 @@
                     "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                     "type": "string",
                     "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
                   }
                 },
                 "required": ["mode"]
@@ -10929,6 +12918,32 @@
                     "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine.",
                     "type": "string",
                     "enum": ["routine", "commitment"]
+                  },
+                  "urgency": {
+                    "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower. It still notifies as today until push levels ship.",
+                    "type": "string",
+                    "enum": ["today", "whenever"]
+                  },
+                  "answerBy": {
+                    "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority.",
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "consequence": {
+                    "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn').",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "reversible": {
+                    "description": "Whether what the answer does can be undone. Omit when you do not know.",
+                    "type": "boolean"
+                  },
+                  "dedupeKey": {
+                    "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
                   }
                 },
                 "required": ["mode", "provide"]

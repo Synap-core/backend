@@ -793,6 +793,18 @@ export function registerSetupRoutes(app: HubHono): void {
       typeof body.instanceId === "string" && body.instanceId.trim()
         ? body.instanceId.trim()
         : undefined;
+    // `mcp:` and `oauth:` instances are minted by /mcp/redeem and the OAuth
+    // door only (review bf96d410, lane B): a key from this door never wears
+    // one, so no reader can take it for theirs.
+    if (instanceId && /^(?:mcp|oauth):/i.test(instanceId)) {
+      return c.json(
+        {
+          error:
+            "Invalid `instanceId` — `mcp:` and `oauth:` are kept for the Synap account and OAuth doors.",
+        },
+        400
+      );
+    }
     // The computer's human name for that instance ("devbox", "MacBook") —
     // what the approval page and the connection's name show. Display only:
     // the instance id, never this, decides what an approval replaces.
@@ -1397,9 +1409,9 @@ export function registerSetupRoutes(app: HubHono): void {
             agentType,
             instanceId,
             expiresAt: apiKey.expiresAt ?? null,
-            asPerson: asPerson
-              ? { instanceLabel: instanceLabel ?? surfaceHostSeat ?? null }
-              : null,
+            // The computer the audit names ("requested from …"): the
+            // filing key's own machine record, never this request's body.
+            asPerson: asPerson ? { instanceLabel: surfaceHostSeat } : null,
           }));
         } catch (err) {
           await revokeApiKeys(db, {

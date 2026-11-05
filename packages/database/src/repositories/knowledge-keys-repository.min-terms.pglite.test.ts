@@ -12,6 +12,10 @@
  *  - a short row matching every term outranks a long row repeating three
  *    of them (rank by distinct terms matched, then length-normalised density);
  *  - omitted options ⇒ the old any-term behaviour (the keyword door unchanged).
+ *  - a term under 4 characters matches the whole word only: "set up the
+ *    backup" no longer pulls a note that merely says "settings" and "update"
+ *    (`set:*` / `up:*` used to carry it over the two-term floor), while a
+ *    4+ character term still matches as a prefix ("backup" → "backups").
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
@@ -42,7 +46,18 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${columns.join(", ")});`;
 }
 
-const IGNORE = new Set(["the", "a", "of", "for", "what", "how", "is", "our"]);
+const IGNORE = new Set([
+  "the",
+  "a",
+  "of",
+  "for",
+  "what",
+  "how",
+  "is",
+  "our",
+  "do",
+  "i",
+]);
 let repo: KnowledgeKeysRepository;
 
 beforeAll(async () => {
@@ -55,6 +70,16 @@ beforeAll(async () => {
     [
       "design:flows",
       "Before changing a desktop page, check its user flows in the Design app.",
+    ],
+    [
+      "ops:backup",
+      "To set up the nightly backup, open the pod settings and turn backups on.",
+    ],
+    [
+      "notes:settings",
+      "Update the settings, upload the export, then update the settings again. ".repeat(
+        10
+      ),
     ],
     [
       "notes:long",
@@ -104,6 +129,27 @@ describe("knowledge_keys searchFullText — matched-term floor", () => {
       { minMatchedTerms: 2, ignoreTerms: IGNORE }
     );
     expect(rows.map((r) => r.key)).toEqual(["design:flows", "notes:long"]);
+  });
+
+  it("short terms match whole words: 'set up the backup' skips a note that only says settings/update", async () => {
+    const rows = await repo.searchFullText(
+      "how do I set up the backup?",
+      undefined,
+      10,
+      { minMatchedTerms: 2, ignoreTerms: IGNORE }
+    );
+    expect(keys(rows)).toEqual(["ops:backup"]);
+  });
+
+  it("a 4+ character term still matches as a prefix", async () => {
+    const rows = await repo.searchFullText("backups setting", undefined, 10, {
+      minMatchedTerms: 2,
+      ignoreTerms: IGNORE,
+    });
+    // "setting:*" reaches "settings" and "backups:*" reaches "backups": an
+    // exact match of every term would find nothing. notes:settings matches
+    // one term only, so the floor keeps it out.
+    expect(keys(rows)).toEqual(["ops:backup"]);
   });
 
   it("omitted options keep the any-term behaviour", async () => {

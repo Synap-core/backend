@@ -27,6 +27,7 @@
  */
 
 import { closestWithDistance, foldPropertyKey } from "./did-you-mean.js";
+import { slugifyPropertyKey } from "../utils/property-key.js";
 
 /** A property-def value type, as the create door accepts it. */
 export type PropertyDefValueType =
@@ -121,21 +122,10 @@ export interface ReconcilePropertiesResult {
   lensMisses: Array<{ key: string; canonicalSlug: string }>;
 }
 
-/**
- * Normalize a free-form label to a property-def slug (`/^[a-z0-9-]+$/`, the slug
- * regex property-defs.create enforces). `Geo`→`geo`, `Funding Amount`→`funding-amount`,
- * `Score!!`→`score`. Returns `""` when nothing slug-able remains (caller keeps
- * the value under its original key in that case).
- */
-export function slugifyPropertyKey(label: string): string {
-  return label
-    .trim()
-    .toLowerCase()
-    .replace(/[_\s]+/g, "-")
-    .replace(/[^a-z0-9-]+/g, "")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+// ONE slugifier, kept beside the key grammar it must agree with
+// (`utils/property-key.ts`, CP ticket 5980e79d); re-exported so every
+// existing `@synap/database` import keeps resolving.
+export { slugifyPropertyKey };
 
 /** Infer a def value type from a JS value (defaults to string). */
 export function inferValueType(value: unknown): PropertyDefValueType {

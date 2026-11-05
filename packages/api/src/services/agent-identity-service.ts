@@ -39,6 +39,7 @@ import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import { SYNAP_ACCOUNT_KEY_ORIGIN } from "./synap-account-client.js";
 import {
   createAndVerifyHubInboundKey,
   type RegistrationResult,
@@ -751,7 +752,11 @@ async function adoptComputerlessAgent(opts: {
           eq(users.isPersonalAgent, false),
           isNull(users.hostUserId),
           isNull(users.hostSeat),
-          isNull(users.agentRole)
+          isNull(users.agentRole),
+          // An agent reached through the Synap account is never moved onto a
+          // computer (its seat already says so since 0400; this holds for
+          // one whose key came before its seat).
+          drizzleSql`NOT EXISTS (SELECT 1 FROM ${apiKeys} WHERE ${apiKeys.userId} = ${users.id} AND ${apiKeys.origin} = ${SYNAP_ACCOUNT_KEY_ORIGIN})`
         )} ORDER BY ${users.createdAt} ASC LIMIT 1)`
       )
     )
@@ -1071,6 +1076,11 @@ export interface ProvisionSurfaceAgentKeyOpts {
   agentRole?: string | null;
   /** Provenance of a NEW agent user (`users.created_via`). Default "cli". */
   createdVia?: AgentCreatedVia;
+  /**
+   * The minted key's `api_keys.origin` (0400). Only `/mcp/redeem` passes it
+   * (`SYNAP_ACCOUNT_KEY_ORIGIN`); tripwire `synap-account-key-origin`.
+   */
+  keyOrigin?: string | null;
   logger?: ProvisionLogger;
 }
 
@@ -1303,6 +1313,7 @@ export async function provisionSurfaceAgentKey(
       linkedUserId: resolvedLinkedUserId,
       instanceId: instanceId ?? null,
       instanceLabel: opts.instanceLabel ?? null,
+      origin: opts.keyOrigin ?? null,
       ...toolSurface,
       expiresAt: new Date(nowMs + ttlDays * DAY_MS),
       rotationScheduledAt: new Date(

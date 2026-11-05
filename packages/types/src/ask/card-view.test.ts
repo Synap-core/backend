@@ -138,7 +138,7 @@ describe("askCardView — the asker", () => {
   it("a criterion / param slot names its cause from its own stamps", () => {
     expect(askCardView({ label: "X", criterionKey: "k" }).asker).toMatchObject({
       kind: "cause",
-      label: "From the session's checks",
+      label: "From the job's checks",
     });
     expect(
       askCardView({ label: "X", paramName: "channel" }).asker
@@ -247,7 +247,7 @@ describe("askFate — the owed ask's fate on silence", () => {
         { label: "a", ask: confirm, owedSince: daysAgo(2) },
         { now: NOW }
       ).ageFate.label
-    ).toBe("Asked 2d ago · Ends with the session");
+    ).toBe("Asked 2d ago · Ends with the job");
   });
 
   it("a fate with no deadline is never amber; it reads as the proposal's", () => {

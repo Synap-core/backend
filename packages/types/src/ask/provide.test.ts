@@ -122,7 +122,7 @@ describe("provideGrantNote: what a secret hand-over will let the agent do", () =
       minutes: 60,
     };
     expect(provideGrantNote(grant)).toBe(
-      "Researcher will be able to read it for 60 minutes, in this session only."
+      "Researcher will be able to read it for 60 minutes, in this job only."
     );
     expect(provideExpectedGranteeId(grant)).toBe("agent-1");
   });

@@ -33,6 +33,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  GRANT_SUBJECT_CATALOG,
+  assertPermissions,
+} from "@synap-core/types/grants";
 
 // ─── In-memory store standing in for Postgres ────────────────────────────────
 
@@ -304,6 +308,13 @@ vi.mock("./client-metadata.js", async () => {
   };
 });
 
+// The presence gate (W3 slice 2): its own suite is presence.pglite.test.ts.
+// Here a spy, so a test can read WHAT the consent asked it to prove.
+const presenceGate = vi.hoisted(() => vi.fn(async (_args: unknown) => {}));
+vi.mock("../../services/presence/gate.js", () => ({
+  assertPresenceForRequest: (args: unknown) => presenceGate(args),
+}));
+
 // One shared logger so a test can assert what the routes WARNED about.
 const log = vi.hoisted(() => ({
   info: vi.fn(),
@@ -320,6 +331,7 @@ import { oauthApp } from "./routes.js";
 import { computeS256Challenge } from "./protocol.js";
 import { decideOAuthAuthorization, getOAuthConsentContext } from "./consent.js";
 import { renderAuthorizeRefusalPage } from "./refusal-page.js";
+import { oauthConsentId } from "@synap-core/types/presence";
 
 const ISSUER = "https://pod.test.synap.live";
 const POD_ADMIN = "https://pod-admin.test.synap.live";
@@ -344,6 +356,8 @@ beforeEach(() => {
   store.cimd.clear();
   podAppPolicy.allowUnverified = true;
   log.warn.mockClear();
+  presenceGate.mockReset();
+  presenceGate.mockResolvedValue(undefined);
   revokeSpy.mockReset();
   claimWhere.length = 0;
   store.users.set(HUMAN_ID, { id: HUMAN_ID, userType: "human" });
@@ -439,6 +453,23 @@ describe("discovery metadata", () => {
     expect(doc.token_endpoint).toBe(`${ISSUER}/token`);
     expect(doc.registration_endpoint).toBe(`${ISSUER}/register`);
     expect(doc.code_challenge_methods_supported).toEqual(["S256"]);
+  });
+
+  it("advertises the permissions a pod app may request, from the grant catalog", async () => {
+    const res = await oauthApp.request(
+      "/.well-known/oauth-authorization-server"
+    );
+    const doc = (await res.json()) as any;
+    expect(doc.synap_app_permissions).toEqual(
+      GRANT_SUBJECT_CATALOG.flatMap((s) =>
+        s.actions.map((a) => `${s.subject}.${a}`)
+      )
+    );
+    expect(doc.synap_app_permissions).toContain("entity.read");
+    // `scope` values stay the narrowed set the server accepts, no permission names.
+    expect(doc.scopes_supported).toEqual(["mcp.read", "mcp.write"]);
+    // Every advertised permission is one the CIMD parser accepts.
+    expect(() => assertPermissions(doc.synap_app_permissions)).not.toThrow();
   });
 
   it("canonicalizes a PUBLIC_URL with a trailing slash", async () => {
@@ -712,6 +743,59 @@ describe("consent decision", () => {
     // The consenting human is bound to the code — this is what becomes
     // linkedUserId at /token.
     expect(row.userId).toBe(HUMAN_ID);
+  });
+});
+
+describe("consent decision — proof of presence (W3 slice 2)", () => {
+  const approveBody = (clientId: string) => ({
+    clientId,
+    redirectUri: CALLBACK,
+    responseType: "code",
+    scope: "mcp.read mcp.write",
+    codeChallenge: CHALLENGE,
+    codeChallengeMethod: "S256",
+    state: "st-9",
+    approve: true,
+  });
+
+  it("an AI client's Allow asks for a proof bound to THIS authorization, as the browser names it", async () => {
+    const { body: client } = await register();
+    await consentAndExtractCode(client.client_id, "st-9");
+    expect(presenceGate).toHaveBeenCalledTimes(1);
+    // The id the consent screen computes from the authorize URL it shows.
+    const id = await oauthConsentId({
+      clientId: client.client_id,
+      redirectUri: CALLBACK,
+      codeChallenge: CHALLENGE,
+      state: "st-9",
+    });
+    expect(presenceGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: HUMAN_ID,
+        kind: "oauth_consent",
+        id,
+        proof: null,
+        door: "oauth.consent",
+      })
+    );
+  });
+
+  it("a refused proof mints no code", async () => {
+    const { body: client } = await register();
+    presenceGate.mockRejectedValueOnce(new Error("PRESENCE_REQUIRED"));
+    await expect(
+      decideOAuthAuthorization(approveBody(client.client_id), HUMAN_ID)
+    ).rejects.toThrow(/PRESENCE_REQUIRED/);
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("Deny asks for no proof", async () => {
+    const { body: client } = await register();
+    await decideOAuthAuthorization(
+      { ...approveBody(client.client_id), approve: false },
+      HUMAN_ID
+    );
+    expect(presenceGate).not.toHaveBeenCalled();
   });
 });
 

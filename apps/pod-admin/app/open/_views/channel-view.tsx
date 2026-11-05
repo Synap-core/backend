@@ -19,6 +19,11 @@ import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { RoomMessages } from "../../_lib/object/room-messages";
 import { BounceView } from "./bounce-view";
+import { Pill } from "../../_lib/object/provenance-chips";
+import { kindIcon } from "../../_lib/object/kind-icon";
+import { openIn } from "../../../lib/open-in";
+import { openT } from "../copy";
+import { linkedObjectChip } from "./channel-model";
 
 export function ChannelView({ id }: { id: string }) {
   const channel = trpc.chat.getChannel.useQuery(
@@ -67,7 +72,41 @@ export function ChannelView({ id }: { id: string }) {
         ],
       }}
     >
+      <LinkedObject linked={channel.data?.linkedObject} />
       <RoomMessages channelId={id} enabled={Boolean(channel.data)} />
     </OpenObject>
+  );
+}
+
+/** The door to what this conversation belongs to: its session, entity, … */
+function LinkedObject({
+  linked,
+}: {
+  linked: Parameters<typeof linkedObjectChip>[0];
+}) {
+  const chip = linkedObjectChip(linked);
+  if (!chip) return null;
+  const t = openT();
+  const Icon = kindIcon(chip.objectKind);
+  return (
+    <div
+      role="group"
+      aria-label={t("channel.belongsToLabel")}
+      className="flex flex-wrap items-center gap-1.5"
+    >
+      <Pill
+        exit={openIn({
+          kind: "object",
+          objectKind: chip.objectKind,
+          id: chip.id,
+        })}
+      >
+        <span className="text-foreground/55">{t("channel.belongsTo")}</span>
+        <Icon aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
+        <span className="truncate font-medium text-foreground">
+          {chip.label}
+        </span>
+      </Pill>
+    </div>
   );
 }

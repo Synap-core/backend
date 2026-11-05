@@ -5,7 +5,10 @@ import {
   base64UrlToBuffer,
   bufferToBase64Url,
   createPasskey,
+  getPasskeyAssertion,
   passkeyCreationOptions,
+  passkeyRequestOptions,
+  PRESENCE_PROMPT_TIMEOUT_MS,
 } from "./passkey";
 
 const bytes = (b: ArrayBuffer | ArrayBufferView | undefined) =>
@@ -118,5 +121,77 @@ describe("createPasskey", () => {
     await expect(
       createPasskey(registrationData, { name: "a@b.c" })
     ).rejects.toBeInstanceOf(PasskeyCancelled);
+  });
+});
+
+describe("proof of presence: the assertion (W3)", () => {
+  const request = {
+    challenge: "AQID", // [1,2,3]
+    rpId: "lab.pod.synap.live",
+    rpIds: ["lab.pod.synap.live", "pod.synap.live"],
+    allowCredentials: [{ id: "BAUG", type: "public-key" as const }],
+    userVerification: "required" as const,
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("asks with the pod's challenge, rp id and passkeys, user verification REQUIRED", () => {
+    const options = passkeyRequestOptions(request);
+    expect(bytes(options.challenge as ArrayBuffer)).toEqual([1, 2, 3]);
+    expect(options.rpId).toBe("lab.pod.synap.live");
+    expect(options.userVerification).toBe("required");
+    expect(options.timeout).toBe(PRESENCE_PROMPT_TIMEOUT_MS);
+    expect(
+      options.allowCredentials!.map((c) => [c.type, bytes(c.id as ArrayBuffer)])
+    ).toEqual([["public-key", [4, 5, 6]]]);
+  });
+
+  it("encodes the signed assertion as the approve doors read it (base64url, no padding)", async () => {
+    const buf = (...b: number[]) => new Uint8Array(b).buffer;
+    const credential = {
+      id: "BAUG",
+      rawId: buf(4, 5, 6),
+      type: "public-key",
+      response: {
+        clientDataJSON: buf(251, 255),
+        authenticatorData: buf(7),
+        signature: buf(8, 9),
+        userHandle: null,
+      },
+      getClientExtensionResults: () => ({}),
+    };
+    const get = vi.fn(async () => credential);
+    vi.stubGlobal("window", { PublicKeyCredential: function PKC() {} });
+    vi.stubGlobal("navigator", { credentials: { get } });
+    await expect(getPasskeyAssertion(request)).resolves.toEqual({
+      id: "BAUG",
+      rawId: "BAUG",
+      type: "public-key",
+      response: {
+        clientDataJSON: "-_8",
+        authenticatorData: "Bw",
+        signature: "CAk",
+        userHandle: null,
+      },
+      clientExtensionResults: {},
+    });
+    const passed = (
+      get.mock.calls[0] as unknown as [CredentialRequestOptions]
+    )[0];
+    expect(passed.publicKey?.userVerification).toBe("required");
+  });
+
+  it("a closed prompt (NotAllowedError) is PasskeyCancelled", async () => {
+    vi.stubGlobal("window", { PublicKeyCredential: function PKC() {} });
+    vi.stubGlobal("navigator", {
+      credentials: {
+        get: async () => {
+          throw new DOMException("denied", "NotAllowedError");
+        },
+      },
+    });
+    await expect(getPasskeyAssertion(request)).rejects.toBeInstanceOf(
+      PasskeyCancelled
+    );
   });
 });

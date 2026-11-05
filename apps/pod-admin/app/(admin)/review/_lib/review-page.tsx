@@ -38,6 +38,8 @@ import { Check, ChevronRight, SlidersHorizontal, X } from "lucide-react";
 import { navHref } from "../../../../lib/console-nav";
 import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
+import { useBatchApproveProposals } from "../../../_lib/presence/use-approve";
+import { needsPresence } from "../../../_lib/presence/presence-model";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { isUuid } from "../../../../lib/format";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
@@ -261,7 +263,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     void utils.proposals.invalidate();
   }
 
-  const batchApprove = trpc.proposals.batchApprove.useMutation({
+  // With the proof of presence for each item the pod asks it for (W3).
+  const batchApprove = useBatchApproveProposals({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
       showReceipt(batchFailureReceipt("approve", err));
@@ -279,7 +282,14 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     if (proposalIds.length === 0) return;
     let res: Awaited<ReturnType<typeof batchApprove.mutateAsync>>;
     try {
-      res = await batchApprove.mutateAsync({ proposalIds });
+      res = await batchApprove.mutateAsync({
+        proposalIds,
+        // The sensitive ones are proved up front (proof of presence, W3).
+        upFrontIds: proposalIds.filter((id) => {
+          const f = facts.get(id);
+          return f !== undefined && needsPresence(f);
+        }),
+      });
     } catch {
       return; // `onError` said so.
     }

@@ -876,6 +876,21 @@ LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
 SYNAP_SKIP_GIT_SYNC=1 run_update --unattended; rc=$?
 [ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && [ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && [ "$(cur_id)" = "$R1" ] \
   && ok "sourcetimer: a pod's unattended 'source' channel is refused and recorded, never built" || { bad "sourcetimer: rc=$rc record=$(last status)"; show; }
+# The same unattended run with UE_SOURCE_EXPLICIT=1 inherited from its environment (a shell
+# where it was exported, a wrapper): still refused. Only this installer's own re-exec keeps it
+# (review bf96d410, #782 follow-up).
+setup sourceinherit r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release" "$DEPLOY/state"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
+echo '{"auto":true,"channel":"source","window":"00:00-00:00"}' > "$DEPLOY/state/update-policy.json"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourceinherit: git fixture"
+LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+: > "$FAKE/log"
+UE_SOURCE_EXPLICIT=1 SYNAP_SKIP_GIT_SYNC=1 run_update --unattended; rc=$?
+[ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && [ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && [ "$(cur_id)" = "$R1" ] \
+  && ok "sourceinherit: an inherited UE_SOURCE_EXPLICIT=1 does not pass the unattended refusal" || { bad "sourceinherit: rc=$rc builds=$(grep -c '^build ' "$FAKE/log") record=$(last status)"; show; }
 
 # ── 7. edge=traefik: caddy never touched, every other service comes up ───────
 setup traefik r1; publish "$R2" 0012_new.sql

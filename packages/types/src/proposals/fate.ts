@@ -11,6 +11,14 @@ import type { UnitTone } from "../units/state.js";
 import type { AskFate } from "../ask/card.js";
 import { formatFloorCount } from "../value-format/numbers.js";
 import { workClockIn } from "../work-clock/index.js";
+import { nounInSentence, resolveObjectNoun } from "../vocabulary/index.js";
+
+/**
+ * A session in the person's words, "job", for a sentence (vocabulary door,
+ * founder G1, 2026-10-30): the ONE definition the ask card and the fate copy
+ * both say. The card face never says "session".
+ */
+export const JOB_NOUN = nounInSentence(resolveObjectNoun("session"));
 
 /**
  * Untouched `objectWork` proposals leave the headline count after this many
@@ -136,8 +144,11 @@ export function isReviewLater(input: ProposalFateInput): boolean {
  */
 export const FATE_COPY = {
   untilDecided: "Stays until you decide",
-  /** A session-bound draft, or an agent's own confirm / choose. */
-  endsWithSession: "Ends with the session",
+  /**
+   * A session-bound draft, or an agent's own confirm / choose. The session is
+   * the person's "job" (vocabulary door): the card face never says "session".
+   */
+  endsWithSession: `Ends with the ${JOB_NOUN}`,
   reviewLater: "In Review later",
   /** `date` is already formatted ("29 Sep"). */
   reviewLaterSince: (date: string): string => `In Review later since ${date}`,
@@ -163,12 +174,12 @@ export const FATE_COPY = {
   /** Who waits on a proposal, by the pod's reason (`ProposalWaits.reason`). */
   waitReason: {
     parked_run: "The agent is paused until you decide",
-    gate: "The session can't go on until you decide",
-    owed_slot: "The agent needs this to finish the session",
+    gate: `The ${JOB_NOUN} can't go on until you decide`,
+    owed_slot: `The agent needs this to finish the ${JOB_NOUN}`,
   } satisfies Record<ProposalWaitReason, string>,
   /** An expiry its session's end may come before. */
   orSessionEnd: (expiry: string): string =>
-    `${expiry}, or when the session ends`,
+    `${expiry}, or when the ${JOB_NOUN} ends`,
 } as const;
 
 /**

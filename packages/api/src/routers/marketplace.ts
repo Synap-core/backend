@@ -27,6 +27,8 @@
  * `market.search` applies — and never the list of sources itself.
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -707,9 +709,18 @@ const sourcesRouter = router({
       z.object({
         id: z.string().min(1).max(100),
         keyFingerprint: z.string().min(1).max(200),
+        /** Proof of presence (W3): trusting a new signing key is governance. */
+        presence: presenceProofSchema.optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ ctx, input }) => {
+      await assertPresenceForRequest({
+        userId: ctx.userId,
+        kind: "marketplace_key",
+        id: input.id,
+        proof: input.presence ?? null,
+        door: "trpc.marketplace.approveKeyChange",
+      });
       const { views } = await sourcesWithViews();
       const view = views.find((v) => v.source.id === input.id);
       if (!view || view.source.official) {
