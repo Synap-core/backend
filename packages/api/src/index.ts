@@ -134,6 +134,13 @@ export {
   installOfficialAgentTemplates,
   type OfficialAgentTemplatesReport,
 } from "./services/agent-templates/official.js";
+// Agents link to their template by themselves when it is clear, else the
+// person is asked once (D10).
+export {
+  selfHealAgentTemplateLinks,
+  registerAgentTemplateAnswerReactor,
+  type SelfHealReport,
+} from "./services/agent-templates/self-heal.js";
 export {
   orderWorkspacesByTemplateDependencies,
   type OrderableWorkspaceRow,

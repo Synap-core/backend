@@ -40,6 +40,7 @@ import {
   reconcileCapabilitiesToTemplates,
   reconcileStandaloneConfigsToTemplates,
   installOfficialAgentTemplates,
+  selfHealAgentTemplateLinks,
   backfillCapabilityEmits,
   notifyCapabilityUpdatesAvailable,
   normalizeIssuerUrl,
@@ -995,6 +996,8 @@ async function runStartupHooksInner(): Promise<void> {
   // last sync listed even before the next sync runs. Never throws.
   try {
     await installOfficialAgentTemplates();
+    // Then link the agents whose program is clear; ask once for the rest (D10).
+    await selfHealAgentTemplateLinks();
   } catch (err) {
     logger.warn(
       { err },
