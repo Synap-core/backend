@@ -750,6 +750,13 @@ export interface PlaybookActivator {
    * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
    */
   unless?: { property: string; present: true };
+  /**
+   * `created` / `enters_status` only: keep only a thing whose property holds
+   * one of these values (trimmed, any case), e.g. `{ property: "post-format",
+   * in: ["Short Video", "Long Video"] }`. Mirror of `WorkerOnly`
+   * (`@synap-core/types/workers`).
+   */
+  only?: { property: string; in: string[] };
 }
 
 /** Where a failed stage gate sends the run — see {@link PlaybookStage.onFail}. */

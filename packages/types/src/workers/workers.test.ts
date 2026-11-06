@@ -8,6 +8,7 @@ import {
   WORKER_TARGET_ROLE,
   effectiveWorkerSize,
   readWorkerTargetMetadata,
+  skippedByOnly,
   skippedByUnless,
 } from "./index.js";
 
@@ -30,11 +31,32 @@ describe("skippedByUnless (an activator's unless)", () => {
   });
 });
 
+describe("skippedByOnly (an activator's only)", () => {
+  const only = { property: "post-format", in: ["Short Video", "Long Video"] };
+  it("keeps a thing whose value is listed, trimmed and in any case, or a list holding one", () => {
+    expect(skippedByOnly(only, { "post-format": "Short Video" })).toBe(false);
+    expect(skippedByOnly(only, { "post-format": " long video " })).toBe(false);
+    expect(skippedByOnly(only, { "post-format": ["Carousel", "Short Video"] })).toBe(false);
+  });
+  it("leaves out a thing whose value is not listed, empty, absent or not text", () => {
+    expect(skippedByOnly(only, { "post-format": "Carousel" })).toBe(true);
+    expect(skippedByOnly(only, { "post-format": "" })).toBe(true);
+    expect(skippedByOnly(only, { "post-format": [] })).toBe(true);
+    expect(skippedByOnly(only, { "post-format": 3 })).toBe(true);
+    expect(skippedByOnly(only, {})).toBe(true);
+    expect(skippedByOnly(only, null)).toBe(true);
+  });
+  it("keeps every thing when the activator declares no only", () => {
+    expect(skippedByOnly(undefined, { "post-format": "Carousel" })).toBe(false);
+    expect(skippedByOnly(undefined, null)).toBe(false);
+  });
+});
+
 describe("worker skip reasons", () => {
   it("every worker skip reason is an automation skip reason (one run-row vocabulary)", () => {
     const automation = new Set<string>(Object.values(AUTOMATION_SKIP_REASONS));
     const worker = Object.values(WORKER_SKIP_REASONS);
-    expect(worker.length).toBe(5);
+    expect(worker.length).toBe(6);
     for (const r of worker) expect(automation.has(r)).toBe(true);
   });
 
