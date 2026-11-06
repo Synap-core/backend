@@ -2311,6 +2311,23 @@ export const focusSessionsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: moveRefusal });
       }
 
+      // DECLARED STAGES ONLY — the advance door's rule (`stage-declared.ts`),
+      // asked before this door's own multi-field UPDATE below.
+      if (patch.currentStage !== undefined) {
+        const { refuseUndeclaredStage } =
+          await import("@synap/jobs/utils/stage-declared.js");
+        const undeclared = await refuseUndeclaredStage(
+          existing,
+          patch.currentStage
+        );
+        if (undeclared) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: undeclared.reason,
+          });
+        }
+      }
+
       // TRACK FILING — the ONE resolution (throws the refusal as a TRPCError).
       const trackFilingModule =
         await import("../services/tracks/session-track-filing.js");

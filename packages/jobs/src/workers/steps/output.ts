@@ -40,6 +40,7 @@ import {
   PolicyBlockedError,
 } from "../../utils/automation-governance.js";
 import { advanceSessionStageViaSlot } from "../../utils/stage-advance.js";
+import { refuseUndeclaredStage } from "../../utils/stage-declared.js";
 import { sessionOutcomeDoor } from "../../utils/session-outcome-door.js";
 import {
   lifecycleSlugOf,
@@ -1117,6 +1118,24 @@ export async function executeOutputStep(
         return { status: "skipped", reason: "no matching session" };
       }
 
+      // ONE PLAYBOOK'S SESSIONS (finding 8c08b138): `whenPlaybookId` scopes
+      // the step to sessions FOLLOWING that playbook, so "a PR of a Fix a
+      // finding session merged → its stage is merged" is stored config that
+      // leaves every other session alone. Any other session is a REPORTED
+      // no-op, decided before governance (nothing is proposed for it).
+      const whenPlaybookId =
+        typeof config.whenPlaybookId === "string" && config.whenPlaybookId
+          ? config.whenPlaybookId
+          : undefined;
+      if (whenPlaybookId && session.playbookId !== whenPlaybookId) {
+        return {
+          status: "skipped",
+          reason: "session does not follow the playbook this step is for",
+          sessionId: session.id,
+          whenPlaybookId,
+        };
+      }
+
       // Cross-workspace guard: only mutate a session in the automation's
       // workspace (or a pod-wide NULL-workspace session). Mirrors the
       // playbook_run subject IDOR guard — the column has no FK.
@@ -1124,6 +1143,24 @@ export async function executeOutputStep(
         throw new Error(
           `session_update: session ${session.id} not visible in workspace ${workspaceId}`
         );
+      }
+
+      // DECLARED STAGES ONLY — the advance door's rule (`stage-declared.ts`),
+      // asked BEFORE governance: a proposed advance is applied later by the
+      // executor, outside the door, so it must never carry a key the
+      // session's process does not declare. Refused whole (nothing of the
+      // patch is written) and reported on the step.
+      if (currentStage !== undefined) {
+        const undeclared = await refuseUndeclaredStage(session, currentStage);
+        if (undeclared) {
+          return {
+            status: "refused",
+            code: undeclared.code,
+            reason: undeclared.reason,
+            sessionId: session.id,
+            stages: undeclared.stages,
+          };
+        }
       }
 
       // Governed — same gate as entity_create / entity_update above.
@@ -1223,6 +1260,17 @@ export async function executeOutputStep(
           agentUserId: producerAgentUserId,
           stageWrite: "door",
         });
+        // The door's own refusal (a stage that stopped being declared between
+        // the check above and here): reported, never a silent "updated".
+        if (advance.refused) {
+          return {
+            status: "refused",
+            code: advance.refused.code,
+            reason: advance.refused.reason,
+            sessionId: session.id,
+            stages: advance.refused.stages,
+          };
+        }
         stageGated = advance.gated;
       }
 

@@ -88,6 +88,10 @@ import {
   stageForSubjectStatus,
 } from "@synap/playbooks";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
+import {
+  refuseUndeclaredStage,
+  type UndeclaredStageRefusal,
+} from "@synap/jobs/utils/stage-declared.js";
 import { applyStageGateOnAdvance } from "../playbooks/stage-gate.js";
 import { mergeEnteredStageSlots } from "./stage-slots.js";
 import {
@@ -180,6 +184,12 @@ export interface AdvanceSessionStageResult {
    * Absent when the stage declares none.
    */
   stageSlots?: { added: string[] } | { error: string };
+  /**
+   * The move was REFUSED: `toStage` is not a stage the session's process
+   * declares (`stage-declared.ts`). Nothing was written, emitted or gated;
+   * `changed` is false. A session with no stages is never refused.
+   */
+  refused?: UndeclaredStageRefusal;
 }
 
 const UNCHANGED: AdvanceSessionStageResult = {
@@ -208,6 +218,22 @@ export async function advanceSessionStage(
   const fromStage = session.currentStage ?? null;
 
   if (toStage === fromStage) return UNCHANGED;
+
+  // DECLARED STAGES ONLY (finding 8c08b138): a run with stages moves between
+  // the keys its process names, whoever drives the advance (an automation
+  // reaching this door through the jobs slot, process-sync, a person). Before
+  // any write. The "caller" doors ask the same rule before their own UPDATE,
+  // so for them this never fires; it is the floor that holds if one forgets.
+  const refused = await refuseUndeclaredStage(session, toStage);
+  if (refused) {
+    if (input.stageWrite === "caller") {
+      logger.error(
+        { sessionId: session.id, toStage },
+        "a caller door wrote a stage its process does not declare before asking refuseUndeclaredStage"
+      );
+    }
+    return { ...UNCHANGED, refused };
+  }
 
   // STEP = STATUS (see the header): the subject moves, the run follows it.
   let subjectFirst: StageSubjectStatusOutcome | undefined;

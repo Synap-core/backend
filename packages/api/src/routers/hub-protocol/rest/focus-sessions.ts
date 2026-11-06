@@ -125,6 +125,7 @@ import { sessionTargetsSchema } from "../../../services/focus-sessions/session-t
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
 import type { StageSubjectStatusOutcome } from "../../../services/focus-sessions/stage-subject-status.js";
 import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
+import { refuseUndeclaredStage } from "@synap/jobs/utils/stage-declared.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
   answerDoorInputIssue,
@@ -2314,6 +2315,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           toStage: patch.currentStage,
         });
         if (refusal) return c.json({ error: refusal }, 409);
+      }
+
+      // Step 3b: DECLARED STAGES ONLY — the advance door's rule
+      // (`stage-declared.ts`), asked after the gate floor (its 409 names the
+      // approval) and before this door's own multi-field UPDATE: a key the session's process does not declare is refused.
+      if (patch.currentStage !== undefined) {
+        const undeclared = await refuseUndeclaredStage(
+          existing,
+          patch.currentStage
+        );
+        if (undeclared) return c.json({ error: undeclared.reason }, 400);
       }
 
       // Step 2d: AGENT HAND-OFF — an agent putting ANOTHER agent on the roster

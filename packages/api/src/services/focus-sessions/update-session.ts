@@ -2230,6 +2230,21 @@ export async function updateFocusSession(
     if (refusal) return { status: "denied", reason: refusal };
   }
 
+  // DECLARED STAGES ONLY — the advance door's rule (`stage-declared.ts`),
+  // asked HERE because this door writes the stage inside its own multi-field
+  // UPDATE (and an agent's write may become a proposal applied later): a key
+  // the session's process does not declare is refused before anything is
+  // stored or proposed. A session with no stages keeps free keys.
+  if (params.currentStage !== undefined) {
+    const { refuseUndeclaredStage } =
+      await import("@synap/jobs/utils/stage-declared.js");
+    const undeclared = await refuseUndeclaredStage(
+      existing,
+      params.currentStage
+    );
+    if (undeclared) return { status: "denied", reason: undeclared.reason };
+  }
+
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
   // same reason as the floors above: a track the caller cannot see, a stage it
   // did not pin or a cross-project filing is refused to the caller, never

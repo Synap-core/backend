@@ -44,7 +44,10 @@ import {
 } from "@synap/jobs/workers/hold-resume.js";
 
 import { apiKeyService } from "../api-keys.js";
-import { sessionForDevLoopFact } from "../dev-loop/pr-session-resolver.js";
+import {
+  sessionForDevLoopFact,
+  sessionsInDeploy,
+} from "../dev-loop/pr-session-resolver.js";
 import { observationFactKey } from "./fact-key.js";
 import { PG_UUID_RE } from "../../routers/hub-protocol/rest/_codecs/_openapi.js";
 
@@ -70,6 +73,9 @@ async function withResolvedSession(
   input: RecordObservationInput
 ): Promise<Record<string, unknown>> {
   if (!isDevLoopEventType(input.type)) return input.data;
+  if (input.type === DEV_LOOP_EVENT_TYPES.deployed) {
+    return withDeployedSessions(input);
+  }
   try {
     const sessionId = await sessionForDevLoopFact({
       userId: input.userId,
@@ -83,6 +89,33 @@ async function withResolvedSession(
       "observation: resolving the session of a dev-loop fact failed — recorded unstamped"
     );
     return input.data;
+  }
+}
+
+/**
+ * The sessions a `dev.deployed` build carries the PR of, stamped on its data
+ * as `sessionIds` (`sessionsInDeploy`). Always the pod's own derivation: a
+ * producer's `sessionIds` is dropped, never trusted (the list names sessions
+ * an automation then moves). Same posture as the PR stamp: a failed lookup
+ * never costs the fact.
+ */
+async function withDeployedSessions(
+  input: RecordObservationInput
+): Promise<Record<string, unknown>> {
+  const { sessionIds: _claimed, ...data } = input.data;
+  try {
+    const sessionIds = await sessionsInDeploy({
+      userId: input.userId,
+      data,
+      occurredAt: input.occurredAt,
+    });
+    return sessionIds.length > 0 ? { ...data, sessionIds } : data;
+  } catch (err) {
+    logger.warn(
+      { err, type: input.type, subjectRef: input.subjectRef },
+      "observation: resolving the sessions a deploy carries failed — recorded unstamped"
+    );
+    return data;
   }
 }
 

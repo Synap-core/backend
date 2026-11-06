@@ -58,6 +58,35 @@ function shortSha(sha: unknown): string | null {
 }
 
 const repoOf = sql<string>`lower(${events.data}->>'repo')`;
+
+const FACT_SELECT = {
+  type: events.type,
+  timestamp: events.timestamp,
+  data: events.data,
+};
+
+/** The PR facts (`dev.pr_*`, `dev.merge_queued`) of these PRs, under `visible`. */
+async function readPullRequestFactRows(
+  refs: readonly PullRequestRef[],
+  visible: SQL,
+  database: typeof db
+): Promise<DevLoopEventRowLike[]> {
+  return database
+    .select(FACT_SELECT)
+    .from(events)
+    .where(
+      and(
+        inArray(events.type, PR_TYPES),
+        or(
+          ...refs.map(
+            (r) =>
+              sql`(${repoOf} = ${r.repo.toLowerCase()} and ${events.data}->>'number' = ${String(r.number)})`
+          )
+        ),
+        visible
+      )
+    );
+}
 const shaOf = sql<string>`lower(left(${events.data}->>'sha', ${SHORT}))`;
 
 export async function readPullRequestStates(
@@ -69,27 +98,12 @@ export async function readPullRequestStates(
   const unique = new Map(refs.map((r) => [pullRequestKey(r), r]));
   if (unique.size === 0) return out;
   const visible = eventVisibleWhere(reader);
-  const select = {
-    type: events.type,
-    timestamp: events.timestamp,
-    data: events.data,
-  };
 
-  const prRows: DevLoopEventRowLike[] = await database
-    .select(select)
-    .from(events)
-    .where(
-      and(
-        inArray(events.type, PR_TYPES),
-        or(
-          ...[...unique.values()].map(
-            (r) =>
-              sql`(${repoOf} = ${r.repo.toLowerCase()} and ${events.data}->>'number' = ${String(r.number)})`
-          )
-        ),
-        visible
-      )
-    );
+  const prRows = await readPullRequestFactRows(
+    [...unique.values()],
+    visible,
+    database
+  );
   if (prRows.length === 0) return out;
 
   const repos = [
@@ -131,7 +145,7 @@ export async function readPullRequestStates(
     );
   }
   const laterRows: DevLoopEventRowLike[] = await database
-    .select(select)
+    .select(FACT_SELECT)
     .from(events)
     .where(and(or(...followUps), visible));
 
@@ -141,4 +155,35 @@ export async function readPullRequestStates(
     if (facts) out.set(key, facts);
   }
   return out;
+}
+
+/**
+ * The PRs among `refs` that ONE deploy contains — the fold's own `deployed`
+ * (`foldPullRequestState`: the PR merged, and the deploy is a build of its
+ * repo made at or after the merge, or names the merge commit), read over the
+ * PRs' recorded facts and this deploy alone. One derivation: never a second
+ * containment check. Used to name, on a `dev.deployed` fact, the sessions
+ * whose PR the build carries (`pr-session-resolver.ts` `sessionsInDeploy`).
+ * A failed read THROWS.
+ */
+export async function pullRequestsInDeploy(
+  refs: readonly PullRequestRef[],
+  deploy: DevLoopEventRowLike,
+  reader: EventReader,
+  database: typeof db = db
+): Promise<PullRequestRef[]> {
+  const unique = new Map(refs.map((r) => [pullRequestKey(r), r]));
+  if (unique.size === 0 || deploy.type !== DEV_LOOP_EVENT_TYPES.deployed) {
+    return [];
+  }
+  const prRows = await readPullRequestFactRows(
+    [...unique.values()],
+    eventVisibleWhere(reader),
+    database
+  );
+  if (prRows.length === 0) return [];
+  const rows = [...prRows, deploy];
+  return [...unique.values()].filter(
+    (ref) => foldPullRequestState(ref, rows)?.deployed === true
+  );
 }
