@@ -43,6 +43,7 @@ import {
   permits,
   type GrantRequest,
 } from "@synap/governance-policy/grants";
+import { placeBeyondPodWideReads } from "@synap-core/types/grants";
 
 export interface GrantWriteInput {
   subjectType: string;
@@ -89,8 +90,12 @@ export function namedPermissionPermits(
         patternMatches(p, { subject: named.subject, action: named.action })
     );
     if (!holds) return false;
-    if (!scope.workspaceIds || named.workspaceId === null) return true;
-    return scope.workspaceIds.includes(named.workspaceId);
+    // Where the scope reaches for a write, read through the ONE parse
+    // (access model B, `packages/types/src/grants/reach.ts`).
+    const place = placeBeyondPodWideReads(scope);
+    if (!place) return false;
+    if (place.kind === "unbounded" || named.workspaceId === null) return true;
+    return place.ids.includes(named.workspaceId);
   });
 }
 
