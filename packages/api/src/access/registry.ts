@@ -42,6 +42,7 @@ import {
   sourceConfigs,
   sourceSubscriptions,
   boxRuns,
+  dailyAsks,
   userPreferences,
   userResourceState,
   libraryGroups,
@@ -490,6 +491,14 @@ registerVisibility({
   query: () => db.query.notifications,
   // `userId` is the RECIPIENT — a notification belongs to exactly one user.
   rule: { kind: "user", userColumn: notifications.userId },
+});
+// The daily ask budget's stamps (0367) are the PERSON's: which of their asks
+// were headlined today. Written only by the one counting door
+// (services/governance/ask-budget.ts), read only for that person.
+registerVisibility({
+  table: dailyAsks,
+  query: () => db.query.dailyAsks,
+  rule: { kind: "user", userColumn: dailyAsks.userId },
 });
 registerVisibility({
   table: inboxItems,

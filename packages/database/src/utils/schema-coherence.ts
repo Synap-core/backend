@@ -37,6 +37,7 @@ import { notificationPreferences } from "../schema/notifications.js";
 import { documents } from "../schema/documents.js";
 import { workspaces } from "../schema/workspaces.js";
 import { projectTracks } from "../schema/project-tracks.js";
+import { dailyAsks } from "../schema/daily-asks.js";
 import { trackParticipants } from "../schema/track-participants.js";
 import { libraryGroups } from "../schema/library-groups.js";
 
@@ -1852,6 +1853,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0356_box_runs.sql",
   },
 
+  // daily_asks — the ONE count of the daily ask budget (0367). Absence means
+  // every needs-you read and push would fail to read the day's stamps
+  // (42P01); the budget then fails OPEN (every ask headlined), never closed.
+  {
+    table: "daily_asks",
+    column: "item_kind",
+    addedBy: "0367_daily_ask_budget.sql",
+  },
+  {
+    table: "daily_asks",
+    column: "day",
+    addedBy: "0367_daily_ask_budget.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.
@@ -2531,6 +2546,9 @@ const REQUIRED_INDEX_TABLES = [
   // The Library (0328): the per-person key unique index IS "one group per
   // key"; the documents read index (declared on `documents` above) pages it.
   libraryGroups,
+  // The daily ask budget (0367): the per-person-day item unique index IS "one
+  // stamp per ask per day"; the stamp insert conflicts on it.
+  dailyAsks,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

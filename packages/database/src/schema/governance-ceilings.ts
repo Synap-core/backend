@@ -46,6 +46,8 @@ export const governanceCeilingAxisEnum = pgEnum("governance_ceiling_axis", [
   "automation_ai_dispatch_daily",
   "worker_pending_approvals",
   "worker_irreversible_sends_daily",
+  // 0367 — the daily ask budget: a PERSON-subject axis (`subjectType: "user"`).
+  "daily_ask_count",
 ]);
 export const GOVERNANCE_CEILING_AXES = governanceCeilingAxisEnum.enumValues;
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];

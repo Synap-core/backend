@@ -289,6 +289,19 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 export const DEFAULT_DAILY_WRITE_CEILING: number | null = null;
 
 /**
+ * THE DAILY ASK BUDGET (D7, founder-approved 2026-10-28; axis
+ * `daily_ask_count`, 0367). How many asks are HEADLINED to one person per
+ * local day — pushed, on Home, in the Asks lane. Past it an ask waits in
+ * "Later": listed and decidable, never pushed, and NEVER auto-approved. The
+ * budget is on the person's attention, not on the agent's writes: the engine
+ * still decides whether a person must decide, every floor holds, and this
+ * number only decides when and how loudly they are asked. Counted in ONE
+ * place (`daily_asks`, services/governance/ask-budget.ts). A row (subject =
+ * the person) changes it; raising it is a loosening (`classifySettingSensitivity`).
+ */
+export const DEFAULT_DAILY_ASK_COUNT = 5;
+
+/**
  * The SYSTEM ceiling on irreversible sends (`messaging.external.send`,
  * `provider.action` — every key {@link isReversibleWrite} answers `false` for)
  * ONE stage worker enablement may make per UTC day (work model L4). Past it,
@@ -321,6 +334,8 @@ export const CEILING_DEFAULTS = {
   automation_ai_dispatch_daily: 50,
   worker_pending_approvals: 20,
   worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
+  /** Asks headlined per person per local day; the rest wait in Later. */
+  daily_ask_count: DEFAULT_DAILY_ASK_COUNT,
 } as const;
 
 /**

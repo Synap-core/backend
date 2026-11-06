@@ -4784,6 +4784,8 @@ ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispat
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispatch_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_approvals';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
+-- 0367: the daily ask budget (a person-subject axis).
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'daily_ask_count';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,
@@ -5407,3 +5409,23 @@ CREATE INDEX IF NOT EXISTS "idx_box_runs_session"
 CREATE INDEX IF NOT EXISTS "idx_box_runs_skill"
   ON "box_runs" ("skill_id")
   WHERE "skill_id" IS NOT NULL;
+
+-- daily_asks — the ONE count of the daily ask budget (D7). The first time an
+-- ask is headlined on a person's local day it is stamped here, until the
+-- `daily_ask_count` ceiling is reached; the rest wait in Later. Owner-only
+-- read. Mirrors 0367_daily_ask_budget.sql.
+CREATE TABLE IF NOT EXISTS "daily_asks" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"      text        NOT NULL,
+  "day"          date        NOT NULL,
+  "item_kind"    text        NOT NULL,
+  "item_id"      text        NOT NULL,
+  "rank"         integer     NOT NULL,
+  "surfaced_at"  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "daily_asks_user_day_item_uniq"
+  ON "daily_asks" ("user_id", "day", "item_kind", "item_id");
+
+CREATE INDEX IF NOT EXISTS "daily_asks_user_day_idx"
+  ON "daily_asks" ("user_id", "day");
