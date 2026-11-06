@@ -81,3 +81,37 @@ describe("presence.challenge — a failed passkey read is not 'no passkey'", () 
     expect(h.issue).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("presence.challenge — each passkey says where it lives", () => {
+  it("names the holder from the AAGUID, so pod admin can skip an extension", async () => {
+    h.readPasskeys.mockResolvedValue([
+      {
+        id: "ZGV2aWNl",
+        aaguid: "fbfc3007-154e-4ecc-8c0b-6e020557d7bd",
+        displayName: "iCloud Keychain",
+      },
+      {
+        id: "Yml0d2FyZGVu",
+        aaguid: "d548826e-79b4-db40-a3d8-11116f7e8349",
+        displayName: null,
+      },
+      { id: "a2V5", aaguid: null, displayName: null },
+    ]);
+    const res = await caller().challenge(KEY_REQUEST);
+    expect(res.passkey?.allowCredentials).toEqual([
+      {
+        id: "ZGV2aWNl",
+        type: "public-key",
+        holder: "device",
+        name: "iCloud Keychain",
+      },
+      {
+        id: "Yml0d2FyZGVu",
+        type: "public-key",
+        holder: "manager",
+        name: "Bitwarden",
+      },
+      { id: "a2V5", type: "public-key", holder: "unknown", name: null },
+    ]);
+  });
+});

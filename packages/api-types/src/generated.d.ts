@@ -15768,6 +15768,30 @@ export interface ProposalExecutorResult {
 	joined?: boolean;
 	approvalRun?: ApprovalRunView;
 }
+/**
+ * Where a passkey lives, read from its authenticator's AAGUID (the id Kratos
+ * records for each passkey, `credentials.passkey.config.credentials[].
+ * authenticator.aaguid`). Pod admin uses it to send the browser's WebAuthn
+ * call to the prompt that can actually answer it:
+ *
+ *  - `device`: a store the browser's OWN prompt reaches (iCloud Keychain /
+ *    Apple Passwords, Google Password Manager, Windows Hello, Chrome or Edge
+ *    on this computer).
+ *  - `manager`: a password manager whose BROWSER EXTENSION holds it
+ *    (Bitwarden, 1Password, Dashlane, Proton Pass…). Such an extension
+ *    replaces `navigator.credentials.get/create` in the page, and answers
+ *    "no passkey" for any passkey it does not hold itself.
+ *  - `unknown`: an AAGUID this table does not list, the all-zero AAGUID
+ *    ("none" attestation) or none recorded (a security key, a phone, an
+ *    unlisted store).
+ *
+ * Source, verified entry by entry: the community list
+ * github.com/passkeydeveloper/passkey-authenticator-aaguids, `aaguid.json`
+ * at commit 22c5ac90 (20 Oct 2026). `name` is that list's name. Add a row
+ * from that list only; never type an AAGUID from memory.
+ */
+/** Where a passkey lives: this device's own store, a password manager's extension, or unknown. */
+export type PasskeyHolder = "device" | "manager" | "unknown";
 declare const PRESENCE_REFUSAL_CODES: readonly [
 	"PRESENCE_REQUIRED",
 	"PRESENCE_INVALID",
@@ -47725,7 +47749,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				nonce: string;
 				passkey: {
 					allowCredentials: {
+						holder: PasskeyHolder;
 						id: string;
+						name: string | null;
 						type: "public-key";
 					}[];
 					challenge: string;
