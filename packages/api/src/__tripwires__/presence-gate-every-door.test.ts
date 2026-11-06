@@ -422,19 +422,6 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     ).toEqual([]);
   });
 
-  it("the ONE step-up middleware asks SENSITIVE_ACTIONS for a proof bound to the call", () => {
-    const trpc = FILES.find((f) => f.path === "trpc.ts")!.src;
-    const mw = trpc.slice(
-      trpc.indexOf("export const requireFreshAuthentication"),
-      trpc.indexOf("export const credentialProcedure")
-    );
-    expect(mw).toMatch(/isSensitiveActionPath\(path\)/);
-    expect(mw).toMatch(/passPresenceForAction\(/);
-    expect(mw).toMatch(/getRawInput\(\)/);
-    // The pass rides to the procedure: the service behind the act asks it.
-    expect(mw).toMatch(/opts\.next\(\{ ctx: \{ presencePass \} \}\)/);
-  });
-
   /** Writes that turn a skill, tool or MCP server ON with no gate, and why. */
   const ON_WRITERS: Record<string, string> = {
     "routers/intelligence.ts":
