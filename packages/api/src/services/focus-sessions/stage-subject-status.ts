@@ -21,6 +21,10 @@
  * A caller's reply carries the outcome as `subjectMove`
  * ({@link reportedSubjectMove}) whenever the stage asked for a move.
  *
+ * BIRTH (finding e100ddf6): a session born from a staged playbook is seeded
+ * INTO its first stage (`create-session.ts`), so that stage's value is written
+ * at birth by the same rule — {@link writeBirthStageSubjectStatus}.
+ *
  * NOT called (by the advance door) when:
  *  - the advance FOLLOWS the subject (`skipSubjectWrite`, `@synap/jobs`
  *    `utils/process-sync.ts`): the subject is the source of truth there, and a
@@ -61,6 +65,7 @@ import type { Hold } from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
+import { resolveStageGate } from "@synap/playbooks";
 import type { Context } from "../../types/context.js";
 import { moveStatus, type MoveStatusResult } from "../lifecycle/move-status.js";
 import { readSubjectProfile } from "../playbooks/playbook-activators.js";
@@ -188,6 +193,38 @@ export async function writeStageSubjectStatus(input: {
     );
     return { status: "failed", reason };
   }
+}
+
+/**
+ * BIRTH: a session seeded INTO its first stage (`create-session.ts`) writes
+ * that stage's `subjectStatus` by the rule an advance into it applies
+ * (`advance-stage.ts`): an UNGATED stage writes it on entry, through
+ * {@link writeStageSubjectStatus}; a GATED stage writes nothing — a stage held
+ * by its gate is not agreed yet, and its value belongs to the gate's pass.
+ * `undefined` when nothing was attempted (no subject, a gated stage); never
+ * throws (a write that could not happen is `failed`, and the session stands).
+ */
+export async function writeBirthStageSubjectStatus(
+  input: Parameters<typeof writeStageSubjectStatus>[0]
+): Promise<StageSubjectStatusOutcome | undefined> {
+  const { session } = input;
+  if (!session.subjectEntityId) return undefined;
+  try {
+    const proc = await loadSessionProcess({
+      sessionId: session.id,
+      playbookId: session.playbookId,
+    });
+    const stage = proc?.stages.find((s) => s?.key === input.toStage);
+    if (stage && resolveStageGate(stage)) return undefined;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      { err, sessionId: session.id, toStage: input.toStage },
+      "birth stage subject-status not written — the session stands"
+    );
+    return { status: "failed", reason };
+  }
+  return writeStageSubjectStatus(input);
 }
 
 /**

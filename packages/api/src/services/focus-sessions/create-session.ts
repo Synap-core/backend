@@ -102,6 +102,10 @@ import {
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { readStartOffers, type StartOffersRead } from "./start-offers.js";
+// Types only, statically: the writer is loaded where it runs (below). A static
+// import puts `move-status` → `permission-check` on this module's graph and
+// closes an import cycle through `permission-check` (see complete-session.ts).
+import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -498,6 +502,13 @@ export type CreateFocusSessionResult =
       subjectRef?: SubjectRefResolution;
       /** Present iff `targets` were given: which were added, which already were. */
       targets?: SessionTargetsWrite;
+      /**
+       * Born INTO a first stage that asks for a subject status: what happened
+       * to the subject (written, proposed, skipped with why, failed) — the
+       * same report an advance's reply carries (`reportedSubjectMove`).
+       * Absent when there was nothing to move, and for a gated first stage.
+       */
+      subjectMove?: StageSubjectStatusOutcome;
     }
   | {
       /**
@@ -1379,6 +1390,41 @@ export async function createFocusSession(
     }
   }
 
+  // BIRTH STAGE = SUBJECT STATUS (finding e100ddf6): the session was seeded
+  // INTO its first stage, so that stage's `subjectStatus` is written now, by
+  // the advance's own rule and writer (ungated writes, gated holds). After the
+  // commit, never inside it: a subject write that fails is reported on the
+  // reply, and never fails a session that already exists.
+  let subjectMove: StageSubjectStatusOutcome | undefined;
+  if (sessionOut.currentStage && sessionOut.subjectEntityId) {
+    try {
+      const { writeBirthStageSubjectStatus, reportedSubjectMove } =
+        await import("./stage-subject-status.js");
+      subjectMove = reportedSubjectMove(
+        await writeBirthStageSubjectStatus({
+          session: {
+            id: sessionOut.id,
+            playbookId: sessionOut.playbookId ?? null,
+            subjectEntityId: sessionOut.subjectEntityId,
+            workspaceId: sessionOut.workspaceId ?? null,
+          },
+          toStage: sessionOut.currentStage,
+          userId,
+          agentUserId: agentUserId ?? null,
+        })
+      );
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: sessionOut.id },
+        "birth stage subject-status not written — session kept"
+      );
+      subjectMove = {
+        status: "failed",
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
   // parent). AFTER the session exists, and never inside the transaction — a bad
   // parent handle must not roll back a legitimate session. The producer owns the
@@ -1625,5 +1671,6 @@ export async function createFocusSession(
     ...(outcome.adopted ? { adopted: true as const } : {}),
     ...(subjectRefResolution ? { subjectRef: subjectRefResolution } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
+    ...(subjectMove ? { subjectMove } : {}),
   };
 }

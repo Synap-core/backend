@@ -2050,6 +2050,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(result.offers ? { offers: result.offers } : {}),
         ...(result.adopted ? { adopted: true } : {}),
         ...(result.targets ? { targets: result.targets } : {}),
+        // Born into a stage that moves the subject: what the move did.
+        ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
       });
     } catch (err) {
       // An agent's start that declares no criterion: a refusal, not a fault.
