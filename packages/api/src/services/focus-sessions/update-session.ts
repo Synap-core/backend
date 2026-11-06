@@ -44,12 +44,14 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { openLink } from "../../utils/deep-links.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
+  ASK_ANSWER_BY_PAST_MESSAGE,
   ASK_LIMITS,
   ASK_LOOKED_AT_KINDS,
   AnswerProvenanceSchema,
   AskAnswerValueSchema,
   AskCauseSchema,
   AskSchema,
+  isAskAnswerByPast,
   AskSnapshotSchema,
   PendingRelayedAnswerSchema,
   askFingerprint,
@@ -136,6 +138,9 @@ import {
   withDefaultUnblocks,
 } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
+// Type only: the writer behind it (move-status, the permission gate) is
+// imported lazily where the advance reports it.
+import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   closedRunRefusal,
   normalizeSessionTitle,
@@ -400,6 +405,14 @@ export type UpdateFocusSessionResult =
       subSessionsFiled?: string[];
       /** What `targets` did: which were added, which already were. */
       targets?: SessionTargetsWrite;
+      /**
+       * What a `currentStage` advance did to the session's subject, present
+       * whenever the entered stage declares a `subjectStatus`: written,
+       * proposed, failed, or skipped with why (`reportedSubjectMove`). The
+       * stage stands either way; a move that did not happen must reach the
+       * caller, who otherwise reads the advance as having moved the thing.
+       */
+      subjectMove?: StageSubjectStatusOutcome;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -1003,6 +1016,40 @@ export function personsSlotsHandedAway(
       );
     })
     .map((item) => item.label);
+}
+
+/**
+ * The labels of incoming slots whose ask names an `answerBy` already past
+ * ({@link isAskAnswerByPast}) — refused at write, by every door that declares
+ * a slot. Round-tripping the stored ask's own `answerBy` unchanged is fine:
+ * only a value the caller is WRITING now is judged. Pure.
+ */
+export function pastAnswerByLabels(
+  current: OutputItem[],
+  incoming: readonly (OutputItem | undefined)[],
+  now: Date | number = Date.now()
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item): item is OutputItem => {
+      const answerBy = (item?.ask as { answerBy?: unknown } | null | undefined)
+        ?.answerBy;
+      if (!isAskAnswerByPast(answerBy, now)) return false;
+      const stored = (
+        twinOf(item)?.ask as { answerBy?: unknown } | null | undefined
+      )?.answerBy;
+      return stored !== answerBy;
+    })
+    .map((item) => item.label);
+}
+
+/** The refusal of {@link pastAnswerByLabels}. */
+export function pastAnswerByError(labels: string[]): string {
+  const named = labels
+    .slice(0, 5)
+    .map((l) => `"${l}"`)
+    .join(", ");
+  return `Refused: ${named}: ${ASK_ANSWER_BY_PAST_MESSAGE} Nothing was changed.`;
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
@@ -2006,6 +2053,25 @@ export async function updateFocusSession(
     }
   }
 
+  // A DEADLINE ALREADY PAST, refused to the caller who wrote it (review
+  // 5 Nov 2026): "overdue" is P0, whose push breaks through Focus, so a past
+  // `answerBy` would be a way around the person's push budget.
+  {
+    const declared = [
+      ...(params.expectedOutputs ?? []),
+      ...(params.addOutput ? [params.addOutput] : []),
+    ];
+    if (declared.length > 0) {
+      const stored: OutputItem[] = Array.isArray(existing.expectedOutputs)
+        ? (existing.expectedOutputs as OutputItem[])
+        : [];
+      const past = pastAnswerByLabels(stored, declared as OutputItem[]);
+      if (past.length > 0) {
+        return { status: "denied", reason: pastAnswerByError(past) };
+      }
+    }
+  }
+
   // WHAT IT UNBLOCKS (decision E, needs-truth §5): an AGENT that hands the
   // person a slot says what moves on the answer. Read on the slots this patch
   // would newly pose (`slotsMissingUnblocks`, the provenance stamp's own
@@ -2750,6 +2816,7 @@ export async function updateFocusSession(
   // `stageWrite: "caller"` because the stage rode along in the multi-field UPDATE
   // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
+  let subjectMove: StageSubjectStatusOutcome | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -2771,6 +2838,10 @@ export async function updateFocusSession(
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
     if (advance.paused) gatedStatus = "paused";
+    // What the advance did to the subject, whenever the entered stage asked
+    // for a move: a move that did not happen is never silent.
+    const { reportedSubjectMove } = await import("./stage-subject-status.js");
+    subjectMove = reportedSubjectMove(advance.subjectStatus);
   }
 
   // ── FOLLOW / RELEASE A PLAYBOOK ─────────────────────────────────────────────
@@ -2898,6 +2969,7 @@ export async function updateFocusSession(
     ...(followRefusal ? { followRefusal } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
+    ...(subjectMove ? { subjectMove } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),

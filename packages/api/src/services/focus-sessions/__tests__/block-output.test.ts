@@ -23,6 +23,11 @@ import { describe, it, expect } from "vitest";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { stampBlocked, stampUnblocked } from "../block-output.js";
 import {
+  classifyOwedAsk,
+  type NeedsYouSessionFacts,
+  type NeedsYouSlotFacts,
+} from "@synap-core/types/needs-you";
+import {
   applyOutputMutations,
   reconcileOwedSince,
   withEvidenceVerdict,
@@ -102,6 +107,45 @@ describe("stampBlocked — the slot becomes the human's", () => {
     // The owed feed ages rows by this stamp; re-declaring must not make the
     // oldest owed slot look brand new.
     expect(twice[1]!.owedSince).toBe(AT.toISOString());
+  });
+
+  it("a re-asked slot drops the person's Later on the old ask: the new question is in their headline", () => {
+    // The person set the first ask aside for a week, then answered it; the
+    // agent asks again on the same slot.
+    const asked: ExpectedOutput = {
+      kind: "ask",
+      label: "Signed NDA",
+      owner: "human",
+      blockedReason: "decision",
+      askedBy: "agent-1",
+      owedSince: "2026-09-07T09:00:00.000Z",
+      laterUntil: "2026-09-15T08:00:00.000Z",
+      answer: { text: "yes", answeredAt: "2026-09-07T10:00:00.000Z" },
+    } as ExpectedOutput;
+    const [reasked] = stampBlocked(
+      [asked],
+      "Signed NDA",
+      "decision",
+      "again",
+      AT,
+      undefined,
+      {
+        mode: "confirm",
+        prompt: "Still signed?",
+      }
+    );
+    expect(reasked).not.toHaveProperty("laterUntil");
+    expect(
+      classifyOwedAsk(
+        reasked as NeedsYouSlotFacts,
+        {
+          status: "active",
+          turnInFlight: false,
+          lastAgentActivityAt: null,
+        } as NeedsYouSessionFacts,
+        AT
+      )
+    ).not.toBe("review_later");
   });
 
   it("drops a blank `why` rather than storing an empty line", () => {

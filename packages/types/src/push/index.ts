@@ -329,6 +329,16 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
 export const PUSH_DAILY_CAP = 3;
 
 /**
+ * How many asks due within the hour ONE agent may break through the person's
+ * Focus with, per day (review 5 Nov 2026, reviews backend #1 / oversight 2):
+ * `answerBy` is written by the asking agent, so without a budget an agent that
+ * dates every ask "now" would break Focus and skip {@link PUSH_DAILY_CAP} on
+ * every push. Past it, the agent's next due-soon ask goes as a normal push,
+ * counted and capped like any other. The day is the person's own.
+ */
+export const PUSH_DUE_SOON_DAILY_PER_AGENT = 1;
+
+/**
  * Categories the cap never holds back and never counts: "something you own
  * broke" (incidents and failures, plan Q5.2) always reaches the phone, and
  * so does what the person sent to it themselves (`sent-by-you`): the budget

@@ -127,6 +127,8 @@ const IDLE = randomUUID();
 const SYNAP_AI_ROW = randomUUID();
 /** An agent the pod runs itself (an IS persona user, no key): `pod` reach. */
 const HOUSE = randomUUID();
+/** A second "Claude Code", on another computer (the founder's two, finding 2288ffce). */
+const TWIN = randomUUID();
 const WS = randomUUID();
 const PLAYBOOK = randomUUID();
 /** A playbook that runs only on agents (`external-agent`). */
@@ -189,14 +191,16 @@ beforeAll(async () => {
       ($1, 'a@x.test', 'Antoine', 'human', null, null),
       ($2, 'cc@x.test', 'Claude Code', 'agent', 'claude-code', $1),
       ($3, 'cx@x.test', 'Codex', 'agent', 'codex', $1),
-      ($4, 'meta@x.test', 'General Agent', 'agent', 'meta', $1)`,
-    [USER, RUNNING, IDLE, HOUSE]
+      ($4, 'meta@x.test', 'General Agent', 'agent', 'meta', $1),
+      ($5, 'cc2@x.test', 'Claude Code', 'agent', 'claude-code', $1)`,
+    [USER, RUNNING, IDLE, HOUSE, TWIN]
   );
   await q(
     `insert into api_keys (id, user_id, key_type, is_active, linked_user_id, last_used_at, instance_label, worker_served_at, created_at) values
       ($1, $2, 'hub_inbound', true, $4, now(), 'devbox', now() - interval '30 seconds', now()),
-      ($3, $5, 'hub_inbound', true, $4, now(), 'MacBook', null, now())`,
-    [randomUUID(), RUNNING, randomUUID(), USER, IDLE]
+      ($3, $5, 'hub_inbound', true, $4, now(), 'MacBook', null, now()),
+      ($6, $7, 'hub_inbound', true, $4, now(), 'Studio', now() - interval '30 seconds', now())`,
+    [randomUUID(), RUNNING, randomUUID(), USER, IDLE, randomUUID(), TWIN]
   );
   await q(
     `insert into agents (id, name, agent_slug, active, owner_type) values ($1, 'Meta', 'meta', true, 'system')`,
@@ -250,16 +254,21 @@ describe("nothing remembered yet", () => {
         [{ executor: "external-agent", agentUserId: IDLE }, "cant_wake"],
       ])
     );
-    // The words come from the pod, so an app never writes its own.
-    expect(
-      read.options
-        .filter((o) => o.choice.executor === "external-agent")
-        .map((o) => [o.label, o.wakeLabel])
-    ).toEqual(
+    // The words come from the pod, so an app never writes its own; two agents
+    // with one name carry their computer (finding 2288ffce), a unique one
+    // stays bare.
+    const agentLabels = read.options
+      .filter((o) => o.choice.executor === "external-agent")
+      .map((o) => [o.label, o.wakeLabel]);
+    expect(agentLabels).toEqual(
       expect.arrayContaining([
-        ["Claude Code", "Awake"],
+        [expect.stringMatching(/^Claude Code · devbox$/i), "Awake"],
+        [expect.stringMatching(/^Claude Code · Studio$/i), "Awake"],
         ["Codex", "Can't wake · Nothing can start it yet"],
       ])
+    );
+    expect(new Set(read.options.map((o) => o.label)).size).toBe(
+      read.options.length
     );
     expect(read.next).toEqual({
       executor: "is-agent",

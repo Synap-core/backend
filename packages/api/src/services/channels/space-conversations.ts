@@ -3,7 +3,8 @@
  * one space, in ONE read (CRM Messages contract b4f8c2cd, A; build map
  * ca310f27 slice 1). Hub `GET /channels/conversations`.
  *
- * Who is listed: a person (any record) with a live facet in the space, whom
+ * Who is listed: a person (any record) wearing a live role in the space (a
+ * facet stamped there, or a pod-wide facet whose role is granted to it), whom
  * the caller can read, and who has an external channel bound to them or an
  * open send (pending, held or failed). One row per person: their name and
  * company, their channel ids, the last message, the draft waiting (or the
@@ -11,8 +12,9 @@
  *
  * Every read carries the caller's floor AND the key's grant, through the
  * existing doors:
- *   - the people: `entityReadVisibleWhere` + `facetInWorkspaceLensWhere`
- *     (a facet in THIS space, and the caller a member of it), and the
+ *   - the people: `entityReadVisibleWhere` + `roleInWorkspaceLensWhere`
+ *     (a role in THIS space, stamped there or pod-wide and granted to it,
+ *     and the caller a member of it), and the
  *     listing rule (`listableEntityWhere`: no probe or demo row);
  *   - their channels: `channelVisibilityWhere` (a channel follows its person);
  *   - their sends: `proposalUserFloor` (floor + `proposal` grant): a key that
@@ -46,7 +48,7 @@ import {
 } from "@synap/database/schema";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
-import { facetInWorkspaceLensWhere } from "../../utils/project-scope.js";
+import { roleInWorkspaceLensWhere } from "../../utils/project-scope.js";
 import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { storedLinkedinReach } from "../connectors/linkedin-reach.js";
 import {
@@ -191,8 +193,9 @@ export async function listSpaceConversations(
     proposalUserFloor(userId)
   );
 
-  // 1. The people: a facet in the space, readable, and a channel or an open
-  //    send bound to them.
+  // 1. The people: a role in the space (a facet stamped there, or a pod-wide
+  //    facet whose role is granted to it: most leads are pod-wide), readable,
+  //    and a channel or an open send bound to them.
   const withChannel = database
     .select({ id: channels.contextObjectId })
     .from(channels)
@@ -211,7 +214,12 @@ export async function listSpaceConversations(
     .where(
       and(
         isNull(entities.deletedAt),
-        facetInWorkspaceLensWhere(entities.id, userId, workspaceId),
+        roleInWorkspaceLensWhere(
+          entities.workspaceId,
+          entities.id,
+          userId,
+          workspaceId
+        ),
         entityReadVisibleWhere(userId),
         // THE LISTING RULE (FB1020 B5): no probe-key row, no demo row.
         listableEntityWhere(),

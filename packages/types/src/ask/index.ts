@@ -590,6 +590,28 @@ export function isAskInstant(value: unknown): value is string {
 }
 
 /**
+ * Is this `answerBy` already past at the moment the ask is WRITTEN? Every
+ * write door refuses such an ask (review 5 Nov 2026, reviews backend #1 /
+ * oversight 2): a deadline in the past is not a deadline, and the pod reads
+ * "overdue" as P0, the level whose push breaks through the person's Focus.
+ * Read-time stays lenient: a stored ask that went past its time is simply
+ * overdue. Anything that is not an instant is not "past" here (the schema
+ * refuses it on its own).
+ */
+export function isAskAnswerByPast(
+  answerBy: unknown,
+  now: Date | number = Date.now()
+): boolean {
+  if (!isAskInstant(answerBy)) return false;
+  const at = now instanceof Date ? now.getTime() : now;
+  return Date.parse(answerBy) <= at;
+}
+
+/** The refusal every write door gives for {@link isAskAnswerByPast}. */
+export const ASK_ANSWER_BY_PAST_MESSAGE =
+  "answerBy is already past: give the time the answer is still useful, in the future, or leave answerBy out.";
+
+/**
  * Shared by every mode, like `stakes`: what makes one ask a TICKET the pod can
  * rank. Every field is optional and absent reads as today's behaviour.
  */

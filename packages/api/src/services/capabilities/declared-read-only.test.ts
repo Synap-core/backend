@@ -183,13 +183,18 @@ describe("the shipped exa declaration actually reaches the projection", () => {
     const { fileURLToPath } = await import("node:url");
     const path = fileURLToPath(
       new URL(
-        "../../../../../../synap-control-plane-api/src/seeds/capability-templates/exa.capability.json",
+        "../../../../../../synap-app/packages/workspace-templates/capabilities/exa.capability.json",
         import.meta.url
       )
     );
-    const def = JSON.parse(await readFile(path, "utf8")) as {
-      skills: Array<{ name: string; metadata?: Record<string, unknown> }>;
-    };
+    // The catalog manifest's `spec` is the capability definition.
+    const def = (
+      JSON.parse(await readFile(path, "utf8")) as {
+        spec: {
+          skills: Array<{ name: string; metadata?: Record<string, unknown> }>;
+        };
+      }
+    ).spec;
     const search = def.skills.find((s) => s.name === "exa_search");
     expect(search, "exa_search vanished from the template").toBeDefined();
     expect(declaredAllowedHosts(search!.metadata)).toBeUndefined();

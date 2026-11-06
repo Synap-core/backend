@@ -21,7 +21,7 @@
 import { TRPCError } from "@trpc/server";
 import { db as defaultDb, focusSessions, and, eq } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { REQUEST_LATER_MAX_MS } from "@synap-core/types/proposals";
+import { laterTimeProblem } from "@synap-core/types/proposals";
 import { findSlotIndex } from "./slot-keys.js";
 import { isOwedSlot } from "./owed-outputs.js";
 
@@ -50,21 +50,10 @@ export function stampAskLater(
   return { status: "ok", outputs: copy, label: slot.label };
 }
 
-/** The refusals a bad time earns, the same words as a request's Later. */
+/** The refusal a bad time earns: the one Later check, shared with a request's. */
 function assertLaterTime(until: Date, now: Date): void {
-  const at = until.getTime();
-  if (!Number.isFinite(at) || at <= now.getTime()) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Later needs a time in the future.",
-    });
-  }
-  if (at > now.getTime() + REQUEST_LATER_MAX_MS) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Later can set an ask aside for 30 days at most.",
-    });
-  }
+  const problem = laterTimeProblem(until, now, "an ask");
+  if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
 }
 
 async function writeAskLater(p: {
