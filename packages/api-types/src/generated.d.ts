@@ -38790,6 +38790,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						as?: string | undefined;
 						over: string;
 					} | undefined;
+					when?: {
+						equals?: unknown;
+						exists?: boolean | undefined;
+						param: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -45476,6 +45481,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						as?: string | undefined;
 						over: string;
 					} | undefined;
+					when?: {
+						equals?: unknown;
+						exists?: boolean | undefined;
+						param: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -46481,6 +46491,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					forEach?: {
 						as?: string | undefined;
 						over: string;
+					} | undefined;
+					when?: {
+						equals?: unknown;
+						exists?: boolean | undefined;
+						param: string;
 					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
@@ -56987,6 +57002,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							forEach?: {
 								as?: string | undefined;
 								over: string;
+							} | undefined;
+							when?: {
+								equals?: unknown;
+								exists?: boolean | undefined;
+								param: string;
 							} | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;

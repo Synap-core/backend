@@ -1063,6 +1063,20 @@ export interface PlaybookStageForEach {
 }
 
 /**
+ * A condition under which a stage runs. ADVISORY and declarative: it names the
+ * test, it does not evaluate it. Nothing consumes it yet; the run handler that
+ * skips a stage reads it when it lands. Give `equals` or `exists` (or both).
+ */
+export interface PlaybookStageWhen {
+  /** A run param or earlier output to test: a name or dotted path. A reference, never data. */
+  param: string;
+  /** The stage runs when the value at `param` equals this. */
+  equals?: unknown;
+  /** The stage runs when the value at `param` is present (true) or absent (false). */
+  exists?: boolean;
+}
+
+/**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
  * (progress-only). The active stage's `key` is stored on
@@ -1164,6 +1178,12 @@ export interface PlaybookStage {
    * Advisory: nothing consumes it yet.
    */
   forEach?: PlaybookStageForEach;
+  /**
+   * Run this stage only when the condition holds — see
+   * {@link PlaybookStageWhen}. Absent ⇒ the stage always runs, as before.
+   * Advisory: nothing consumes it yet.
+   */
+  when?: PlaybookStageWhen;
 }
 
 /**

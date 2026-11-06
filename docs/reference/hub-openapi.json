@@ -16594,6 +16594,22 @@
                                     },
                                     "required": ["over"],
                                     "additionalProperties": false
+                                  },
+                                  "when": {
+                                    "type": "object",
+                                    "properties": {
+                                      "param": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                      },
+                                      "equals": {},
+                                      "exists": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["param"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -20064,6 +20080,22 @@
                                       }
                                     },
                                     "required": ["over"],
+                                    "additionalProperties": false
+                                  },
+                                  "when": {
+                                    "type": "object",
+                                    "properties": {
+                                      "param": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                      },
+                                      "equals": {},
+                                      "exists": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": ["param"],
                                     "additionalProperties": false
                                   }
                                 },
@@ -25572,6 +25604,22 @@
                             }
                           },
                           "required": ["over"],
+                          "additionalProperties": false
+                        },
+                        "when": {
+                          "type": "object",
+                          "properties": {
+                            "param": {
+                              "type": "string",
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                            },
+                            "equals": {},
+                            "exists": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": ["param"],
                           "additionalProperties": false
                         }
                       },
