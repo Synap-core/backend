@@ -3826,6 +3826,45 @@ export function resolveRunChoiceViaLabel(
 }
 
 /**
+ * Whose key Synap AI runs on (`RunChoiceProvider.key`), in brackets after the
+ * provider's name: "Synap AI · using Anthropic (your key)". A pod-wide key is
+ * the person's own pod, so it reads as theirs too. `agents/run-choice.ts`
+ * holds the floor that a new key ships with its words.
+ */
+export const RUN_CHOICE_PROVIDER_KEY_LABELS = {
+  person: "your key",
+  space: "this space's key",
+  pod: "your key",
+  synap: "",
+} as const;
+
+/** What Synap AI runs on when the pod has no AI provider of its own. */
+export const SYNAP_CREDITS_LABEL = "Synap credits";
+
+/**
+ * The Synap AI option's label with the provider it uses now:
+ * "Synap AI · using Anthropic (your key)", "Synap AI · using Synap credits".
+ */
+export function resolveSynapAiProviderLabel(provider: {
+  name: string;
+  key: string;
+}): string {
+  const whose =
+    (RUN_CHOICE_PROVIDER_KEY_LABELS as Readonly<Record<string, string>>)[
+      provider.key
+    ] ?? humanizeToken(provider.key);
+  return whose
+    ? `${SYNAP_AI_LABEL} · using ${provider.name} (${whose})`
+    : `${SYNAP_AI_LABEL} · using ${provider.name}`;
+}
+
+/** The line under the options when some agents cannot run it now. */
+export function resolveRunChoiceHiddenLabel(count: number): string | null {
+  if (count <= 0) return null;
+  return `${count} more can't run now`;
+}
+
+/**
  * What a COORDINATION POST says — one agent's typed message to another
  * session (`sessionPost.intent`, `@synap-core/types/agents` session-post).
  * A MARK, never a sentence: the change feed, the packet inbox and the room
