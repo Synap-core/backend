@@ -162,6 +162,60 @@
     }
   },
   {
+    "kind": "agent",
+    "slug": "claude-code",
+    "version": "h-a9e17c0de001",
+    "door": "GET /api/packages/:slug → package.definition",
+    "definition": {
+      "agent": {
+        "harness": "claude-code",
+        "worker": true,
+        "tried": true,
+        "detect": {
+          "bins": [
+            "claude"
+          ],
+          "homePaths": [
+            ".claude.json",
+            ".claude"
+          ]
+        },
+        "wake": {
+          "program": "claude",
+          "args": [
+            "-p",
+            "{prompt}",
+            "--output-format",
+            "stream-json",
+            "--verbose"
+          ],
+          "params": {
+            "prompt": {
+              "type": "text",
+              "required": true
+            },
+            "model": {
+              "type": "model"
+            }
+          },
+          "env": {
+            "strip": [
+              "ANTHROPIC_API_KEY"
+            ]
+          }
+        },
+        "practices": {
+          "skills": [
+            "synap"
+          ]
+        }
+      },
+      "_meta": {
+        "slug": "claude-code"
+      }
+    }
+  },
+  {
     "kind": "template",
     "slug": "old-crm",
     "version": "h-111111111111",

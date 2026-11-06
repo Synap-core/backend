@@ -902,6 +902,10 @@ const OBJECT_NOUN_ROWS = {
   mcp: "MCP server",
   api_key: "API key",
   ssh_key: "SSH key",
+  // An AI service registered on the pod (`intelligenceRegistry`), and a
+  // vault secret: named by the presence words (`SENSITIVE_ACTION_TOKENS`).
+  intelligence_service: "AI service",
+  secret: "Secret",
   env_variable: "Environment variable",
   url: "Page",
   // Humanizing this event domain to "Proactive" loses its subject — the AI is
@@ -989,6 +993,8 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   mcp: "MCP servers",
   api_key: "API keys",
   ssh_key: "SSH keys",
+  intelligence_service: "AI services",
+  secret: "Secrets",
   env_variable: "Environment variables",
   url: "Pages",
   proactive: "Proactive AIs",
@@ -3823,6 +3829,45 @@ export function resolveRunChoiceViaLabel(
     (RUN_CHOICE_VIA_LABELS as Readonly<Record<string, string>>)[via] ??
     humanizeToken(via)
   );
+}
+
+/**
+ * Whose key Synap AI runs on (`RunChoiceProvider.key`), in brackets after the
+ * provider's name: "Synap AI · using Anthropic (your key)". A pod-wide key is
+ * the person's own pod, so it reads as theirs too. `agents/run-choice.ts`
+ * holds the floor that a new key ships with its words.
+ */
+export const RUN_CHOICE_PROVIDER_KEY_LABELS = {
+  person: "your key",
+  space: "this space's key",
+  pod: "your key",
+  synap: "",
+} as const;
+
+/** What Synap AI runs on when the pod has no AI provider of its own. */
+export const SYNAP_CREDITS_LABEL = "Synap credits";
+
+/**
+ * The Synap AI option's label with the provider it uses now:
+ * "Synap AI · using Anthropic (your key)", "Synap AI · using Synap credits".
+ */
+export function resolveSynapAiProviderLabel(provider: {
+  name: string;
+  key: string;
+}): string {
+  const whose =
+    (RUN_CHOICE_PROVIDER_KEY_LABELS as Readonly<Record<string, string>>)[
+      provider.key
+    ] ?? humanizeToken(provider.key);
+  return whose
+    ? `${SYNAP_AI_LABEL} · using ${provider.name} (${whose})`
+    : `${SYNAP_AI_LABEL} · using ${provider.name}`;
+}
+
+/** The line under the options when some agents cannot run it now. */
+export function resolveRunChoiceHiddenLabel(count: number): string | null {
+  if (count <= 0) return null;
+  return `${count} more can't run now`;
 }
 
 /**

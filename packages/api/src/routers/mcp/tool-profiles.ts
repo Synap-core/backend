@@ -93,6 +93,7 @@ export const TOOL_GROUPS = {
     "synap_link_entities",
     "synap_attach_facet",
     "synap_detach_facet",
+    "synap_update_facet",
     "synap_move_entities",
     "synap_organize_library",
   ],

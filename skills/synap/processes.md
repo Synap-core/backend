@@ -36,10 +36,11 @@ start on it, and a person decides at the moments that commit the business. It ne
 The reference is Content OS "Produce Content" (`synap-app/packages/workspace-templates/src/content-os.yaml`).
 
 **Official vs pod-local.** An official template or capability lives ONLY in the catalog
-(`synap-app/packages/workspace-templates/`, by kind) and is published with
-`synap catalog publish --official` (CI on main). A playbook, kind or automation an agent creates on a pod
-(`synap_create_playbook`, `synap_define_kind`, …) is **pod-local**: it never reaches the catalog. To make it
-official, write it into the catalog file and publish.
+(`synap-app/packages/workspace-templates/`, by kind); landing it on app-bases main publishes it (CI). A
+playbook, kind or automation an agent creates on a pod (`synap_create_playbook`, `synap_define_kind`, …) is
+**pod-local**: it never reaches the catalog. To make it official, write it into the catalog file and land it
+on main. A pod draft proposal mirrored into the catalog is a second copy: once the file lands, withdraw the
+proposal; the review is the catalog commit.
 
 | Field                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -114,5 +115,5 @@ batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
 `{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
-writes it into the catalog and publishes it with
-`synap catalog publish --official`.
+writes it into the catalog (`synap-app/packages/workspace-templates`); landing it
+on app-bases main publishes it.

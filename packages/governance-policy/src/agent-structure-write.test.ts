@@ -46,6 +46,9 @@ describe("rung 2.09 — agent structure-write floor (D1/D2)", () => {
       "playbook.create",
       "automation.create",
       "automation.activate",
+      // Run choice v3, decision D7: an agent or app remembering who runs a
+      // playbook for the person only ever asks.
+      "playbook.set_run_choice",
     ]) {
       expect(AGENT_STRUCTURE_WRITE_EVENT_KEYS, key).toContain(key);
     }

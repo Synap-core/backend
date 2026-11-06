@@ -96,8 +96,7 @@ export function viaSynapAccount(row: AgentRosterRowLike): boolean {
 }
 
 /** What a pause does, in one line: the fact a person needs before pausing. */
-export const AGENT_PAUSE_NOTE =
-  "A paused agent takes no work and is refused when named. Its keys keep working.";
+export const AGENT_PAUSE_NOTE = "Takes no new work until you resume it.";
 
 /** Paused by its owner or a pod admin: it takes no work until resumed. */
 export function isAgentPaused(row: Pick<AgentRosterRowLike, "pausedAt">) {

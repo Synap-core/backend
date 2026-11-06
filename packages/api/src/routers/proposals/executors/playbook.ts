@@ -995,6 +995,75 @@ export function registerPlaybookExecutors(): void {
       return { success: true };
     },
   });
+
+  // ── playbook / set_run_choice ─────────────────────────────────────────────
+  // An agent or a third-party app asked to remember who runs a playbook for
+  // the person (run choice v3, decision D7). Approving saves it FOR THAT
+  // PERSON, so only they may approve it. Replayed through
+  // `playbooksRouter.setRunChoice` as the approver with `governanceProposalId`
+  // set: the visibility load, the key grant and the "Synap AI cannot run an
+  // agents-only process" refusal all run again, and the write applies once.
+  // Idempotent: the assignment edge is one per person per playbook.
+  registerProposalExecutor({
+    key: "playbook/set_run_choice",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const playbookId = inner.playbookId;
+      const choice = inner.choice as
+        { executor?: unknown; agentUserId?: unknown } | undefined;
+      if (typeof playbookId !== "string" || !choice) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This run-choice proposal is missing its playbook or choice.",
+        });
+      }
+      if (typeof inner.ownerId === "string" && inner.ownerId !== userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "This is another person's choice of who runs their process: only they can approve it.",
+        });
+      }
+      const { playbooksRouter } = await import("../../playbooks.js");
+      const caller = playbooksRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        governanceProposalId: proposal.id,
+      } as unknown as Context);
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await caller.setRunChoice({
+          playbookId,
+          choice:
+            choice.executor === "external-agent" &&
+            typeof choice.agentUserId === "string"
+              ? { executor: "external-agent", agentUserId: choice.agentUserId }
+              : { executor: "is-agent" },
+        })
+      );
+
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: playbookId };
+    },
+  });
 }
 
 /** At most this many runs of one batch start at once — sane for 100+ leads. */

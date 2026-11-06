@@ -1047,6 +1047,22 @@ export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
 export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
 
 /**
+ * A stage that runs once per item of a collection (a UNIT), e.g. one run per
+ * shot of a film. ADVISORY and declarative: it names WHAT to iterate, it does
+ * not iterate. Nothing consumes it yet; the run handler that fans a stage out
+ * over its items reads it when it lands.
+ */
+export interface PlaybookStageForEach {
+  /**
+   * The collection to iterate: a run param name (`shots`) or a dotted path into
+   * the subject or earlier outputs (`subject.shots`). A reference, never data.
+   */
+  over: string;
+  /** Name the current item goes by inside the stage (default: `item`). */
+  as?: string;
+}
+
+/**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
  * (progress-only). The active stage's `key` is stored on
@@ -1142,6 +1158,12 @@ export interface PlaybookStage {
    * a model later. Never a control: a stage with or without it runs the same.
    */
   tier?: PlaybookStageTier;
+  /**
+   * Run this stage once per item of a collection — see
+   * {@link PlaybookStageForEach}. Absent ⇒ the stage runs once, as before.
+   * Advisory: nothing consumes it yet.
+   */
+  forEach?: PlaybookStageForEach;
 }
 
 /**

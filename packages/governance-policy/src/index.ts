@@ -822,6 +822,10 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   // Editing a playbook can switch on its schedule, which materialises an ACTIVE
   // cron automation (services/playbooks/cron-automation.ts).
   "playbook/update": "floored",
+  // Choosing who runs a playbook for the person from now on (run choice v3,
+  // decision D7): an agent or a third-party app may ASK, the person approves it
+  // once; a person's own choice never reaches the engine.
+  "playbook/set_run_choice": "floored",
   // Promoting a cell to a kind's renderer changes how every entity of it renders.
   "profile/renderer.set": "floored",
   // The second writer of `widget_definitions` — a cell definition by another name.
@@ -939,6 +943,7 @@ export type KnownGovernanceAction =
   | "setState"
   | "execute"
   | "run"
+  | "set_run_choice"
   | "grant_capability"
   // An agent handing a session to ANOTHER agent (roster add ≠ itself).
   | "assign_agent"
@@ -1006,6 +1011,7 @@ export function requiredPermissionFor(
     action === "setState" ||
     action === "execute" ||
     action === "run" ||
+    action === "set_run_choice" ||
     action === "grant_capability" ||
     action === "assign_agent" ||
     action === "register" ||
@@ -1159,6 +1165,9 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // keeps permitting it (`grantRequestKeys`).
   "facet/attach": "create",
   "facet/detach": "delete",
+  // Choosing who runs a playbook is part of running it (run choice v3): the
+  // grant that may run it may ask to remember who does.
+  "playbook/set_run_choice": "run",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -2370,6 +2379,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "playbook/create": "disruptive", // struct (2.09)
   "playbook/promote": "disruptive", // struct (2.09)
   "playbook/run": "disruptive", // effect: starts a process that fans out
+  "playbook/set_run_choice": "disruptive", // floored (D7): who runs the person's work is theirs to approve
   "playbook/update": "disruptive", // struct (2.09)
   "playbook_run/update": "reversible", // run orchestration
   "proactive/recap": "disruptive", // effect: a message is read, not undone
@@ -2673,6 +2683,7 @@ export const GATE_WRITE_DOORS = {
   "playbook/create": "gate",
   "playbook/promote": "gate",
   "playbook/run": "gate",
+  "playbook/set_run_choice": "gate",
   "playbook/update": "gate",
   "playbook_run/update": "gate",
   "proactive/recap": "gate",

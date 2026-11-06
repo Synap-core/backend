@@ -3,7 +3,9 @@
  * (`presence-provider.tsx` draws it). Pure, so each state is tested:
  *  - a failed challenge read is its own state, with Try again; the pod's own
  *    message is a muted detail, never the headline;
- *  - no passkey on this pod: "Add a passkey" is the primary action;
+ *  - no passkey on this pod: "Add a passkey" is the primary action; once it
+ *    opened its tab, the dialog says to come back and press Try again, which
+ *    becomes the primary action;
  *  - a browser that cannot use a passkey: no primary action, no Try again;
  *  - Relay is offered only on a device the person enrolled, and only for
  *    what Relay can approve (never this page's own change, `inBrowserOnly`);
@@ -18,6 +20,7 @@ export type PresenceWord =
   | "confirm"
   | "tryAgain"
   | "addPasskey"
+  | "comeBack"
   | "notNow"
   | "stopHere";
 
@@ -40,6 +43,8 @@ export interface PresenceDialogInput {
    * which Relay cannot sign. Relay is then never offered.
    */
   inBrowserOnly?: boolean;
+  /** "Add a passkey" opened its tab: the person adds it there, then comes back. */
+  addPasskeyOpened?: boolean;
 }
 
 export interface PresenceDialogView {
@@ -50,8 +55,8 @@ export interface PresenceDialogView {
   detail: string | null;
   notice: "noPasskey" | "unsupported" | null;
   primary: "confirm" | "tryAgain" | "addPasskey" | null;
-  /** Beside "Add a passkey": read again once one is added. */
-  secondary: "tryAgain" | null;
+  /** Beside the primary: read again once a passkey is added, or open its tab again. */
+  secondary: "tryAgain" | "addPasskey" | null;
   decline: "notNow" | "stopHere";
   /** The enrolled Relay device to offer, or null: never promise Relay blind. */
   relayDevice: string | null;
@@ -94,6 +99,18 @@ export function presenceDialogView(
     !input.inBrowserOnly && phase.deviceKeys.length > 0
       ? phase.deviceKeys[0]!.label.trim() || ""
       : null;
+  if (!phase.passkey && input.addPasskeyOpened) {
+    return {
+      ...base,
+      status: { word: "comeBack" },
+      tone: "muted",
+      notice: "noPasskey",
+      primary: "tryAgain",
+      secondary: "addPasskey",
+      relayDevice,
+      busy: false,
+    };
+  }
   if (!phase.passkey) {
     return {
       ...base,

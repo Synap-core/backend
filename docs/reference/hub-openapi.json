@@ -481,6 +481,16 @@
                   "unreachable",
                   "misconfigured"
                 ]
+              },
+              "agent": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
               }
             },
             "required": [
@@ -489,7 +499,8 @@
               "template",
               "cell",
               "skill",
-              "view"
+              "view",
+              "agent"
             ]
           }
         },
@@ -16577,6 +16588,23 @@
                                   "tier": {
                                     "type": "string",
                                     "enum": ["deep", "standard", "quick"]
+                                  },
+                                  "forEach": {
+                                    "type": "object",
+                                    "properties": {
+                                      "over": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                      },
+                                      "as": {
+                                        "type": "string",
+                                        "maxLength": 60,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                                      }
+                                    },
+                                    "required": ["over"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -20031,6 +20059,23 @@
                                   "tier": {
                                     "type": "string",
                                     "enum": ["deep", "standard", "quick"]
+                                  },
+                                  "forEach": {
+                                    "type": "object",
+                                    "properties": {
+                                      "over": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                      },
+                                      "as": {
+                                        "type": "string",
+                                        "maxLength": 60,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                                      }
+                                    },
+                                    "required": ["over"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -25522,6 +25567,23 @@
                         "tier": {
                           "type": "string",
                           "enum": ["deep", "standard", "quick"]
+                        },
+                        "forEach": {
+                          "type": "object",
+                          "properties": {
+                            "over": {
+                              "type": "string",
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                            },
+                            "as": {
+                              "type": "string",
+                              "maxLength": 60,
+                              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                            }
+                          },
+                          "required": ["over"],
+                          "additionalProperties": false
                         }
                       },
                       "required": ["key", "name", "category"],
@@ -25781,7 +25843,7 @@
       "get": {
         "tags": ["Playbooks"],
         "summary": "Who runs a playbook for you",
-        "description": "Your remembered choice for this playbook (Synap AI or one of your agents), whether a launch should ask first (`ask`), the answers to offer (Synap AI first when the playbook allows it, then your agents with their wake mark) and what the next run would do (`next`), by the same rule the run uses. Answer an ask with POST /playbooks/{id}/run `runOn` or `handToAgentId` plus `remember: true`.",
+        "description": "Your remembered choice for this playbook (Synap AI or one of your agents), whether a launch should ask first (`ask`: whenever nothing is stored), the answers to offer (Synap AI first when the playbook allows it, labelled with the AI provider it uses now, then only your agents that are awake or can wake), the agents that cannot run it now grouped by reason (`hidden`), and what the next run would do (`next`), by the same rule the run uses. Answer an ask with POST /playbooks/{id}/run `runOn` or `handToAgentId` plus `remember: true`, or save it alone with PUT /playbooks/{id}/run-choice.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -25798,9 +25860,634 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": {},
-                  "description": "PlaybookRunChoice (@synap-core/types/agents): stored, ask, synapAiAllowed, options[], next."
+                  "properties": {
+                    "playbookId": { "type": "string", "format": "uuid" },
+                    "stored": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "executor": {
+                              "type": "string",
+                              "enum": ["is-agent"]
+                            }
+                          },
+                          "required": ["executor"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "executor": {
+                              "type": "string",
+                              "enum": ["external-agent"]
+                            },
+                            "agentUserId": {
+                              "type": "string",
+                              "format": "uuid"
+                            }
+                          },
+                          "required": ["executor", "agentUserId"]
+                        },
+                        { "type": "null" }
+                      ]
+                    },
+                    "ask": {
+                      "type": "boolean",
+                      "description": "Ask before a launch the person starts: nothing is stored and something can run it (even one option). Headless runs never ask."
+                    },
+                    "synapAiAllowed": { "type": "boolean" },
+                    "options": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "choice": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "executor": {
+                                    "type": "string",
+                                    "enum": ["is-agent"]
+                                  }
+                                },
+                                "required": ["executor"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "executor": {
+                                    "type": "string",
+                                    "enum": ["external-agent"]
+                                  },
+                                  "agentUserId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  }
+                                },
+                                "required": ["executor", "agentUserId"]
+                              }
+                            ]
+                          },
+                          "name": { "type": ["string", "null"] },
+                          "label": {
+                            "type": "string",
+                            "description": "What to show: \"Synap AI · using Anthropic (your key)\", \"Claude Code · MacBook\"."
+                          },
+                          "wake": {
+                            "type": ["object", "null"],
+                            "properties": {
+                              "state": {
+                                "type": "string",
+                                "enum": ["awake", "can_wake", "cant_wake"]
+                              },
+                              "how": {
+                                "type": ["string", "null"],
+                                "enum": ["built_in", "binding", "runner", null]
+                              },
+                              "why": { "type": ["string", "null"] }
+                            },
+                            "required": ["state", "how", "why"]
+                          },
+                          "wakeLabel": { "type": ["string", "null"] },
+                          "recommended": { "type": "boolean" },
+                          "provider": {
+                            "type": ["object", "null"],
+                            "properties": {
+                              "providerId": { "type": ["string", "null"] },
+                              "name": { "type": "string" },
+                              "key": {
+                                "type": "string",
+                                "enum": ["person", "space", "pod", "synap"]
+                              }
+                            },
+                            "required": ["providerId", "name", "key"],
+                            "description": "Only on Synap AI: the pod's AI provider it runs on now (one global choice); providerId null = Synap credits."
+                          }
+                        },
+                        "required": [
+                          "choice",
+                          "name",
+                          "label",
+                          "wake",
+                          "wakeLabel",
+                          "recommended",
+                          "provider"
+                        ]
+                      },
+                      "description": "Synap AI first when the playbook allows it, then only your agents that are awake or can wake."
+                    },
+                    "hidden": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "why": { "type": "string" },
+                          "label": { "type": "string" },
+                          "count": { "type": "integer" },
+                          "names": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          },
+                          "agentUserIds": {
+                            "type": "array",
+                            "items": { "type": "string", "format": "uuid" }
+                          }
+                        },
+                        "required": [
+                          "why",
+                          "label",
+                          "count",
+                          "names",
+                          "agentUserIds"
+                        ]
+                      },
+                      "description": "Your agents that cannot run it now, grouped by reason."
+                    },
+                    "hiddenLabel": { "type": ["string", "null"] },
+                    "next": {
+                      "type": "object",
+                      "additionalProperties": {},
+                      "description": "RunOn: what the next run would do, by the rule the run uses."
+                    }
+                  },
+                  "required": [
+                    "playbookId",
+                    "stored",
+                    "ask",
+                    "synapAiAllowed",
+                    "options",
+                    "hidden",
+                    "hiddenLabel",
+                    "next"
+                  ],
+                  "additionalProperties": {}
                 }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Playbook not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["Playbooks"],
+        "summary": "Remember who runs a playbook for you",
+        "description": "Saves your choice for this playbook: Synap AI (`{executor: 'is-agent'}`) or one of your agents (`{executor: 'external-agent', agentUserId}`). A person's key applies it (200, `status: 'applied'`, with the new read). An agent or third-party app key files a proposal the person approves once (202, `status: 'proposed'`).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "choice": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "executor": { "type": "string", "enum": ["is-agent"] }
+                        },
+                        "required": ["executor"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "executor": {
+                            "type": "string",
+                            "enum": ["external-agent"]
+                          },
+                          "agentUserId": { "type": "string", "format": "uuid" }
+                        },
+                        "required": ["executor", "agentUserId"]
+                      }
+                    ]
+                  },
+                  "reasoning": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "Why an agent or app asks for this choice (shown on its proposal)."
+                  }
+                },
+                "required": ["choice"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["applied", "proposed"]
+                    },
+                    "proposalId": { "type": ["string", "null"] },
+                    "message": { "type": ["string", "null"] },
+                    "runChoice": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "playbookId": { "type": "string", "format": "uuid" },
+                        "stored": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "executor": {
+                                  "type": "string",
+                                  "enum": ["is-agent"]
+                                }
+                              },
+                              "required": ["executor"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "executor": {
+                                  "type": "string",
+                                  "enum": ["external-agent"]
+                                },
+                                "agentUserId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                }
+                              },
+                              "required": ["executor", "agentUserId"]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "ask": {
+                          "type": "boolean",
+                          "description": "Ask before a launch the person starts: nothing is stored and something can run it (even one option). Headless runs never ask."
+                        },
+                        "synapAiAllowed": { "type": "boolean" },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "choice": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "executor": {
+                                        "type": "string",
+                                        "enum": ["is-agent"]
+                                      }
+                                    },
+                                    "required": ["executor"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "executor": {
+                                        "type": "string",
+                                        "enum": ["external-agent"]
+                                      },
+                                      "agentUserId": {
+                                        "type": "string",
+                                        "format": "uuid"
+                                      }
+                                    },
+                                    "required": ["executor", "agentUserId"]
+                                  }
+                                ]
+                              },
+                              "name": { "type": ["string", "null"] },
+                              "label": {
+                                "type": "string",
+                                "description": "What to show: \"Synap AI · using Anthropic (your key)\", \"Claude Code · MacBook\"."
+                              },
+                              "wake": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "enum": ["awake", "can_wake", "cant_wake"]
+                                  },
+                                  "how": {
+                                    "type": ["string", "null"],
+                                    "enum": [
+                                      "built_in",
+                                      "binding",
+                                      "runner",
+                                      null
+                                    ]
+                                  },
+                                  "why": { "type": ["string", "null"] }
+                                },
+                                "required": ["state", "how", "why"]
+                              },
+                              "wakeLabel": { "type": ["string", "null"] },
+                              "recommended": { "type": "boolean" },
+                              "provider": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "providerId": { "type": ["string", "null"] },
+                                  "name": { "type": "string" },
+                                  "key": {
+                                    "type": "string",
+                                    "enum": ["person", "space", "pod", "synap"]
+                                  }
+                                },
+                                "required": ["providerId", "name", "key"],
+                                "description": "Only on Synap AI: the pod's AI provider it runs on now (one global choice); providerId null = Synap credits."
+                              }
+                            },
+                            "required": [
+                              "choice",
+                              "name",
+                              "label",
+                              "wake",
+                              "wakeLabel",
+                              "recommended",
+                              "provider"
+                            ]
+                          },
+                          "description": "Synap AI first when the playbook allows it, then only your agents that are awake or can wake."
+                        },
+                        "hidden": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "why": { "type": "string" },
+                              "label": { "type": "string" },
+                              "count": { "type": "integer" },
+                              "names": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                              },
+                              "agentUserIds": {
+                                "type": "array",
+                                "items": { "type": "string", "format": "uuid" }
+                              }
+                            },
+                            "required": [
+                              "why",
+                              "label",
+                              "count",
+                              "names",
+                              "agentUserIds"
+                            ]
+                          },
+                          "description": "Your agents that cannot run it now, grouped by reason."
+                        },
+                        "hiddenLabel": { "type": ["string", "null"] },
+                        "next": {
+                          "type": "object",
+                          "additionalProperties": {},
+                          "description": "RunOn: what the next run would do, by the rule the run uses."
+                        }
+                      },
+                      "required": [
+                        "playbookId",
+                        "stored",
+                        "ask",
+                        "synapAiAllowed",
+                        "options",
+                        "hidden",
+                        "hiddenLabel",
+                        "next"
+                      ],
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": ["status", "proposalId", "message", "runChoice"]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for the person's approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["applied", "proposed"]
+                    },
+                    "proposalId": { "type": ["string", "null"] },
+                    "message": { "type": ["string", "null"] },
+                    "runChoice": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "playbookId": { "type": "string", "format": "uuid" },
+                        "stored": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "executor": {
+                                  "type": "string",
+                                  "enum": ["is-agent"]
+                                }
+                              },
+                              "required": ["executor"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "executor": {
+                                  "type": "string",
+                                  "enum": ["external-agent"]
+                                },
+                                "agentUserId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                }
+                              },
+                              "required": ["executor", "agentUserId"]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "ask": {
+                          "type": "boolean",
+                          "description": "Ask before a launch the person starts: nothing is stored and something can run it (even one option). Headless runs never ask."
+                        },
+                        "synapAiAllowed": { "type": "boolean" },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "choice": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "executor": {
+                                        "type": "string",
+                                        "enum": ["is-agent"]
+                                      }
+                                    },
+                                    "required": ["executor"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "executor": {
+                                        "type": "string",
+                                        "enum": ["external-agent"]
+                                      },
+                                      "agentUserId": {
+                                        "type": "string",
+                                        "format": "uuid"
+                                      }
+                                    },
+                                    "required": ["executor", "agentUserId"]
+                                  }
+                                ]
+                              },
+                              "name": { "type": ["string", "null"] },
+                              "label": {
+                                "type": "string",
+                                "description": "What to show: \"Synap AI · using Anthropic (your key)\", \"Claude Code · MacBook\"."
+                              },
+                              "wake": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "state": {
+                                    "type": "string",
+                                    "enum": ["awake", "can_wake", "cant_wake"]
+                                  },
+                                  "how": {
+                                    "type": ["string", "null"],
+                                    "enum": [
+                                      "built_in",
+                                      "binding",
+                                      "runner",
+                                      null
+                                    ]
+                                  },
+                                  "why": { "type": ["string", "null"] }
+                                },
+                                "required": ["state", "how", "why"]
+                              },
+                              "wakeLabel": { "type": ["string", "null"] },
+                              "recommended": { "type": "boolean" },
+                              "provider": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "providerId": { "type": ["string", "null"] },
+                                  "name": { "type": "string" },
+                                  "key": {
+                                    "type": "string",
+                                    "enum": ["person", "space", "pod", "synap"]
+                                  }
+                                },
+                                "required": ["providerId", "name", "key"],
+                                "description": "Only on Synap AI: the pod's AI provider it runs on now (one global choice); providerId null = Synap credits."
+                              }
+                            },
+                            "required": [
+                              "choice",
+                              "name",
+                              "label",
+                              "wake",
+                              "wakeLabel",
+                              "recommended",
+                              "provider"
+                            ]
+                          },
+                          "description": "Synap AI first when the playbook allows it, then only your agents that are awake or can wake."
+                        },
+                        "hidden": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "why": { "type": "string" },
+                              "label": { "type": "string" },
+                              "count": { "type": "integer" },
+                              "names": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                              },
+                              "agentUserIds": {
+                                "type": "array",
+                                "items": { "type": "string", "format": "uuid" }
+                              }
+                            },
+                            "required": [
+                              "why",
+                              "label",
+                              "count",
+                              "names",
+                              "agentUserIds"
+                            ]
+                          },
+                          "description": "Your agents that cannot run it now, grouped by reason."
+                        },
+                        "hiddenLabel": { "type": ["string", "null"] },
+                        "next": {
+                          "type": "object",
+                          "additionalProperties": {},
+                          "description": "RunOn: what the next run would do, by the rule the run uses."
+                        }
+                      },
+                      "required": [
+                        "playbookId",
+                        "stored",
+                        "ask",
+                        "synapAiAllowed",
+                        "options",
+                        "hidden",
+                        "hiddenLabel",
+                        "next"
+                      ],
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": ["status", "proposalId", "message", "runChoice"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid choice",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
