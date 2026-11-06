@@ -176,6 +176,32 @@ export async function enrollDeviceKey(args: {
 }
 
 /**
+ * The `security.factor_changed` notification's data: tokens only, the
+ * registry row owns the words. `label` is the factor's own name (null when
+ * there is none, as on a Kratos passkey change), and `named` says which: an
+ * ICU select cannot test for a missing value, so the body drops its label
+ * sentence on `named: "no"`.
+ */
+export function factorChangedData(args: {
+  change: "added" | "removed" | "changed";
+  factor: "passkey" | "device_key";
+  label: string | null;
+}): {
+  change: "added" | "removed" | "changed";
+  factor: "passkey" | "device_key";
+  named: "yes" | "no";
+  label: string | null;
+} {
+  const label = args.label?.trim() || null;
+  return {
+    change: args.change,
+    factor: args.factor,
+    named: label ? "yes" : "no",
+    label,
+  };
+}
+
+/**
  * Tell the person a factor was added or removed. The change has already
  * landed; a notification that cannot be written is logged as an error (the
  * audit log still holds the change), never silently dropped.
@@ -193,18 +219,7 @@ export async function notifyFactorChanged(args: {
       userId: args.userId,
       sourceType: "system",
       sourceId: args.id,
-      data: {
-        change: args.change,
-        factor: args.factor,
-        what: args.factor === "passkey" ? "A passkey" : "A device key",
-        verb:
-          args.change === "added"
-            ? "was added to"
-            : args.change === "removed"
-              ? "was removed from"
-              : "was added to or removed from",
-        label: args.label ?? "Just now",
-      },
+      data: factorChangedData(args),
     });
   } catch (err) {
     logger.error(

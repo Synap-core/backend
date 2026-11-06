@@ -133,6 +133,15 @@ export const documentsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // A page IS its content: with a `url` it would be stored as a reference
+      // document with no bytes, which no host can run.
+      if (input.type === "html" && input.url) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            'A `type: "html"` page is not taken with `url`: send the page itself as `content`, or drop `type` to keep a reference to the url.',
+        });
+      }
       // Decode an agent's XML-escaped title once, at the one door both MCP
       // (synap_create_document) and Hub REST call through — see
       // `entities/create.ts` for the full rationale.
@@ -296,10 +305,11 @@ export const documentsRouter = router({
         ctx.sessionId,
         input.expectedLabel
       );
-      // A stored page that loads code or assets from the network is SAID on
-      // the receipt, the moment it is written (the frame policy names no
-      // remote origin, so readers' hosts would not run it): the same
-      // sentence `synap_get_document` returns in `diagnostics`.
+      // A stored page that loads code or assets from the network, or is
+      // larger than a host runs, is SAID on the receipt, the moment it is
+      // written (the frame policy names no remote origin, so readers' hosts
+      // would not run it): the same sentence `synap_get_document` returns in
+      // `diagnostics`.
       const pageWarnings =
         input.type === "html" && !input.url
           ? diagnoseHtmlPage(input.content).map((d) => `${d.message} ${d.fix}`)

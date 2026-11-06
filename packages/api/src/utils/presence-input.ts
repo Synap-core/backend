@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { presenceProofSchema } from "@synap-core/types/presence";
+import type { Context } from "../types/context.js";
 
 export const presenceInput = z
   .object({ presence: presenceProofSchema.optional() })
@@ -21,9 +22,8 @@ export const presenceInput = z
  * is built by the pod from the request (`createContext`). The tripwire
  * `presence-gate-every-door` pins which files hold the flag.
  */
-export function proofCheckedByApproval(ctx: unknown): boolean {
-  return (
-    (ctx as { presenceChecked?: unknown } | null | undefined)
-      ?.presenceChecked === "applyProposalApproval"
-  );
+export function proofCheckedByApproval(
+  ctx: Pick<Context, "presenceChecked">
+): boolean {
+  return ctx.presenceChecked === "applyProposalApproval";
 }
