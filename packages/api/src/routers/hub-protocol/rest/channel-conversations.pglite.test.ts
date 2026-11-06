@@ -810,6 +810,8 @@ describe("GET /channels/conversations — contacts of company leads", () => {
   const SILENT = randomUUID(); // no role, works_at GUIDEFLOW, no channel
   const OTTO = randomUUID(); // no role, works_at OTHERCO, homed in CRM
   const BOTH = randomUUID(); // a lead in CRM ("new") AND works_at GUIDEFLOW
+  const FERN = randomUUID(); // no role, works_at GUIDEFLOW, no channel, a FAILED send
+  const P_FERN = randomUUID();
   const CHS = {
     GEOFFROY: randomUUID(),
     PAULINE: randomUUID(),
@@ -854,6 +856,7 @@ describe("GET /channels/conversations — contacts of company leads", () => {
       [SILENT, "Sid Silent", CRM, GUIDEFLOW, null],
       [OTTO, "Otto Otherco", CRM, OTHERCO, CHS.OTTO],
       [BOTH, "Bea Both", null, GUIDEFLOW, CHS.BOTH],
+      [FERN, "Fern Failsend", CRM, GUIDEFLOW, null],
     ] as const) {
       await q(
         `insert into entities (id, user_id, workspace_id, home_workspace_id, profile_id, type, title, properties, system_data)
@@ -882,11 +885,40 @@ describe("GET /channels/conversations — contacts of company leads", () => {
         ]
       );
     }
+    // A send that failed before any channel existed (the pod's real case:
+    // "No LinkedIn profile on file"): no channelId, only the person.
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status,
+         created_by, agent_user_id, subject_user_id, rejection_reason, revision_history, created_at, updated_at)
+       values ($1,$2,'messaging',$3,'messaging.external.send',$4::jsonb,'approval_failed',$5,$6,$5,$7,'[]'::jsonb,$8,$8)`,
+      [
+        P_FERN,
+        CRM,
+        FERN,
+        JSON.stringify({
+          entityId: FERN,
+          provider: "linkedin",
+          platform: "linkedin",
+          body: "Bonjour Fern",
+        }),
+        OWNER,
+        AGENT,
+        "No LinkedIn profile on file for Fern Failsend.",
+        T(9),
+      ]
+    );
   });
 
   interface LeadRow {
     person: { id: string; company: { id: string; name: string } | null };
     lead: { kind: string; id: string; stage: string | null };
+    channelIds: string[];
+    draft: {
+      proposalId: string;
+      channelId: string | null;
+      state: string;
+      reason: string | null;
+    } | null;
   }
   const rowsOf = async (key: KeyName, ws: string) => {
     const all: LeadRow[] = [];
@@ -951,6 +983,25 @@ describe("GET /channels/conversations — contacts of company leads", () => {
         lead: { kind: "person", id: BOTH, stage: "new" },
       });
     }
+  });
+
+  it("a company-lead contact with no channel but a FAILED send is listed, draft failed with its reason", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const fern = (await rowsOf(key, CRM)).find((r) => r.person.id === FERN);
+      expect(fern).toMatchObject({
+        lead: { kind: "company", id: GUIDEFLOW, stage: "qualified" },
+        channelIds: [],
+        draft: {
+          proposalId: P_FERN,
+          channelId: null,
+          state: "failed",
+          reason: "No LinkedIn profile on file for Fern Failsend.",
+        },
+      });
+    }
+    // It waits on the person: kept by needsYou.
+    const res = await page("crm", `workspaceId=${CRM}&needsYou=true&limit=100`);
+    expect(res.conversations.map((c) => c.person.id)).toContain(FERN);
   });
 
   it("SECURITY: a contact the space-limited key cannot read (no role, not homed in the space) is listed only for the owner's own key", async () => {
