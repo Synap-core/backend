@@ -15799,6 +15799,22 @@ declare const PRESENCE_REFUSAL_CODES: readonly [
 	"PRESENCE_USED"
 ];
 export type PresenceRefusalCode = (typeof PRESENCE_REFUSAL_CODES)[number];
+/**
+ * What a pod admin switched OFF of the sensitive lists (W5, founder 6 Nov
+ * 2026: "pod settings (pod admin) should enable the user to select what is
+ * considered sensitive & what is not"). Stored per pod
+ * (`pod_settings.settings.presenceSensitivity`), written only by
+ * `presence.setSensitivity`. Absent or empty = every row on: today's lists.
+ * Only a row of `SENSITIVE_APPROVALS` / `SENSITIVE_PROPOSAL_TYPE_PREFIXES` /
+ * `SENSITIVE_ACTIONS` can be switched: a request filed AS the person and the
+ * requests a door decides (`PRESENCE_REQUEST_KINDS`) always ask.
+ */
+export interface PresenceSensitivityChoice {
+	/** Keys of `SENSITIVE_APPROVALS` or `SENSITIVE_PROPOSAL_TYPE_PREFIXES` switched off. */
+	approvalsOff: readonly string[];
+	/** Paths of `SENSITIVE_ACTIONS` switched off. */
+	actionsOff: readonly string[];
+}
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
@@ -21812,6 +21828,11 @@ export interface PresenceModeState {
 	mode: PresenceMode;
 	/** Where the mode comes from: the operator env floor, the pod setting, or the default. */
 	source: "default" | "env" | "setting";
+	changedBy: string | null;
+	changedAt: string | null;
+}
+/** The pod's choice of what asks for a passkey, and who last changed it. */
+export interface PresenceSensitivityState extends PresenceSensitivityChoice {
 	changedBy: string | null;
 	changedAt: string | null;
 }
@@ -47685,6 +47706,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		authorizePasskeyChange: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				change?: "add" | "remove" | undefined;
 				presence: {
 					challengeId: string;
 					keyId: string;
@@ -47722,7 +47744,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				request: {
 					id: string;
-					kind: "app_connection_request" | "device_enroll" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "skill" | "tool" | "trusted_issuer";
+					kind: "app_connection_request" | "device_enroll" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "skill" | "tool" | "trusted_issuer";
 				};
 			} | {
 				action: {
@@ -47881,6 +47903,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source: "default" | "env" | "setting";
 			};
 		}>;
+		sensitivity: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				actionsOff: readonly string[];
+				approvalsOff: readonly string[];
+				changedAt: string | null;
+				changedBy: string | null;
+				mode: PresenceMode;
+			};
+		}>;
 		setMode: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				mode: "enforce" | "report";
@@ -47909,6 +47942,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: PresenceModeState;
+		}>;
+		setSensitivity: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				actionsOff: string[];
+				approvalsOff: string[];
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
+			};
+			meta: object;
+			output: PresenceSensitivityState;
 		}>;
 	}>>;
 	proactive: import("@trpc/server").TRPCBuiltRouter<{

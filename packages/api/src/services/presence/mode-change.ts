@@ -27,11 +27,18 @@ import {
 const logger = createLogger({ module: "presence-mode" });
 
 /**
- * Tell every pod admin the proof of presence was switched OFF (back to
- * `report`), and by whom. A notice that cannot be written is logged as an
- * error; the change and its event stand.
+ * Tell every pod admin about a change to the proof of presence, and by whom
+ * (`security.presence_mode_changed`, `security.presence_sensitivity_changed`).
+ * A notice that cannot be written is logged as an error; the change and its
+ * event stand.
  */
-export async function notifyAdminsPresenceOff(byUserId: string): Promise<void> {
+export async function notifyPodAdmins(args: {
+  type:
+    "security.presence_mode_changed" | "security.presence_sensitivity_changed";
+  byUserId: string;
+  data: Record<string, unknown>;
+}): Promise<void> {
+  const { type, byUserId } = args;
   try {
     const podAdminWorkspace = await db.query.workspaces.findFirst({
       where: and(
@@ -50,20 +57,29 @@ export async function notifyAdminsPresenceOff(byUserId: string): Promise<void> {
     });
     for (const admin of admins) {
       await NotificationService.create({
-        type: "security.presence_mode_changed",
+        type,
         workspaceId: podAdminWorkspace.id,
         userId: admin.userId,
         sourceType: "system",
         sourceId: byUserId,
-        data: { mode: "report", byUserId },
+        data: { ...args.data, byUserId },
       });
     }
   } catch (err) {
     logger.error(
-      { err, byUserId },
-      "proof of presence switched off, but the pod admins could not be notified"
+      { err, byUserId, type },
+      "the proof of presence changed, but the pod admins could not be notified"
     );
   }
+}
+
+/** Tell every pod admin the proof of presence was switched OFF (back to `report`). */
+export async function notifyAdminsPresenceOff(byUserId: string): Promise<void> {
+  await notifyPodAdmins({
+    type: "security.presence_mode_changed",
+    byUserId,
+    data: { mode: "report" },
+  });
 }
 
 /**

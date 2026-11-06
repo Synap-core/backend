@@ -76,9 +76,11 @@ export const en = {
   declined: "Not approved: you didn’t confirm it’s you.",
   "declined.act": "Nothing changed: you didn’t confirm it’s you.",
   "doing.passkeyAdd": "Add a passkey to your account",
+  "doing.passkeyRemove": "Remove a passkey from your account",
   "doing.modeOff": "Turn off approvals in person",
-  "passkeyAdd.needsProof":
-    "Adding a passkey needs a confirmation from your passkey.",
+  "doing.sensitivityOff": "Stop asking for a passkey there",
+  "passkeyChange.needsProof":
+    "A passkey change needs a confirmation from your passkey.",
 };
 
 const fr: Catalog<typeof en> = {
@@ -145,9 +147,11 @@ const fr: Catalog<typeof en> = {
   declined: "Non approuvée : vous n’avez pas confirmé que c’est vous.",
   "declined.act": "Rien n’a changé : vous n’avez pas confirmé que c’est vous.",
   "doing.passkeyAdd": "Ajouter une clé d’accès à votre compte",
+  "doing.passkeyRemove": "Retirer une clé d’accès de votre compte",
   "doing.modeOff": "Désactiver les approbations en personne",
-  "passkeyAdd.needsProof":
-    "Ajouter une clé d’accès demande une confirmation avec votre clé d’accès.",
+  "doing.sensitivityOff": "Ne plus demander de clé d’accès à cet endroit",
+  "passkeyChange.needsProof":
+    "Modifier une clé d’accès demande une confirmation avec votre clé d’accès.",
 };
 
 /** The presence dialog's translator, in the ambient catalog locale. */

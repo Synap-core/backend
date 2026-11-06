@@ -1480,6 +1480,21 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "informational",
   },
   {
+    // W5: a pod admin changed what asks for a passkey (switching a row off
+    // needed their own proof). Every pod admin hears it.
+    type: "security.presence_sensitivity_changed",
+    category: "system",
+    label: "What asks for your passkey changed",
+    icon: "shield-alert",
+    priority: "high",
+    titleTemplate: "What asks for a passkey changed",
+    bodyTemplate:
+      "A pod admin changed which approvals and actions ask for a passkey. See them in pod admin, Security.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    needsYou: "informational",
+  },
+  {
     type: "workspace.invite",
     category: "system",
     label: "Workspace Invite",

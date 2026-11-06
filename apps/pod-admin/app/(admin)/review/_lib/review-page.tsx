@@ -40,6 +40,7 @@ import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
 import { useBatchApproveProposals } from "../../../_lib/presence/use-approve";
 import { needsPresence } from "../../../_lib/presence/presence-model";
+import { usePodSensitivity } from "../../../_lib/presence/use-sensitivity";
 import { useCreateGovernanceRule } from "../../../_lib/presence/use-sensitive-actions";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { isUuid } from "../../../../lib/format";
@@ -269,7 +270,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     void utils.proposals.invalidate();
   }
 
-  // With the proof of presence for each item the pod asks it for (W3).
+  // With the proof of presence for each item the pod asks it for (W3), by
+  // what this pod asks a passkey for (W5).
+  const sensitivity = usePodSensitivity();
   const batchApprove = useBatchApproveProposals({
     onError: (err) => {
       if (redirectToLoginIfUnauthorized(err)) return;
@@ -293,7 +296,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         // The sensitive ones are proved up front (proof of presence, W3).
         upFrontIds: proposalIds.filter((id) => {
           const f = facts.get(id);
-          return f !== undefined && needsPresence(f);
+          return f !== undefined && needsPresence(f, sensitivity);
         }),
       });
     } catch {
