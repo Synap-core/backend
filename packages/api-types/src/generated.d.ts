@@ -1086,6 +1086,12 @@ export type AgentPostureName = (typeof AGENT_POSTURE_NAMES)[number];
 export interface AgentMetadata {
 	agentType: string;
 	agentTemplate?: "assistant" | "custom" | "twin";
+	/**
+	 * The person said this agent runs none of the installed agent templates'
+	 * programs ("None of these" on the self-healing card, D10): it is never
+	 * asked again. Written only by `applyAgentTemplateAnswer`.
+	 */
+	templateNone?: boolean;
 	description?: string;
 	createdByUserId: string;
 	capabilities?: string[];
