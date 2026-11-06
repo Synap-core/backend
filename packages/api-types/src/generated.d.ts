@@ -37497,6 +37497,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
 				subjectEntityId: string | null;
+				subjectMove?: StageSubjectStatusOutcome | undefined;
 				targets?: SessionTargetsWrite | undefined;
 				templateId: string | null;
 				title: string | null;
