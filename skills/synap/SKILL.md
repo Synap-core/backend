@@ -2768,6 +2768,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 - The only bare imports that resolve are the ones the host provides: `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime` and `@synap/kit` (see "What the frame provides" below). Any other bare import (`recharts`, `d3`, `three`, …) fails in the frame.
 - **No `import` of local files and no `import` from a URL.** A third-party library must be bundled into the source before you define the cell (`synap cell build <entry> --bundle-deps`), never fetched at runtime.
 - Leave `deps` out (or `{}`). A cell that declares runtime `deps`, names `esm.sh`, imports anything the host does not provide, or loads code or a stylesheet from the network is **refused when you define it** (`synap_create_cell`, `POST /cells/define`): nothing is saved or proposed, and the error names the line and the fix.
+- A person approves **exactly the content** a cell proposal holds: its source, its mechanism, its `deps` and its egress. Changing any of them is a new approval: define the cell again (a new proposal), or revise the pending one. The stored cell records the fingerprint of the content it holds.
 - Advice on colour (raw hex instead of `var(--synap-*)` tokens) and accessibility (an image with no `alt`, a clickable `div`) comes back as `advice` with the reply. It never blocks the cell; fix what it names.
 - No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
 - An **HTML page** (a source that opens with `<`) is drawn as a page, not a module: it gets **no host modules**, so it can run inline script only and cannot `import` anything, not even `react`. To use React or `@synap/kit`, write the cell as an ES module that default-exports a component.
@@ -3203,10 +3204,11 @@ start on it, and a person decides at the moments that commit the business. It ne
 The reference is Content OS "Produce Content" (`synap-app/packages/workspace-templates/src/content-os.yaml`).
 
 **Official vs pod-local.** An official template or capability lives ONLY in the catalog
-(`synap-app/packages/workspace-templates/`, by kind) and is published with
-`synap catalog publish --official` (CI on main). A playbook, kind or automation an agent creates on a pod
-(`synap_create_playbook`, `synap_define_kind`, …) is **pod-local**: it never reaches the catalog. To make it
-official, write it into the catalog file and publish.
+(`synap-app/packages/workspace-templates/`, by kind); landing it on app-bases main publishes it (CI). A
+playbook, kind or automation an agent creates on a pod (`synap_create_playbook`, `synap_define_kind`, …) is
+**pod-local**: it never reaches the catalog. To make it official, write it into the catalog file and land it
+on main. A pod draft proposal mirrored into the catalog is a second copy: once the file lands, withdraw the
+proposal; the review is the catalog commit.
 
 | Field                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -3281,8 +3283,8 @@ batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
 `{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
-writes it into the catalog and publishes it with
-`synap catalog publish --official`.
+writes it into the catalog (`synap-app/packages/workspace-templates`); landing it
+on app-bases main publishes it.
 
 ---
 
