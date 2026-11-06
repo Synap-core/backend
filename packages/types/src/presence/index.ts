@@ -14,6 +14,11 @@
  */
 
 import { z } from "zod";
+import type { Catalog, Locale } from "../i18n/index.js";
+import {
+  buildObjectActionTitle,
+  type VerbMood,
+} from "../vocabulary/index.js";
 
 /** The first line of every signed presence message (its version). */
 export const PRESENCE_MESSAGE_VERSION = "synap-presence-v1" as const;
@@ -379,6 +384,123 @@ export type SensitiveActionPath = keyof typeof SENSITIVE_ACTIONS;
 export function sensitiveActionReason(path: string): SensitiveReason | null {
   return (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[path] ?? null;
 }
+
+/**
+ * What confirming each sensitive action does, as vocabulary TOKENS: the title
+ * door (`buildObjectActionTitle`) turns them into words, in either mood and
+ * language, so no client keeps a label map of its own. Typed over every path:
+ * a path added to `SENSITIVE_ACTIONS` fails the build here until it is named.
+ */
+export const SENSITIVE_ACTION_TOKENS = {
+  "apiKeys.create": { action: "create", objectKind: "api_key" },
+  "apiKeys.rotate": { action: "rotate", objectKind: "api_key" },
+  "apiKeys.setGrants": { action: "update", objectKind: "api_key" },
+  "apiKeys.connectIntegration": { action: "connect", objectKind: "app" },
+  "apiKeys.beginMcpConnect": { action: "connect", objectKind: "agent" },
+  "apiKeys.createSystemKey": { action: "create", objectKind: "api_key" },
+  "apiKeys.adminCreateServiceKey": { action: "create", objectKind: "api_key" },
+  "apiKeys.createForWorkspace": { action: "create", objectKind: "api_key" },
+  "apiKeys.setMachineDefaults": { action: "update", objectKind: "machine" },
+  "apps.issueKey": { action: "create", objectKind: "api_key" },
+  "apps.setWriteMode": { action: "update", objectKind: "app" },
+  "apps.setRedirectUris": { action: "update", objectKind: "app" },
+  "apps.setSignInPolicy": { action: "update", objectKind: "app" },
+  "intelligenceRegistry.register": {
+    action: "connect",
+    objectKind: "intelligence_service",
+  },
+  "intelligenceRegistry.update": {
+    action: "update",
+    objectKind: "intelligence_service",
+  },
+  "intelligenceRegistry.rotateKey": { action: "rotate", objectKind: "api_key" },
+  "intelligence.registerCustomService": {
+    action: "connect",
+    objectKind: "intelligence_service",
+  },
+  "machines.setKeyTtl": { action: "update", objectKind: "machine" },
+  "machines.setRunsScripts": { action: "update", objectKind: "machine" },
+  "machines.setBelongsTo": { action: "update", objectKind: "machine" },
+  "secretsVault.reveal": { action: "see", objectKind: "secret" },
+  "agentUsers.create": { action: "create", objectKind: "agent" },
+  "agentUsers.update": { action: "update", objectKind: "agent" },
+  "agentUsers.setPosture": { action: "update", objectKind: "agent" },
+  "connectors.setKeepSyncing": { action: "update", objectKind: "connection" },
+  "trustedIssuers.adminRegister": { action: "add", objectKind: "issuer" },
+  "governanceRules.create": { action: "create", objectKind: "rule" },
+  "governanceRules.widenCell": { action: "widen_scopes", objectKind: "agent" },
+  "governanceRules.proposeNextRung": {
+    action: "widen_scopes",
+    objectKind: "agent",
+  },
+  "governanceRules.setReversibleDefault": {
+    action: "update",
+    objectKind: "rule",
+  },
+  "governanceRules.setOwnOrganiseDefault": {
+    action: "update",
+    objectKind: "rule",
+  },
+  "governanceRules.setActionMode": { action: "update", objectKind: "rule" },
+  "govConfig.set": { action: "update", objectKind: "rule" },
+} as const satisfies Record<
+  SensitiveActionPath,
+  { action: string; objectKind: string }
+>;
+
+/**
+ * A sensitive action's title through the one title door: imperative (what
+ * confirming it WILL do, "Create API key") by default, past for history.
+ */
+export function sensitiveActionTitle(
+  path: SensitiveActionPath,
+  opts: { mood?: VerbMood; locale?: Locale } = {}
+): string {
+  const tokens = SENSITIVE_ACTION_TOKENS[path];
+  return buildObjectActionTitle({
+    action: tokens.action,
+    objectKind: tokens.objectKind,
+    mood: opts.mood ?? "imperative",
+    ...(opts.locale ? { locale: opts.locale } : {}),
+  });
+}
+
+/**
+ * The ONE wording of proof of presence that every client shows (pod admin,
+ * Relay, the desktop app), as a catalog of the i18n door: English is the
+ * source and the type.
+ *  - `setting`: the pod setting's name;
+ *  - `on` / `off`: its state. Off is "Off" everywhere (the pod still records
+ *    each approval made without a proof; the setting's own line says so);
+ *  - `refused`: the title of a refusal for want of a proof;
+ *  - `sensitive`: what needs it;
+ *  - `where`: where the person can give it.
+ * DRAFT French ("vous"), awaiting the founder's review.
+ */
+export const presenceWordsEn = {
+  "presence.setting": "Approvals need you in person",
+  "presence.on": "On",
+  "presence.off": "Off",
+  "presence.refused": "Needs you in person",
+  "presence.sensitive":
+    "Connecting an AI or an app, changing keys and rules, deploys and deletions",
+  "presence.where":
+    "Approve them in pod admin with a passkey, in Relay with Face ID, or in the desktop app with Touch ID.",
+} as const;
+
+export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
+  "presence.setting": "Les approbations demandent votre présence",
+  "presence.on": "Activé",
+  "presence.off": "Désactivé",
+  "presence.refused": "Demande votre présence",
+  "presence.sensitive":
+    "Connecter une IA ou une app, modifier des clés et des règles, les déploiements et les suppressions",
+  "presence.where":
+    "Approuvez-les dans l’administration du pod avec une clé d’accès, dans Relay avec Face ID, ou dans l’app de bureau avec Touch ID.",
+};
+
+/** The shared presence words, per catalog language (`useT` / `createT`). */
+export const PRESENCE_WORDS = { en: presenceWordsEn, fr: presenceWordsFr };
 
 /**
  * JSON with object keys sorted at every level, so the client and the pod

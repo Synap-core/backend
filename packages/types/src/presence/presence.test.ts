@@ -13,7 +13,14 @@ import {
   presenceMessage,
   presenceProofSchema,
   sensitiveApprovalReason,
+  PRESENCE_WORDS,
+  SENSITIVE_ACTIONS,
+  SENSITIVE_ACTION_TOKENS,
+  sensitiveActionTitle,
+  type SensitiveActionPath,
 } from "./index.js";
+import { catalogProblems } from "../i18n/index.js";
+import { ACTION_VERBS } from "../vocabulary/index.js";
 
 describe("proof of presence vocabulary", () => {
   it("isPresenceCode tells the four presence refusals from any other code", () => {
@@ -188,5 +195,58 @@ describe("sensitive actions (slice 3, founder decision 1)", () => {
     expect(presenceActionSubject("apiKeys.create", a)).toBe(
       `action:apiKeys.create:${a}`
     );
+  });
+});
+
+describe("the one wording of proof of presence", () => {
+  const paths = Object.keys(SENSITIVE_ACTIONS) as SensitiveActionPath[];
+
+  it("names every sensitive action through the title door, never a raw token", () => {
+    expect(paths.length).toBeGreaterThan(20);
+    expect(Object.keys(SENSITIVE_ACTION_TOKENS).sort()).toEqual(
+      [...paths].sort()
+    );
+    for (const path of paths) {
+      const { action, objectKind } = SENSITIVE_ACTION_TOKENS[path];
+      // A curated verb and noun: never the humanized fallback of a token.
+      expect(ACTION_VERBS, path).toHaveProperty([action]);
+      const en = sensitiveActionTitle(path, { locale: "en" });
+      const fr = sensitiveActionTitle(path, { locale: "fr" });
+      expect(en, path).not.toMatch(/[._]/);
+      // French has its own noun for each: the fallback reads "l’élément X".
+      expect(fr, path).not.toMatch(/élément/);
+      expect(fr, path).not.toBe(en);
+    }
+  });
+
+  it("reads what confirming does, in either mood", () => {
+    expect(sensitiveActionTitle("apiKeys.create", { locale: "en" })).toBe(
+      "Create API key"
+    );
+    expect(sensitiveActionTitle("apiKeys.create", { locale: "fr" })).toBe(
+      "Créer la clé API"
+    );
+    expect(
+      sensitiveActionTitle("secretsVault.reveal", { locale: "fr" })
+    ).toBe("Voir le secret");
+    expect(
+      sensitiveActionTitle("intelligenceRegistry.register", { locale: "en" })
+    ).toBe("Connect AI service");
+    expect(
+      sensitiveActionTitle("apiKeys.rotate", { locale: "en", mood: "past" })
+    ).toBe("Replaced API key");
+  });
+
+  it("holds every shared word in French, with the same parameters", () => {
+    expect(Object.keys(PRESENCE_WORDS.en).length).toBeGreaterThan(5);
+    expect(catalogProblems(PRESENCE_WORDS)).toEqual([]);
+  });
+
+  it("names the three places a person can approve, and one word for off", () => {
+    const where = PRESENCE_WORDS.en["presence.where"];
+    for (const place of ["pod admin", "Relay", "desktop app"]) {
+      expect(where).toContain(place);
+    }
+    expect(PRESENCE_WORDS.en["presence.off"]).toBe("Off");
   });
 });
