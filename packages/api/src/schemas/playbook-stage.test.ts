@@ -273,6 +273,50 @@ describe("playbookStageSchema — stage.forEach (run once per item)", () => {
   });
 });
 
+describe("playbookStageSchema — stage.when (run only if true)", () => {
+  it("accepts equals and/or exists on a param path, and keeps absent absent", () => {
+    for (const when of [
+      { param: "needsVoiceover", equals: true },
+      { param: "subject.kind", equals: "film" },
+      { param: "script", exists: true },
+      { param: "script", exists: false },
+      { param: "mode", equals: 0, exists: true },
+    ]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, when });
+      expect(r.success && r.data.when).toEqual(when);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success && "when" in none.data).toBe(false);
+  });
+
+  it("refuses prose, a missing param, an empty condition, a misspelled key and a bad type", () => {
+    for (const bad of [
+      { param: "if the film has a voiceover", equals: true },
+      { param: "", exists: true },
+      { equals: true },
+      { param: "script" },
+      { param: "script", equal: true },
+      { param: "script", exists: "yes" },
+      "script",
+      null,
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, when: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, when: { param: "needsVoiceover", equals: true } },
+    ]);
+    expect(r.success && r.data[0].when).toEqual({
+      param: "needsVoiceover",
+      equals: true,
+    });
+  });
+});
+
 describe("a declared slot's `ask` is parsed at the playbook write doors", () => {
   const slot = (ask: unknown) => ({ kind: "decision", label: "Region", ask });
 

@@ -74,6 +74,9 @@ const FOR_EACH_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const FOR_EACH_MESSAGE =
   'forEach must name a collection as an identifier path (e.g. "shots" or "subject.shots"), not prose';
 
+const WHEN_PARAM_MESSAGE =
+  'when.param must name a run param or output as an identifier path (e.g. "needsVoiceover" or "subject.kind"), not prose';
+
 const STAGE_DOMAIN_MESSAGE =
   'Stage domain must be a workspace template slug (lowercase, e.g. "crm"), not a workspace id or name';
 
@@ -236,6 +239,27 @@ export const playbookStageSchema = z.looseObject({
         .optional(),
     })
     .optional(),
+  /**
+   * Run the stage only when a condition holds — see `PlaybookStage.when`.
+   * STRICT like `gate`, `onFail` and `forEach`: a misspelled key ("equal",
+   * "exist") must not survive as a stage that looks conditional and is not.
+   * `param` is an identifier path, so prose or an expression is refused; a
+   * condition with neither `equals` nor `exists` tests nothing and is refused.
+   */
+  when: z
+    .strictObject({
+      param: z
+        .string()
+        .trim()
+        .regex(FOR_EACH_PATH, { message: WHEN_PARAM_MESSAGE })
+        .max(200),
+      equals: z.unknown().optional(),
+      exists: z.boolean().optional(),
+    })
+    .refine((w) => w.equals !== undefined || w.exists !== undefined, {
+      message: "when needs `equals` or `exists`",
+    })
+    .optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -294,6 +318,9 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // stage out over a collection is a session RUN's concern, and nothing
   // consumes it yet.
   "forEach",
+  // A track stage session is started by the tracks service; skipping a stage
+  // on a condition is a session RUN's concern, and nothing consumes it yet.
+  "when",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =
