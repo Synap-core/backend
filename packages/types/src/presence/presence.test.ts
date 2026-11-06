@@ -311,6 +311,9 @@ describe("what asks for your passkey (W5): the pod's choice", () => {
     expect(a).not.toBe(c);
     expect(PRESENCE_REQUEST_KINDS.presence_sensitivity).toBe("governance");
     expect(isPresenceCode(PRESENCE_LAST_PASSKEY)).toBe(false);
+  });
+});
+
 describe("the one wording of proof of presence", () => {
   const paths = Object.keys(SENSITIVE_ACTIONS) as SensitiveActionPath[];
 
