@@ -29,7 +29,7 @@ describe("proof of presence vocabulary", () => {
       expect(isPresenceCode(other)).toBe(false);
   });
 
-  it("the sensitive set: setup, governance, deploys, deletions; everyday approvals are not in it", () => {
+  it("the sensitive set: setup, governance, deletions; everyday approvals are not in it", () => {
     expect(
       sensitiveApprovalReason({ targetType: "agent", proposalType: "connect" })
     ).toBe("setup");
@@ -45,12 +45,6 @@ describe("proof of presence vocabulary", () => {
         proposalType: "settings.update",
       })
     ).toBe("governance");
-    expect(
-      sensitiveApprovalReason({
-        targetType: "focus_session",
-        proposalType: "dev.deploy_approval",
-      })
-    ).toBe("deploy");
     expect(
       sensitiveApprovalReason({ targetType: "entity", proposalType: "delete" })
     ).toBe("deletion");
@@ -73,6 +67,24 @@ describe("proof of presence vocabulary", () => {
         `${targetType}/${proposalType}`
       ).toBeNull();
     }
+  });
+
+  it("a push, publish or deploy approval needs no proof; connecting an agent still does (founder, 6 Nov 2026)", () => {
+    expect(
+      sensitiveApprovalReason({
+        targetType: "focus_session",
+        proposalType: "dev.deploy_approval",
+      })
+    ).toBeNull();
+    expect(
+      sensitiveApprovalReason({
+        targetType: "",
+        proposalType: "dev.deploy_approval",
+      })
+    ).toBeNull();
+    expect(
+      sensitiveApprovalReason({ targetType: "agent", proposalType: "connect" })
+    ).toBe("setup");
   });
 
   it("the signed message names the pod, the challenge and the subject, in order", () => {

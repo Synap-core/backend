@@ -2,8 +2,8 @@
  * Proof of presence in pod admin (W3): the ONE way the console approves when
  * the pod asks for the person in person. Pure: no React, no fetch.
  *
- * A sensitive approval (connect an AI, change who may do what, deploy,
- * delete: `SENSITIVE_APPROVALS`, `@synap-core/types/presence`) is refused
+ * A sensitive approval (connect an AI, change who may do what, delete:
+ * `SENSITIVE_APPROVALS`, `@synap-core/types/presence`) is refused
  * `PRESENCE_REQUIRED` without a proof once the pod runs in `enforce`, and a
  * request filed AS the person always is. The client then:
  *   1. asks `presence.challenge` for THAT proposal (or pending agent key);

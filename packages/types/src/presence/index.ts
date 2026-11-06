@@ -77,8 +77,10 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   // Governance: who or what may do what on the pod.
   "settings.update": "governance",
   "trusted_issuer/trusted_issuer.widen_scopes": "governance",
-  // Deploys.
-  "focus_session/dev.deploy_approval": "deploy",
+  // A push, publish or deploy approval (`focus_session/dev.deploy_approval`)
+  // is NOT here: a signed-in session approves it (founder, 6 Nov 2026,
+  // decision 528d24cf: "the push action should not ask a passkey, same for
+  // deploy").
   // Deletions.
   "entity/delete": "deletion",
   "entity/merge": "deletion",
