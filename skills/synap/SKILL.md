@@ -138,7 +138,7 @@ Every lifecycle option has one fixed category: `open · active · paused · done
 
 ### The one door
 
-Every status change — your call, a board drag, a method's step, a sync — goes through `moveStatus`. As an agent: a kind's status = `update_entity` with the lifecycle property set to the new value AND, over MCP, `expectedStatus` = the status you saw (the in-app `update_entity` has no `expectedStatus` yet; the door still checks the lifecycle); a role's status = `update_facet` `status` where your tools list it (the in-app agent; MCP has no role-status tool yet).
+Every status change — your call, a board drag, a method's step, a sync — goes through `moveStatus`. As an agent: a kind's status = `update_entity` with the lifecycle property set to the new value AND, over MCP, `expectedStatus` = the status you saw (the in-app `update_entity` has no `expectedStatus` yet; the door still checks the lifecycle); a role's status = `update_facet` with the role's status field in `properties` AND `expectedStatus` = the status you saw (over MCP: `synap_update_facet`, backend#863; the in-app agent: `update_facet` `status`).
 
 - `conflict` (with the current status) is normal: someone moved it; re-read and decide again. A person's move always wins.
 - `proposed` is success (a done/lost move, or governance said review).
@@ -303,6 +303,10 @@ Environment failure ≠ product bug: when Docker Hub rate-limits a pull (`429 To
 ---
 
 ## From intent — conductor for a new area of work
+
+## Apps are views of pod state
+
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
 Use this when the user states an **intent** to start or track something that may need structure (a project, domains, kinds, roles, deals-shaped things) — not when they only want to capture a fact into types that already exist (`synap` skill).
 
