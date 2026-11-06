@@ -339,7 +339,8 @@ export const entityHandlers: McpHandlerMap = {
       args.properties !== undefined ||
       args.metadata !== undefined ||
       args.profileSlug !== undefined ||
-      args.documentId !== undefined;
+      args.documentId !== undefined ||
+      args.homeWorkspaceId !== undefined;
 
     let body: Record<string, unknown> | undefined;
     if (content !== undefined) {
@@ -411,6 +412,12 @@ export const entityHandlers: McpHandlerMap = {
         ? { documentId: args.documentId }
         : {}),
       ...(args.replaceBody === true ? { replaceBody: true } : {}),
+      // File a pod-wide record for a space, or clear it (finding a70f910f):
+      // checked and governed by `entities.update`.
+      ...(typeof args.homeWorkspaceId === "string" ||
+      args.homeWorkspaceId === null
+        ? { homeWorkspaceId: args.homeWorkspaceId as string | null }
+        : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Compare-and-set on the status; a stale move comes back as

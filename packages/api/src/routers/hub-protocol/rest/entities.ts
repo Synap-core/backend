@@ -3006,7 +3006,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     tags: ["Entities"],
     summary: "Update an entity",
     description:
-      "Patch entity title / preview / metadata, or attach an existing document as its body (`documentId`, `replaceBody`). Supports `Idempotency-Key`.",
+      "Patch entity title / preview / metadata, attach an existing document as its body (`documentId`, `replaceBody`), or file a pod-wide record for a space (`homeWorkspaceId`). Supports `Idempotency-Key`.",
     request: {
       params: z.object({ entityId: uuidPathParam }),
       body: {
@@ -3156,6 +3156,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...moveHoldArgs(body),
         ...(body.documentId ? { documentId: body.documentId } : {}),
         ...(body.replaceBody ? { replaceBody: true } : {}),
+        ...(body.homeWorkspaceId !== undefined
+          ? { homeWorkspaceId: body.homeWorkspaceId }
+          : {}),
       });
       if (result.status === "conflict") return c.json(result, 409);
 
