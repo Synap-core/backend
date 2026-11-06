@@ -24,6 +24,7 @@ import {
   it,
   vi,
 } from "vitest";
+import type { PresenceProof } from "@synap-core/types/presence";
 
 const h = vi.hoisted(() => ({
   db: null as unknown,
@@ -173,7 +174,7 @@ function newDeviceKey() {
 async function enrol(
   userId: string,
   fresh = newDeviceKey(),
-  proof?: unknown
+  proof?: PresenceProof
 ): Promise<{ id: string }> {
   const c = await issuePresenceChallenge({
     userId,
@@ -185,7 +186,7 @@ async function enrol(
     label: "Phone",
     publicKey: fresh.publicKey,
     signature: deviceSign(c.message, fresh.key.privateKey),
-    proof: (proof ?? null) as never,
+    proof: proof ?? null,
   });
 }
 
@@ -266,13 +267,13 @@ const webauthnChallengeOf = (message: string) =>
 
 async function gate(
   proposal: typeof SENSITIVE | typeof EVERYDAY,
-  proof?: unknown,
+  proof?: PresenceProof,
   userId = PERSON
 ) {
   return assertPresenceForApproval({
     userId,
     proposal,
-    proof: (proof ?? null) as never,
+    proof: proof ?? null,
     door: "test",
   });
 }
@@ -402,7 +403,7 @@ describe("proof of presence: the gate", () => {
       challengeId: c.challengeId,
       keyId: deviceKeyId,
       signature: deviceSign(c.message),
-    };
+    } satisfies PresenceProof;
     expect(await refusal(gate(SENSITIVE, proof))).toBe("accepted");
     expect(h.events.at(-1)).toMatchObject({
       type: "presence.proved",
@@ -424,7 +425,7 @@ describe("proof of presence: the gate", () => {
       challengeId: c.challengeId,
       keyId: deviceKeyId,
       signature: deviceSign(c.message),
-    };
+    } satisfies PresenceProof;
     expect(await refusal(gate(OTHER_SENSITIVE, proof))).toBe(
       "PRESENCE_INVALID"
     );
@@ -579,13 +580,13 @@ describe("proof of presence: decisions that settle no proposal (slice 2)", () =>
   const request = (
     kind: "key_request" | "device_request",
     id: string,
-    proof?: unknown
+    proof?: PresenceProof
   ) =>
     assertPresenceForRequest({
       userId: PERSON,
       kind,
       id,
-      proof: (proof ?? null) as never,
+      proof: proof ?? null,
       door: "test",
     });
 
@@ -608,7 +609,7 @@ describe("proof of presence: decisions that settle no proposal (slice 2)", () =>
       challengeId: c.challengeId,
       keyId: deviceKeyId,
       signature: deviceSign(c.message),
-    };
+    } satisfies PresenceProof;
     expect(await refusal(request("device_request", id, proof))).toBe(
       "PRESENCE_INVALID"
     );
@@ -651,7 +652,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     invalidatePresenceMode();
   });
 
-  const proofFor = async (subject: string) => {
+  const proofFor = async (subject: string): Promise<PresenceProof> => {
     const c = await challengeFor(subject);
     return {
       kind: "device_key",
@@ -660,12 +661,12 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
       signature: deviceSign(c.message),
     };
   };
-  const action = (path: string, input: unknown, proof?: unknown) =>
+  const action = (path: string, input: unknown, proof?: PresenceProof) =>
     assertPresenceForAction({
       userId: PERSON,
       path,
       input,
-      proof: (proof ?? null) as never,
+      proof: proof ?? null,
     });
 
   it("GUARDRAIL: a sensitive action with no proof is refused (enforce); an everyday path asks nothing", async () => {
@@ -735,7 +736,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
         changePresenceMode({
           userId: PERSON,
           mode: "report",
-          proof: proof as never,
+          proof,
         })
       )
     ).toBe("accepted");
@@ -814,7 +815,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
         changePresenceMode({
           userId: PERSON,
           mode: "report",
-          proof: proof as never,
+          proof,
         })
       )
     ).toMatch(/operator/);
@@ -932,7 +933,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
       userId: PERSON,
       kind: "passkey_change",
       id: PERSON,
-      proof: proof as never,
+      proof,
       door: "test",
     });
     expect(await redeemPasskeyChangeGrant(OTHER)).toBe(false);
@@ -944,7 +945,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
       userId: PERSON,
       kind: "passkey_change",
       id: PERSON,
-      proof: old as never,
+      proof: old,
       door: "test",
     });
     await h.client!.exec(

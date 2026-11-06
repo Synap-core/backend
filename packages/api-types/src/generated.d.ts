@@ -11510,6 +11510,15 @@ export interface Context {
 	 */
 	governanceProposalId?: string;
 	/**
+	 * INTERNAL CHANNEL — never from a request (`createContext` never sets it).
+	 * A proposal executor calling a router through `createCaller` sets it when
+	 * `applyProposalApproval` already checked the proof of presence for this
+	 * approval, so the procedure does not ask again (`proofCheckedByApproval`,
+	 * `utils/presence-input.ts`). The tripwire `presence-gate-every-door` pins
+	 * which files set it.
+	 */
+	presenceChecked?: "applyProposalApproval";
+	/**
 	 * The message ID that triggered this hub-protocol request.
 	 * When set, proposals created during this request are linked to this message.
 	 */
@@ -22224,9 +22233,18 @@ export interface NotificationDef {
 	label: string;
 	icon: string;
 	priority: "high" | "low" | "normal" | "urgent";
-	/** Mustache-style template: {{variable}} */
+	/** Mustache-style template: {{variable}} (an ICU message under `messageSyntax: "icu"`). */
 	titleTemplate: string;
 	bodyTemplate: string;
+	/**
+	 * `"icu"`: `titleTemplate` and `bodyTemplate` are messages in the ICU subset
+	 * of `@synap-core/types/i18n` (`{name}`, `select`, `plural`; write ’, never
+	 * an ASCII apostrophe where ICU would quote), formatted in English with the
+	 * producer's `data` (`renderNotificationText`). Use it when the words depend
+	 * on a token the producer sends: the producer sends tokens, the registry owns
+	 * the words. Omit ⇒ mustache `{{variable}}` interpolation.
+	 */
+	messageSyntax?: "icu";
 	/** Default delivery channels (user prefs can override) */
 	defaultChannels: DeliveryChannel[];
 	/**
@@ -47328,6 +47346,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			}>;
 		}>>;
+		factors: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				deviceKeys: number;
+				passkeys: number;
+			};
+		}>;
 		mode: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
@@ -53578,6 +53604,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				fromDate?: string | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				presenceMissing?: {
+					kind?: string | undefined;
+				} | undefined;
 				subjectType?: string | null | undefined;
 				toDate?: string | undefined;
 				userId?: string | null | undefined;

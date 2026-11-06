@@ -544,6 +544,13 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
     const attachEntityId = args.entityId as string | undefined;
+    // An entity's body is read as markdown on Relay and the desktop; a page
+    // runs only at /open/<id>. Refused before anything is written.
+    if (args.type === "html" && attachEntityId) {
+      throw new Error(
+        'A `type: "html"` page is not attached with `entityId` (an entity body is read as markdown): create the page without `entityId`; it opens at /open/<id>.'
+      );
+    }
     const replaceBody = args.replaceBody === true;
     // Refuse an attach that would replace a body BEFORE the document exists.
     if (attachEntityId) {

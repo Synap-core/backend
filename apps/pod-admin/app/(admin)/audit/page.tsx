@@ -9,7 +9,8 @@
  * `?section=queue` links redirect there.
  */
 
-import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useMemo, useState } from "react";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { ActivitySection } from "./_lib/activity-section";
 import {
@@ -19,13 +20,26 @@ import {
   type WorkspaceSummary,
 } from "./_lib/filter-bar";
 import { defaultDateRange } from "./_lib/format";
+import {
+  PRESENCE_MISSING_DAYS,
+  readPresenceMissingLens,
+} from "./_lib/presence-missing-link";
+import { PresenceMissingMark } from "./_lib/presence-missing-mark";
 
 const TITLE = "Audit log";
 const DESCRIPTION = "What happened on this pod.";
 
 function AuditInner() {
+  // `?presence=missing[&kind=…]`: what went through without a proof of
+  // presence, the list the Security card's counts open.
+  const params = useSearchParams();
+  const lens = useMemo(() => readPresenceMissingLens(params), [params]);
+  // The lens opens on the window the card counts.
+  const dateRange = () =>
+    defaultDateRange(lens ? PRESENCE_MISSING_DAYS : undefined);
+
   const [filters, setFilters] = useState<AuditFilters>(() => ({
-    ...defaultDateRange(),
+    ...dateRange(),
     userIds: [],
     workspaceIds: [],
     actions: [],
@@ -51,7 +65,7 @@ function AuditInner() {
 
   function resetFilters() {
     setFilters({
-      ...defaultDateRange(),
+      ...dateRange(),
       userIds: [],
       workspaceIds: [],
       actions: [],
@@ -71,8 +85,11 @@ function AuditInner() {
         onReset={resetFilters}
       />
 
+      {lens && <PresenceMissingMark lens={lens} />}
+
       <ActivitySection
         filters={filters}
+        lens={lens}
         onAvailableSubjectTypes={setAvailableSubjectTypes}
         onAvailableActors={setAvailableActors}
         onAvailableWorkspaces={setAvailableWorkspaces}

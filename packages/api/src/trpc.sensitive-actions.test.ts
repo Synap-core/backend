@@ -34,7 +34,9 @@ vi.mock("./utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn(async () => false),
 }));
 
+import type { PresenceProof } from "@synap-core/types/presence";
 import { credentialProcedure, router } from "./trpc.js";
+import type { Context } from "./types/context.js";
 import { presenceInput } from "./utils/presence-input.js";
 
 const seen: unknown[] = [];
@@ -62,18 +64,31 @@ const app = router({
 
 const PERSON = "11111111-1111-4111-8111-111111111111";
 /** A Synap app's device session whose sign-in is an hour old: step-up fails. */
-const staleDevice = {
+const staleDevice: Context = {
+  db: null,
   authenticated: true,
   userId: PERSON,
   sessionKind: "person_device",
-  session: { device: { authTime: new Date(Date.now() - 3600_000) } },
-} as never;
-const browser = {
+  session: {
+    identity: { id: PERSON, traits: { email: "person@example.test" } },
+    active: true,
+    device: {
+      id: "device-1",
+      clientId: "relay",
+      authTime: new Date(Date.now() - 3600_000),
+    },
+  },
+};
+const browser: Context = {
+  db: null,
   authenticated: true,
   userId: PERSON,
-  session: { identity: { id: PERSON } },
-} as never;
-const proof = {
+  session: {
+    identity: { id: PERSON, traits: { email: "person@example.test" } },
+    active: true,
+  },
+};
+const proof: PresenceProof = {
   kind: "device_key",
   challengeId: "00000000-0000-4000-8000-0000000000c1",
   keyId: "00000000-0000-4000-8000-0000000000d1",
@@ -91,7 +106,7 @@ describe("requireFreshAuthentication: sensitive actions", () => {
   it("GUARDRAIL: a listed path asks the gate with its path, its RAW input and the proof", async () => {
     await app
       .createCaller(browser)
-      .apiKeys.create({ keyName: "ci", presence: proof } as never);
+      .apiKeys.create({ keyName: "ci", presence: proof });
     expect(h.gate).toHaveBeenCalledWith({
       userId: PERSON,
       path: "apiKeys.create",
@@ -108,14 +123,14 @@ describe("requireFreshAuthentication: sensitive actions", () => {
   it("a refusal from the gate stops the call", async () => {
     h.gate.mockRejectedValueOnce(new Error("PRESENCE_REQUIRED"));
     await expect(
-      app.createCaller(browser).apiKeys.create({ keyName: "ci" } as never)
+      app.createCaller(browser).apiKeys.create({ keyName: "ci" })
     ).rejects.toThrow(/PRESENCE_REQUIRED/);
     expect(seen).toEqual([]);
   });
 
   it("a checked proof stands for the step-up; with none, a stale device session is still refused", async () => {
     await expect(
-      app.createCaller(staleDevice).apiKeys.create({ keyName: "ci" } as never)
+      app.createCaller(staleDevice).apiKeys.create({ keyName: "ci" })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     h.gate.mockResolvedValueOnce({
       verdict: { method: "device_key" },
@@ -124,7 +139,7 @@ describe("requireFreshAuthentication: sensitive actions", () => {
     await expect(
       app
         .createCaller(staleDevice)
-        .apiKeys.create({ keyName: "ci", presence: proof } as never)
+        .apiKeys.create({ keyName: "ci", presence: proof })
     ).resolves.toBe("created");
   });
 
@@ -136,8 +151,10 @@ describe("requireFreshAuthentication: sensitive actions", () => {
 
   it("a key caller is named to the gate (its refusal says where the person does it)", async () => {
     await app
-      .createCaller({ ...(browser as object), apiKeyId: "k1" } as never)
-      .apiKeys.create({ keyName: "ci" } as never);
+      // A key caller's context carries `apiKeyId` (the Hub's), which the
+      // tRPC Context type does not declare: `isKeyCaller` reads it untyped.
+      .createCaller({ ...browser, apiKeyId: "k1" } as Context)
+      .apiKeys.create({ keyName: "ci" });
     expect(h.gate).toHaveBeenCalledWith(
       expect.objectContaining({ keyCaller: true })
     );
@@ -147,6 +164,7 @@ describe("requireFreshAuthentication: sensitive actions", () => {
     await expect(
       app
         .createCaller(browser)
+        // Deliberately not a PresenceProof: the cast is the point of the test.
         .apiKeys.create({ keyName: "ci", presence: { kind: "nope" } } as never)
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(h.gate).not.toHaveBeenCalled();

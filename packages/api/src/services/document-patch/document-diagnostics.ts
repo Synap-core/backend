@@ -38,9 +38,11 @@ import {
 } from "@synap-core/types/renderables";
 import { isUuid } from "@synap-core/types/property-render";
 import {
+  CELL_FRAME_MAX_BYTES,
   frameNetworkAssetsNotice,
   frameNetworkCodeRefusal,
   frameNetworkLoads,
+  htmlByteLength,
 } from "@synap-core/types/cell-bridge";
 import {
   ATTENTION_CLASSES,
@@ -88,7 +90,11 @@ export const DOCUMENT_DIAGNOSTIC_CODES = [
   "raw_html",
   /** DESIGN (rule 13): a phrase the failure-words door bans. */
   "banned_phrase",
-  /** DESIGN (rule 7, catalog pass): a list cell asks for more rows than its cap. */
+  /**
+   * DESIGN (rule 7, catalog pass): a list cell asks for more rows than its
+   * cap. On a stored HTML page: the page is larger than a host runs
+   * (`CELL_FRAME_MAX_BYTES`), so readers see its source only.
+   */
   "over_cap",
   /** DESIGN (rule 10, catalog pass): a chart snapshot with no sentence saying what it shows. */
   "chart_no_finding",
@@ -279,7 +285,7 @@ function firstOf(
  * served for as long as their text does not change. Bump it whenever the
  * checker's verdicts change meaning.
  */
-export const DOCUMENT_DIAGNOSTICS_CHECKER = 4;
+export const DOCUMENT_DIAGNOSTICS_CHECKER = 5;
 
 /**
  * Codes a flow may stamp: run-time facts only; content codes are derived,
@@ -542,16 +548,32 @@ export async function diagnoseDocument(
   return out.sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
 }
 
+const mebibytes = (bytes: number) => `${(bytes / 1048576).toFixed(2)} MiB`;
+
+/** The fix for a page over `CELL_FRAME_MAX_BYTES` (`over_cap` on a page). */
+export const PAGE_OVER_CAP_FIX =
+  "Make the page smaller: compress or drop embedded images and fonts, minify inlined scripts, or split it into several pages.";
+
 /**
  * Every diagnostic for a stored HTML page (`documents.type = "html"`). A page
  * is not markdown: no directive, embed or design rule applies to it, only the
- * frame it runs in. Its one check is what the frame policy refuses (the shared
- * rule, `@synap-core/types/cell-bridge`), so the author reads at write and read
- * time the same sentence the reader's host shows instead of running the page.
- * Pure: no catalog, no access read.
+ * frame it runs in. Its checks are what the frame refuses (the shared rules,
+ * `@synap-core/types/cell-bridge`): the network policy, and the size a host
+ * runs, measured in UTF-8 bytes as the hosts measure it. The author reads at
+ * write and read time the same verdict the reader's host shows instead of
+ * running the page. Pure: no catalog, no access read.
  */
 export function diagnoseHtmlPage(html: string): DocumentDiagnostic[] {
   const out: DocumentDiagnostic[] = [];
+  const bytes = htmlByteLength(html);
+  if (bytes > CELL_FRAME_MAX_BYTES) {
+    out.push({
+      code: "over_cap",
+      severity: "error",
+      message: `This page is ${mebibytes(bytes)} (${bytes} bytes); readers’ hosts run a page of at most ${mebibytes(CELL_FRAME_MAX_BYTES)} and show a larger one as source only.`,
+      fix: PAGE_OVER_CAP_FIX,
+    });
+  }
   const loads = frameNetworkLoads(html);
   const refusal = frameNetworkCodeRefusal(loads);
   if (refusal) {

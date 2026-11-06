@@ -902,6 +902,10 @@ const OBJECT_NOUN_ROWS = {
   mcp: "MCP server",
   api_key: "API key",
   ssh_key: "SSH key",
+  // An AI service registered on the pod (`intelligenceRegistry`), and a
+  // vault secret: named by the presence words (`SENSITIVE_ACTION_TOKENS`).
+  intelligence_service: "AI service",
+  secret: "Secret",
   env_variable: "Environment variable",
   url: "Page",
   // Humanizing this event domain to "Proactive" loses its subject — the AI is
@@ -989,6 +993,8 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   mcp: "MCP servers",
   api_key: "API keys",
   ssh_key: "SSH keys",
+  intelligence_service: "AI services",
+  secret: "Secrets",
   env_variable: "Environment variables",
   url: "Pages",
   proactive: "Proactive AIs",

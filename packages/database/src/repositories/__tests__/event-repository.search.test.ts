@@ -322,3 +322,61 @@ describe("EventRepository.searchEvents — session filter", () => {
     expect(sql).not.toContain("session_id");
   });
 });
+
+/**
+ * The `dataEquals` predicate: one `data` key equal to one value, in SQL, with
+ * both the key and the value as bound parameters. The key is refused unless it
+ * is a plain identifier, so no caller can reach the query text through it.
+ */
+describe("EventRepository.searchEvents — dataEquals", () => {
+  let unsafe: ReturnType<typeof vi.fn>;
+  let repo: EventRepository;
+
+  beforeEach(() => {
+    unsafe = vi.fn().mockResolvedValue([]);
+    repo = new EventRepository({ unsafe } as any);
+  });
+
+  const lastCall = () => {
+    const [sql, params] = unsafe.mock.calls[0] as [string, unknown[]];
+    return { sql, params };
+  };
+
+  it("binds the key and the value, ANDed with the event type, before the limit", async () => {
+    await repo.searchEvents({
+      eventType: "presence.missing",
+      dataEquals: { key: "proposalType", value: "apiKeys.create" },
+      limit: 10,
+      offset: 20,
+    });
+    const { sql, params } = lastCall();
+    expect(sql).toContain("AND type = $1");
+    expect(sql).toContain("AND data->>($2::text) = $3");
+    expect(params).toEqual([
+      "presence.missing",
+      "proposalType",
+      "apiKeys.create",
+      10,
+      20,
+    ]);
+    expect(sql.indexOf("data->>($2::text)")).toBeLessThan(sql.indexOf("LIMIT"));
+  });
+
+  it("refuses a key that is not a plain identifier, before any query", async () => {
+    await expect(
+      repo.searchEvents({
+        dataEquals: { key: "x') OR true --", value: "a" },
+      })
+    ).rejects.toThrow(/not an identifier/);
+    await expect(
+      repo.searchEvents({ dataEquals: { key: "a.b", value: "a" } })
+    ).rejects.toThrow(/not an identifier/);
+    expect(unsafe).not.toHaveBeenCalled();
+  });
+
+  it("emits no data predicate when dataEquals is absent", async () => {
+    await repo.searchEvents({ eventType: "presence.missing" });
+    const { sql } = lastCall();
+    expect(sql).not.toContain("data->>(");
+  });
+});
