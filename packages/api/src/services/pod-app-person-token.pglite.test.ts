@@ -47,6 +47,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  /** What the run-choice door asked the gate (D7 case below). */
+  runChoiceGate: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -84,6 +86,35 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
   const schema = await import("@synap/database/schema");
   return {
     ...actual,
+    // The run-choice door's ask (D7 case below): the REAL decision engine
+    // (`previewPermissionDecision`, the same ladder the gate runs), answered
+    // as the gate answers it. Filing the row itself goes through
+    // `@synap/database` helpers on the postgres-js client this harness has not
+    // (the same reason the agent cases above preview rather than file).
+    checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
+      if (opts.action !== "set_run_choice") {
+        return (actual.checkPermissionOrPropose as (o: unknown) => unknown)(
+          opts
+        );
+      }
+      h.runChoiceGate.push(opts);
+      const preview = (await (
+        actual.previewPermissionDecision as (o: unknown) => Promise<{
+          decision: string;
+          reason?: string;
+        }>
+      )(opts)) as { decision: string; reason?: string };
+      if (preview.decision === "propose") {
+        return {
+          proposalId: "00000000-0000-4000-8000-00000000d007",
+          proposalType: "set_run_choice",
+        };
+      }
+      if (preview.decision === "deny") {
+        return { denied: true, reason: preview.reason };
+      }
+      return { granted: true };
+    },
     createPendingProposal: async (
       input: Record<string, unknown>,
       tx?: unknown
@@ -984,6 +1015,7 @@ describe("remembering who runs a playbook: a Synap site signed in as the person 
       runChoice: { stored: { executor: "is-agent" }, ask: false },
     });
     expect(await choiceEdges()).toEqual([{ from_type: "agent" }]);
+    expect(h.runChoiceGate).toEqual([]);
   });
 
   it("an app acting on its own (its ask-first agent): a playbook/set_run_choice proposal, nothing stored", async () => {
@@ -993,19 +1025,25 @@ describe("remembering who runs a playbook: a Synap site signed in as the person 
     );
     const body = await connect(OWNER, UNVERIFIED, RUN_CHOICE_GRANT);
     expect(body.synap_acts_as).toBe("agent");
+    h.runChoiceGate.length = 0;
     const res = await putRunChoice(body.access_token);
     const answer = (await res.json()) as any;
     expect(res.status, JSON.stringify(answer)).toBe(202);
-    expect(answer).toMatchObject({ status: "proposed", runChoice: null });
-    const [filed] = (
-      await q<{ target_type: string; proposal_type: string }>(
-        `select target_type, proposal_type from proposals where id = $1`,
-        [answer.proposalId]
-      )
-    ).rows;
-    expect(filed).toEqual({
-      target_type: "playbook",
-      proposal_type: "set_run_choice",
+    expect(answer).toMatchObject({
+      status: "proposed",
+      proposalId: "00000000-0000-4000-8000-00000000d007",
+      runChoice: null,
+    });
+    // The door asked as the app's agent, for the floored door, and the
+    // engine said propose.
+    const conn = await connectionOf(OWNER, UNVERIFIED);
+    expect(h.runChoiceGate).toHaveLength(1);
+    expect(h.runChoiceGate[0]).toMatchObject({
+      userId: OWNER,
+      agentUserId: conn.agent_user_id,
+      workspaceId: CONTENT,
+      subjectType: "playbook",
+      action: "set_run_choice",
     });
     expect(await choiceEdges()).toEqual([]);
   });
