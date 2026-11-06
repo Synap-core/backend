@@ -23,6 +23,7 @@ import { TRPCError } from "@trpc/server";
 import {
   PRESENCE_REQUEST_KINDS,
   oauthConsentId,
+  passkeyHolder,
   presenceRequestSubject,
   presenceActionDigest,
   presenceActionSubject,
@@ -211,9 +212,16 @@ export const presenceRouter = router({
                 rpId: passkeyRpId(podOrigin, toPodAdminOrigin(podOrigin)),
                 /** Every rp id the pod accepts (the host and each parent). */
                 rpIds: passkeyRpIds(podOrigin),
+                /**
+                 * Each passkey, with where it lives (`passkeyHolder`, from its
+                 * AAGUID): pod admin sends a device's passkey straight to the
+                 * browser's own prompt when a password-manager extension has
+                 * taken over WebAuthn in the page.
+                 */
                 allowCredentials: passkeys.map((p) => ({
                   id: p.id,
                   type: "public-key" as const,
+                  ...passkeyHolder(p.aaguid, p.displayName),
                 })),
                 userVerification: "required" as const,
               }

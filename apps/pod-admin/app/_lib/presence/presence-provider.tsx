@@ -17,6 +17,12 @@
  * this pod, or a browser that cannot use one, it says so: add one on the
  * passkeys page (a new tab; the dialog then says to come back and press Try
  * again), or approve in Relay with Face ID.
+ *
+ * Which prompt Confirm opens follows where the person's passkeys live and
+ * whether a password-manager extension took over WebAuthn in this page
+ * (`planAssertion`): a device passkey goes to the browser's own prompt past
+ * the extension. When a prompt does not sign, the other one is offered as a
+ * button, never run on its own (a NotAllowedError is also a closed prompt).
  */
 
 import {
@@ -53,11 +59,18 @@ import {
   PasskeyCancelled,
   getPasskeyAssertion,
   isPasskeyAssertionSupported,
+  otherRoute,
+  planAssertion,
+  webauthnErrorDetail,
+  webauthnTakenOver,
+  type AssertionPlan,
+  type PasskeyRoute,
 } from "../../../lib/passkey";
+import { CopyButton } from "../copy-button";
 import { proposalHeading } from "../../proposal/[id]/proposal-heading";
 import { PASSKEYS_PATH } from "../../settings/security/passkeys-path";
 import { presenceT } from "./copy";
-import { presenceDialogView } from "./dialog-model";
+import { failedPromptWord, presenceDialogView } from "./dialog-model";
 import {
   PresenceDeclined,
   challengeInput,
@@ -92,7 +105,15 @@ type Phase =
   | { kind: "reading" }
   /** The pod's own words, shown small under the headline (never the headline). */
   | { kind: "read-failed"; detail: string | null }
-  | { kind: "ready"; challenge: PresenceChallenge; note: string | null }
+  | {
+      kind: "ready";
+      challenge: PresenceChallenge;
+      note: string | null;
+      /** The other prompt to offer, once one did not sign. */
+      fallback?: PasskeyRoute | null;
+      /** The failed prompt's error, for "Copy details". */
+      copyDetail?: string | null;
+    }
   | { kind: "signing"; challenge: PresenceChallenge };
 
 interface PresenceContextValue {
@@ -108,6 +129,25 @@ const PresenceContext = createContext<PresenceContextValue>({
 /** The person's proof of presence, asked through the one dialog. */
 export function usePresence(): PresenceContextValue {
   return useContext(PresenceContext);
+}
+
+/** Which prompt to open for this challenge's passkeys, in this page. */
+function assertionPlan(challenge: PresenceChallenge): AssertionPlan {
+  return planAssertion(
+    // A challenge from a pod before holders: "unknown", so both prompts stay on offer.
+    (challenge.passkey?.allowCredentials ?? []).map(
+      (c) => c.holder ?? "unknown"
+    ),
+    webauthnTakenOver("get")
+  );
+}
+
+/** The name of the store holding one of the person's device passkeys, else of a passkey of unknown home. */
+function devicePasskeyName(challenge: PresenceChallenge): string | null {
+  const credentials = challenge.passkey?.allowCredentials ?? [];
+  const named = (holder: string) =>
+    credentials.find((c) => c.holder === holder && c.name)?.name ?? null;
+  return named("device") ?? named("unknown");
 }
 
 /** Why the pod asks again, in words; null for a first ask. */
@@ -260,8 +300,10 @@ function PresenceDialog({
     if (ask) void read.current(ask, againNote(ask.refusal), ask.upFront);
   }, [ask]);
 
-  async function signWith(challenge: PresenceChallenge) {
+  async function signWith(challenge: PresenceChallenge, chosen?: PasskeyRoute) {
     if (!ask || !challenge.passkey) return;
+    const plan = assertionPlan(challenge);
+    const route = chosen ?? plan.route;
     // Read a fresh one rather than sign a challenge about to lapse; the
     // person clicks again (the prompt needs that click).
     if (Date.parse(challenge.expiresAt) - Date.now() < CHALLENGE_MARGIN_MS) {
@@ -270,7 +312,7 @@ function PresenceDialog({
     }
     setPhase(ask, { kind: "signing", challenge });
     try {
-      const credential = await getPasskeyAssertion(challenge.passkey);
+      const credential = await getPasskeyAssertion(challenge.passkey, route);
       settle({
         proof: {
           kind: "passkey",
@@ -279,13 +321,28 @@ function PresenceDialog({
         },
       });
     } catch (err) {
+      const cancelled = err instanceof PasskeyCancelled;
+      const offer = otherRoute(plan, route);
+      const { word, name } = failedPromptWord({
+        cancelled,
+        route,
+        offer,
+        deviceName: devicePasskeyName(challenge),
+        onMac:
+          typeof navigator !== "undefined" &&
+          /Macintosh/.test(navigator.userAgent),
+      });
       setPhase(ask, {
         kind: "ready",
         challenge,
-        note:
+        note: name ? t(word, { name }) : t(word),
+        fallback: offer,
+        // A closed prompt too: an extension's "no passkey found" is the
+        // evidence that tells it from a person closing the prompt.
+        copyDetail:
           err instanceof PasskeyCancelled
-            ? t("cancelled")
-            : t("ceremonyFailed"),
+            ? err.detail
+            : webauthnErrorDetail(err),
       });
     }
   }
@@ -308,6 +365,8 @@ function PresenceDialog({
             passkey: phase.challenge.passkey !== null,
             deviceKeys: phase.challenge.deviceKeys,
             note: phase.kind === "ready" ? phase.note : null,
+            fallback: phase.kind === "ready" ? phase.fallback : null,
+            copyDetail: phase.kind === "ready" ? phase.copyDetail : null,
           }
         : phase,
     passkeySupported: isPasskeyAssertionSupported(),
@@ -391,6 +450,16 @@ function PresenceDialog({
               {view.detail}
             </p>
           )}
+          {view.copyDetail && (
+            <div className="-mt-2">
+              <CopyButton
+                text={view.copyDetail}
+                label={t("copyDetails")}
+                variant="light"
+                ariaLabel={t("copyDetailsA11y")}
+              />
+            </div>
+          )}
           {view.relayDevice !== null && (
             <p className="text-foreground/55">
               {view.relayDevice
@@ -410,6 +479,21 @@ function PresenceDialog({
           {view.secondary === "tryAgain" && (
             <Button variant="flat" onPress={reread}>
               {t("tryAgain")}
+            </Button>
+          )}
+          {(view.secondary === "useDevice" ||
+            view.secondary === "useManager") && (
+            <Button
+              variant="flat"
+              isDisabled={!challenge || phase.kind !== "ready"}
+              onPress={() =>
+                challenge &&
+                phase.kind === "ready" &&
+                phase.fallback &&
+                void signWith(challenge, phase.fallback)
+              }
+            >
+              {t(view.secondary)}
             </Button>
           )}
           {view.secondary === "addPasskey" && (

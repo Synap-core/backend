@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PASSKEY_DATA_UNREADABLE,
   PasskeyCancelled,
+  PasskeyCreateFailed,
+  otherRoute,
+  planAssertion,
+  webauthnTakenOver,
   base64UrlToBuffer,
   bufferToBase64Url,
   createPasskey,
@@ -250,7 +254,14 @@ describe("proof of presence: the assertion (W3)", () => {
     challenge: "AQID", // [1,2,3]
     rpId: "lab.pod.synap.live",
     rpIds: ["lab.pod.synap.live", "pod.synap.live"],
-    allowCredentials: [{ id: "BAUG", type: "public-key" as const }],
+    allowCredentials: [
+      {
+        id: "BAUG",
+        type: "public-key" as const,
+        holder: "unknown" as const,
+        name: null,
+      },
+    ],
     userVerification: "required" as const,
   };
 
@@ -315,4 +326,237 @@ describe("proof of presence: the assertion (W3)", () => {
       PasskeyCancelled
     );
   });
+});
+
+// ─── Past a password-manager extension (6 Nov 2026) ───────────────────────
+//
+// The founder's passkey is in iCloud Keychain; Bitwarden replaced
+// `navigator.credentials.get` as an OWN property of the page's instance and
+// answered "no passkey" (NotAllowedError). The browser's own method stays on
+// `CredentialsContainer.prototype`.
+
+/** A function whose source reads `[native code]`, as the browser's own do (a bound function does in V8). */
+function nativeLike<T extends (...args: never[]) => unknown>(impl: T): T {
+  return impl.bind(null) as T;
+}
+
+/** A page whose `navigator.credentials` is a CredentialsContainer, its methods the prototype's unless `own` replaces them. */
+function stubPage(
+  proto: { get?: unknown; create?: unknown },
+  own: { get?: unknown; create?: unknown } = {}
+) {
+  class CredentialsContainer {}
+  Object.assign(CredentialsContainer.prototype, proto);
+  const credentials = Object.assign(new CredentialsContainer(), own);
+  vi.stubGlobal("CredentialsContainer", CredentialsContainer);
+  vi.stubGlobal("window", { PublicKeyCredential: function PKC() {} });
+  vi.stubGlobal("navigator", { credentials, userAgent: "test" });
+  return credentials;
+}
+
+describe("webauthnTakenOver: an extension replaced WebAuthn in the page", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("the browser's own methods, untouched: not taken over", () => {
+    stubPage({
+      get: nativeLike(async () => null),
+      create: nativeLike(async () => null),
+    });
+    expect(webauthnTakenOver("get")).toBe(false);
+    expect(webauthnTakenOver("create")).toBe(false);
+  });
+
+  it("an own property on navigator.credentials (Bitwarden): taken over", () => {
+    stubPage({ get: nativeLike(async () => null) }, { get: async () => null });
+    expect(webauthnTakenOver("get")).toBe(true);
+  });
+
+  it("an own property that even reads as native code is still another function: taken over", () => {
+    stubPage(
+      { get: nativeLike(async () => null) },
+      { get: nativeLike(async () => null) }
+    );
+    expect(webauthnTakenOver("get")).toBe(true);
+  });
+
+  it("the prototype itself patched with a script (Dashlane): taken over", () => {
+    stubPage({ get: async () => null });
+    expect(webauthnTakenOver("get")).toBe(true);
+  });
+
+  it("no CredentialsContainer to compare with: not taken over", () => {
+    vi.stubGlobal("navigator", { credentials: { get: async () => null } });
+    expect(webauthnTakenOver("get")).toBe(false);
+  });
+});
+
+describe("planAssertion: which prompt Confirm opens", () => {
+  it("no extension: the page's call, nothing else to offer", () => {
+    expect(planAssertion(["device", "manager"], false)).toEqual({
+      route: "page",
+      fallback: null,
+    });
+  });
+
+  it("an extension and only device passkeys: the browser's own prompt, no fallback", () => {
+    expect(planAssertion(["device"], true)).toEqual({
+      route: "native",
+      fallback: null,
+    });
+  });
+
+  it("an extension and passkeys of unknown home (or a challenge from a pod before holders): both prompts on offer", () => {
+    expect(planAssertion(["unknown"], true)).toEqual({
+      route: "native",
+      fallback: "page",
+    });
+  });
+
+  it("an extension, device and unknown passkeys: the browser's own prompt, then the page's", () => {
+    expect(planAssertion(["device", "unknown"], true)).toEqual({
+      route: "native",
+      fallback: "page",
+    });
+  });
+
+  it("an extension holding a manager passkey: the page's call, this device's offered after", () => {
+    expect(planAssertion(["manager", "device"], true)).toEqual({
+      route: "page",
+      fallback: "native",
+    });
+    expect(planAssertion(["manager", "unknown"], true)).toEqual({
+      route: "page",
+      fallback: "native",
+    });
+    expect(planAssertion(["manager"], true)).toEqual({
+      route: "page",
+      fallback: null,
+    });
+  });
+
+  it("otherRoute: after either prompt failed, the plan's other one", () => {
+    const plan = { route: "page", fallback: "native" } as const;
+    expect(otherRoute(plan, "page")).toBe("native");
+    expect(otherRoute(plan, "native")).toBe("page");
+    expect(otherRoute({ route: "native", fallback: null }, "native")).toBe(
+      null
+    );
+  });
+});
+
+describe("the native route reaches the browser's own prompt past the extension", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const request = {
+    challenge: "AQID",
+    rpId: "lab.pod.synap.live",
+    rpIds: ["lab.pod.synap.live"],
+    allowCredentials: [
+      {
+        id: "BAUG",
+        type: "public-key" as const,
+        holder: "device" as const,
+        name: "iCloud Keychain",
+      },
+    ],
+    userVerification: "required" as const,
+  };
+  const buf = (...b: number[]) => new Uint8Array(b).buffer;
+  const signed = {
+    id: "BAUG",
+    rawId: buf(4, 5, 6),
+    type: "public-key",
+    response: {
+      clientDataJSON: buf(1),
+      authenticatorData: buf(2),
+      signature: buf(3),
+      userHandle: null,
+    },
+  };
+
+  it("assertion by `native`: the prototype's get, called on navigator.credentials; the extension's never", async () => {
+    const browser = vi.fn(async function (this: unknown) {
+      return { ...signed, self: this };
+    });
+    const extension = vi.fn(async () => {
+      throw new DOMException("No passkey found", "NotAllowedError");
+    });
+    const credentials = stubPage({ get: browser }, { get: extension });
+    await expect(getPasskeyAssertion(request, "native")).resolves.toMatchObject(
+      { id: "BAUG" }
+    );
+    expect(browser).toHaveBeenCalledTimes(1);
+    expect(browser.mock.contexts[0]).toBe(credentials);
+    expect(extension).not.toHaveBeenCalled();
+  });
+
+  it('an extension\'s "no passkey" is a closed prompt that keeps its words for Copy details', async () => {
+    stubPage(
+      { get: nativeLike(async () => signed) },
+      {
+        get: async () => {
+          throw new DOMException("No passkey found", "NotAllowedError");
+        },
+      }
+    );
+    const err = await getPasskeyAssertion(request, "page").catch((e) => e);
+    expect(err).toBeInstanceOf(PasskeyCancelled);
+    expect((err as PasskeyCancelled).detail).toBe(
+      "NotAllowedError: No passkey found"
+    );
+  });
+
+  it("assertion by `page`: the page's get, whatever replaced it", async () => {
+    const browser = vi.fn(async () => signed);
+    const extension = vi.fn(async () => signed);
+    stubPage({ get: browser }, { get: extension });
+    await getPasskeyAssertion(request, "page");
+    expect(extension).toHaveBeenCalledTimes(1);
+    expect(browser).not.toHaveBeenCalled();
+  });
+
+  const created = {
+    id: "c",
+    rawId: buf(1),
+    type: "public-key",
+    response: { attestationObject: buf(2), clientDataJSON: buf(3) },
+  };
+
+  it("creation on this device with an extension in the page: the prototype's create", async () => {
+    const browser = vi.fn(async () => created);
+    const extension = vi.fn(async () => created);
+    stubPage({ create: nativeLike(browser) }, { create: extension });
+    await createPasskey(kratosData, "device");
+    expect(browser).toHaveBeenCalledTimes(1);
+    expect(extension).not.toHaveBeenCalled();
+  });
+
+  it("creation in a password manager: the page's create, so the extension takes it", async () => {
+    const browser = vi.fn(async () => created);
+    const extension = vi.fn(async () => created);
+    stubPage({ create: nativeLike(browser) }, { create: extension });
+    await createPasskey(kratosData, "manager");
+    expect(extension).toHaveBeenCalledTimes(1);
+    expect(browser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["InvalidStateError", "exists"],
+    ["AbortError", "timeout"],
+    ["TimeoutError", "timeout"],
+    ["SecurityError", "failed"],
+  ] as const)(
+    "a creation refused with %s says why (%s), the browser's words kept for Copy details",
+    async (name, reason) => {
+      stubPage({
+        create: nativeLike(async () => {
+          throw new DOMException("the browser's own words", name);
+        }),
+      });
+      const err = await createPasskey(kratosData, "device").catch((e) => e);
+      expect(err).toBeInstanceOf(PasskeyCreateFailed);
+      expect((err as PasskeyCreateFailed).reason).toBe(reason);
+      expect((err as Error).message).toBe(`${name}: the browser's own words`);
+    }
+  );
 });
