@@ -442,6 +442,29 @@ describe("lifecycle.moving — things left behind", () => {
   });
 });
 
+/**
+ * A session started FROM A PLAYBOOK (`origin: "playbook"`), with the
+ * `playbook_runs` row `create-session.ts` / `run-playbook.ts` write beside
+ * it: `createdBy` is who opened it.
+ */
+async function playbookSession(o: {
+  subject: string;
+  status: string;
+  title: string;
+  endedMins: number;
+  agent: string;
+  openedBy: string;
+}): Promise<string> {
+  const id = await session(o);
+  await q(`update focus_sessions set origin = 'playbook' where id = $1`, [id]);
+  await q(
+    `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, started_at)
+     values (gen_random_uuid(), gen_random_uuid(), $1, 'agent', 'cancelled', '{}'::jsonb, $2, now())`,
+    [id, o.openedBy]
+  );
+  return id;
+}
+
 describe("loose ends — what the agent's own ended sessions left behind", () => {
   it("lists only the calling agent's own, each with the call that settles it", async () => {
     const r = await readLooseEnds({ userId: USER, agentUserId: AGENT });
@@ -477,5 +500,47 @@ describe("loose ends — what the agent's own ended sessions left behind", () =>
     } finally {
       h.failLeftBehind = false;
     }
+  });
+
+  it("lists what a playbook session the agent opened left behind, never one a person ran with the agent on it (finding 47ef3d7a)", async () => {
+    // The live case: the agent started "Win a deal" from its playbook, then
+    // cancelled it; the deal stayed where it was.
+    const deal = await finding(DEV, "Deal left meeting booked", "fixing");
+    const won = await playbookSession({
+      subject: deal,
+      status: "cancelled",
+      title: "Win a deal",
+      endedMins: 2,
+      agent: AGENT,
+      openedBy: AGENT,
+    });
+    // A run the PERSON started, with the agent as its executor: not the
+    // agent's to settle.
+    const theirs = await finding(DEV, "Person's run left this", "open");
+    await playbookSession({
+      subject: theirs,
+      status: "closed",
+      title: "Person's run",
+      endedMins: 3,
+      agent: AGENT,
+      openedBy: USER,
+    });
+
+    const r = await readLooseEnds({ userId: USER, agentUserId: AGENT });
+    const items = (r.leftBehind as { items: Array<Record<string, unknown>> })
+      .items;
+    expect(items.map((i) => i.entityId)).toEqual([deal, T.mine]);
+    expect(items[0]).toMatchObject({
+      sessionId: won,
+      sessionTitle: "Win a deal",
+      sessionStatus: "cancelled",
+      status: "fixing",
+    });
+    expect(r.leftBehind).toMatchObject({ count: 2 });
+
+    // Moving now (every session) still lists both: only the agent lens narrows.
+    const { leftBehind } = await caller().moving();
+    const moving = (leftBehind?.items ?? []).map((i) => i.entityId);
+    expect(moving).toEqual(expect.arrayContaining([deal, theirs]));
   });
 });

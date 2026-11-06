@@ -5,7 +5,8 @@
  *
  * Four populations, all the calling agent's OWN (never another agent's, never
  * the person's):
- *   - sessions it opened (`origin: 'agent'`, on its roster) idle over
+ *   - sessions it opened (`agentOpenedSessionsWhere`: ad hoc or from a
+ *     playbook, never a run someone else started) idle over
  *     {@link LOOSE_END_IDLE_DAYS} days. Closing one is the agent's to do when
  *     no person touched it and it owes the person nothing (founder Q-B1);
  *     otherwise its asks are withdrawn or handed over first (Q-B2);
@@ -36,12 +37,14 @@ import {
   db,
   and,
   eq,
+  or,
   inArray,
   lt,
   asc,
   desc,
   drizzleSql,
   focusSessions,
+  playbookRuns,
   proposals,
   automations,
   ProposalStatus,
@@ -203,12 +206,38 @@ export type ReadyToClose =
 const wholeDays = (from: Date, to: Date) =>
   Math.floor((to.getTime() - from.getTime()) / MS_PER_DAY);
 
-/** Sessions this agent OPENED for this person. */
-function ownAgentSessionsWhere(userId: string, agentUserId: string) {
+/**
+ * Sessions this agent OPENED for this person, whatever process they follow.
+ *
+ * `origin` says how a session came to exist, not who opened it: a session an
+ * agent starts FROM A PLAYBOOK (`synap_start_session` with `templateId`) is
+ * `origin: "playbook"`, and narrowing to `"agent"` hid every such session's
+ * loose ends from the agent that opened it (finding 47ef3d7a: a cancelled
+ * "Win a deal" session's deal never reached the agent's `leftBehind`).
+ *
+ * The opener is read from typed facts, never from `metadata`:
+ *   - `origin: "agent"` — an agent opened it ad hoc (or started a run on its
+ *     own, `run-playbook.ts` `startedByAgent`); `agentIds` names WHICH agent
+ *     (`create-session.ts` puts the opening agent on the roster);
+ *   - `origin: "playbook"` — opened by whoever its `playbook_runs` row names
+ *     in `created_by` (`agentUserId ?? userId` at `create-session.ts`). A run
+ *     a PERSON started with this agent as executor carries the person there
+ *     (`run-playbook.ts` writes the person): the agent merely runs it, so it
+ *     is not the agent's loose end.
+ * Automation and worker sessions (`origin: "automation"`) and a person's own
+ * (`"human"`) never count, even with the agent on their roster.
+ */
+function agentOpenedSessionsWhere(userId: string, agentUserId: string) {
   return and(
     eq(focusSessions.userId, userId),
-    eq(focusSessions.origin, "agent"),
-    drizzleSql`${agentUserId} = ANY(${focusSessions.agentIds})`
+    drizzleSql`${agentUserId} = ANY(${focusSessions.agentIds})`,
+    or(
+      eq(focusSessions.origin, "agent"),
+      and(
+        eq(focusSessions.origin, "playbook"),
+        drizzleSql`EXISTS (SELECT 1 FROM ${playbookRuns} WHERE ${playbookRuns.sessionId} = ${focusSessions.id} AND ${playbookRuns.createdBy} = ${agentUserId})`
+      )
+    )
   );
 }
 
@@ -300,7 +329,7 @@ async function readIdleSessions(
   try {
     const cutoff = new Date(now.getTime() - LOOSE_END_IDLE_DAYS * MS_PER_DAY);
     const where = and(
-      ownAgentSessionsWhere(userId, agentUserId),
+      agentOpenedSessionsWhere(userId, agentUserId),
       inArray(focusSessions.status, [...RUNNING_STATUSES]),
       lt(focusSessions.updatedAt, cutoff),
       // Receipts (metadata.kind = the agent-proposal-package marker) are
@@ -366,7 +395,7 @@ async function readLeftoverAsks(
       .from(focusSessions)
       .where(
         and(
-          ownAgentSessionsWhere(userId, agentUserId),
+          agentOpenedSessionsWhere(userId, agentUserId),
           inArray(focusSessions.status, [...ENDED_STATUSES]),
           owedSlotWhere()
         )
@@ -495,7 +524,7 @@ export async function readSessionsReadyToClose(p: {
       .from(focusSessions)
       .where(
         and(
-          ownAgentSessionsWhere(p.userId, p.agentUserId),
+          agentOpenedSessionsWhere(p.userId, p.agentUserId),
           inArray(focusSessions.status, [...RUNNING_STATUSES]),
           drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`,
           notReceiptWhere()
@@ -548,7 +577,7 @@ async function readLeftBehindSection(
       { userId, roster: false },
       {
         limit: LOOSE_ENDS_ITEMS,
-        sessionWhere: ownAgentSessionsWhere(userId, agentUserId),
+        sessionWhere: agentOpenedSessionsWhere(userId, agentUserId),
       }
     );
     return {
