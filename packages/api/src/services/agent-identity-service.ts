@@ -56,6 +56,7 @@ import {
   SETUP_AGENT_HUB_SCOPES,
   revokeActiveHubInboundKeysForUser,
 } from "./hub-integration-registration.js";
+import { assertPresencePass, type PresencePass } from "./presence/pass.js";
 
 type AgentRow = typeof agents.$inferSelect;
 type UserRow = typeof users.$inferSelect;
@@ -893,7 +894,13 @@ export async function createNamedAgent(opts: {
   name: string;
   agentType: string;
   createdByUserId: string;
+  /** The gate's pass for `agentUsers.create` (`passPresenceForAction`): it mints an agent key. */
+  presence: PresencePass | null;
 }): Promise<CreateNamedAgentResult> {
+  assertPresencePass(opts.presence, {
+    actions: ["agentUsers.create"],
+    userId: opts.createdByUserId,
+  });
   const { agentUserId, email } = await findOrCreateServiceAgentUser({
     creatorId: opts.createdByUserId,
     agentType: opts.agentType,

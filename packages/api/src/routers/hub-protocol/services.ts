@@ -35,6 +35,8 @@ import { intelligenceServices } from "@synap/database/schema";
 import { validateExternalUrl } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
 import { isPodAdmin } from "../../utils/workspace-role.js";
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { passPresenceForAction } from "../../services/presence/gate.js";
 
 const logger = createLogger({ module: "hub-protocol-services" });
 
@@ -80,9 +82,12 @@ export const servicesRouter = router({
         mcpEndpoint: z.string().url().optional(),
         capabilities: z.array(z.string()).min(1),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /** A proof of presence (a pod admin's call; see below). */
+        presence: presenceProofSchema.optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async ({ input: sent, ctx }) => {
+      const { presence, ...input } = sent;
       const callerId = ctx.userId;
       if (!callerId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No caller" });
@@ -93,6 +98,20 @@ export const servicesRouter = router({
           code: "FORBIDDEN",
           message:
             "Only a pod admin or the Intelligence Service may register intelligence services",
+        });
+      }
+      // The Intelligence Service's own key registers itself (provisioning).
+      // A PERSON's key (a pod admin's) adds an AI service whose origin then
+      // receives delegation tokens: the sensitive act `intelligenceRegistry.register`,
+      // so it needs a proof bound to this call, as the tRPC door does.
+      if (ctx.keyType !== "is_internal") {
+        await passPresenceForAction({
+          userId: callerId,
+          path: "intelligenceRegistry.register",
+          input: { ...input, ...(presence ? { presence } : {}) },
+          proof: presence ?? null,
+          keyCaller: true,
+          door: "hubProtocol.services.register",
         });
       }
 

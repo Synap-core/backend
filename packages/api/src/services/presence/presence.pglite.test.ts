@@ -87,9 +87,13 @@ const { invalidatePresenceMode, readPresenceMode, writePresenceMode } =
 const { PRESENCE_NO_FACTOR_HINT } = await import("./gate.js");
 const { changePresenceMode } = await import("./mode-change.js");
 const { redeemPasskeyChangeGrant } = await import("./passkey-change.js");
-const { assertMayEnrollDeviceKey } = await import("./factors.js");
+const { enrollDeviceKey } = await import("./factors.js");
+const { assertPresencePass, mintPresencePass } = await import("./pass.js");
+const { passPresenceForAction, PRESENCE_KEY_CALLER_MESSAGE } =
+  await import("./gate.js");
 const { issuePresenceChallenge, passkeyRpId } = await import("./proof.js");
-const { presenceMessage } = await import("@synap-core/types/presence");
+const { presenceMessage, enrollmentSubject } =
+  await import("@synap-core/types/presence");
 
 const POD = "https://pod.example.test";
 const PERSON = crypto.randomUUID();
@@ -133,6 +137,35 @@ function deviceSign(message: string, key = device.privateKey): string {
       dsaEncoding: "der",
     })
   );
+}
+
+/** A new device key, as Relay makes one, and its public half (SPKI DER, base64url). */
+function newDeviceKey() {
+  const key = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  return {
+    key,
+    publicKey: b64u(key.publicKey.export({ type: "spki", format: "der" })),
+  };
+}
+
+/** Steps 1 and 2 of enrolling a device key, as the router runs them. */
+async function enrol(
+  userId: string,
+  fresh = newDeviceKey(),
+  proof?: unknown
+): Promise<{ id: string }> {
+  const c = await issuePresenceChallenge({
+    userId,
+    subject: enrollmentSubject,
+  });
+  return enrollDeviceKey({
+    userId,
+    challengeId: c.challengeId,
+    label: "Phone",
+    publicKey: fresh.publicKey,
+    signature: deviceSign(c.message, fresh.key.privateKey),
+    proof: (proof ?? null) as never,
+  });
 }
 
 async function challengeFor(proposalId: string, userId = PERSON) {
@@ -235,6 +268,17 @@ async function refusal(p: Promise<unknown>): Promise<string> {
   }
 }
 
+/**
+ * Every test asks for challenges; the per-person limit counts the last
+ * minute. Age the earlier tests' challenges past it (the limit has its own
+ * test).
+ */
+async function agePastRateWindow(): Promise<void> {
+  await h.client!.exec(
+    "update presence_challenges set created_at = created_at - interval '2 minutes'"
+  );
+}
+
 /** A pod whose admins never chose a mode: no stored setting, cache dropped. */
 async function noStoredMode(): Promise<void> {
   await h.client!.exec("delete from pod_settings");
@@ -287,6 +331,7 @@ describe("proof of presence: the gate", () => {
     process.env.PUBLIC_URL = POD;
     process.env.SYNAP_PRESENCE_PROOF = "enforce";
     h.events.length = 0;
+    await agePastRateWindow();
     await noStoredMode();
     h.passkeys = [
       {
@@ -503,6 +548,7 @@ describe("proof of presence: decisions that settle no proposal (slice 2)", () =>
     process.env.PUBLIC_URL = POD;
     process.env.SYNAP_PRESENCE_PROOF = "enforce";
     h.events.length = 0;
+    await agePastRateWindow();
     await noStoredMode();
   });
   afterEach(() => {
@@ -574,6 +620,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     process.env.PUBLIC_URL = POD;
     process.env.SYNAP_PRESENCE_PROOF = "enforce";
     h.events.length = 0;
+    await agePastRateWindow();
     h.notices.length = 0;
     h.passkeys = [];
     await noStoredMode();
@@ -724,17 +771,8 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     }).catch((e: Error) => e);
     expect((off as Error).message).toContain(PRESENCE_NO_FACTOR_HINT);
     // The way back in: their first Relay device key needs no proof.
-    const fresh = crypto.generateKeyPairSync("ec", {
-      namedCurve: "prime256v1",
-    });
-    const freshPublic = b64u(
-      fresh.publicKey.export({ type: "spki", format: "der" })
-    );
-    expect(
-      await refusal(
-        assertMayEnrollDeviceKey({ userId: OTHER, publicKey: freshPublic })
-      )
-    ).toBe("accepted");
+    const lockedOut = crypto.randomUUID();
+    expect(await refusal(enrol(lockedOut))).toBe("accepted");
     // Someone who HOLDS a factor gets the plain refusal, no hint.
     const held = await gate(SENSITIVE).catch((e: Error) => e);
     expect((held as Error).message).not.toContain(PRESENCE_NO_FACTOR_HINT);
@@ -764,36 +802,100 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
   it("GUARDRAIL: a second device key needs a proof from an existing factor; the first does not", async () => {
     const { presenceKeyFingerprint } =
       await import("@synap-core/types/presence");
-    const fresh = crypto.generateKeyPairSync("ec", {
-      namedCurve: "prime256v1",
-    });
-    const freshPublic = b64u(
-      fresh.publicKey.export({ type: "spki", format: "der" })
-    );
-    // PERSON already holds a device key: refused without a proof.
-    expect(
-      await refusal(
-        assertMayEnrollDeviceKey({ userId: PERSON, publicKey: freshPublic })
-      )
-    ).toBe("PRESENCE_REQUIRED");
+    const fresh = newDeviceKey();
+    // PERSON already holds a device key: refused without a proof, and the
+    // enrolment challenge is not spent by the refusal.
+    expect(await refusal(enrol(PERSON, fresh))).toBe("PRESENCE_REQUIRED");
     const proof = await proofFor(
-      `device_enroll:${await presenceKeyFingerprint(freshPublic)}`
+      `device_enroll:${await presenceKeyFingerprint(fresh.publicKey)}`
     );
-    expect(
-      await refusal(
-        assertMayEnrollDeviceKey({
-          userId: PERSON,
-          publicKey: freshPublic,
-          proof: proof as never,
-        })
-      )
-    ).toBe("accepted");
-    // OTHER holds no factor: their first key needs none.
-    expect(
-      await refusal(
-        assertMayEnrollDeviceKey({ userId: OTHER, publicKey: freshPublic })
-      )
-    ).toBe("accepted");
+    expect(await refusal(enrol(PERSON, fresh, proof))).toBe("accepted");
+    // Someone who holds no factor: their first key needs none.
+    expect(await refusal(enrol(crypto.randomUUID()))).toBe("accepted");
+  });
+
+  it("GUARDRAIL: two first enrolments at once yield ONE factor; the other needs a proof", async () => {
+    const newcomer = crypto.randomUUID();
+    const results = await Promise.all([
+      refusal(enrol(newcomer)),
+      refusal(enrol(newcomer)),
+    ]);
+    expect(results.sort()).toEqual(["PRESENCE_REQUIRED", "accepted"]);
+    const { rows } = await (
+      h.client as unknown as {
+        query: (s: string, p: unknown[]) => Promise<{ rows: unknown[] }>;
+      }
+    ).query(`select id from presence_device_keys where user_id = $1`, [
+      newcomer,
+    ]);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("report mode lets a second key through without a proof, and records it", async () => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
+    expect(await refusal(enrol(PERSON))).toBe("accepted");
+    expect(h.events.map((e) => e.type)).toContain("presence.missing");
+  });
+
+  it("a person asks at most 20 challenges a minute", async () => {
+    const busy = crypto.randomUUID();
+    for (let i = 0; i < 20; i++) {
+      await issuePresenceChallenge({ userId: busy, subject: `s${i}` });
+    }
+    const err = await issuePresenceChallenge({
+      userId: busy,
+      subject: "one more",
+    }).catch((e: { code?: string }) => e);
+    expect((err as { code?: string }).code).toBe("TOO_MANY_REQUESTS");
+    // Someone else is not slowed down by it.
+    await expect(
+      issuePresenceChallenge({ userId: crypto.randomUUID(), subject: "x" })
+    ).resolves.toMatchObject({ subject: "x" });
+  });
+
+  it("GUARDRAIL: a key caller is told the person does it in pod admin, never the passkey hint", async () => {
+    const err = await assertPresenceForAction({
+      userId: OTHER,
+      path: "apps.issueKey",
+      input: { publicId: "app_x" },
+      proof: null,
+      keyCaller: true,
+    }).catch((e: Error) => e);
+    expect((err as Error).message).toBe(PRESENCE_KEY_CALLER_MESSAGE);
+    expect((err as { cause?: { reasonCode?: string } }).cause?.reasonCode).toBe(
+      "PRESENCE_REQUIRED"
+    );
+  });
+
+  it("GUARDRAIL: a sensitive service takes only a pass the gate minted, for its act and person", async () => {
+    // Report mode: the gate lets it through, records it, and hands a pass.
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
+    const { pass } = await passPresenceForAction({
+      userId: PERSON,
+      path: "apps.issueKey",
+      input: { publicId: "app_x" },
+    });
+    expect(pass).toMatchObject({ action: "apps.issueKey", proved: false });
+    const actions = ["apps.issueKey"] as const;
+    expect(() =>
+      assertPresencePass(pass, { actions, userId: PERSON })
+    ).not.toThrow();
+    // A look-alike object, a pass for another act or another person: refused.
+    const forged = { action: "apps.issueKey", userId: PERSON, proved: true };
+    for (const [p, userId, acts] of [
+      [forged, PERSON, actions],
+      [pass, OTHER, actions],
+      [pass, PERSON, ["apps.setWriteMode"] as const],
+      [null, PERSON, actions],
+    ] as const) {
+      expect(() =>
+        assertPresencePass(p as never, { actions: acts, userId })
+      ).toThrow(/pod admin/);
+    }
+    // Only the gate mints: the helper is the gate's (pinned by the tripwire).
+    expect(typeof mintPresencePass).toBe("function");
   });
 
   it("GUARDRAIL: one passkey-change proof is redeemed once, and only within 5 minutes", async () => {
@@ -824,18 +926,28 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
   });
 
-  it("the router enrols through assertMayEnrollDeviceKey BEFORE it spends the enrolment challenge", async () => {
+  it("the router enrols through enrollDeviceKey, which decides the factor under the lock BEFORE it spends the challenge", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const src = readFileSync(
+    const router = readFileSync(
       join(__dirname, "../../routers/presence.ts"),
       "utf8"
     );
-    const enroll = src.slice(src.indexOf("    enroll: protectedProcedure"));
-    const gateAt = enroll.indexOf("assertMayEnrollDeviceKey(");
-    const spendAt = enroll.indexOf(".update(presenceChallenges)");
-    expect(gateAt).toBeGreaterThan(0);
-    expect(spendAt).toBeGreaterThan(gateAt);
-    expect(src).toMatch(/return changePresenceMode\(/);
+    const enroll = router.slice(
+      router.indexOf("    enroll: protectedProcedure")
+    );
+    expect(enroll).toMatch(/enrollDeviceKey\(/);
+    expect(enroll).not.toMatch(/\.insert\(presenceDeviceKeys\)/);
+    expect(router).toMatch(/return changePresenceMode\(/);
+    const factors = readFileSync(join(__dirname, "factors.ts"), "utf8");
+    const tx = factors.slice(factors.indexOf("db.transaction(async (tx)"));
+    const lockAt = tx.indexOf("pg_advisory_xact_lock");
+    const decideAt = tx.indexOf("hasProofFactor(args.userId, tx)");
+    const spendAt = tx.indexOf(".update(presenceChallenges)");
+    const insertAt = tx.indexOf(".insert(presenceDeviceKeys)");
+    expect(lockAt).toBeGreaterThan(0);
+    expect(decideAt).toBeGreaterThan(lockAt);
+    expect(spendAt).toBeGreaterThan(decideAt);
+    expect(insertAt).toBeGreaterThan(spendAt);
   });
 });

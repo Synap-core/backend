@@ -31,27 +31,14 @@ import {
   type SensitiveActionPath,
   type PresenceRequestKind,
   PRESENCE_ENROLL_FRESH_SECONDS,
-  PRESENCE_EXPIRED,
-  PRESENCE_INVALID,
-  PRESENCE_USED,
   enrollmentSubject,
-  presenceMessage,
 } from "@synap-core/types/presence";
-import {
-  and,
-  db,
-  desc,
-  eq,
-  gt,
-  isNull,
-  presenceChallenges,
-  presenceDeviceKeys,
-} from "@synap/database";
+import { and, db, desc, eq, isNull, presenceDeviceKeys } from "@synap/database";
 
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { assertPresenceForRequest } from "../services/presence/gate.js";
 import {
-  assertMayEnrollDeviceKey,
+  enrollDeviceKey,
   notifyFactorChanged,
 } from "../services/presence/factors.js";
 import { PASSKEY_CHANGE_GRANT_SECONDS } from "../services/presence/passkey-change.js";
@@ -66,7 +53,6 @@ import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import {
   issuePresenceChallenge,
   readPasskeys,
-  verifyDeviceSignature,
   passkeyRpId,
   passkeyRpIds,
   presencePodOrigin,
@@ -353,76 +339,26 @@ export const presenceRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         assertSignedInPerson(ctx, SIGNED_IN);
-        // Proof of possession: the challenge is consumed only by a signature
-        // the new key made over it, once, in time.
-        const challenge = await db.query.presenceChallenges.findFirst({
-          where: and(
-            eq(presenceChallenges.id, input.challengeId),
-            eq(presenceChallenges.userId, ctx.userId)
-          ),
-        });
-        if (
-          !challenge ||
-          challenge.subject !== enrollmentSubject(challenge.id)
-        ) {
-          asTrpc(new PresenceError(PRESENCE_INVALID, "Unknown challenge."));
-        }
-        if (challenge.consumedAt) {
-          asTrpc(new PresenceError(PRESENCE_USED, "This challenge was used."));
-        }
-        if (challenge.expiresAt <= new Date()) {
-          asTrpc(
-            new PresenceError(PRESENCE_EXPIRED, "This challenge expired.")
-          );
-        }
-        const message = presenceMessage({
-          podOrigin: presencePodOrigin(),
-          challengeId: challenge.id,
-          subject: challenge.subject,
-          nonce: challenge.nonce,
-        });
-        if (!verifyDeviceSignature(input.publicKey, message, input.signature)) {
-          asTrpc(
-            new PresenceError(
-              PRESENCE_INVALID,
-              "This key did not sign the enrolment challenge."
-            )
-          );
-        }
-        // An existing factor approves the new one; the person's first factor
-        // rests on the fresh sign-in `enrollChallenge` checked.
-        await assertMayEnrollDeviceKey({
-          userId: ctx.userId,
-          publicKey: input.publicKey,
-          proof: input.presence ?? null,
-        });
-        const [spent] = await db
-          .update(presenceChallenges)
-          .set({ consumedAt: new Date(), method: "device_key" })
-          .where(
-            and(
-              eq(presenceChallenges.id, challenge.id),
-              isNull(presenceChallenges.consumedAt),
-              gt(presenceChallenges.expiresAt, new Date())
-            )
-          )
-          .returning({ id: presenceChallenges.id });
-        if (!spent) {
-          asTrpc(new PresenceError(PRESENCE_USED, "This challenge was used."));
-        }
-        const [row] = await db
-          .insert(presenceDeviceKeys)
-          .values({
+        // Proof of possession, then ONE first factor per person decided in
+        // the transaction that stores the key (`enrollDeviceKey`).
+        let row: { id: string };
+        try {
+          row = await enrollDeviceKey({
             userId: ctx.userId,
+            challengeId: input.challengeId,
             label: input.label,
             publicKey: input.publicKey,
-          })
-          .returning({ id: presenceDeviceKeys.id });
+            signature: input.signature,
+            proof: input.presence ?? null,
+          });
+        } catch (err) {
+          asTrpc(err);
+        }
         void auditLog({
           subjectType: "presence_device_key",
           action: "enroll",
           phase: "completed",
-          subjectId: row!.id,
+          subjectId: row.id,
           userId: ctx.userId,
           workspaceId: null,
           data: { label: input.label },
@@ -432,9 +368,9 @@ export const presenceRouter = router({
           change: "added",
           factor: "device_key",
           label: input.label,
-          id: row!.id,
+          id: row.id,
         });
-        return { id: row!.id };
+        return { id: row.id };
       }),
 
     /** Revoke one of the person's device keys. Only takes power away. */

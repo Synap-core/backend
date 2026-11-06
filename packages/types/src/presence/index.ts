@@ -72,6 +72,8 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   // on through skills/tools.setApproved, which then trust this proof).
   "capability.enable": "setup",
   "apiKey/create": "setup",
+  // Rotating a key mints a new secret (its executor replays apiKeys.rotate).
+  "apiKey/update": "setup",
   "vault/grant": "setup",
   "vault/vault.request": "setup",
   // Governance: who or what may do what on the pod.
