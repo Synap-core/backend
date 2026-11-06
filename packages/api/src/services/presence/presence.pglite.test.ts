@@ -31,6 +31,8 @@ const h = vi.hoisted(() => ({
   events: [] as Array<{ type: string; data: Record<string, unknown> }>,
   passkeys: [] as Array<Record<string, unknown>>,
   notices: [] as Array<{ type: string; userId: string }>,
+  /** When set, every passkey read waits here (the race test's rendezvous). */
+  kratosGate: null as null | (() => Promise<void>),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -69,13 +71,32 @@ vi.mock("../../utils/audit-log.js", () => ({ auditLog: () => undefined }));
 
 vi.mock("@synap/auth", () => ({
   kratosAdmin: {
-    getIdentity: async () => ({
-      data: {
-        credentials: { passkey: { config: { credentials: h.passkeys } } },
-      },
-    }),
+    getIdentity: async () => {
+      if (h.kratosGate) await h.kratosGate();
+      return {
+        data: {
+          credentials: { passkey: { config: { credentials: h.passkeys } } },
+        },
+      };
+    },
   },
 }));
+
+/**
+ * A rendezvous for `n` arrivals: each waits until all `n` have arrived, or
+ * until `ms` passed (an arrival the others can never join, because they wait
+ * behind a lock it holds, goes on alone).
+ */
+function rendezvous(n: number, ms: number): () => Promise<void> {
+  let arrived = 0;
+  let release!: () => void;
+  const all = new Promise<void>((r) => (release = r));
+  return async () => {
+    arrived += 1;
+    if (arrived >= n) release();
+    await Promise.race([all, new Promise((r) => setTimeout(r, ms))]);
+  };
+}
 
 const {
   assertPresenceForAction,
@@ -816,10 +837,16 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
 
   it("GUARDRAIL: two first enrolments at once yield ONE factor; the other needs a proof", async () => {
     const newcomer = crypto.randomUUID();
+    // Both enrolments read "does this person hold a factor?" at the same
+    // moment when they can: the read waits for the other one (up to 300 ms).
+    // Decided outside a lock, both read "none" and both enrol unproved.
+    h.kratosGate = rendezvous(2, 300);
     const results = await Promise.all([
       refusal(enrol(newcomer)),
       refusal(enrol(newcomer)),
-    ]);
+    ]).finally(() => {
+      h.kratosGate = null;
+    });
     expect(results.sort()).toEqual(["PRESENCE_REQUIRED", "accepted"]);
     const { rows } = await (
       h.client as unknown as {
