@@ -96,6 +96,7 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { AppRepository, runWithActingAgent } from "@synap/database";
+import { mintPresencePass } from "./presence/pass.js";
 import { applyProposalApproval } from "../routers/proposals/apply-approval.js";
 import { apiKeyService } from "./api-keys.js";
 import { issueKey, requestAccess, revokeApp } from "./app-connect.js";
@@ -140,6 +141,12 @@ beforeAll(async () => {
       tableNames.push(getTableConfig(value).name);
     }
   }
+  // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
+  // setting enforces, services/presence/mode.ts), so its sensitive approvals
+  // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
+  await h.client!.exec(
+    `insert into pod_settings (settings) values ('{"presence":{"mode":"report","changedBy":"test","changedAt":"2026-11-05T00:00:00.000Z"}}'::jsonb)`
+  );
   await q(
     `insert into users (id, email, user_type) values ($1, 'owner@x', 'human')`,
     [OWNER]
@@ -268,6 +275,7 @@ describe("invariant 2 — the key's plaintext lives only in the one-time respons
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     // The one delivery: the caller gets it, whole.
     expect(issued.apiKey).toMatch(/^synap_/);
@@ -316,6 +324,7 @@ describe("D8 — an app key does not expire; rotation is a re-issue", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     const [key] = (
       await q<{ expires_at: string | null }>(
@@ -342,6 +351,7 @@ describe("invariant 4 — revoke stops the key at once", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     // Validates — and is now in the 30s verification cache.
     const before = await apiKeyService.validateApiKey(issued.apiKey);
@@ -369,6 +379,7 @@ describe("invariant 4 — revoke stops the key at once", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     expect((await apiKeyService.validateApiKey(first.apiKey))?.id).toBe(
       first.keyId
@@ -377,6 +388,7 @@ describe("invariant 4 — revoke stops the key at once", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     expect(await apiKeyService.validateApiKey(first.apiKey)).toBeNull();
     expect((await apiKeyService.validateApiKey(second.apiKey))?.id).toBe(

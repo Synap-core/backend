@@ -46,6 +46,7 @@ import {
   type HubVariables,
   refuseStaleDeviceSession,
 } from "./_shared.js";
+import { gateHubTwin, refusalBody } from "./_presence.js";
 import {
   issueKey,
   loadOwnedApp,
@@ -102,13 +103,17 @@ const RedirectUrisBody = z.object({
   redirectUris: z.array(z.string().min(1).max(2048)).max(8),
 });
 
+/** A JSON body as an object (anything else is no body). */
+function asBody(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
+}
+
 function fail(c: Ctx, err: unknown, what: string) {
   const status = httpStatusForTrpcError(err);
   if (status === 500) logger.error({ err }, `${what} failed`);
-  return c.json(
-    { error: err instanceof Error ? err.message : `${what} failed` },
-    status
-  );
+  return c.json(refusalBody(err, `${what} failed`), status);
 }
 
 export function registerAppsRoutes(app: HubHono): void {
@@ -218,6 +223,13 @@ export function registerAppsRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
     const appId = requireAppPublicIdParam(c, "id");
     if (appId instanceof Response) return appId;
+    const raw = await c.req.json().catch(() => null);
+    const pass = await gateHubTwin(c, {
+      action: "apps.issueKey",
+      input: { ...asBody(raw), publicId: appId },
+      door: "POST /apps/:id/key",
+    });
+    if (pass instanceof Response) return pass;
     try {
       return c.json(
         await issueKey({
@@ -226,6 +238,7 @@ export function registerAppsRoutes(app: HubHono): void {
           actorAgentUserId: c.get("agentUserId") as string | undefined,
           actorKeyType: c.get("keyType") as string | undefined,
           via: "cli",
+          presence: pass,
         })
       );
     } catch (err) {
@@ -244,15 +257,20 @@ export function registerAppsRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
     const appId = requireAppPublicIdParam(c, "id");
     if (appId instanceof Response) return appId;
-    const body = RedirectUrisBody.safeParse(
-      await c.req.json().catch(() => null)
-    );
+    const raw = await c.req.json().catch(() => null);
+    const body = RedirectUrisBody.safeParse(raw);
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
         400
       );
     }
+    const pass = await gateHubTwin(c, {
+      action: "apps.setRedirectUris",
+      input: { ...asBody(raw), publicId: appId },
+      door: "PUT /apps/:id/redirect-uris",
+    });
+    if (pass instanceof Response) return pass;
     try {
       const found = await setAppRedirectUris({
         publicId: appId,
@@ -260,6 +278,7 @@ export function registerAppsRoutes(app: HubHono): void {
         redirectUris: body.data.redirectUris,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
         actorKeyType: c.get("keyType") as string | undefined,
+        presence: pass,
       });
       return c.json({ app: serializeApp(found) });
     } catch (err) {
@@ -359,13 +378,20 @@ export function registerAppsRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
     const appId = requireAppPublicIdParam(c, "id");
     if (appId instanceof Response) return appId;
-    const body = WriteModeBody.safeParse(await c.req.json().catch(() => null));
+    const raw = await c.req.json().catch(() => null);
+    const body = WriteModeBody.safeParse(raw);
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
         400
       );
     }
+    const pass = await gateHubTwin(c, {
+      action: "apps.setWriteMode",
+      input: { ...asBody(raw), publicId: appId },
+      door: "PUT /apps/:id/write-mode",
+    });
+    if (pass instanceof Response) return pass;
     try {
       return c.json(
         await setAppWriteMode({
@@ -374,6 +400,7 @@ export function registerAppsRoutes(app: HubHono): void {
           applyAutomatically: body.data.applyAutomatically,
           actorAgentUserId: c.get("agentUserId") as string | undefined,
           actorKeyType: c.get("keyType") as string | undefined,
+          presence: pass,
         })
       );
     } catch (err) {

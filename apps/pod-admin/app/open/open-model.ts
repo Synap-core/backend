@@ -12,6 +12,7 @@ import {
 } from "@synap-core/types/presentation";
 import type { inferRouterInputs } from "@trpc/server";
 import { shortDescription } from "../_lib/object/object-summaries";
+import { isHtmlPageMime } from "../_lib/object/content/document-model";
 import { BOUNCE_TYPES, HOST_TYPES, isSafeOpenId } from "./open-params";
 import { openT } from "./copy";
 
@@ -253,6 +254,11 @@ export function redactSecretProperties(
  * (`resolveEntityMedia`) on what the kind declares (`uiHints.presentation`) —
  * and whether the body document IS that media (an uploaded image), in which
  * case it is drawn once, as media, and never read again as text.
+ *
+ * An HTML page is never media, even where the kind declares its own document
+ * as its media (the `file` kind does): its body is read and RUNS in the
+ * isolated frame. Before, an agent's HTML view kept as a file drew a download
+ * card and its page never ran.
  */
 export function entityPageMedia(
   entity: {
@@ -268,6 +274,17 @@ export function entityPageMedia(
     presentationFromUiHints(uiHints)
   );
   if (primary.via === "none") return { media: null, bodyIsMedia: false };
+  const isBody =
+    primary.via === "stored" &&
+    !!primary.documentId &&
+    primary.documentId === entity.documentId;
+  const mime =
+    (primary.via === "stored" ? primary.mime : undefined) ??
+    (typeof entity.properties?.mimeType === "string"
+      ? entity.properties.mimeType
+      : undefined);
+  if (isBody && isHtmlPageMime(mime))
+    return { media: null, bodyIsMedia: false };
   return {
     media: primary,
     bodyIsMedia:

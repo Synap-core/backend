@@ -109,6 +109,9 @@ export * from "./message-links.js";
 // NEW: Agent Configs (centralised user preferences for AI agent behaviour)
 export * from "./agent-configs.js";
 
+// Agent Templates (0404): AI programs installed by the catalog kind `agent`
+export * from "./agent-templates.js";
+
 // NEW: MCP Servers (workspace-level Model Context Protocol server registry)
 export * from "./mcp-servers.js";
 

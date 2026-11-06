@@ -80,7 +80,10 @@ import {
   SESSION_ARTIFACT_KINDS,
 } from "../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../services/focus-sessions/assert-output-ref-visible.js";
+import { sessionTargetsSchema } from "../services/focus-sessions/session-targets-wire.js";
+import type { SessionTargetsWrite } from "../services/focus-sessions/session-targets.js";
 import type { FollowOutcome } from "../services/focus-sessions/follow-playbook.js";
+import type { StageSubjectStatusOutcome } from "../services/focus-sessions/stage-subject-status.js";
 import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
 import {
   blockExpectedOutput,
@@ -247,6 +250,7 @@ function slotOwnershipResult(
         message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.alreadyDone}`,
       });
     case "ref_unreachable":
+    case "ask_refused":
       // Block only. The `default` below returns SUCCESS, so a refusal with no
       // case here would report `ok: true` while the pointer was dropped.
       throw new TRPCError({ code: "BAD_REQUEST", message: result.reason });
@@ -1994,6 +1998,11 @@ export const focusSessionsRouter = router({
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
         /**
+         * The things this session works on as a BATCH (`session-targets.ts`):
+         * floored and written by `createFocusSession`, reported on `targets`.
+         */
+        targets: sessionTargetsSchema.optional(),
+        /**
          * Open a NEW session even when an open session of the same goal and
          * scope exists. Without it the door returns that session, marked
          * `deduped: true`.
@@ -2025,6 +2034,7 @@ export const focusSessionsRouter = router({
         agentIds: input.agentIds,
         parentSessionId: input.parentSessionId ?? null,
         blockedBySessionIds: input.blockedBySessionIds ?? [],
+        targets: input.targets,
         forceCreate: input.forceCreate,
       });
       if (result.status === "proposed") {
@@ -2058,6 +2068,9 @@ export const focusSessionsRouter = router({
         ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
         ...(result.playbooks ? { playbooks: result.playbooks } : {}),
         ...(result.adopted ? { adopted: result.adopted } : {}),
+        ...(result.targets ? { targets: result.targets } : {}),
+        // Born into a stage that moves the subject: what the move did.
+        ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
       };
     }),
 
@@ -2126,6 +2139,12 @@ export const focusSessionsRouter = router({
          * is about. Omitted leaves the anchor alone; `null` is the un-set.
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
+        /**
+         * ADD things this session works on as a batch (`session-targets.ts`):
+         * add-only, idempotent, floored like the subject and refused on a
+         * session that is not in flight (or that this call ends).
+         */
+        targets: sessionTargetsSchema.optional(),
         /**
          * FILE the session into a project (Home's "Unfiled" → File), or
          * UNFILE it with an explicit `null`. Floored through
@@ -2243,7 +2262,27 @@ export const focusSessionsRouter = router({
         });
       }
 
-      const { id: _id, expectedStatus, ...patch } = input;
+      const { id: _id, expectedStatus, targets: rawTargets, ...patch } = input;
+
+      // TARGETS: the ONE floor (`checkSessionTargets`) on the loaded row —
+      // visible entities, a session in flight that this call does not end.
+      const {
+        checkSessionTargets,
+        normalizeSessionTargets,
+        writeSessionTargets,
+      } = await import("../services/focus-sessions/session-targets.js");
+      const targets = normalizeSessionTargets(rawTargets);
+      if (targets.length > 0) {
+        const refusal = await checkSessionTargets({
+          userId: ctx.userId,
+          targets,
+          sessionStatus: existing.status,
+          closing: isTerminalSessionStatus(patch.status),
+        });
+        if (refusal) {
+          throw new TRPCError({ code: refusal.code, message: refusal.message });
+        }
+      }
 
       // A stale move: the caller decided on a status the session left.
       if (expectedStatus && expectedStatus !== existing.status) {
@@ -2444,6 +2483,16 @@ export const focusSessionsRouter = router({
         throw err;
       });
 
+      // The TARGETS, after the row write, through THE writer every door uses.
+      const targetsWrite =
+        updated && targets.length > 0
+          ? await writeSessionTargets({
+              sessionId: updated.id,
+              workspaceId: updated.workspaceId ?? null,
+              entityIds: targets,
+            })
+          : undefined;
+
       // The spine record of this edit — the signal "touched by a person
       // since" reads (`isOwnFreshWork`, FB1020 B3). Without it a person
       // re-filing, renaming or re-scoping the session in the app left no
@@ -2456,9 +2505,12 @@ export const focusSessionsRouter = router({
           userId: ctx.userId,
           agentUserId: ctx.agentUserId ?? null,
           workspaceId: updated.workspaceId ?? null,
-          fields: Object.keys(patch).filter(
-            (k) => (patch as Record<string, unknown>)[k] !== undefined
-          ),
+          fields: [
+            ...Object.keys(patch).filter(
+              (k) => (patch as Record<string, unknown>)[k] !== undefined
+            ),
+            ...(targets.length > 0 ? ["targets"] : []),
+          ],
         });
       }
 
@@ -2480,6 +2532,7 @@ export const focusSessionsRouter = router({
       //
       // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
       let stageGated = false;
+      let subjectMove: StageSubjectStatusOutcome | undefined;
       if (patch.currentStage !== undefined) {
         const { advanceSessionStage } =
           await import("../services/focus-sessions/advance-stage.js");
@@ -2498,6 +2551,10 @@ export const focusSessionsRouter = router({
           stageWrite: "caller",
         });
         stageGated = advance.paused;
+        // What the advance did to the subject (the MCP door's `subjectMove`).
+        const { reportedSubjectMove } =
+          await import("../services/focus-sessions/stage-subject-status.js");
+        subjectMove = reportedSubjectMove(advance.subjectStatus);
       }
 
       // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
@@ -2544,8 +2601,18 @@ export const focusSessionsRouter = router({
       // `follow` rides the row so the surface can confirm WHAT happened —
       // which playbook, which stage, how much structure merged — rather than
       // inferring it from a `playbookId` that appeared.
-      return (follow ? { ...row, follow } : row) as FocusSession & {
+      return {
+        ...row,
+        ...(follow ? { follow } : {}),
+        // What `targets` did: which were added, which already were.
+        ...(targetsWrite ? { targets: targetsWrite } : {}),
+        // What a stage advance did to the subject, when the stage asked for a
+        // move: moved, waiting on a person, skipped or failed, with why.
+        ...(subjectMove ? { subjectMove } : {}),
+      } as FocusSession & {
         follow?: FollowOutcome;
+        targets?: SessionTargetsWrite;
+        subjectMove?: StageSubjectStatusOutcome;
       };
     }),
 
@@ -2585,6 +2652,8 @@ export const focusSessionsRouter = router({
           ...(result.session as FocusSession),
           warnings: result.warnings,
           ...(result.verdict ? { verdict: result.verdict } : {}),
+          // What the end moved (`subjectProfile.onEnd`), each with why.
+          ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         };
       } catch (err) {
         const e = err as { code?: string; message?: string };

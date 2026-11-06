@@ -271,16 +271,22 @@ export async function executeMCPToolViaHubProtocol(
       : ambiguityNoted;
   // The same fact as data. The Note above stays (clients may read it); this is
   // what a client can branch on — including an explicit `sessionId` that was
-  // DROPPED, which the Note never covered. Reads carry no attribution.
-  const attributed = resolution
-    ? withSessionAttribution(disclosed, {
-        ...resolution.attribution,
-        ...(filed ? { filed } : {}),
-      })
-    : disclosed;
+  // DROPPED, which the Note never covered. Reads carry no attribution, and
+  // neither does a write whose block would only repeat what the caller said
+  // (`attributionCarriesNews`).
+  const attribution: SessionAttributionReport | undefined = resolution
+    ? { ...resolution.attribution, ...(filed ? { filed } : {}) }
+    : undefined;
+  const attributed =
+    attribution &&
+    attributionCarriesNews(attribution, resolution?.session?.sessionId)
+      ? withSessionAttribution(disclosed, attribution)
+      : disclosed;
   // An AGENT is told which of its proposals were decided since its last call
-  // (approved / rejected / approval_failed + reason, ≤10) — otherwise it can
-  // only learn it by polling get_proposal (ticket 437d7370).
+  // (approved / rejected / approval_failed + reason, ≤3 per reply) — otherwise
+  // it can only learn it by polling get_proposal (ticket 437d7370). A call with
+  // a session hears only the proposals filed under THAT session; a call with
+  // none (every read) keeps the agent-wide read.
   const digested = agentUserId
     ? withProposalUpdates(
         attributed,
@@ -292,6 +298,33 @@ export async function executeMCPToolViaHubProtocol(
   // — `link`, `attribution` and `proposalUpdates` included — and the two
   // copies never diverge.
   return withUiStructuredContent(toolName, digested);
+}
+
+/**
+ * Does this write's `attribution` block tell the caller anything it did not
+ * already say? An agent that NAMED its session (and it was kept) and whose
+ * writes all landed there learns nothing from `{session:"explicit",
+ * ambiguous:false, openCount:null, filed:{status:"ok", filedIn:[<that
+ * session>]}}`: 16-54 tokens on every write reply (measured over 24 days).
+ * That is the ONE case dropped. Every other block is news and kept as before:
+ * a session the caller did not name (`derived` / `none`: the block is where
+ * its writes went, and the tool texts point at `attribution.filed`), several
+ * open and none guessed (`ambiguous`), the named id dropped
+ * (`ignoredSession`), the filing unread (`unavailable`), a write about
+ * another project (`topicHint`), a per-call run's `handle`, or a write filed
+ * in a session other than the named one.
+ */
+export function attributionCarriesNews(
+  attribution: SessionAttributionReport,
+  namedSessionId: string | undefined
+): boolean {
+  if (attribution.session !== "explicit") return true;
+  if (attribution.ambiguous || attribution.ignoredSession) return true;
+  const filed = attribution.filed;
+  if (!filed) return false;
+  if (filed.status !== "ok") return true;
+  if (filed.topicHint || filed.handle) return true;
+  return filed.filedIn.some((f) => f.sessionId !== namedSessionId);
 }
 
 /** Said to the agent when its proposals' decisions could not be read. */

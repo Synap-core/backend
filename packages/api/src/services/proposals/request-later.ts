@@ -17,7 +17,7 @@ import {
   proposalSnoozes,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { REQUEST_LATER_MAX_MS } from "@synap-core/types/proposals";
+import { laterTimeProblem } from "@synap-core/types/proposals";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 
 type Database = typeof defaultDb;
@@ -36,19 +36,8 @@ export async function setRequestLater(input: {
 }): Promise<{ proposalId: string; snoozedUntil: Date }> {
   const database = input.db ?? defaultDb;
   const now = input.now ?? new Date();
-  const until = input.until.getTime();
-  if (!Number.isFinite(until) || until <= now.getTime()) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Later needs a time in the future.",
-    });
-  }
-  if (until > now.getTime() + REQUEST_LATER_MAX_MS) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Later can set a request aside for 30 days at most.",
-    });
-  }
+  const problem = laterTimeProblem(input.until, now, "a request");
+  if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
   await assertProposalVisibleTo(input.proposalId, input.userId, {
     db: database,
   });

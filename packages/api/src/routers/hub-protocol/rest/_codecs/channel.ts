@@ -181,6 +181,15 @@ export const SpaceConversationSchema = z
         .object({ id: z.string(), name: z.string().nullable() })
         .nullable(),
     }),
+    lead: z
+      .object({
+        kind: z.enum(["person", "company"]),
+        id: z.string(),
+        stage: z.string().nullable(),
+      })
+      .describe(
+        "The lead this person is listed for: themselves (`person`), or the company they work at that is a lead of the space (`company`, its id). `stage` is that role's status in the space, null when it has none."
+      ),
     channelIds: z.array(z.string()),
     lastMessage: z
       .object({

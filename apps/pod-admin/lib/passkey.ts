@@ -120,6 +120,66 @@ export function passkeyCreationOptions(
   };
 }
 
+/**
+ * Where a new passkey lives: the person's answer to "Where should this
+ * passkey live?", asked wherever pod admin creates one (Settings › Security,
+ * the invite page; the presence dialog's "Add a passkey" opens Settings).
+ *
+ *  - `device`: this computer's own lock (Touch ID, Windows Hello).
+ *  - `manager`: a password manager, a security key or a phone.
+ */
+export type PasskeyPlacement = "device" | "manager";
+
+/**
+ * Creation options with WebAuthn L3 `hints`, which TypeScript 5.9's DOM lib
+ * types only on the JSON form (`PublicKeyCredentialCreationOptionsJSON`).
+ * A browser that does not know `hints` ignores it.
+ */
+export type PlacedCreationOptions = PublicKeyCredentialCreationOptions & {
+  hints?: ("client-device" | "security-key" | "hybrid")[];
+};
+
+/**
+ * The person's placement merged onto the server's creation options. The
+ * answer owns exactly two fields; everything else Kratos sent passes through
+ * (`residentKey`, `requireResidentKey`, `userVerification`, extensions, …).
+ *
+ * Kratos v1.3.1 asks for `authenticatorAttachment: "platform"` on EVERY
+ * passkey (`driver/config/config.go` `PasskeyConfig`), so:
+ *  - `device` keeps "platform" and adds the WebAuthn L3 hint
+ *    `["client-device"]`: the browser's own prompt goes to this device first.
+ *  - `manager` drops the attachment and sends no hints: "platform" would hide
+ *    security keys and phones from the browser's prompt. L3 has no hint for a
+ *    password manager ("security-key" is a USB/NFC key, "hybrid" a phone by
+ *    QR code), and a manager the operating system lists (iCloud Keychain,
+ *    1Password on macOS) counts as "client-device"; hinting "security-key" or
+ *    "hybrid" would open the USB or QR dialog first and bury it. With neither
+ *    field, the browser and any password-manager extension offer everything.
+ *
+ * Both are requests, not guarantees: a password-manager extension replaces
+ * `navigator.credentials.create` in the page and may take the passkey either
+ * way (the words say how to pick the device then).
+ */
+export function placePasskey(
+  options: PlacedCreationOptions,
+  placement: PasskeyPlacement
+): PlacedCreationOptions {
+  const { hints: _serverHints, ...rest } = options;
+  const { authenticatorAttachment: _serverAttachment, ...selection } =
+    options.authenticatorSelection ?? {};
+  if (placement === "device") {
+    return {
+      ...rest,
+      authenticatorSelection: {
+        ...selection,
+        authenticatorAttachment: "platform",
+      },
+      hints: ["client-device"],
+    };
+  }
+  return { ...rest, authenticatorSelection: selection };
+}
+
 /** A created credential as Kratos reads it from the register field. */
 export function encodeAttestation(credential: PublicKeyCredential): string {
   const response = credential.response as AuthenticatorAttestationResponse;
@@ -142,18 +202,24 @@ export class PasskeyCancelled extends Error {
 }
 
 /**
- * Run the ceremony: ask the device for a new passkey and return the value for
- * the flow's register field. Throws {@link PasskeyCancelled} when the person
- * dismisses the prompt (WebAuthn `NotAllowedError`), an Error otherwise.
+ * Run the ceremony: ask for a new passkey where the person chose
+ * ({@link placePasskey}) and return the value for the flow's register field.
+ * Every pod-admin creation goes through here, so `placement` is required.
+ * Throws {@link PasskeyCancelled} when the person dismisses the prompt
+ * (WebAuthn `NotAllowedError`), an Error otherwise.
  */
 export async function createPasskey(
   createData: string,
+  placement: PasskeyPlacement,
   person?: { name: string; displayName?: string }
 ): Promise<string> {
   if (!isPasskeySupported()) {
     throw new Error("This browser can't create a passkey.");
   }
-  const publicKey = passkeyCreationOptions(createData, person);
+  const publicKey = placePasskey(
+    passkeyCreationOptions(createData, person),
+    placement
+  );
   let credential: Credential | null;
   try {
     credential = await navigator.credentials.create({ publicKey });

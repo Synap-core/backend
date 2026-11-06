@@ -408,6 +408,10 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     expectedOutputs: buildOutputSlotsJsonSchema(
       "What this stage must produce: each { kind, label, relationToSubject? }."
     ),
+    tier: deriveJsonSchema(
+      playbookStageSchema.shape.tier.unwrap(),
+      "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+    ),
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
@@ -440,7 +444,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -627,8 +631,8 @@ const RUN_CAPABILITY_JSON_SCHEMA = buildCapabilityExecuteAgentJsonSchema();
  * The adapter already reads `sessionId` on every write
  * (`resolveSessionHandle`); undeclared, a client that validates its arguments
  * could not send it, and an agent was never told it may. The handle is
- * server-minted (MCP SEP-2567): a session it started, or the one the reply
- * names in `attribution.filed`. The idle window is
+ * server-minted (MCP SEP-2567): a session it started, or the one a reply
+ * names in `attribution.filed` when the call named none. The idle window is
  * `RECEIPT_IDLE_WINDOW_HOURS` (pinned by `attributed-tools-declare-session`).
  */
 const ATTRIBUTED_SESSION_ID_PARAM = {
@@ -1387,7 +1391,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `documentId` attaches an EXISTING document from the entity's own space as the body (e.g. one left orphaned) and always goes to review (a document from another space is refused: the person attaches it); replacing a body the entity already has also needs `replaceBody: true`; undo puts the previous body back. `profileSlug` converts it to another kind, keeping its id and links (always reviewed).",
+          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `documentId` attaches an EXISTING document from the entity's own space as the body (e.g. one left orphaned) and always goes to review (a document from another space is refused: the person attaches it); replacing a body the entity already has also needs `replaceBody: true`; undo puts the previous body back. `profileSlug` converts it to another kind, keeping its id and links (always reviewed). `homeWorkspaceId` files a POD-WIDE record for a space so its members (and that space's apps) read it; null clears it.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1425,6 +1429,11 @@ export const tools = {
               type: "boolean",
               description:
                 "Set true with documentId when the entity ALREADY has a body and you mean to replace it (it is kept, detached, and comes back on undo). Without it the call is refused naming the current body. Always a proposal.",
+            },
+            homeWorkspaceId: {
+              type: ["string", "null"],
+              description:
+                "File a POD-WIDE record (one in no space) for this space, its home: the space's members and its apps then read it. Refused on a record that lives in a space (move it instead) and unless the person can write in that space. Always a proposal for you; undo puts the previous home back. null clears the home.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -1558,7 +1567,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
+          "Create a standalone document. THREE modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. (3) a page — `type: \"html\"` with `content` a whole HTML page: pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN, no remote font or image; live pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown; the page opens at `/open/<id>`). Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1571,7 +1580,13 @@ export const tools = {
             content: {
               type: "string",
               description:
-                "Authored document body (markdown or plain text). Mutually exclusive with `url`.",
+                'Authored document body (markdown or plain text; with `type: "html"`, the whole page). Mutually exclusive with `url`.',
+            },
+            type: {
+              type: "string",
+              enum: ["markdown", "html"],
+              description:
+                'What `content` is. "markdown" (default) is a document. "html" is a page pod admin runs at `/open/<id>` in an isolated frame: inline only (the policy blocks the network: no CDN, no remote font or image), at most 2 MB, reading pod data through the read-only bridge. The receipt\'s `warnings` say what will not run. Not taken with `url` or `entityId`.',
             },
             url: {
               type: "string",
@@ -2050,6 +2065,63 @@ export const tools = {
         },
       },
       {
+        name: "synap_update_facet",
+        annotations: {
+          title: "Update facet",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Change the fields of a ROLE an entity already wears (Kind + Facets) — e.g. a lead's nextAction / nextActionAt. A role's fields live on its facet, NOT on the entity: synap_update_entity does not reach them, and synap_attach_facet on a role the entity already has writes nothing (it answers status 'exists' with the facetId). Target the facet by entityId + facetSlug, or by facetId (the handle attach returns). `properties` MERGES into the role's current fields (keys you omit are kept). If `properties` carries the role's status field, it moves through the status door: pass `expectedStatus` (the status you saw). Governed like any write: may return 'proposed' — NEVER treat that as an error.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description:
+                "UUID of the entity wearing the role (with facetSlug).",
+            },
+            facetSlug: {
+              type: "string",
+              description:
+                "Role-profile slug of the role to change (paired with entityId), e.g. 'lead'.",
+            },
+            facetId: {
+              type: "string",
+              description:
+                "Alternative to entityId+facetSlug: the facet's own UUID (the handle synap_attach_facet returns).",
+            },
+            properties: {
+              type: "object",
+              description:
+                "The role fields to set. Merged into the role's current fields: keys you omit are kept.",
+            },
+            expectedStatus: {
+              type: ["string", "null"],
+              description:
+                "Only when `properties` changes the role's status field: the status you saw (compare-and-set; a stale one is refused). null = the role had no status.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace lens used to resolve the facet when targeting it by entityId + facetSlug (needed when the role is worn in several spaces).",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["properties"],
+        },
+      },
+      {
         name: "synap_define_role",
         annotations: {
           title: "Define role type",
@@ -2122,7 +2194,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten — with ONE exception: re-declare an existing field with its `constraints.enum` PLUS new values to ADD allowed values. Governed like any schema change, and refused for the kind's status field and for a value one typo away from an allowed one (send the allowed one instead). This is the door when a write was refused because no allowed value fits). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Slugs are NORMALISED to lowercase words joined by '-' (social_account_audit → social-account-audit, botScore → botscore): the result's `notice`/`normalized` names every rewrite — use the stored slugs in code and later calls. Governed: 'proposed' is success; a NEW kind's `properties` ride that same proposal (one approval creates the kind and its fields, so do not re-call for them). Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten — with ONE exception: re-declare an existing field with its `constraints.enum` PLUS new values to ADD allowed values. Governed like any schema change, and refused for the kind's status field and for a value one typo away from an allowed one (send the allowed one instead). This is the door when a write was refused because no allowed value fits). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Slugs are NORMALISED to lowercase words joined by '-' (social_account_audit → social-account-audit, botScore → botscore): the result's `notice`/`normalized` names every rewrite — use the stored slugs in code and later calls. Governed: 'proposed' is success; a NEW kind's `properties` ride that same proposal (one approval creates the kind and its fields, so do not re-call for them). Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2315,7 +2387,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's GOALS (tracks in tool and field names) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); every write reply names it in `attribution.filed`. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. The result's `offers` block (suggestions, NOTHING applied) lists `goals` — the project's open goals when you named no trackId: if the work serves one, file it with synap_update_session trackId — and `sessions` — open sessions on close work in the same goal or project: if one is the same work, continue it instead; a start that landed in NO project gets `homes` instead — up to 3 projects or goals it may belong in, each with its `reasons`: file it with synap_update_session projectId or trackId, or ask the person. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion — or an outcome with `verify` — on a new session: without one the start is refused (status 'refused', reasonCode NO_CRITERIA, nothing created); continuing an existing session needs none. Propose two to five binary, observable statements and let the person validate or rewrite them. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's GOALS (tracks in tool and field names) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); a write reply names it in `attribution.filed` when you did not name it. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. PLAYBOOKS BIND ON FACTS, never on words: the one you name with templateId; else the one active playbook for the subject's kind; else the one the parent session follows; else the main-red playbook for a `main red:` title. The result's `binding` line says which and why (or offers the few it could not choose between). With no templateId, its `playbooks` block also ranks the pod's playbooks against your title+goal, each with its `reason`: suggestions, NOTHING applied. Follow one later, or release one the pod bound, with synap_update_session followPlaybookId (null releases). Pass templateId: null to skip the ranked suggestions (facts still bind). The result's `offers` block (suggestions, NOTHING applied) lists `goals` — the project's open goals when you named no trackId: if the work serves one, file it with synap_update_session trackId — and `sessions` — open sessions on close work in the same goal or project: if one is the same work, continue it instead; a start that landed in NO project gets `homes` instead — up to 3 projects or goals it may belong in, each with its `reasons`: file it with synap_update_session projectId or trackId, or ask the person. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion — or an outcome with `verify` — on a new session: without one the start is refused (status 'refused', reasonCode NO_CRITERIA, nothing created); continuing an existing session needs none. Propose two to five binary, observable statements and let the person validate or rewrite them. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2389,7 +2461,7 @@ export const tools = {
             templateId: {
               type: ["string", "null"],
               description:
-                "Optional playbook UUID — the ONE way a playbook binds to this session. Omit and the result's `playbooks` block ranks the pod's playbooks against your words so you can name one (nothing is applied for you); pass null to skip matching entirely.",
+                "Optional playbook UUID this session follows from the start. Omit it and the pod binds on facts (subject kind, parent's playbook, `main red:` title) and ranks the rest against your words in `playbooks` (suggestions, nothing applied); null skips those suggestions. Later, synap_update_session followPlaybookId binds or releases one.",
             },
             params: {
               type: "object",
@@ -2408,6 +2480,13 @@ export const tools = {
               format: "uuid",
               description:
                 "Optional UUID of this session's PARENT — this session is a child: a detour (something blocked the parent's work and this clears it) or a planned sub-session of a larger piece of work. Records `session --spawned_from--> session`; the parent stays OPEN and lists its children (closing a child never closes the parent, and the parent never auto-closes). Must be a session you own; if it cannot be linked, the result's `parentLink` says why. The child does NOT inherit the parent's governance settings.",
+            },
+            targets: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 100,
+              description:
+                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already).",
             },
             blockedBySessionIds: {
               type: "array",
@@ -2552,7 +2631,7 @@ export const tools = {
             currentStage: {
               type: "string",
               description:
-                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door. Changing it emits a stage-transition event automations can react to.",
+                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to.",
             },
             subjectEntityId: {
               type: ["string", "null"],
@@ -2743,6 +2822,13 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "Only with followPlaybookId: which stage this work is ALREADY in, by the stage `key` (optional). OMIT IT unless you know — the session then sits in no stage, which is honest; it is never guessed and never set to the first stage. A key the playbook does not declare is refused, with the valid keys listed.",
+            },
+            targets: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 100,
+              description:
+                "ADD entity UUIDs this session works on as a batch (as start's `targets`; add-only, idempotent: a target ends with a result, never removed). Each must be an entity you can see; the session must be active, paused or forming. Reported on `targets` (added | already).",
             },
             addBlockedBySessionIds: {
               type: "array",
@@ -3112,7 +3198,7 @@ export const tools = {
         description:
           "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. " +
           "Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. " +
-          "PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. An ask due within the hour also breaks through the person's Focus; any other ask is a normal push. " +
+          "PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. An ask due within the hour also breaks through the person's Focus, once a day per agent (your next due-soon ask that day is a normal push, counted against the person's daily push budget); any other ask is a normal push. An answerBy already in the past is refused. " +
           "`dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. " +
           "Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
         inputSchema: {
@@ -3596,7 +3682,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…), or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3613,6 +3699,17 @@ export const tools = {
             limit: {
               type: "number",
               description: "Page size (1–100, default 50).",
+            },
+            playbookId: {
+              type: "string",
+              description:
+                "Read ONE playbook in full (its whole definition), instead of listing.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              description:
+                "lean (default) = the digest per playbook; full = complete rows (large: pair it with a small limit).",
             },
           },
           required: [],
@@ -3674,7 +3771,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
         inputSchema: {
           type: "object",
           properties: {
@@ -4313,7 +4410,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Escalation L3 (governed — may propose): create a workspace from a definition. Template-first: market.search(kind:template) + prefer install before freehand create. Only after workspace-design four conditions hold and no template fits. Capture never invents a workspace. Pass stable proposalId for idempotency. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6285,7 +6382,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6521,6 +6618,16 @@ export const tools = {
               description:
                 "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused.",
             },
+            parentSessionId: {
+              type: "string",
+              description:
+                "Optional UUID of the session this run is spawned FROM (a session you own): records `run session --spawned_from--> parent`, as synap_start_session does. Omitted: the session your call is bound to, if any.",
+            },
+            suspendedIntent: {
+              type: "string",
+              description:
+                "With parentSessionId: this run is a DETOUR that BLOCKS the parent — one line (max 400) naming what the parent was about to do; the parent waits until the run's session closes. Omit for a run that does not block the parent.",
+            },
             handToAgentId: {
               type: "string",
               description:
@@ -6539,7 +6646,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both: read synap_load_skill('system/synap/code-skills') first for the runtime (the async (args, context) wrapper, callProvider and its return shape, hubProtocol reads, propose.entity, limits). A code skill that calls an installed tool with callProvider should declare it in `requiredTools`, so a run is approved once, not once more per call. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until a person approves its proposal — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. That one approval also turns it on: there is no separate enable step (an edit to its code later turns it off until approved again). One name per skill in a scope: a create under a name that already exists here is refused with that skill's id — change it with synap_update_skill instead. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both: read synap_load_skill('system/synap/code-skills') first for the runtime (the async (args, context) wrapper, callProvider and its return shape, hubProtocol reads, propose.entity, limits). A code skill that calls an installed tool with callProvider should declare it in `requiredTools`, so a run is approved once, not once more per call. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until a person approves its proposal — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. That one approval also turns it on: there is no separate enable step (an edit to its code later turns it off until approved again). One name per skill in a scope: a create under a name that already exists here is refused with that skill's id — change it with synap_update_skill instead. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {

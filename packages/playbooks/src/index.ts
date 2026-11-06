@@ -866,6 +866,12 @@ export interface SlotAskOption {
   description?: string;
   /** One short fact to weigh before picking it ("Skips 1,284 tests"). */
   caution?: string;
+  /** What the person looks at before picking it. Mirrors `AskOptionMedia`. */
+  media?: {
+    kind: "image" | "video" | "audio";
+    ref: { url: string } | { assetId: string } | { entityId: string };
+    alt?: string;
+  };
 }
 
 /** The question a choose option opens once picked: ONE level, 2–4 options. */
@@ -1038,6 +1044,45 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
+ * How much model a stage's work needs — ADVISORY. `deep` = architecture or
+ * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
+ * a smaller model can do. An executor MAY map it to a model; nothing reads it
+ * yet, and absent means "no preference" (the executor's own default).
+ */
+export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
+export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
+
+/**
+ * A stage that runs once per item of a collection (a UNIT), e.g. one run per
+ * shot of a film. ADVISORY and declarative: it names WHAT to iterate, it does
+ * not iterate. Nothing consumes it yet; the run handler that fans a stage out
+ * over its items reads it when it lands.
+ */
+export interface PlaybookStageForEach {
+  /**
+   * The collection to iterate: a run param name (`shots`) or a dotted path into
+   * the subject or earlier outputs (`subject.shots`). A reference, never data.
+   */
+  over: string;
+  /** Name the current item goes by inside the stage (default: `item`). */
+  as?: string;
+}
+
+/**
+ * A condition under which a stage runs. ADVISORY and declarative: it names the
+ * test, it does not evaluate it. Nothing consumes it yet; the run handler that
+ * skips a stage reads it when it lands. Give `equals` or `exists` (or both).
+ */
+export interface PlaybookStageWhen {
+  /** A run param or earlier output to test: a name or dotted path. A reference, never data. */
+  param: string;
+  /** The stage runs when the value at `param` equals this. */
+  equals?: unknown;
+  /** The stage runs when the value at `param` is present (true) or absent (false). */
+  exists?: boolean;
+}
+
+/**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
  * (progress-only). The active stage's `key` is stored on
@@ -1127,6 +1172,24 @@ export interface PlaybookStage {
    * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
    */
   onFail?: PlaybookStageOnFail;
+  /**
+   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
+   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
+   * a model later. Never a control: a stage with or without it runs the same.
+   */
+  tier?: PlaybookStageTier;
+  /**
+   * Run this stage once per item of a collection — see
+   * {@link PlaybookStageForEach}. Absent ⇒ the stage runs once, as before.
+   * Advisory: nothing consumes it yet.
+   */
+  forEach?: PlaybookStageForEach;
+  /**
+   * Run this stage only when the condition holds — see
+   * {@link PlaybookStageWhen}. Absent ⇒ the stage always runs, as before.
+   * Advisory: nothing consumes it yet.
+   */
+  when?: PlaybookStageWhen;
 }
 
 /**

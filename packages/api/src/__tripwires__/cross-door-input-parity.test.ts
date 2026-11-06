@@ -762,6 +762,7 @@ const ASK_PERSON_WITHHELD = [
   "retireOutput",
   "addAgentId",
   "subjectEntityId",
+  "targets",
   "projectId",
   "workspaceId",
   "trackId",

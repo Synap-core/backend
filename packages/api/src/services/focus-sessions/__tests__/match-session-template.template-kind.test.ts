@@ -84,4 +84,18 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
       useMany = false;
     }
   });
+
+  it("excludeGoalTemplates (a session is starting): never offers a Goal template; synap_find (flag off) still does", async () => {
+    const input = { userId: "u1", goal: "business model interrogation" };
+    const session = await matchSessionTemplate({
+      ...input,
+      excludeGoalTemplates: true,
+    });
+    expect(session.candidates.map((c) => c.id)).toEqual(["pb-twin"]);
+    expect(
+      session.candidates.some((c) => c.templateKind === "Goal template")
+    ).toBe(false);
+    const find = await matchSessionTemplate(input);
+    expect(find.candidates.map((c) => c.id)).toContain("pb-track");
+  });
 });

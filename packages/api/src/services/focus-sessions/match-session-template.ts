@@ -5,8 +5,10 @@
  * Founder decision 2026-09-20 — discovery is a property of the DOOR, not a
  * plea in prose: "make sure AIs always fetch session playbooks before creating
  * a session". So the start door ALWAYS hands back the pod's existing processes,
- * ranked, with the reason each one matched, and the caller decides. Naming a
- * playbook with `templateId` is now the ONLY way one binds at start.
+ * ranked, with the reason each one matched, and the caller decides. WORDS
+ * never bind: a playbook binds when the caller names it (`templateId`, or
+ * `update_session followPlaybookId` later) or when a FACT names it
+ * (`resolve-binding-rung.ts`, founder decisions d01–d03 of 2026-11-05).
  *
  * WHAT WAS RETIRED, AND WHY. Until this date the door auto-applied a playbook
  * above a confidence threshold (a lexical floor for a lone candidate, an IS
@@ -74,6 +76,12 @@ export interface MatchSessionTemplateInput {
   goal: string;
   /** Max candidates returned. Default {@link CANDIDATES_MAX}; a caller's own cap (`synap_find` `limit`) wins. */
   limit?: number;
+  /**
+   * A SESSION is being started or nudged: a project-scope playbook (a "Goal
+   * template", run as a track with `synap_start_track`) cannot bind to it, so
+   * it is not offered. `synap_find` leaves this off and still lists them.
+   */
+  excludeGoalTemplates?: boolean;
 }
 
 function stageNames(stages: unknown): string[] {
@@ -106,15 +114,17 @@ export async function matchSessionTemplate(
   const matched = rankRouteCandidates({
     entity: {},
     intentText,
-    candidates: rows.map((p) => ({
-      kind: "playbook" as const,
-      id: p.id,
-      name: p.name,
-      text: [p.description, p.goalTemplate, ...stageNames(p.stages)],
-      subjectProfileSlug: null,
-      description: p.description ?? undefined,
-      scope: p.scope,
-    })),
+    candidates: rows
+      .filter((p) => !(input.excludeGoalTemplates && p.scope === "project"))
+      .map((p) => ({
+        kind: "playbook" as const,
+        id: p.id,
+        name: p.name,
+        text: [p.description, p.goalTemplate, ...stageNames(p.stages)],
+        subjectProfileSlug: null,
+        description: p.description ?? undefined,
+        scope: p.scope,
+      })),
   }).filter((r) => r.signals.some((s) => s.type === "intent"));
 
   return {

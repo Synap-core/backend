@@ -135,7 +135,10 @@ describe("/agents/[id] — the agent's page in the console", () => {
     >;
     rows[0] = { ...rows[0], pausedAt: null, viewerCanDisconnect: true };
     let page = text(renderToStaticMarkup(<AgentPage />));
-    expect(page).toContain("Not paused.");
+    // Rules out (review S6): a "Paused" heading over an agent that is not
+    // paused, and engine words a person cannot act on.
+    expect(page).toContain("Pausing it stops new work until you resume it.");
+    expect(page).not.toMatch(/Not paused|refused when named|keys keep working/);
     expect(page).toMatch(/\bPause\b/);
 
     rows[0] = {

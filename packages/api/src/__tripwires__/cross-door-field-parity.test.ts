@@ -1195,11 +1195,11 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "SAME VALUE, ALREADY ON THE ROW. `computeAgentScorecard` returns `sampled: total` and `counts: { total, … }` from the one local `total` — the row forwards it as `total`. Checkable in `agent-scorecard.ts` at the single return literal that builds both; if they ever diverge, that literal is the one place it can happen.",
   },
-  // ── entity-get on `synap_detach_facet` ─────────────────────────────────────
+  // ── entity-get in `resolveLiveFacetId` (synap_detach/update_facet) ─────────
   // These four share ONE reason, and it is a property of the CALL SITE, not of
   // any field: this block does not publish the entity read at all. It is a
   // lookup — entityId + facetSlug → facetId — feeding the governed
-  // `entities.detachFacet` call below it. `classify` forces "mcp" from the file
+  // `entities.detachFacet` / `entities.updateFacet` call of its two callers. `classify` forces "mcp" from the file
   // path, which is right for the file and wrong for this block; rather than
   // teach the classifier to guess which blocks publish (it cannot), the four
   // are named here so a real drop on the door that DOES publish
@@ -1207,30 +1207,30 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   {
     service: "entity-get",
     field: "entity",
-    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    door: "routers/mcp/handlers/entity.ts:resolveLiveFacetId",
     reason:
-      "NOT A PUBLISHING DOOR — this block never emits the entity read. It calls `entityCaller.get` only to resolve entityId + facetSlug → facetId, then hands that id to the governed `entities.detachFacet` door. CHECKABLE in the block itself: every `ok(...)` inside it carries either `{ error }`, `{ error, candidates }` (facetId + workspaceId pairs), or the detachFacet outcome — no field of the entity read is on any of them.",
+      "NOT A PUBLISHING DOOR — this block never emits the entity read. It calls `entityCaller.get` only to resolve entityId + facetSlug → facetId, which its callers (synap_detach_facet, synap_update_facet) hand to the governed `entities.detachFacet` / `entities.updateFacet` door. CHECKABLE in the block itself: it returns only `{ facetId }` or a `refusal` of `{ error }` / `{ error, candidates }` (facetId + workspaceId pairs) — no field of the entity read is on any of them.",
   },
   {
     service: "entity-get",
     field: "effectiveProperties",
-    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    door: "routers/mcp/handlers/entity.ts:resolveLiveFacetId",
     reason:
-      "NOT A PUBLISHING DOOR — same block, same reason as `entity` above: a facetSlug→facetId lookup, whose only emitted payloads are `{ error }` / `{ error, candidates }` / the detachFacet outcome. The property SCHEMA in particular has no bearing on detaching a role; nothing here reads it.",
+      "NOT A PUBLISHING DOOR — same block, same reason as `entity` above: a facetSlug→facetId lookup, whose only results are `{ facetId }` / `{ error }` / `{ error, candidates }`. The property SCHEMA in particular has no bearing on which facet is targeted; nothing here reads it (the facet door validates the written properties itself).",
   },
   {
     service: "entity-get",
     field: "effectivePropertiesByWorkspace",
-    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    door: "routers/mcp/handlers/entity.ts:resolveLiveFacetId",
     reason:
       'NOT A PUBLISHING DOOR — same block, same reason. Note this is a DIFFERENT fact from the lean projection on `read.ts:synap_get_entity`, which DOES reach this field (it reads it to build `propertyOverlays`, and returns it whole on `detail: "full"`) and is therefore covered there rather than acknowledged.',
   },
   {
     service: "entity-get",
     field: "externalLinks",
-    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    door: "routers/mcp/handlers/entity.ts:resolveLiveFacetId",
     reason:
-      "NOT A PUBLISHING DOOR — same block, same reason as `entity` above. The lookup destructures `facets` and reads `f.profile.slug` / `f.facet.id`; import provenance is not part of resolving which facet to detach and is never emitted here.",
+      "NOT A PUBLISHING DOOR — same block, same reason as `entity` above. The lookup destructures `facets` and reads `f.profile.slug` / `f.facet.id`; import provenance is not part of resolving which facet is targeted and is never emitted here.",
   },
 ];
 
@@ -1541,7 +1541,7 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
     [
       "entity-get",
       "facets",
-      "routers/mcp/handlers/entity.ts:synap_detach_facet",
+      "routers/mcp/handlers/entity.ts:resolveLiveFacetId",
     ],
     // The lean projection's SIGNPOST source: `read.ts:synap_get_entity` reads
     // `effectivePropertiesByWorkspace` to build `propertyOverlays` and returns

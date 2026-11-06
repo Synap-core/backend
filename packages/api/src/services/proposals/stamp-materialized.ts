@@ -1075,6 +1075,8 @@ export async function readEntityUndoSnapshot(
       preview: true,
       properties: true,
       documentId: true,
+      // A pod-wide record's home: an update that sets it is undoable too.
+      homeWorkspaceId: true,
     },
   });
   return row ?? null;

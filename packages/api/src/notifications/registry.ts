@@ -93,9 +93,18 @@ export interface NotificationDef {
   label: string;
   icon: string; // lucide icon name
   priority: "low" | "normal" | "high" | "urgent";
-  /** Mustache-style template: {{variable}} */
+  /** Mustache-style template: {{variable}} (an ICU message under `messageSyntax: "icu"`). */
   titleTemplate: string;
   bodyTemplate: string;
+  /**
+   * `"icu"`: `titleTemplate` and `bodyTemplate` are messages in the ICU subset
+   * of `@synap-core/types/i18n` (`{name}`, `select`, `plural`; write ’, never
+   * an ASCII apostrophe where ICU would quote), formatted in English with the
+   * producer's `data` (`renderNotificationText`). Use it when the words depend
+   * on a token the producer sends: the producer sends tokens, the registry owns
+   * the words. Omit ⇒ mustache `{{variable}}` interpolation.
+   */
+  messageSyntax?: "icu";
   /** Default delivery channels (user prefs can override) */
   defaultChannels: DeliveryChannel[];
   /**
@@ -632,6 +641,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{description}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    // The write already happened. News in the bell, not an ask.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     // Proactive twin of the approve-time preflight: a pending proposal whose
@@ -677,6 +689,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       "{{newerRejectPct}}% of {{newerDecided}} reviewed proposals rejected vs {{previousRejectPct}}% of {{previousDecided}} for {{previousPromptVersion}} ({{engine}} / {{model}}).",
     defaultChannels: ["in_app"],
     ttl: 0,
+    // No action: the prompt lives in the IS and no pod write reverts it.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "ai_request.vault_access",
@@ -753,6 +768,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{itemCount}} items imported",
     defaultChannels: ["in_app"],
     ttl: 6_000,
+    // A finished sync asks for nothing. A failure stays an item below.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "connector.sync.failed",
@@ -824,6 +842,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{entityTitle}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
 
   // ── AI ────────────────────────────────────────────────────────────────────
@@ -837,6 +857,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{description}}",
     defaultChannels: ["in_app"],
     ttl: 4_000,
+    // fromSkillTrigger reports that a skill ran. Nothing waits on the person.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "agent.task_complete",
@@ -848,6 +871,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{summary}}",
     defaultChannels: ["in_app"],
     ttl: 6_000,
+    // Finished work stays in the bell. A failure is the ask (agent.task_failed).
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
     actions: [
       {
         id: "view",
@@ -965,6 +991,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{entityType}} was removed",
     defaultChannels: ["in_app"],
     ttl: 6_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "data.document.created",
@@ -976,6 +1004,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{description}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "data.view.created",
@@ -987,6 +1017,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{viewType}} view created",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "data.relation.created",
@@ -998,6 +1030,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{relationType}}",
     defaultChannels: ["in_app"],
     ttl: 5_000,
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
 
   // ── AI: Proactive Messages ──────────────────────────────────────────────
@@ -1410,7 +1444,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "informational",
   },
   {
-    // W3 slice 3 (founder decision 2): a passkey or a Relay device key was
+    // Founder decision 2 of 4 Nov: a passkey or a Relay device key was
     // added to or removed from the person's account. Every device hears it, so
     // a factor an AI or a thief added does not go unseen.
     type: "security.factor_changed",
@@ -1418,9 +1452,14 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     label: "Sign-in factor changed",
     icon: "shield-alert",
     priority: "high",
-    titleTemplate: "{{what}} {{verb}} your account",
+    // Tokens from `notifyFactorChanged`: `factor` (passkey | device_key),
+    // `change` (added | removed | changed: added to or removed from), `named`
+    // (yes | no: whether `label`, the factor's own name, is sent).
+    messageSyntax: "icu",
+    titleTemplate:
+      "{factor, select, passkey {{change, select, added {A passkey was added to your account} removed {A passkey was removed from your account} other {A passkey was added to or removed from your account}}} other {{change, select, added {A device key was added to your account} removed {A device key was removed from your account} other {A device key was added to or removed from your account}}}}",
     bodyTemplate:
-      "{{label}}. If it wasn't you, remove it in pod admin, Security.",
+      "{named, select, yes {{label}. } other {}}If it wasn’t you, remove it in pod admin, Security.",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
     needsYou: "informational",

@@ -11,12 +11,18 @@
  * the ONE list), plus every request the CLI filed AS THE PERSON
  * (`data.asPerson`). Everything else passes untouched.
  *
- * Rollout (`SYNAP_PRESENCE_PROOF`): `enforce` refuses a sensitive approval
- * with no proof; anything else (`report`, the default until Relay, desktop and
- * pod admin send proofs) lets it through and records `presence.missing`. A
- * request filed as the person ALWAYS needs the proof, whatever the mode: it is
- * new, and it is the founder's condition (an AI never acts as the person). A
- * proof that is sent is ALWAYS verified, in every mode.
+ * The mode (`mode.ts`: the pod setting, `enforce` by default, the operator
+ * env floor): `enforce` refuses a sensitive approval with no proof; `report`
+ * (an admin's explicit choice) lets it through and records
+ * `presence.missing`. A request filed as the person ALWAYS needs the proof,
+ * whatever the mode: it is new, and it is the founder's condition (an AI
+ * never acts as the person). A proof that is sent is ALWAYS verified, in
+ * every mode.
+ *
+ * A person with NO proof factor is refused like anyone else, and the refusal
+ * says how to add one: their first passkey and their first Relay device key
+ * need no proof (`factors.ts`, the Kratos settings guard), so the way back in
+ * is always open.
  */
 
 import { randomUUID } from "node:crypto";
@@ -33,13 +39,18 @@ import {
   sensitiveActionReason,
   sensitiveApprovalReason,
   type PresenceProof,
+  type SensitiveActionPath,
   type SensitiveReason,
 } from "@synap-core/types/presence";
 import { isUuid } from "@synap-core/types/property-render";
 import { readPresenceMode } from "./mode.js";
+import { mintPresencePass, type PresencePass } from "./pass.js";
 import { db, eq, users, EventRepository, sql } from "@synap/database";
 
+export type { PresencePass } from "./pass.js";
+
 import {
+  hasProofFactor,
   PresenceError,
   verifyAndConsumePresence,
   type PresenceVerdict,
@@ -105,11 +116,84 @@ async function record(
   });
 }
 
+/** The refusal's sentence: what it needs, and how to add one when none is held. */
+export const PRESENCE_REQUIRED_MESSAGE =
+  "Confirm it is you: this needs Face ID, Touch ID or your passkey.";
+export const PRESENCE_NO_FACTOR_HINT =
+  "You have none yet: add a passkey in pod admin under Security, or set up Relay on your phone. The first one needs no approval.";
+/**
+ * The refusal a KEY caller gets (the CLI, an AI, a script): a key can never
+ * answer a Face ID or passkey prompt, so it is told where the person does it.
+ */
+export const PRESENCE_KEY_CALLER_MESSAGE =
+  "This needs the person, not a key: do it in pod admin, where you confirm it is you.";
+
+/**
+ * The words of a PRESENCE_REQUIRED refusal. When the person holds no factor
+ * at all, it says how to add the first one. The refusal stands either way:
+ * a failed factor read only loses the hint (logged), never the refusal.
+ */
+export async function presenceRequiredMessage(
+  userId: string,
+  sentence: string = PRESENCE_REQUIRED_MESSAGE
+): Promise<string> {
+  try {
+    if (!(await hasProofFactor(userId))) {
+      return `${sentence} ${PRESENCE_NO_FACTOR_HINT}`;
+    }
+  } catch (err) {
+    logger.warn(
+      { err, userId },
+      "could not read the person's proof factors for the refusal's hint"
+    );
+  }
+  return sentence;
+}
+
 /**
  * The one check behind both gates: a proof for `subject`, or (report mode) the
  * missing one recorded. `subject` is a proposal id or `<kind>:<id>`; `what` is
  * what the events call it (`proposalType`, or the request kind).
  */
+/**
+ * The PRESENCE_REQUIRED refusal. A key caller is told where the person does
+ * it (a key cannot prove presence, and the no-factor hint is the person's);
+ * anyone else gets the sentence, with the hint when they hold no factor.
+ */
+export async function presenceRequiredError(args: {
+  userId: string;
+  subject: string;
+  keyCaller?: boolean;
+}): Promise<TRPCError> {
+  return new TRPCError({
+    code: "FORBIDDEN",
+    message: args.keyCaller
+      ? PRESENCE_KEY_CALLER_MESSAGE
+      : await presenceRequiredMessage(args.userId),
+    cause: { reasonCode: PRESENCE_REQUIRED, proposalId: args.subject },
+  });
+}
+
+/** Record a sensitive call let through with no proof (`report` mode). */
+export async function recordMissing(args: {
+  userId: string;
+  subject: string;
+  what: string;
+  reason: SensitiveReason | "as_person";
+  door: string;
+}): Promise<void> {
+  logger.warn(
+    { subject: args.subject, door: args.door, reason: args.reason },
+    "sensitive call with no proof of presence (report mode)"
+  );
+  await record(PRESENCE_MISSING_EVENT, args.userId, {
+    proposalId: args.subject,
+    proposalType: args.what,
+    reason: args.reason,
+    door: args.door,
+  }).catch((err) => logger.warn({ err }, "could not record presence.missing"));
+}
+
 async function checkPresence(args: {
   userId: string;
   subject: string;
@@ -118,6 +202,8 @@ async function checkPresence(args: {
   proof?: PresenceProof | null;
   door: string;
   requestedFrom?: string | null;
+  /** The caller is a key (Bearer), not a person's session. */
+  keyCaller?: boolean;
 }): Promise<PresenceVerdict | null> {
   const { userId, subject, what, reason, proof, door } = args;
   // `proposalId` names the subject on the wire (a proposal id, or the request
@@ -127,25 +213,13 @@ async function checkPresence(args: {
       reason === "as_person" ||
       (await readPresenceMode()).mode === "enforce"
     ) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message:
-          "Confirm it is you: this needs Face ID, Touch ID or your passkey.",
-        cause: { reasonCode: PRESENCE_REQUIRED, proposalId: subject },
+      throw await presenceRequiredError({
+        userId,
+        subject,
+        keyCaller: args.keyCaller,
       });
     }
-    logger.warn(
-      { subject, door, reason },
-      "sensitive approval with no proof of presence (report mode)"
-    );
-    await record(PRESENCE_MISSING_EVENT, userId, {
-      proposalId: subject,
-      proposalType: what,
-      reason,
-      door,
-    }).catch((err) =>
-      logger.warn({ err }, "could not record presence.missing")
-    );
+    await recordMissing({ userId, subject, what, reason, door });
     return null;
   }
 
@@ -226,6 +300,7 @@ export async function assertPresenceForRequest(args: {
   proof?: PresenceProof | null;
   door: string;
   requestedFrom?: string | null;
+  keyCaller?: boolean;
 }): Promise<PresenceVerdict | null> {
   return checkPresence({
     userId: args.userId,
@@ -235,6 +310,7 @@ export async function assertPresenceForRequest(args: {
     proof: args.proof,
     door: args.door,
     requestedFrom: args.requestedFrom ?? null,
+    keyCaller: args.keyCaller,
   });
 }
 
@@ -251,6 +327,9 @@ export async function assertPresenceForAction(args: {
   /** The call's RAW input (before validation), presence included. */
   input: unknown;
   proof?: PresenceProof | null;
+  keyCaller?: boolean;
+  /** Which door, when it is not the tRPC procedure itself (a Hub twin). */
+  door?: string;
 }): Promise<PresenceVerdict | null> {
   const reason = sensitiveActionReason(args.path);
   if (!reason) return null;
@@ -261,6 +340,30 @@ export async function assertPresenceForAction(args: {
     what: args.path,
     reason,
     proof: args.proof,
-    door: args.path,
+    door: args.door ?? args.path,
+    keyCaller: args.keyCaller,
   });
+}
+
+/**
+ * The gate of a sensitive ACTION, for any door: checks the proof bound to
+ * this call (or, in `report` mode, records the missing one) and hands the
+ * pass the service behind the act requires. Throws as the other gates do.
+ */
+export async function passPresenceForAction(args: {
+  userId: string;
+  path: SensitiveActionPath;
+  input: unknown;
+  proof?: PresenceProof | null;
+  keyCaller?: boolean;
+  door?: string;
+}): Promise<{ verdict: PresenceVerdict | null; pass: PresencePass }> {
+  if (!sensitiveActionReason(args.path)) {
+    throw new Error(`${args.path} is not a sensitive action`);
+  }
+  const verdict = await assertPresenceForAction(args);
+  return {
+    verdict,
+    pass: mintPresencePass(args.path, args.userId, verdict !== null),
+  };
 }

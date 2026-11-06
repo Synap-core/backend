@@ -156,6 +156,7 @@ import {
 } from "../webhooks/provision-inbound-webhook.js";
 import { requireUserId } from "../../utils/user-scoped.js";
 import { capabilityElementOf, skillElementOf } from "./package-element.js";
+import { installAgentTemplate } from "../agent-templates/install.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -2004,6 +2005,40 @@ export async function applyMarketInstall(
         });
       }
       return { kind: "view", created, updated, failed, viewIds };
+    }
+
+    case "agent": {
+      // An agent template (an AI program a person connects). The official
+      // ones are installed on every pod by the catalog itself (founder
+      // decision D8, `installOfficialAgentTemplates`); this case is the
+      // marketplace door: a third-party template (a person, or an approved
+      // proposal), or an official one a person installs before the sync.
+      // ONE write: `installAgentTemplate` (never overwrites an installed slug).
+      const resolved =
+        supplied ??
+        (await resolveCatalogDefinition(
+          "agent",
+          input.slug,
+          entry,
+          input.version
+        ));
+      const res = await installAgentTemplate({
+        slug: pslug,
+        packageSlug: pslug,
+        packageVersion: entry?.version ?? input.version ?? null,
+        name:
+          (typeof resolved?.name === "string" && resolved.name) ||
+          entry?.name ||
+          input.slug,
+        definition: resolved,
+      });
+      if (res.status === "refused") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `The agent template "${input.slug}" cannot be installed: ${res.reason}.`,
+        });
+      }
+      return { kind: "agent", ...res };
     }
   }
 }

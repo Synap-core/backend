@@ -345,6 +345,11 @@ const GATED_ELSEWHERE: Readonly<
     }
   >
 > = {
+  "PUT /playbooks/:id/run-choice": {
+    via: "setPlaybookRunChoiceGoverned",
+    load: () => import("../services/playbooks/set-run-choice.js"),
+    why: "playbook.set_run_choice through checkPermissionOrPropose (an agent's choice is a proposal)",
+  },
   "POST /projects": {
     via: "createProjectGoverned",
     load: () => import("../services/projects/create-project.js"),

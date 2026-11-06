@@ -32,6 +32,7 @@ import {
   type QuestionDisposition,
   type QuestionDispositionInput,
   type AskOption,
+  type AskOptionMedia,
   type AskProvideKind,
   type AskRisk,
   type AskSnapshot,
@@ -54,6 +55,7 @@ import {
 import { ageSpan, ageSpanSpoken, shortDate } from "../lens/age.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
 import { isSetAside } from "../needs-you/set-aside.js";
+import { NEEDS_YOU_DUE_SOON_MS } from "../needs-you/priority.js";
 // The zod-free leaf (the needs-you rule reaches it without zod): re-exported
 // here so `./card.js` callers keep their import.
 import {
@@ -113,6 +115,13 @@ export const ASK_COPY = {
   choseDifferently: "Chose differently from AI",
   /** The overrode mark's detail line, when the recommended option is known. */
   aiPicked: (label: string): string => `AI picked: ${label}`,
+  /**
+   * The ask's deadline mark (`answerBy`, {@link askCardView} `due`): a time
+   * past the hour, the span within it, or how late it is.
+   */
+  neededBy: (when: string): string => `Needed by ${when}`,
+  neededIn: (span: string): string => `Needed in ${span}`,
+  overdueBy: (span: string): string => `Overdue by ${span}`,
   /** A provide this host has not wired (`askRowRegion` → `none`). */
   provideTitle: "Not answerable here yet",
   provideBody: "Talk it through with the agent.",
@@ -440,6 +449,8 @@ export interface AskOptionChip {
   description?: string;
   /** One short fact to weigh before picking it — a warning chip. */
   caution?: string;
+  /** What to show beside the label (a shot, a take). */
+  media?: AskOptionMedia;
 }
 
 function optionChip(o: AskOption): AskOptionChip {
@@ -451,6 +462,7 @@ function optionChip(o: AskOption): AskOptionChip {
     ...(o.recommended ? { recommended: true as const } : {}),
     ...(o.description ? { description: o.description } : {}),
     ...(o.caution ? { caution: o.caution } : {}),
+    ...(o.media ? { media: o.media } : {}),
   };
 }
 
@@ -889,10 +901,81 @@ export interface AskCardView {
    * `spoken` is the same in full words, for a screen reader.
    */
   ageFate: { label: string; spoken: string; tone: UnitTone; fate: AskFate };
+  /**
+   * When the answer is needed (`ask.answerBy`), as ONE mark: "Needed by
+   * 17:00", "Needed in 40m" within the hour (the window that makes it P0 and
+   * lets its push break through Focus, `NEEDS_YOU_DUE_SOON_MS`), "Overdue by
+   * 12m" past it. `soon` is true inside that window or past it. `null` when the
+   * ask names no readable time.
+   */
+  due: AskCardDue | null;
+  /** What the answer will DO (`ask.consequence`), one line; `null` when the agent said nothing. */
+  consequence: string | null;
   /** The answer buttons (confirm, choose); empty for every other mode. */
   answers: AskCardAnswer[];
   /** The collapsed note affordance. */
   note: { label: string };
+}
+
+export interface AskCardDue {
+  label: string;
+  /** The same in full words, for a screen reader. */
+  spoken: string;
+  tone: UnitTone;
+  /** Within the hour or past it: the ask is the person's top priority. */
+  soon: boolean;
+  /** `answerBy`, as given. */
+  at: string;
+}
+
+/**
+ * The deadline mark of an ask (`answerBy`), or null when it names no readable
+ * instant. Past the hour, the time of day (with the date when it is not
+ * today, in the device's zone); within it, the span; past it, how late.
+ */
+export function askCardDue(
+  answerBy: unknown,
+  now: Date | number = Date.now()
+): AskCardDue | null {
+  if (typeof answerBy !== "string") return null;
+  const at = Date.parse(answerBy);
+  if (!Number.isFinite(at)) return null;
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  const left = at - nowMs;
+  if (left <= 0) {
+    return {
+      label: ASK_COPY.overdueBy(ageSpan(-left)),
+      spoken: ASK_COPY.overdueBy(ageSpanSpoken(-left)),
+      tone: "error",
+      soon: true,
+      at: answerBy,
+    };
+  }
+  if (left <= NEEDS_YOU_DUE_SOON_MS) {
+    return {
+      label: ASK_COPY.neededIn(ageSpan(left)),
+      spoken: ASK_COPY.neededIn(ageSpanSpoken(left)),
+      tone: "warning",
+      soon: true,
+      at: answerBy,
+    };
+  }
+  const when = new Date(at);
+  const time = when.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const today = when.toDateString() === new Date(nowMs).toDateString();
+  const words = ASK_COPY.neededBy(
+    today ? time : `${shortDate(answerBy)}, ${time}`
+  );
+  return {
+    label: words,
+    spoken: words,
+    tone: "textSecondary",
+    soon: false,
+    at: answerBy,
+  };
 }
 
 export interface AskCardViewOptions {
@@ -973,6 +1056,8 @@ export function askCardView(
     context,
     asker,
     ageFate,
+    due: askCardDue(ask?.answerBy, now),
+    consequence: ask?.consequence?.trim() || null,
     answers: askCardAnswers(ask),
     note: { label: ASK_COPY.addNote },
   };

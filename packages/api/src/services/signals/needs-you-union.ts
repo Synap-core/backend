@@ -347,6 +347,14 @@ export interface Signal {
    */
   keptOwedAt?: string;
   /**
+   * The person's Later on an `owed-slot` (`ExpectedOutput.laterUntil`, an ISO
+   * instant), carried as it is stored: in the future, the ask is set aside
+   * (its row is in Review later); past, it came BACK from Later and a surface
+   * may mark it so (founder, 5 Nov 2026, D3). Absent when never set aside, and
+   * on every other kind.
+   */
+  laterUntil?: string;
+  /**
    * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
    * hands the whole row to the one card adapter (`askCardSlotOf`) and names
    * the cause the same way the session page does. Absent on every other slot
@@ -411,6 +419,14 @@ export interface Signal {
    * classified `proposal-cluster`; absent elsewhere.
    */
   priority?: NeedsYouPriority;
+  /**
+   * `proposal-cluster`: the kind of object the proposal acts on (the cluster's
+   * `targetType`: "tool", a profile slug, ...), so the Inbox row wears that
+   * kind's own icon instead of the same decision mark on every row. Absent when
+   * the proposal names no target kind. A token, never a label: surfaces resolve
+   * its glyph and noun through the vocabulary.
+   */
+  subjectKind?: string;
   /**
    * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
    * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
@@ -577,6 +593,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "ask",
   "pendingRelay",
   "keptOwedAt",
+  "laterUntil",
   "paramName",
   "class",
   "lifetimeHours",
@@ -584,6 +601,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "blocksOpenPr",
   "needsYouClass",
   "priority",
+  "subjectKind",
   "unblocks",
   "source",
   "by",
@@ -914,6 +932,9 @@ export function signalFromCluster(
       ? "older"
       : ageBucketOf(cluster.latestAt, now),
     ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
+    ...(cluster.targetType?.trim()
+      ? { subjectKind: cluster.targetType.trim() }
+      : {}),
     ...(cluster.needsYouClass
       ? {
           needsYouClass: cluster.needsYouClass,
@@ -1135,6 +1156,9 @@ export interface OwedSlotSignalInput {
  *                                      awaiting the tap: the row's Confirm.
  *   keptOwedAt                      → `keptOwedAt` — kept past its session:
  *                                      the card's fate reads it.
+ *   laterUntil                      → `laterUntil` — the person's Later: its
+ *                                      class reads it, and a returned ask
+ *                                      (past) wears a "Back" mark (D3).
  *   paramName                       → `paramName` — the param a param slot
  *                                      asks for; the card adapter reads it.
  *   askedBy, askedByName            → `by` — the asker as a named mark, only
@@ -1187,12 +1211,12 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "keptOwedAt",
   "paramName",
   "blocksOpenPr",
+  // Read by the slot's class (`owedSlotClassOf`) AND carried: a returned ask
+  // (the time is past) wears a "Back" mark on the phone (founder D3).
+  "laterUntil",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
-  // Read by the slot's class only (`owedSlotClassOf`): a set-aside ask
-  // reaches the signal as its Review later fold, never as a second field.
-  "laterUntil",
   "sessionStatus",
   "workspaceId",
   "icon",
@@ -1438,6 +1462,7 @@ export function signalFromOwedSlot(
     ...(row.ask ? { ask: row.ask } : {}),
     ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
     ...(row.keptOwedAt ? { keptOwedAt: row.keptOwedAt } : {}),
+    ...(row.laterUntil ? { laterUntil: row.laterUntil } : {}),
     ...(row.paramName ? { paramName: row.paramName } : {}),
     ...(row.askedBy && row.askedByName
       ? {

@@ -17,6 +17,8 @@
  *     space with a channel or an open send, paged without loss or overlap;
  *   - someone else's person (a facet in another space) listed, or a space
  *     the key may not read answered;
+ *   - a lead whose role facet is POD-WIDE (granted to the space) left out,
+ *     or a pod-wide role the space was not granted let in;
  *   - a held draft or a failed send missing from the list, or shown as a
  *     plain draft;
  *   - the person's typed message lost when they are not reachable (it is
@@ -684,6 +686,331 @@ describe("GET /channels/conversations — every person in one read", () => {
         )
       ).status
     ).toBe(400);
+  });
+});
+
+// Most leads on a real pod wear a POD-WIDE role facet (no workspace) whose
+// role is granted to the CRM space, not a facet stamped in it; their LinkedIn
+// channel is stamped wherever the connector filed it (the Pod Admin space on
+// the founder's pod). The door must list them as the CRM's own lead lists do
+// (`roleInSpacesWhere`), and still keep out a pod-wide role the space was
+// never granted.
+describe("GET /channels/conversations — pod-wide leads", () => {
+  const ROLE_INVESTOR = randomUUID();
+  const POD_LEAD = randomUUID();
+  const POD_INVESTOR = randomUUID();
+  const CH_POD_LEAD = randomUUID();
+  const CH_POD_INVESTOR = randomUUID();
+
+  beforeAll(async () => {
+    await q(
+      `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id)
+       values ($1,'investor','Investor','role','workspace','workspace',true,'{}'::jsonb,null)`,
+      [ROLE_INVESTOR]
+    );
+    // The lead role is granted to CRM; the investor role to OTHER only.
+    await q(
+      `insert into profile_workspace_access (profile_id, workspace_id, granted_at) values ($1,$2,now()), ($3,$4,now())`,
+      [ROLE_LEAD, CRM, ROLE_INVESTOR, OTHER]
+    );
+    for (const [id, title, role, channel, chat] of [
+      [POD_LEAD, "Paul Podlead", ROLE_LEAD, CH_POD_LEAD, "chat-podlead"],
+      [
+        POD_INVESTOR,
+        "Ivy Investor",
+        ROLE_INVESTOR,
+        CH_POD_INVESTOR,
+        "chat-investor",
+      ],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+         values ($1,$2,null,$3,'person',$4,'{}'::jsonb,'{}'::jsonb)`,
+        [id, OWNER, PERSON_KIND, title]
+      );
+      // A POD-WIDE facet: no workspace.
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties)
+         values ($1,$2,$3,$4,null,'{}'::jsonb)`,
+        [randomUUID(), id, role, OWNER]
+      );
+      // The channel stamped in ANOTHER space than the one asked about.
+      await q(
+        `insert into channels (id, user_id, workspace_id, title, channel_type, scope, status,
+           context_object_type, context_object_id, external_source, external_channel_id, external_id, metadata, ai_reaction_mode, updated_at)
+         values ($1,$2,$3,null,'external','workspace','active','entity',$4,'linkedin',$5,$5,$6::jsonb,'when_confident',$7)`,
+        [
+          channel,
+          OWNER,
+          OTHER,
+          id,
+          chat,
+          JSON.stringify({ accountId: ACCOUNT }),
+          T(0),
+        ]
+      );
+      await q(
+        `insert into messages (id, channel_id, role, author_type, message_category, content, user_id,
+           timestamp, hash, ephemeral, direction, delivery_status, external_source, external_message_id)
+         values ($1,$2,'user','external','chat',$3,$4,$5,$6,false,'inbound',null,'linkedin',$7)`,
+        [
+          randomUUID(),
+          channel,
+          `${title} says hi`,
+          OWNER,
+          T(7),
+          `hash-${randomUUID()}`,
+          `ext-${randomUUID()}`,
+        ]
+      );
+    }
+  });
+
+  it("lists a person whose POD-WIDE role is granted to the space, with their channel stamped in another space", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const { conversations } = await page(key, `workspaceId=${CRM}`);
+      const lead = conversations.find((c) => c.person.id === POD_LEAD);
+      expect(lead).toMatchObject({
+        person: { name: "Paul Podlead" },
+        channelIds: [CH_POD_LEAD],
+        lastMessage: { text: "Paul Podlead says hi", direction: "inbound" },
+        unread: 1,
+      });
+      const waiting = await page(key, `workspaceId=${CRM}&needsYou=true`);
+      expect(waiting.conversations.map((c) => c.person.id)).toContain(POD_LEAD);
+    }
+  });
+
+  it("SECURITY: a person whose pod-wide role is NOT granted to the space is never listed", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const { conversations } = await page(key, `workspaceId=${CRM}`);
+      expect(conversations.map((c) => c.person.id)).not.toContain(POD_INVESTOR);
+      expect(JSON.stringify(conversations)).not.toContain("Ivy Investor");
+    }
+    // The space the role IS granted to lists them (the owner's full key).
+    const other = await page("full", `workspaceId=${OTHER}`);
+    expect(other.conversations.map((c) => c.person.id)).toContain(POD_INVESTOR);
+  });
+});
+
+// Most company leads are reached through a person who works at the company
+// (plan 87088d2d W1; on the founder's pod Geoffroy d'Halluin works_at
+// Guideflow, and the role is Guideflow's). The door lists such a contact,
+// says which lead the row belongs to and its stage, and keeps out the
+// contacts of a company whose role is in another space. A contact the
+// key's grant cannot read (pod-wide, no role, not homed in the space) is
+// still left out for a key limited to the space.
+describe("GET /channels/conversations — contacts of company leads", () => {
+  const GUIDEFLOW = randomUUID(); // a lead stamped in CRM, stage "qualified"
+  const PODCO = randomUUID(); // a POD-WIDE lead granted to CRM, "contacted"
+  const OTHERCO = randomUUID(); // a lead in OTHER only
+  const GEOFFROY = randomUUID(); // no role, works_at GUIDEFLOW, homed in CRM
+  const PAULINE = randomUUID(); // no role, works_at PODCO, homed in CRM
+  const UNHOMED = randomUUID(); // no role, works_at GUIDEFLOW, no home
+  const SILENT = randomUUID(); // no role, works_at GUIDEFLOW, no channel
+  const OTTO = randomUUID(); // no role, works_at OTHERCO, homed in CRM
+  const BOTH = randomUUID(); // a lead in CRM ("new") AND works_at GUIDEFLOW
+  const FERN = randomUUID(); // no role, works_at GUIDEFLOW, no channel, a FAILED send
+  const P_FERN = randomUUID();
+  const CHS = {
+    GEOFFROY: randomUUID(),
+    PAULINE: randomUUID(),
+    UNHOMED: randomUUID(),
+    OTTO: randomUUID(),
+    BOTH: randomUUID(),
+  };
+
+  beforeAll(async () => {
+    // The lead role is granted to CRM (the pod-wide company's role).
+    await q(
+      `insert into profile_workspace_access (profile_id, workspace_id, granted_at) values ($1,$2,now())`,
+      [ROLE_LEAD, CRM]
+    );
+    for (const [id, title] of [
+      [GUIDEFLOW, "Guideflow"],
+      [PODCO, "Podco"],
+      [OTHERCO, "Otherco"],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+         values ($1,$2,null,$3,'company',$4,'{}'::jsonb,'{}'::jsonb)`,
+        [id, OWNER, COMPANY_KIND, title]
+      );
+    }
+    for (const [entityId, ws, status] of [
+      [GUIDEFLOW, CRM, "qualified"],
+      [PODCO, null, "contacted"],
+      [OTHERCO, OTHER, "qualified"],
+      [BOTH, CRM, "new"],
+    ] as const) {
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, properties)
+         values ($1,$2,$3,$4,$5,$6,'{}'::jsonb)`,
+        [randomUUID(), entityId, ROLE_LEAD, OWNER, ws, status]
+      );
+    }
+    for (const [id, title, home, company, channel] of [
+      [GEOFFROY, "Geoffroy Contact", CRM, GUIDEFLOW, CHS.GEOFFROY],
+      [PAULINE, "Pauline Podco", CRM, PODCO, CHS.PAULINE],
+      [UNHOMED, "Una Unhomed", null, GUIDEFLOW, CHS.UNHOMED],
+      [SILENT, "Sid Silent", CRM, GUIDEFLOW, null],
+      [OTTO, "Otto Otherco", CRM, OTHERCO, CHS.OTTO],
+      [BOTH, "Bea Both", null, GUIDEFLOW, CHS.BOTH],
+      [FERN, "Fern Failsend", CRM, GUIDEFLOW, null],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, home_workspace_id, profile_id, type, title, properties, system_data)
+         values ($1,$2,null,$3,$4,'person',$5,'{}'::jsonb,'{}'::jsonb)`,
+        [id, OWNER, home, PERSON_KIND, title]
+      );
+      await q(
+        `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at)
+         values ($1,$2,null,$3,$4,'works_at',now())`,
+        [randomUUID(), OWNER, id, company]
+      );
+      if (!channel) continue;
+      // The channel stamped where the connector filed it, not in CRM.
+      await q(
+        `insert into channels (id, user_id, workspace_id, title, channel_type, scope, status,
+           context_object_type, context_object_id, external_source, external_channel_id, external_id, metadata, ai_reaction_mode, updated_at)
+         values ($1,$2,$3,null,'external','workspace','active','entity',$4,'linkedin',$5,$5,$6::jsonb,'when_confident',$7)`,
+        [
+          channel,
+          OWNER,
+          OTHER,
+          id,
+          `chat-${channel}`,
+          JSON.stringify({ accountId: ACCOUNT }),
+          T(8),
+        ]
+      );
+    }
+    // A send that failed before any channel existed (the pod's real case:
+    // "No LinkedIn profile on file"): no channelId, only the person.
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status,
+         created_by, agent_user_id, subject_user_id, rejection_reason, revision_history, created_at, updated_at)
+       values ($1,$2,'messaging',$3,'messaging.external.send',$4::jsonb,'approval_failed',$5,$6,$5,$7,'[]'::jsonb,$8,$8)`,
+      [
+        P_FERN,
+        CRM,
+        FERN,
+        JSON.stringify({
+          entityId: FERN,
+          provider: "linkedin",
+          platform: "linkedin",
+          body: "Bonjour Fern",
+        }),
+        OWNER,
+        AGENT,
+        "No LinkedIn profile on file for Fern Failsend.",
+        T(9),
+      ]
+    );
+  });
+
+  interface LeadRow {
+    person: { id: string; company: { id: string; name: string } | null };
+    lead: { kind: string; id: string; stage: string | null };
+    channelIds: string[];
+    draft: {
+      proposalId: string;
+      channelId: string | null;
+      state: string;
+      reason: string | null;
+    } | null;
+  }
+  const rowsOf = async (key: KeyName, ws: string) => {
+    const all: LeadRow[] = [];
+    let cursor: string | null = null;
+    do {
+      const res = await page(
+        key,
+        `workspaceId=${ws}&limit=3${cursor ? `&cursor=${cursor}` : ""}`
+      );
+      all.push(...(res.conversations as unknown as LeadRow[]));
+      cursor = res.nextCursor;
+    } while (cursor);
+    return all;
+  };
+
+  it("lists a person with no role who works at a lead company, with the company's id and stage", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const rows = await rowsOf(key, CRM);
+      const by = Object.fromEntries(rows.map((r) => [r.person.id, r]));
+      expect(by[GEOFFROY]).toMatchObject({
+        person: { company: { id: GUIDEFLOW, name: "Guideflow" } },
+        lead: { kind: "company", id: GUIDEFLOW, stage: "qualified" },
+      });
+      // A pod-wide company whose role is granted to the space.
+      expect(by[PAULINE]).toMatchObject({
+        person: { company: { id: PODCO, name: "Podco" } },
+        lead: { kind: "company", id: PODCO, stage: "contacted" },
+      });
+      // A person who is a lead themselves keeps kind person (no stage here).
+      expect(by[LEAD]).toMatchObject({
+        lead: { kind: "person", id: LEAD, stage: null },
+      });
+    }
+  });
+
+  it("a contact with no channel and no open send is not listed", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const rows = await rowsOf(key, CRM);
+      expect(rows.map((r) => r.person.id)).not.toContain(SILENT);
+    }
+  });
+
+  it("SECURITY: the contact of a company whose role is only in another space is not listed", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const rows = await rowsOf(key, CRM);
+      expect(rows.map((r) => r.person.id)).not.toContain(OTTO);
+      expect(JSON.stringify(rows)).not.toContain("Otherco");
+    }
+    // The space the company IS a lead of lists them (the owner's full key).
+    const other = await rowsOf("full", OTHER);
+    expect(other.find((r) => r.person.id === OTTO)).toMatchObject({
+      lead: { kind: "company", id: OTHERCO, stage: "qualified" },
+    });
+  });
+
+  it("a person who is a lead AND works at a lead company: one row, kind person, their own stage", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const rows = (await rowsOf(key, CRM)).filter((r) => r.person.id === BOTH);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        person: { company: { id: GUIDEFLOW } },
+        lead: { kind: "person", id: BOTH, stage: "new" },
+      });
+    }
+  });
+
+  it("a company-lead contact with no channel but a FAILED send is listed, draft failed with its reason", async () => {
+    for (const key of ["crm", "full"] as const) {
+      const fern = (await rowsOf(key, CRM)).find((r) => r.person.id === FERN);
+      expect(fern).toMatchObject({
+        lead: { kind: "company", id: GUIDEFLOW, stage: "qualified" },
+        channelIds: [],
+        draft: {
+          proposalId: P_FERN,
+          channelId: null,
+          state: "failed",
+          reason: "No LinkedIn profile on file for Fern Failsend.",
+        },
+      });
+    }
+    // It waits on the person: kept by needsYou.
+    const res = await page("crm", `workspaceId=${CRM}&needsYou=true&limit=100`);
+    expect(res.conversations.map((c) => c.person.id)).toContain(FERN);
+  });
+
+  it("SECURITY: a contact the space-limited key cannot read (no role, not homed in the space) is listed only for the owner's own key", async () => {
+    expect((await rowsOf("full", CRM)).map((r) => r.person.id)).toContain(
+      UNHOMED
+    );
+    const crm = await rowsOf("crm", CRM);
+    expect(crm.map((r) => r.person.id)).not.toContain(UNHOMED);
+    expect(JSON.stringify(crm)).not.toContain("Una Unhomed");
   });
 });
 

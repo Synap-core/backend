@@ -25,9 +25,11 @@ import {
   AWAITED_GATE_PROPOSAL_TYPES,
   type AwaitedGateProposalType,
   MAX_STAGE_LESSONS,
+  PLAYBOOK_STAGE_TIERS,
   STAGE_LESSON_MAX_CHARS,
   type PlaybookStage,
   type PlaybookStageCategory,
+  type PlaybookStageTier,
   type StageGateProposalType,
 } from "@synap/playbooks";
 import type { TrackStageDeclaration } from "@synap-core/types/units";
@@ -46,6 +48,14 @@ export const playbookStageCategorySchema = z.enum(
 );
 
 /**
+ * The advisory model tiers, as a zod enum derived from the contract package's
+ * list so the door cannot drift from the type.
+ */
+export const playbookStageTierSchema = z.enum(
+  PLAYBOOK_STAGE_TIERS as readonly [PlaybookStageTier, ...PlaybookStageTier[]]
+);
+
+/**
  * A relation-type slug (`made_for`, `derived_from`) — what a slot's
  * `relationToSubject` names. Shared by the stage-level and playbook-level slot
  * schemas so the two levels cannot accept different spellings.
@@ -59,6 +69,13 @@ export const relationTypeSlugSchema = z
     message:
       'relationToSubject must be a relation type slug (lowercase, e.g. "made_for")',
   });
+
+const FOR_EACH_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const FOR_EACH_MESSAGE =
+  'forEach must name a collection as an identifier path (e.g. "shots" or "subject.shots"), not prose';
+
+const WHEN_PARAM_MESSAGE =
+  'when.param must name a run param or output as an identifier path (e.g. "needsVoiceover" or "subject.kind"), not prose';
 
 const STAGE_DOMAIN_MESSAGE =
   'Stage domain must be a workspace template slug (lowercase, e.g. "crm"), not a workspace id or name';
@@ -194,6 +211,55 @@ export const playbookStageSchema = z.looseObject({
   onFail: z
     .strictObject({ toStage: z.string().trim().min(1).max(200) })
     .optional(),
+  /**
+   * Advisory model tier — see `PlaybookStage.tier`. Closed set: a typo
+   * ("fast", "Deep") is refused at the door rather than stored as a tier no
+   * executor will ever map.
+   */
+  tier: playbookStageTierSchema.optional(),
+  /**
+   * Run the stage once per item of a collection — see `PlaybookStage.forEach`.
+   * STRICT like `gate` and `onFail`: it is a control, so a misspelled key
+   * ("each", "ovr") must not survive as a stage that looks fanned out and is
+   * not. `over` and `as` are identifier paths, so prose or a template string is
+   * refused at the door.
+   */
+  forEach: z
+    .strictObject({
+      over: z
+        .string()
+        .trim()
+        .regex(FOR_EACH_PATH, { message: FOR_EACH_MESSAGE })
+        .max(200),
+      as: z
+        .string()
+        .trim()
+        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, { message: FOR_EACH_MESSAGE })
+        .max(60)
+        .optional(),
+    })
+    .optional(),
+  /**
+   * Run the stage only when a condition holds — see `PlaybookStage.when`.
+   * STRICT like `gate`, `onFail` and `forEach`: a misspelled key ("equal",
+   * "exist") must not survive as a stage that looks conditional and is not.
+   * `param` is an identifier path, so prose or an expression is refused; a
+   * condition with neither `equals` nor `exists` tests nothing and is refused.
+   */
+  when: z
+    .strictObject({
+      param: z
+        .string()
+        .trim()
+        .regex(FOR_EACH_PATH, { message: WHEN_PARAM_MESSAGE })
+        .max(200),
+      equals: z.unknown().optional(),
+      exists: z.boolean().optional(),
+    })
+    .refine((w) => w.equals !== undefined || w.exists !== undefined, {
+      message: "when needs `equals` or `exists`",
+    })
+    .optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -244,6 +310,17 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // The failed-gate return path is applied by the SESSION run's gate
   // (`stage-on-fail.ts`); a track's gate holds and resumes explicitly.
   "onFail",
+  // Advisory model choice for a session RUN's executor; a track stage session
+  // is started by the tracks service, which does not pick a model, and nothing
+  // consumes the tier yet.
+  "tier",
+  // A track stage session is started once by the tracks service; fanning a
+  // stage out over a collection is a session RUN's concern, and nothing
+  // consumes it yet.
+  "forEach",
+  // A track stage session is started by the tracks service; skipping a stage
+  // on a condition is a session RUN's concern, and nothing consumes it yet.
+  "when",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =

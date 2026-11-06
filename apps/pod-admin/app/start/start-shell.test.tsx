@@ -51,11 +51,13 @@ vi.mock("../../lib/pod-trpc", () => ({
 }));
 
 import RootPage from "../page";
+import StartDefaultsPage from "./defaults/page";
 import StartPage from "./page";
 import { StartIntentForm } from "./StartIntentForm";
 import {
   intentModel,
   intentPatch,
+  STEPS_WITH_PAGE,
   startBandStep,
   startStepHref,
   type CloudState,
@@ -182,6 +184,7 @@ function pageExists(pathname: string, dir = join(__dirname, "..")): boolean {
 describe("every start step resolves to a page that exists", () => {
   it("the page finder sees real pages and misses fake ones", () => {
     expect(pageExists("/start")).toBe(true);
+    expect(pageExists("/start/defaults")).toBe(true);
     expect(pageExists("/home")).toBe(true);
     expect(pageExists("/start/views")).toBe(false);
   });
@@ -196,7 +199,10 @@ describe("every start step resolves to a page that exists", () => {
       const param = new URL(startStepHref(step), "http://x").searchParams.get(
         "start"
       );
-      if (step !== "start:intent") expect(startBandStep(param)).toBe(step);
+      // A step with its own page carries no band param; every other one does.
+      if (!STEPS_WITH_PAGE.includes(step)) {
+        expect(startBandStep(param)).toBe(step);
+      }
     }
     expect(startBandStep("nonsense")).toBeNull();
     expect(startBandStep(null)).toBeNull();
@@ -207,6 +213,7 @@ describe("every start step resolves to a page that exists", () => {
 
 describe("/start reopens the step the person is at", () => {
   it.each([
+    ["start:defaults", "/start/defaults"],
     ["start:views", "/home?start=views"],
     ["start:path", "/home?start=path"],
     ["start:setup", "/home?start=setup"],
@@ -266,7 +273,7 @@ describe("/start reopens the step the person is at", () => {
     ]);
     // React's server renderer writes `checked` before `value` on an <input>.
     expect(html).toMatch(/checked="" value="content-os"/);
-    expect(html).toContain("Step 1 of 7");
+    expect(html).toContain(`Step 1 of ${START_STEP_IDS.length}`);
   });
 
   it("the intent step renders S1 in the Island frame", async () => {
@@ -274,7 +281,7 @@ describe("/start reopens the step the person is at", () => {
     const page = await StartPage({ searchParams: Promise.resolve({}) });
     const html = renderToStaticMarkup(page as ReactElement);
     expect(html).toContain("What should Synap run first?");
-    expect(html).toContain("Step 1 of 7");
+    expect(html).toContain(`Step 1 of ${START_STEP_IDS.length}`);
     expect(html).toContain("Signed in as");
     expect(html).toContain("Everything stays on your pod ·");
   });
@@ -383,5 +390,28 @@ describe("S1 as rendered", () => {
     );
     expect(html).toContain('href="/marketplace"');
     expect(html).not.toContain(">Continue<");
+  });
+});
+
+// ── /start/defaults ─────────────────────────────────────────────────────────
+
+describe("/start/defaults opens only on a real answer", () => {
+  it("renders while the journey is open past the work question", async () => {
+    answer("onboarding.startState", state({ next: "start:defaults" }));
+    expect(await landing(() => StartDefaultsPage())).toBe("(rendered)");
+  });
+
+  it("the work question comes first", async () => {
+    answer("onboarding.startState", state({ next: "start:intent" }));
+    expect(await landing(() => StartDefaultsPage())).toBe("/start");
+  });
+
+  it("a finished journey goes Home; a FAILED read goes Home with the failure", async () => {
+    answer("onboarding.startState", state({ next: null, due: false }));
+    expect(await landing(() => StartDefaultsPage())).toBe("/home");
+    fail("onboarding.startState");
+    expect(await landing(() => StartDefaultsPage())).toBe(
+      "/home?start=unavailable"
+    );
   });
 });

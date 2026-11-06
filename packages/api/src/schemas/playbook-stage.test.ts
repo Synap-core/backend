@@ -205,6 +205,118 @@ describe("playbookStageSchema — stage.domain (W2a)", () => {
   });
 });
 
+describe("playbookStageSchema — stage.tier (advisory model tier)", () => {
+  it("accepts deep, standard and quick, and keeps absent absent", () => {
+    for (const tier of ["deep", "standard", "quick"]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, tier });
+      expect(r.success && r.data.tier).toBe(tier);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success).toBe(true);
+    expect(none.success && "tier" in none.data).toBe(false);
+  });
+
+  it("refuses anything outside the closed set", () => {
+    for (const bad of ["fast", "Deep", "", " quick", null, 1, ["quick"]]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, tier: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, tier: "quick" },
+    ]);
+    expect(r.success && r.data[0].tier).toBe("quick");
+  });
+});
+
+describe("playbookStageSchema — stage.forEach (run once per item)", () => {
+  it("accepts a collection path with an optional item name, and keeps absent absent", () => {
+    for (const forEach of [
+      { over: "shots" },
+      { over: "subject.shots", as: "shot" },
+    ]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, forEach });
+      expect(r.success && r.data.forEach).toEqual(forEach);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success && "forEach" in none.data).toBe(false);
+  });
+
+  it("refuses prose, a missing collection, a misspelled key and a bad item name", () => {
+    for (const bad of [
+      { over: "every shot in the film" },
+      { over: "" },
+      { over: "shots.", as: "shot" },
+      {},
+      { over: "shots", each: "x" },
+      { over: "shots", as: "my shot" },
+      "shots",
+      null,
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, forEach: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, forEach: { over: "shots", as: "shot" } },
+    ]);
+    expect(r.success && r.data[0].forEach).toEqual({
+      over: "shots",
+      as: "shot",
+    });
+  });
+});
+
+describe("playbookStageSchema — stage.when (run only if true)", () => {
+  it("accepts equals and/or exists on a param path, and keeps absent absent", () => {
+    for (const when of [
+      { param: "needsVoiceover", equals: true },
+      { param: "subject.kind", equals: "film" },
+      { param: "script", exists: true },
+      { param: "script", exists: false },
+      { param: "mode", equals: 0, exists: true },
+    ]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, when });
+      expect(r.success && r.data.when).toEqual(when);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success && "when" in none.data).toBe(false);
+  });
+
+  it("refuses prose, a missing param, an empty condition, a misspelled key and a bad type", () => {
+    for (const bad of [
+      { param: "if the film has a voiceover", equals: true },
+      { param: "", exists: true },
+      { equals: true },
+      { param: "script" },
+      { param: "script", equal: true },
+      { param: "script", exists: "yes" },
+      "script",
+      null,
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, when: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, when: { param: "needsVoiceover", equals: true } },
+    ]);
+    expect(r.success && r.data[0].when).toEqual({
+      param: "needsVoiceover",
+      equals: true,
+    });
+  });
+});
+
 describe("a declared slot's `ask` is parsed at the playbook write doors", () => {
   const slot = (ask: unknown) => ({ kind: "decision", label: "Region", ask });
 

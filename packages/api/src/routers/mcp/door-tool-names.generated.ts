@@ -401,6 +401,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_update_entity",
     "cp-connector": "pod__update_entity",
   },
+  synap_update_facet: { "pod-mcp": "synap_update_facet", "cp-connector": null },
   synap_update_playbook: {
     "pod-mcp": "synap_update_playbook",
     "cp-connector": "pod__update_playbook",

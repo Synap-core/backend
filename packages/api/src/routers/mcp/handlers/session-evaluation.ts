@@ -55,6 +55,22 @@ export const sessionEvaluationHandlers: McpHandlerMap = {
     if (result.status === "not_found") {
       return ok({ error: `Focus session ${parsed.data.sessionId} not found` });
     }
-    return ok(result);
+    // REPLY SHAPING (2026-11-05): the agent declared the criteria and sent the
+    // evidence, so neither is echoed back (`criteria` ~112 tokens, the full
+    // evaluation rows ~515, measured over 24 days). Each current evaluation
+    // keeps what the agent acts on: which criterion, its verdict, who graded
+    // it, on which attempt, and why. The Hub REST and tRPC doors keep the
+    // whole read shape.
+    const { criteria: _criteria, evaluations, ...rest } = result;
+    return ok({
+      ...rest,
+      evaluations: evaluations.map((e) => ({
+        criterionKey: e.criterionKey,
+        verdict: e.verdict,
+        evaluatorKind: e.evaluatorKind,
+        attempt: e.attempt,
+        ...(e.rationale ? { rationale: e.rationale } : {}),
+      })),
+    });
   },
 };

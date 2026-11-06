@@ -7,7 +7,6 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { userPreferences } from "@synap/database/schema";
-import { eq } from "@synap/database";
 import {
   ReviewPreferencesSchema,
   UpdatePreferencesInputSchema,
@@ -21,7 +20,9 @@ import {
   writeRailPins,
   type RailPinsOp,
 } from "../services/preferences/rail-pins.js";
-import { yourApps } from "../services/preferences/your-apps.js";
+import { externalApps, yourApps } from "../services/preferences/your-apps.js";
+import { eq } from "@synap/database";
+import { readConnectedPodApps } from "../services/preferences/connected-pod-apps.js";
 import type { Context } from "../context.js";
 import { workspacesRouter } from "./workspaces.js";
 import { entitiesRouter } from "./entities.js";
@@ -138,12 +139,23 @@ export const preferencesRouter = router({
    * arm fails the read: a partial list would read as "these are all".
    */
   yourApps: protectedProcedure.query(async ({ ctx }) => {
-    const [pins, spaces, links] = await Promise.all([
+    const [pins, spaces, links, podApps] = await Promise.all([
       readRailPins(ctx.userId),
       workspacesRouter.createCaller(ctx).list(),
       readAllSavedLinks(ctx),
+      readConnectedPodApps(ctx.userId),
     ]);
-    return { apps: yourApps({ pins, spaces, links }) };
+    return {
+      /**
+       * The surfaces the person opens (pins, spaces) and their websites — the
+       * pre-5-Nov "Your apps". DEPRECATED as "Your apps" (founder S4: apps are
+       * the external ones); kept until Relay and the desktop read
+       * `externalApps`, then it goes.
+       */
+      apps: yourApps({ pins, spaces, links }),
+      /** "Your apps" (founder S4, 5 Nov 2026): the pod apps they connected and the websites they keep as tools. */
+      externalApps: externalApps({ podApps, links }),
+    };
   }),
 
   /**

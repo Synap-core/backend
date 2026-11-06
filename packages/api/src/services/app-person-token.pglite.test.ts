@@ -125,6 +125,7 @@ import { Hono } from "hono";
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
+import { mintPresencePass } from "./presence/pass.js";
 import {
   AppRepository,
   getRequestGrant,
@@ -246,6 +247,12 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
+  // setting enforces, services/presence/mode.ts), so its sensitive approvals
+  // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
+  await h.client!.exec(
+    `insert into pod_settings (settings) values ('{"presence":{"mode":"report","changedBy":"test","changedAt":"2026-11-05T00:00:00.000Z"}}'::jsonb)`
+  );
   await q(
     `insert into users (id, email, user_type) values ($1,'owner@x','human'), ($2,'member@x','human')`,
     [OWNER, MEMBER]
@@ -321,13 +328,20 @@ beforeAll(async () => {
   publicId = app.publicId;
   appId = app.id;
   // The app's own (agent) key — the AI half, unchanged by this feature.
-  appKey = (await issueKey({ publicId, ownerUserId: OWNER, via: "cli" }))
-    .apiKey;
+  appKey = (
+    await issueKey({
+      publicId,
+      ownerUserId: OWNER,
+      via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
+    })
+  ).apiKey;
   appAgent = (await repo.getByPublicId(publicId))!.app.agentUserId!;
   await setAppRedirectUris({
     publicId,
     ownerUserId: OWNER,
     redirectUris: [CALLBACK],
+    presence: mintPresencePass("apps.setRedirectUris", OWNER, true),
   });
 
   // The probes' proposals approve through the REAL registry dispatch: an
@@ -897,6 +911,7 @@ describe("(e2) a pod app connection (mode 'oauth') is never a sign-in client", (
         publicId: connection.publicId,
         ownerUserId: OWNER,
         redirectUris: [CALLBACK],
+        presence: mintPresencePass("apps.setRedirectUris", OWNER, true),
       })
     ).rejects.toThrow(/connected app cannot/);
   });
@@ -1232,8 +1247,14 @@ describe("T5 — never wider than the consent; the app's lifecycle reaches it", 
 
   it("rotating the app's own key keeps the person signed in; revoking the app ends it", async () => {
     const t = await signIn(OWNER);
-    appKey = (await issueKey({ publicId, ownerUserId: OWNER, via: "cli" }))
-      .apiKey;
+    appKey = (
+      await issueKey({
+        publicId,
+        ownerUserId: OWNER,
+        via: "cli",
+        presence: mintPresencePass("apps.issueKey", OWNER, true),
+      })
+    ).apiKey;
     expect((await keyRow(t)).is_active).toBe(true);
     await revokeApp({ publicId, ownerUserId: OWNER });
     expect((await keyRow(t)).is_active).toBe(false);

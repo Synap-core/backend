@@ -31,7 +31,12 @@ import {
   type KratosFlow,
   type KratosSession,
 } from "../../../lib/kratos-flow";
-import { createPasskey, isPasskeySupported } from "../../../lib/passkey";
+import {
+  createPasskey,
+  isPasskeySupported,
+  type PasskeyPlacement,
+} from "../../../lib/passkey";
+import { PasskeyPlacementMenu } from "../../_lib/passkey-placement/passkey-placement-menu";
 import {
   joinWithPasskey,
   joinWithSynapCloud,
@@ -582,8 +587,9 @@ function PasskeyPanel({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // The passkey is made from the menu's answer ("Where should this passkey
+  // live?"), never by pressing Enter: the answer is the press WebAuthn needs.
+  const join = async (placement: PasskeyPlacement) => {
     setError(null);
     setSubmitting(true);
     try {
@@ -593,6 +599,7 @@ function PasskeyPanel({
           email: inviteEmail,
           ...(name.trim() ? { name: name.trim() } : {}),
           returnTo: joinReturnTo(token, "passkey"),
+          placement,
         },
         JOIN_DEPS
       );
@@ -609,7 +616,7 @@ function PasskeyPanel({
   };
 
   return (
-    <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+    <form className="flex flex-col gap-4" onSubmit={(e) => e.preventDefault()}>
       {error ? <ErrorBanner message={error} /> : null}
       <Input
         label="Email"
@@ -632,16 +639,13 @@ function PasskeyPanel({
         radius="md"
         variant="flat"
       />
-      <Button
-        type="submit"
-        color="primary"
-        radius="md"
-        size="md"
+      <PasskeyPlacementMenu
+        button={{ color: "primary", radius: "md", size: "md" }}
         isLoading={submitting}
-        startContent={submitting ? null : <KeyRound className="h-4 w-4" />}
+        onChoose={(placement) => void join(placement)}
       >
         {resolveSignInWayLabel("passkey", "action")}
-      </Button>
+      </PasskeyPlacementMenu>
     </form>
   );
 }

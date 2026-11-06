@@ -21,9 +21,19 @@
 import { TRPCError } from "@trpc/server";
 import { db as defaultDb, focusSessions, and, eq } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { REQUEST_LATER_MAX_MS } from "@synap-core/types/proposals";
+import { laterTimeProblem } from "@synap-core/types/proposals";
 import { findSlotIndex } from "./slot-keys.js";
 import { isOwedSlot } from "./owed-outputs.js";
+import { createLogger } from "@synap-core/core";
+import { getBoss } from "@synap/events";
+import {
+  ASK_LATER_RETURN_QUEUE,
+  type AskLaterReturnOutcome,
+  type AskLaterReturnPayload,
+} from "@synap/jobs/workers/ask-later-return-worker.js";
+import { notifySessionNeedsYou } from "./notify-needs-you.js";
+
+const logger = createLogger({ module: "ask-later" });
 
 type Database = typeof defaultDb;
 
@@ -50,21 +60,10 @@ export function stampAskLater(
   return { status: "ok", outputs: copy, label: slot.label };
 }
 
-/** The refusals a bad time earns, the same words as a request's Later. */
+/** The refusal a bad time earns: the one Later check, shared with a request's. */
 function assertLaterTime(until: Date, now: Date): void {
-  const at = until.getTime();
-  if (!Number.isFinite(at) || at <= now.getTime()) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Later needs a time in the future.",
-    });
-  }
-  if (at > now.getTime() + REQUEST_LATER_MAX_MS) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Later can set an ask aside for 30 days at most.",
-    });
-  }
+  const problem = laterTimeProblem(until, now, "an ask");
+  if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
 }
 
 async function writeAskLater(p: {
@@ -117,6 +116,8 @@ export async function setAskLater(input: {
   until: Date;
   now?: Date;
   db?: Database;
+  /** Where the return is scheduled; the pg-boss queue by default (tests pass a fake). */
+  schedule?: ScheduleAskLaterReturn;
 }): Promise<{ sessionId: string; label: string; laterUntil: Date }> {
   assertLaterTime(input.until, input.now ?? new Date());
   const written = await writeAskLater({
@@ -133,11 +134,101 @@ export async function setAskLater(input: {
         "This ask is already answered or withdrawn, so there is nothing to put off.",
     });
   }
+  // The ask comes BACK at that time (founder D3): told again at its level.
+  await (input.schedule ?? scheduleAskLaterReturn)(
+    {
+      sessionId: input.sessionId,
+      label: written.label,
+      laterUntil: input.until.toISOString(),
+    },
+    input.until
+  );
   return {
     sessionId: input.sessionId,
     label: written.label,
     laterUntil: input.until,
   };
+}
+
+// ── The return (founder decision D3, 5 Nov 2026) ─────────────────────────────
+
+/** Schedules the return of one Later at `startAfter`. */
+export type ScheduleAskLaterReturn = (
+  payload: AskLaterReturnPayload,
+  startAfter: Date
+) => Promise<void>;
+
+/**
+ * One job per Later on the `ask-later-return` queue, starting at its time. A
+ * failed send is logged, never thrown: the Later itself landed, and the ask
+ * still comes back to the person's list on its own at that time (the
+ * needs-you rule reads `laterUntil`); only the push would be missing.
+ */
+export const scheduleAskLaterReturn: ScheduleAskLaterReturn = async (
+  payload,
+  startAfter
+) => {
+  try {
+    await getBoss().send(ASK_LATER_RETURN_QUEUE, payload, { startAfter });
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: payload.sessionId },
+      "Could not schedule the ask's return from Later — it returns to the list without a push"
+    );
+  }
+};
+
+/**
+ * Pure: the slot a return job may tell the person about — still owed by them
+ * and still set aside until exactly the time the job was scheduled for.
+ * Anything else is stale: an Undo or a re-ask dropped the stamp, a second
+ * Later moved it (its own job will come), an answer made it no longer owed.
+ */
+export function askLaterReturnSlot(
+  outputs: readonly ExpectedOutput[],
+  label: string,
+  laterUntil: string
+): ExpectedOutput | null {
+  const index = findSlotIndex(outputs, label, (s) => !!s && isOwedSlot(s));
+  if (index === -1) return null;
+  const slot = outputs[index]!;
+  return slot.laterUntil === laterUntil ? slot : null;
+}
+
+/**
+ * The `ask-later-return` handler (filled at boot, IoC): re-read the slot and,
+ * when it is still the same Later, tell the person through the ONE needs-you
+ * producer (`notifySessionNeedsYou`, reason `back`) — same summary, level,
+ * agent stamp and push rules as the hand-over itself, so the return counts
+ * against the person's budget, the agent's own limit and the due-soon budget
+ * like any other push. An ask no agent asked is not pushed (as at hand-over).
+ */
+export async function runAskLaterReturn(
+  payload: AskLaterReturnPayload,
+  deps: {
+    db?: Database;
+    notify?: typeof notifySessionNeedsYou;
+  } = {}
+): Promise<AskLaterReturnOutcome> {
+  const database = deps.db ?? defaultDb;
+  const [row] = await database
+    .select({ expectedOutputs: focusSessions.expectedOutputs })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, payload.sessionId))
+    .limit(1);
+  if (!row) return { status: "skipped" };
+  const outputs: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
+    ? (row.expectedOutputs as ExpectedOutput[])
+    : [];
+  const slot = askLaterReturnSlot(outputs, payload.label, payload.laterUntil);
+  if (!slot) return { status: "stale" };
+  const told = await (deps.notify ?? notifySessionNeedsYou)({
+    sessionId: payload.sessionId,
+    byAgent: !!slot.askedBy,
+    agentUserId: slot.askedBy ?? null,
+    reason: { kind: "back", slot },
+  });
+  return { status: told ? "told" : "skipped" };
 }
 
 /** Take back the person's Later on an owed ask (the receipt's Undo). */

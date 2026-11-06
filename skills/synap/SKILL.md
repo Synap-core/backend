@@ -2222,9 +2222,9 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a _receipt_, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
 
-**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped for the same project, that session is adopted (`adopted: true`, same id) — never a second one; another project's writes stay in their own group. Grouping is per conversation and per project: another conversation's session is joined only by passing its id as `sessionId`. On MCP, every write reply names where it landed (`attribution.filed`: session id and name). **One session per piece of work:** a session you started takes every later write, so when an MCP reply carries a `topicHint` (this write is about another project), start a new session if it is new work; rename the current one with `synap_update_session { title }` when its name no longer fits. Names given by automation follow the work as it grows; once you or the person name a session, it keeps that name.
+**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped for the same project, that session is adopted (`adopted: true`, same id) — never a second one; another project's writes stay in their own group. Grouping is per conversation and per project: another conversation's session is joined only by passing its id as `sessionId`. On MCP, a write reply names where it landed (`attribution.filed`: session id and name) when you did not name the session, or when it landed somewhere else. **One session per piece of work:** a session you started takes every later write, so when an MCP reply carries a `topicHint` (this write is about another project), start a new session if it is new work; rename the current one with `synap_update_session { title }` when its name no longer fits. Names given by automation follow the work as it grows; once you or the person name a session, it keeps that name.
 
-**Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
+**Fetch the pod's processes before you invent one.** The pod binds a playbook on FACTS, never on words: the one you name with `templateId`; else the one active playbook for the subject's kind (with a matching status when the playbook maps stages to it); else the playbook the parent session follows; else the main-red playbook for a `main red:` title. The reply says which and why in ONE `binding` line, or offers the few it could not choose between. With no `templateId`, the response's `playbooks` block also lists `candidates` ranked against your title and goal (id, name, score, and the `reason` each one matched): suggestions, never applied. A subject or goal that arrives later re-runs the facts once. Follow one later, or release one the pod bound, with `synap_update_session { followPlaybookId }` (`null` releases, and the pod never re-binds it). Pass `templateId: null` to skip the ranked suggestions (facts still bind). You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
 **Declare your OUTCOMES** — a new session you start must declare at least one fact (or a deliverable with `verify`), or the start is refused (`NO_CRITERIA`); continuing an existing one needs none. `outcomes: [{ key?, label, kind, verify?, owner? }]` on `synap_start_session` / `synap_update_session` (Hub: the same field on `POST`/`PATCH /focus-sessions`). One list of what the work must yield, each one verifiable. Two kinds:
 
@@ -2768,6 +2768,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 - The only bare imports that resolve are the ones the host provides: `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/jsx-dev-runtime` and `@synap/kit` (see "What the frame provides" below). Any other bare import (`recharts`, `d3`, `three`, …) fails in the frame.
 - **No `import` of local files and no `import` from a URL.** A third-party library must be bundled into the source before you define the cell (`synap cell build <entry> --bundle-deps`), never fetched at runtime.
 - Leave `deps` out (or `{}`). A cell that declares runtime `deps`, names `esm.sh`, imports anything the host does not provide, or loads code or a stylesheet from the network is **refused when you define it** (`synap_create_cell`, `POST /cells/define`): nothing is saved or proposed, and the error names the line and the fix.
+- A person approves **exactly the content** a cell proposal holds: its source, its mechanism, its `deps` and its egress. Changing any of them is a new approval: define the cell again (a new proposal), or revise the pending one. The stored cell records the fingerprint of the content it holds.
 - Advice on colour (raw hex instead of `var(--synap-*)` tokens) and accessibility (an image with no `alt`, a clickable `div`) comes back as `advice` with the reply. It never blocks the cell; fix what it names.
 - No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
 - An **HTML page** (a source that opens with `<`) is drawn as a page, not a module: it gets **no host modules**, so it can run inline script only and cannot `import` anything, not even `react`. To use React or `@synap/kit`, write the cell as an ES module that default-exports a component.
@@ -3203,10 +3204,11 @@ start on it, and a person decides at the moments that commit the business. It ne
 The reference is Content OS "Produce Content" (`synap-app/packages/workspace-templates/src/content-os.yaml`).
 
 **Official vs pod-local.** An official template or capability lives ONLY in the catalog
-(`synap-app/packages/workspace-templates/`, by kind) and is published with
-`synap catalog publish --official` (CI on main). A playbook, kind or automation an agent creates on a pod
-(`synap_create_playbook`, `synap_define_kind`, …) is **pod-local**: it never reaches the catalog. To make it
-official, write it into the catalog file and publish.
+(`synap-app/packages/workspace-templates/`, by kind); landing it on app-bases main publishes it (CI). A
+playbook, kind or automation an agent creates on a pod (`synap_create_playbook`, `synap_define_kind`, …) is
+**pod-local**: it never reaches the catalog. To make it official, write it into the catalog file and land it
+on main. A pod draft proposal mirrored into the catalog is a second copy: once the file lands, withdraw the
+proposal; the review is the catalog commit.
 
 | Field                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -3281,8 +3283,8 @@ batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
 `{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
-writes it into the catalog and publishes it with
-`synap catalog publish --official`.
+writes it into the catalog (`synap-app/packages/workspace-templates`); landing it
+on app-bases main publishes it.
 
 ---
 

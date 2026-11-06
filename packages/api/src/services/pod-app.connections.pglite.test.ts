@@ -115,6 +115,7 @@ import {
   getOAuthConsentContext,
 } from "../routers/oauth/consent.js";
 import { appsRouter } from "../routers/apps.js";
+import { router } from "../trpc.js";
 import { registerWebhooksRoutes } from "../routers/hub-protocol/rest/webhooks.js";
 import { registerAgentUsersRoutes } from "../routers/hub-protocol/rest/agent-users.js";
 import { registerAppsRoutes } from "../routers/hub-protocol/rest/apps.js";
@@ -245,6 +246,12 @@ beforeAll(async () => {
 beforeEach(async () => {
   // Every test starts with the pod's default policy (unverified apps allowed).
   await q(`delete from pod_settings`);
+  // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
+  // setting enforces, services/presence/mode.ts), so its sensitive approvals
+  // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
+  await h.client!.exec(
+    `insert into pod_settings (settings) values ('{"presence":{"mode":"report","changedBy":"test","changedAt":"2026-11-05T00:00:00.000Z"}}'::jsonb)`
+  );
 });
 
 const ctxOf = (userId: string, agentUserId?: string) =>
@@ -254,8 +261,11 @@ const ctxOf = (userId: string, agentUserId?: string) =>
     session: { id: "s" },
     ...(agentUserId ? { agentUserId } : {}),
   }) as never;
+// Mounted under its root key, so each procedure runs with its full path
+// (`apps.setWriteMode`): the step-up middleware reads the path to ask the
+// proof-of-presence gate, whose pass the service requires.
 const caller = (userId: string, agentUserId?: string) =>
-  appsRouter.createCaller(ctxOf(userId, agentUserId));
+  router({ apps: appsRouter }).createCaller(ctxOf(userId, agentUserId)).apps;
 
 type Pair = { permission: string; workspaceId: string };
 
