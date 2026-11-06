@@ -4,6 +4,7 @@ import {
   CHART_SPOKEN_VALUES,
   resolveChartComposedLegend,
   resolveChartSpokenLabel,
+  resolveCellInstanceWords,
   resolveChartTableHead,
   resolveEmbedWords,
 } from "./index.js";
@@ -62,6 +63,50 @@ describe("resolveEmbedWords — every embed is named, never blank, never a raw k
       label: "Instance",
     });
     expect(words("entity", {})).toEqual({ noun: "Entity", label: "Entity" });
+  });
+});
+
+describe("resolveCellInstanceWords — an instance embed is named once the pod says which", () => {
+  const instanceModel = (attrs: Record<string, string>) => {
+    const model = describeEmbed({ kind: "cell", attrs });
+    if (model.kind !== "cell-frame") throw new Error(model.kind);
+    return model;
+  };
+
+  it("names the instance by its own name, never 'Card'", () => {
+    expect(
+      resolveCellInstanceWords(instanceModel({ instanceId: "i-1" }), {
+        name: "Q3 pipeline",
+        cellType: "generated:deal-board",
+      })
+    ).toEqual({ noun: "Card", label: "Q3 pipeline" });
+  });
+
+  it("an unnamed instance is named by its type's own name, without the namespace", () => {
+    expect(
+      resolveCellInstanceWords(instanceModel({ instanceId: "i-1" }), {
+        name: null,
+        cellType: "generated:weekly-pulse",
+      }).label
+    ).toBe("Weekly pulse");
+    expect(
+      resolveCellInstanceWords(instanceModel({ instanceId: "i-1" }), {
+        name: "  ",
+        cellType: "entity-list",
+      }).label
+    ).toBe("Entity list");
+  });
+
+  it("the authored label wins; before the pod answers it is the directive's own words", () => {
+    expect(
+      resolveCellInstanceWords(
+        instanceModel({ instanceId: "i-1", label: "Pipeline" }),
+        { name: "Q3 pipeline", cellType: "generated:deal-board" }
+      ).label
+    ).toBe("Pipeline");
+    expect(
+      resolveCellInstanceWords(instanceModel({ instanceId: "i-1" }), null)
+    ).toEqual({ noun: "Card", label: "Card" });
   });
 });
 

@@ -47,6 +47,7 @@ import {
 } from "./chart-data.js";
 import { dataBindingFor, isInstalledRenderableKey } from "./catalog.js";
 import { WIDGET_BY_KEY } from "./widgets.js";
+import { cellKeyName } from "./cell-key.js";
 
 export interface DescribeEmbedInput {
   /** The directive name without `synap-`: `entity` | `view` | `cell` | … */
@@ -181,9 +182,7 @@ function describeCell(input: DescribeEmbedInput): EmbedModel {
     return {
       kind: "cell-frame",
       cellKey,
-      keyName: cellKey
-        ? (cellKey.split(":").filter(Boolean).pop() ?? null)
-        : null,
+      keyName: cellKey ? cellKeyName(cellKey) : null,
       instanceId,
       label: authored,
     };

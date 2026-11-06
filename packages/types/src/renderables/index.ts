@@ -26,6 +26,7 @@ export * from "./chart-data.js";
 export * from "./chart-shapers.js";
 export * from "./fences.js";
 export * from "./embed-model.js";
+export * from "./cell-key.js";
 export * from "./chart-geometry.js";
 export * from "./html-page-source.js";
 export * from "./cell-source-checks.js";

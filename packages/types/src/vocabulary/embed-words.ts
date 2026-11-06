@@ -8,10 +8,16 @@
  *   noun   what kind of thing it is ("Chart", "Entity", "View", "Card")
  *   label  what it is called: the authored label, else the catalog's name,
  *          else the humanized key or type, else the noun — never blank
+ *
+ * A cell embed that names only an INSTANCE (`:::synap-cell{instanceId=…}`)
+ * is the one case the directive alone cannot name: the instance's name and
+ * type live in the pod. Its words are `resolveCellInstanceWords`, once the
+ * surface has read the instance; "Card" is only what it says while it loads.
  */
 
 import type { EmbedModel } from "../renderables/embed-model.js";
 import type { ChartGeometry } from "../renderables/chart-geometry.js";
+import { cellKeyName } from "../renderables/cell-key.js";
 import { humanizeToken, nounInSentence, resolveObjectNoun } from "./index.js";
 
 export interface EmbedWords {
@@ -73,6 +79,36 @@ export function resolveEmbedWords(model: EmbedModel): EmbedWords {
     case "broken":
       return { noun, label: noun };
   }
+}
+
+/**
+ * What the pod says a cell instance is (`cellInstances.get`, on the viewer's
+ * own floor): the half of an instance embed only the pod knows.
+ */
+export interface EmbedCellInstance {
+  /** The instance's own name, when someone gave it one. */
+  name: string | null;
+  /** Its cell type: the key it runs (`generated:weekly-pulse`, `html-embed`, `entity-list`). */
+  cellType: string;
+}
+
+/**
+ * The words for a cell embed once the pod has said which instance it is: the
+ * authored label, else the instance's own name, else its type's own name
+ * humanized (`generated:weekly-pulse` → "Weekly pulse"), the way a keyed
+ * embed is named. Before the pod answers (`instance` null) it is
+ * `resolveEmbedWords`, so "Card" shows only while the instance loads.
+ */
+export function resolveCellInstanceWords(
+  model: Extract<EmbedModel, { kind: "cell-frame" }>,
+  instance: EmbedCellInstance | null
+): EmbedWords {
+  const words = resolveEmbedWords(model);
+  if (!instance || model.label) return words;
+  const name = instance.name?.trim();
+  const keyName = cellKeyName(instance.cellType);
+  const named = name || (keyName ? humanizeToken(keyName) : "");
+  return { noun: words.noun, label: named || words.label };
 }
 
 // ── A drawn chart's words (the geometry carries only marks and numbers) ─────
