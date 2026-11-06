@@ -84,7 +84,10 @@ export function endMoveActor(input: {
 /**
  * Apply `onEnd[status]` to the session's subject and its still-open targets.
  * `undefined` when the process says nothing for this end (no process, no
- * status property, no entry, or nothing to move).
+ * entry, or nothing to move). A process that names an end value but has no
+ * status property to write it on (it names none and its subject kind declares
+ * no lifecycle; `loadSessionProcess` resolves the declared one) reports each
+ * thing `skipped: no_status_property`, never a silent nothing.
  */
 export async function applySessionEndMoves(input: {
   session: {
@@ -100,7 +103,7 @@ export async function applySessionEndMoves(input: {
 }): Promise<SessionEndMovesRecord | undefined> {
   const { session, process: proc, status } = input;
   const value = proc?.onEnd?.[status];
-  if (!proc || !value || !proc.statusProperty) return undefined;
+  if (!proc || !value) return undefined;
   const things: Array<{ entityId: string; as: SessionEndMove["as"] }> = [];
   if (session.subjectEntityId) {
     things.push({ entityId: session.subjectEntityId, as: "subject" });
@@ -110,6 +113,17 @@ export async function applySessionEndMoves(input: {
       things.push({ entityId: id, as: "target" });
   }
   if (things.length === 0) return undefined;
+  const statusProperty = proc.statusProperty;
+  if (!statusProperty) {
+    return {
+      status,
+      value,
+      moves: things.map((thing) => ({
+        ...thing,
+        outcome: { status: "skipped", reason: "no_status_property" },
+      })),
+    };
+  }
 
   const reason = `The session ended ${status}; its process moves what it worked on to "${value}".`;
   const moves: SessionEndMove[] = [];
@@ -120,7 +134,7 @@ export async function applySessionEndMoves(input: {
       entityId: thing.entityId,
       process: {
         profileSlug: proc.profileSlug,
-        statusProperty: proc.statusProperty,
+        statusProperty,
         humanOnlyStatuses: proc.humanOnlyStatuses,
       },
       value,

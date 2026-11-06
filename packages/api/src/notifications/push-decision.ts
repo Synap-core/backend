@@ -26,6 +26,11 @@
  *      An ask due within the hour (`facts.dueSoon`) is never held back by
  *      the budget either: it is one of the two pushes that break through
  *      Focus (founder decision 9bc9f75c, 2026-11-04); it counts.
+ *   3b. the DUE-SOON budget ({@link withinDueSoonBudget}), decided BEFORE the
+ *      budget of rule 4: `answerBy` is the asking agent's own field, so each
+ *      agent may break through Focus with {@link PUSH_DUE_SOON_DAILY_PER_AGENT}
+ *      due-soon ask a day. Past it the push loses `dueSoon`: a normal push,
+ *      counted and held back by rule 4 like any other.
  *   4b. the AGENT's own limit ({@link withinAgentPushLimit}): when the person
  *      set one in that agent's settings (`agentMetadata.pushDailyLimit`;
  *      none by default), an earned push about that agent's work past it is
@@ -57,6 +62,7 @@ import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   PUSH_CAP_EXEMPT_CATEGORIES,
   PUSH_DAILY_CAP,
+  PUSH_DUE_SOON_DAILY_PER_AGENT,
   PUSH_MUTE_EXEMPT_CATEGORIES,
   PUSH_NEEDS_YOU_CATEGORIES,
   classifyPush,
@@ -132,6 +138,26 @@ function countedEarnedPush(d: PushDecision): boolean {
  */
 export function pushCapApplies(d: PushDecision): boolean {
   return countedEarnedPush(d) && !(d.push && d.dueSoon === true);
+}
+
+/** Rule 3b applies to an earned push that would break through Focus. Pure. */
+export function dueSoonBudgetApplies(d: PushDecision): boolean {
+  return d.push && d.dueSoon === true;
+}
+
+/**
+ * Rule 3b, pure: once the agent broke through Focus
+ * {@link PUSH_DUE_SOON_DAILY_PER_AGENT} time(s) today, its next due-soon push
+ * goes as a normal push (no `dueSoon`: normal level, counted and capped).
+ */
+export function withinDueSoonBudget(
+  d: PushDecision,
+  brokeThroughToday: number
+): PushDecision {
+  if (!dueSoonBudgetApplies(d) || !d.push) return d;
+  if (brokeThroughToday < PUSH_DUE_SOON_DAILY_PER_AGENT) return d;
+  const { dueSoon: _spent, ...normal } = d;
+  return normal;
 }
 
 /**
@@ -314,6 +340,47 @@ export async function agentPushesCountedToday(
     );
   return Number(row?.n ?? 0);
 }
+
+/**
+ * The asks due within the hour that `agentUserId` broke through the person's
+ * Focus with since the start of their day (rule 3b): `session.needs_you` rows
+ * pushed today, stamped with that agent, at the `urgent` level — the level a
+ * row is stamped with exactly when one of its asks is P0
+ * (`NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL`, the same `needsYouPriority` the
+ * push's `dueSoon` reads). An urgent row the budget already turned into a
+ * normal push still counts: the count only ever over-states, so the budget
+ * never under-holds. No agent (`null`): the rows stamped with none. A failed
+ * read THROWS.
+ */
+export async function dueSoonPushesToday(
+  userId: string,
+  agentUserId: string | null,
+  timeZone: string
+): Promise<number> {
+  const [row] = await db
+    .select({ n: drizzleSql<number>`cast(count(*) as integer)` })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        agentUserId
+          ? eq(notifications.pushAgentId, agentUserId)
+          : drizzleSql`${notifications.pushAgentId} IS NULL`,
+        eq(notifications.type, DUE_SOON_NOTIFICATION_TYPE),
+        eq(notifications.priority, "urgent"),
+        isNotNull(notifications.pushedAt),
+        drizzleSql`${notifications.pushedAt} >= (date_trunc('day', now() AT TIME ZONE ${timeZone}) AT TIME ZONE ${timeZone})`
+      )
+    );
+  return Number(row?.n ?? 0);
+}
+
+/**
+ * The one notification type whose push can carry `dueSoon`
+ * (`notifySessionNeedsYou`). Its literal, not an import: the producer imports
+ * this module through `NotificationService`.
+ */
+const DUE_SOON_NOTIFICATION_TYPE = "session.needs_you";
 
 /**
  * The daily push limit the person set on this agent

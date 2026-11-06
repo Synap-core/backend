@@ -236,8 +236,9 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // `userId` is the caller's own id or `me` (rest/entities.ts).
   new RegExp(`^/users/(?:me|${ID})/entities/?$`),
   // The list door. Every branch reads through `entities.getEntities` (the
-  // seamed `entities.list` floor) EXCEPT full-text `q` (Typesense), which the
-  // route itself refuses for a fenced grant (rest/entities.ts). `filters` are
+  // seamed `entities.list` floor), and full-text `q` ranks in Typesense, then
+  // `search.search` re-reads its hits through that same floor for a fenced
+  // grant (`withinGrantSearchHits`, services/retrieval/). `filters` are
   // ANDed inside that floor (only narrow); `includeWorkspace` names only the
   // spaces of the rows returned (entities.filters-space-names.pglite.test.ts).
   /^\/entities\/?$/,
@@ -648,7 +649,7 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   ],
   // A space's conversations (`listSpaceConversations`, services/channels/
   // space-conversations.ts, CRM Messages contract A): the people through
-  // `entityReadVisibleWhere` + `facetInWorkspaceLensWhere`, their channels
+  // `entityReadVisibleWhere` + `roleInWorkspaceLensWhere`, their channels
   // through `channelVisibilityWhere`, their drafts through
   // `proposalUserFloor`, each carrying the key's grant (a key without
   // `proposal.read` sees no drafts). Admitted for `channel.read`; the route

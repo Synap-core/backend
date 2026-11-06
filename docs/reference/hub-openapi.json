@@ -9124,10 +9124,10 @@
           {
             "schema": {
               "type": "string",
-              "description": "Free-text search query. Refused (403 GRANT_DOOR_UNSUPPORTED) for a scoped key: search is not bounded by a grant. List without `q` instead."
+              "description": "Free-text search query (relevance-ranked top-N). For a scoped key the hits are bounded by its grant: it reads the top 100 matches and returns only those its grant reads (at most `limit`), so an in-grant match ranked below them is not returned — narrow the query to reach it."
             },
             "required": false,
-            "description": "Free-text search query. Refused (403 GRANT_DOOR_UNSUPPORTED) for a scoped key: search is not bounded by a grant. List without `q` instead.",
+            "description": "Free-text search query (relevance-ranked top-N). For a scoped key the hits are bounded by its grant: it reads the top 100 matches and returns only those its grant reads (at most `limit`), so an in-grant match ranked below them is not returned — narrow the query to reach it.",
             "name": "q",
             "in": "query"
           },
@@ -16573,6 +16573,10 @@
                                     },
                                     "required": ["toStage"],
                                     "additionalProperties": false
+                                  },
+                                  "tier": {
+                                    "type": "string",
+                                    "enum": ["deep", "standard", "quick"]
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -20023,6 +20027,10 @@
                                     },
                                     "required": ["toStage"],
                                     "additionalProperties": false
+                                  },
+                                  "tier": {
+                                    "type": "string",
+                                    "enum": ["deep", "standard", "quick"]
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -25510,6 +25518,10 @@
                           },
                           "required": ["toStage"],
                           "additionalProperties": false
+                        },
+                        "tier": {
+                          "type": "string",
+                          "enum": ["deep", "standard", "quick"]
                         }
                       },
                       "required": ["key", "name", "category"],

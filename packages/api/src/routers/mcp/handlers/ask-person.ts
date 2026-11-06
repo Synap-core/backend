@@ -28,7 +28,13 @@
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { ASK_LIMITS, AskSchema, type Ask } from "@synap-core/types/ask";
+import {
+  ASK_ANSWER_BY_PAST_MESSAGE,
+  ASK_LIMITS,
+  AskSchema,
+  isAskAnswerByPast,
+  type Ask,
+} from "@synap-core/types/ask";
 import { isUuid } from "@synap-core/types/property-render";
 import { needsYouPriority } from "@synap-core/types/needs-you";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -276,6 +282,11 @@ export const askPersonHandlers: McpHandlerMap = {
       });
     }
     const ask = parsed.data.ask as Ask;
+    // Before any session is opened for it: a deadline already past is refused
+    // here as at every write door (`isAskAnswerByPast`).
+    if (isAskAnswerByPast(ask.answerBy)) {
+      return ok({ error: `${ASK_ANSWER_BY_PAST_MESSAGE} NOTHING WAS FILED.` });
+    }
     const slot: ExpectedOutput = {
       ...parsed.data,
       blockedReason: parsed.data.blockedReason ?? blockedReasonForAsk(ask),

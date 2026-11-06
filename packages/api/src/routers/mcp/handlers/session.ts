@@ -908,6 +908,10 @@ export const sessionHandlers: McpHandlerMap = {
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
       ...(result.cancel ? { cancel: result.cancel } : {}),
+      // What the end moved (`subjectProfile.onEnd`): each thing moved,
+      // proposed, skipped or failed with why — absent when the process names
+      // nothing for this end.
+      ...(result.endMoves ? { endMoves: result.endMoves } : {}),
       ...(nudges ? { nudges } : {}),
       ...(leftOwed ? { leftOwed } : {}),
       note:
@@ -1870,6 +1874,10 @@ export const sessionHandlers: McpHandlerMap = {
           // Which track/step it landed in, and — when the step names another
           // domain — that the session was filed where it is, not moved.
           ...(result.trackFiling ? { trackFiling: result.trackFiling } : {}),
+          // Same reason as `completeOutput`: an advance whose stage names a
+          // subject status that did NOT move the subject (skipped, failed, or
+          // waiting on a person) changes nothing the session row shows.
+          ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
           ...(result.warnings ? { warnings: result.warnings } : {}),
