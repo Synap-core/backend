@@ -16588,6 +16588,23 @@
                                   "tier": {
                                     "type": "string",
                                     "enum": ["deep", "standard", "quick"]
+                                  },
+                                  "forEach": {
+                                    "type": "object",
+                                    "properties": {
+                                      "over": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                      },
+                                      "as": {
+                                        "type": "string",
+                                        "maxLength": 60,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                                      }
+                                    },
+                                    "required": ["over"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -20042,6 +20059,23 @@
                                   "tier": {
                                     "type": "string",
                                     "enum": ["deep", "standard", "quick"]
+                                  },
+                                  "forEach": {
+                                    "type": "object",
+                                    "properties": {
+                                      "over": {
+                                        "type": "string",
+                                        "maxLength": 200,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                      },
+                                      "as": {
+                                        "type": "string",
+                                        "maxLength": 60,
+                                        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                                      }
+                                    },
+                                    "required": ["over"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -25533,6 +25567,23 @@
                         "tier": {
                           "type": "string",
                           "enum": ["deep", "standard", "quick"]
+                        },
+                        "forEach": {
+                          "type": "object",
+                          "properties": {
+                            "over": {
+                              "type": "string",
+                              "maxLength": 200,
+                              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                            },
+                            "as": {
+                              "type": "string",
+                              "maxLength": 60,
+                              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                            }
+                          },
+                          "required": ["over"],
+                          "additionalProperties": false
                         }
                       },
                       "required": ["key", "name", "category"],
