@@ -9,7 +9,7 @@
  * (`synap_update_facet`), pinned here too: the merge lands on the same row.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const holder = vi.hoisted(() => ({
