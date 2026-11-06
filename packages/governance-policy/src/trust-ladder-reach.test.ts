@@ -136,6 +136,16 @@ const FIXTURES: Record<keyof typeof PROPOSE_REASON, AgentPolicyInput> = {
     action: "transition",
     lifecycleMove: { intoTerminal: true, humanOnly: false },
   },
+  LIFECYCLE_REOPEN: {
+    subjectType: "entity",
+    action: "transition",
+    lifecycleMove: {
+      intoTerminal: false,
+      humanOnly: false,
+      outOfTerminal: true,
+      atSessionBirth: true,
+    },
+  },
   // The host step's second pass: the agent's COMPUTER asks.
   HOST_ASKS_FIRST: {
     subjectType: "entity",

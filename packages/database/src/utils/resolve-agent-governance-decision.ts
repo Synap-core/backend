@@ -154,7 +154,13 @@ export interface ResolveAgentGovernanceInput {
    * Rungs 2.075 / 2.85 / 2.86 — the write MOVES a lifecycle status (work model
    * W14), classified by the `moveStatus` door from the option it enters.
    */
-  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  lifecycleMove?: {
+    intoTerminal: boolean;
+    humanOnly: boolean;
+    atSessionEnd?: boolean;
+    outOfTerminal?: boolean;
+    atSessionBirth?: boolean;
+  };
   /**
    * Rung 2.07 — the write links a required field or a default onto a
    * pod-admin-owned kind and its principal is not a pod admin (chat door,
@@ -2391,6 +2397,8 @@ export function reasonToRung(reason: string): string {
       return "human-only-status";
     case PROPOSE_REASON.LIFECYCLE_TERMINAL:
       return "lifecycle-terminal";
+    case PROPOSE_REASON.LIFECYCLE_REOPEN:
+      return "lifecycle-reopen";
     case PROPOSE_REASON.ADMIN:
       return "admin-actions";
     case PROPOSE_REASON.SCOPE_IDENTITY_CHANGE:

@@ -50,6 +50,8 @@ export const GOVERNANCE_POLICY_SENTENCES = {
   HUMAN_ONLY_STATUS: "Only you can move this into that status.",
   LIFECYCLE_TERMINAL:
     "An agent wants to close this (done or lost), so it waits for you unless you have said otherwise.",
+  LIFECYCLE_REOPEN:
+    "Starting this work would reopen something already done or lost, so you confirm it first.",
   AGENT_STRUCTURE_WRITE:
     "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.",
 } as const;
@@ -99,6 +101,7 @@ export const GOVERNANCE_REASON_SHORT_LABELS: Readonly<
   AGENT_SCHEMA_DEFINITION: "New kind",
   HUMAN_ONLY_STATUS: "Only you can move it",
   LIFECYCLE_TERMINAL: "Closes it",
+  LIFECYCLE_REOPEN: "Reopens it",
   AGENT_STRUCTURE_WRITE: "Changes what your pod does",
 };
 
