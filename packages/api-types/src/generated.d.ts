@@ -21136,6 +21136,38 @@ export type YourApp = {
 	name: string;
 	url: string;
 };
+/**
+ * "Your apps", as the founder settled it on 5 Nov 2026 (S4): "apps are the
+ * external ones; views, cells etc. on the pod itself are surfaces". So an
+ * app is something OUTSIDE the pod that opens on it:
+ *
+ *   app       a pod app the person connected (an App Connect app signed in
+ *             through the pod's own OAuth door, `apps.mode = 'oauth'`, not
+ *             revoked), opened at its `client_uri` (the homepage its client
+ *             metadata declares, same origin as its `client_id`), else at the
+ *             origin of its `client_id`;
+ *   website   a site they keep as a tool (the shared rule, as before).
+ *
+ * Pins, spaces and documents are SURFACES (Relay's "Your surfaces", the
+ * desktop's rail and spaces), never apps. Pinned and space rows stay in
+ * {@link yourApps} only until Relay and the desktop read this list; then that
+ * list goes. Ordered: apps by name, then websites by name.
+ */
+export type ExternalApp = {
+	/** Its host: the app's identity. */
+	domain: string;
+	/** `app:<publicId>`. */
+	key: string;
+	kind: "app";
+	name: string;
+	publicId: string;
+	/** Where it opens: its `client_uri`, else its `client_id`'s origin. */
+	url: string;
+	/** A Synap app (first-party origin) vs an unverified one. */
+	verified: boolean;
+} | Extract<YourApp, {
+	kind: "website";
+}>;
 export type PublishResult = {
 	proposalId: string;
 	status: "proposed";
@@ -25186,6 +25218,14 @@ export interface Signal {
 	 * session". Absent otherwise, and on every other kind.
 	 */
 	keptOwedAt?: string;
+	/**
+	 * The person's Later on an `owed-slot` (`ExpectedOutput.laterUntil`, an ISO
+	 * instant), carried as it is stored: in the future, the ask is set aside
+	 * (its row is in Review later); past, it came BACK from Later and a surface
+	 * may mark it so (founder, 5 Nov 2026, D3). Absent when never set aside, and
+	 * on every other kind.
+	 */
+	laterUntil?: string;
 	/**
 	 * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
 	 * hands the whole row to the one card adapter (`askCardSlotOf`) and names
@@ -46988,6 +47028,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				apps: YourApp[];
+				externalApps: ExternalApp[];
 			};
 		}>;
 	}>>;
