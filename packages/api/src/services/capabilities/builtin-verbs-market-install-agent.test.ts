@@ -11,6 +11,7 @@
  * `@synap/database`.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { z } from "zod";
 
 const runMarketInstallMock = vi.fn();
 vi.mock("./marketplace-install.js", () => ({
@@ -35,7 +36,11 @@ beforeEach(() => {
 
 describe("market.install — kind agent", () => {
   it("the param schema accepts an agent package", () => {
-    const schema = BUILTIN_VERB_PARAM_SCHEMAS["market.install"]!;
+    // The record is typed by its `shape` only; the value is a Zod object.
+    const schema = BUILTIN_VERB_PARAM_SCHEMAS[
+      "market.install"
+    ] as unknown as z.ZodTypeAny;
+    expect(schema).toBeDefined();
     expect(
       schema.safeParse({ slug: "claude-code", kind: "agent" }).success
     ).toBe(true);
