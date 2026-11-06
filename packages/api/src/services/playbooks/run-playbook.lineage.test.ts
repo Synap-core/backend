@@ -34,6 +34,12 @@ vi.mock("@synap/database", async (importOriginal) => ({
 vi.mock("../focus-sessions/session-blocked-by.js", () => ({
   addCreateTimeBlockers,
 }));
+// `resolveRunChoice` reads the person's stored run choice from the db before the
+// session exists; the db is absent here, so answer "no stored choice".
+vi.mock("../agent-dispatch/agent-assignment.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readStoredRunChoice: async () => null,
+}));
 vi.mock("./playbook-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   resolveRunnablePlaybook: async () => ({
@@ -76,7 +82,7 @@ describe("runPlaybook — lineage", () => {
   });
 
   it("writes no edge when the run was not started from a session", async () => {
-    await runPlaybook(INPUT).catch((e) => console.log("ERR", e));
+    await runPlaybook(INPUT).catch(() => undefined);
     expect(instantiateSession).toHaveBeenCalledOnce();
     expect(recordSessionSpawn).not.toHaveBeenCalled();
   });
