@@ -11178,7 +11178,8 @@ export interface EntityPropertyDiff {
 	 */
 	absentAfter?: string[];
 	/**
-	 * Entity COLUMNS an update changed (title; `preview` is the description).
+	 * Entity COLUMNS an update changed (title; `preview` is the description;
+	 * a pod-wide record's home space).
 	 * Revert restores one only while it still holds the written value.
 	 */
 	fields?: {
@@ -11187,7 +11188,7 @@ export interface EntityPropertyDiff {
 	};
 }
 /** The entity columns an update can change and revert can restore. */
-export type EntityDiffField = "preview" | "title";
+export type EntityDiffField = "homeWorkspaceId" | "preview" | "title";
 export type RevertTarget = {
 	id: string;
 	kind: "entity";
@@ -35915,6 +35916,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						to?: string | undefined;
 					} | null | undefined;
 				} | undefined;
+				homeWorkspaceId?: string | null | undefined;
 				id: string;
 				occurredAt?: string | undefined;
 				profileSlug?: string | undefined;
@@ -35943,6 +35945,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "proposed";
 				};
 			} | {
+				message: string;
+				notice?: string;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
+				status: string;
+				statusMove: {
+					status: "moved";
+					transition: StatusTransition;
+				} | {
+					current: string;
+					status: "unchanged";
+				};
+				written: {
+					documentId: string | null;
+					preview: string | null;
+					properties: unknown;
+					title: string | null;
+				};
+			} | {
 				deferred?: true | undefined;
 				message: string;
 				notice?: string;
@@ -35963,6 +35985,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unmodeled?: UnmodeledProperty[] | undefined;
 				written: {
 					documentId: string | null;
+					homeWorkspaceId?: string | null;
 					preview: string | null;
 					properties: unknown;
 					title: string | null;

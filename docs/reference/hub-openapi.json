@@ -1689,7 +1689,11 @@
               "title": { "type": ["string", "null"] },
               "description": { "type": ["string", "null"] },
               "properties": {},
-              "documentId": { "type": ["string", "null"] }
+              "documentId": { "type": ["string", "null"] },
+              "homeWorkspaceId": {
+                "type": ["string", "null"],
+                "description": "The home space as the write left it, when it set one."
+              }
             },
             "required": ["title", "description", "documentId"],
             "description": "The stored values after the write."
@@ -1828,6 +1832,11 @@
           "replaceBody": {
             "type": "boolean",
             "description": "Required with documentId when the entity already has a body; without it the call is refused (409) naming that body."
+          },
+          "homeWorkspaceId": {
+            "type": ["string", "null"],
+            "format": "uuid",
+            "description": "File a POD-WIDE record for a space (its home): that space's members, and a key limited to it, then read it. Refused (400) on a record that lives in a space (move it instead); refused (403) unless you can write in that space, and under your key's grant. null clears it. An agent's home is always a proposal."
           }
         }
       },
@@ -10070,7 +10079,7 @@
       "patch": {
         "tags": ["Entities"],
         "summary": "Update an entity",
-        "description": "Patch entity title / preview / metadata, or attach an existing document as its body (`documentId`, `replaceBody`). Supports `Idempotency-Key`.",
+        "description": "Patch entity title / preview / metadata, attach an existing document as its body (`documentId`, `replaceBody`), or file a pod-wide record for a space (`homeWorkspaceId`). Supports `Idempotency-Key`.",
         "parameters": [
           {
             "schema": {
