@@ -1,5 +1,6 @@
 /**
- * Pod security's words for the proof-of-presence mode, as catalogs
+ * Pod security's words for the proof-of-presence mode and what asks
+ * for a passkey, as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. The
  * setting's name, its on/off words, what is sensitive and where to approve
  * are the shared presence words (`PRESENCE_WORDS`), merged in here, never
@@ -38,6 +39,29 @@ const cardEn = {
   "presence.retry": "Try again",
   "presence.notChanged": "Couldn’t change it",
   "presence.notChangedHint": "Nothing changed.",
+  "sensitivity.title": "What asks for your passkey",
+  "sensitivity.hint":
+    "Switch off what a signed-in session may do here without your passkey. Switching one off asks for your passkey, and every pod admin is told.",
+  "sensitivity.mark": "{asking} of {total} ask",
+  "sensitivity.reportNote":
+    "Approvals need you in person is off: what is switched on here is recorded, not refused.",
+  "sensitivity.reason.deploy": "Deploys",
+  "sensitivity.reason.setup": "Connecting apps, AIs and keys",
+  "sensitivity.reason.governance": "Who may do what",
+  "sensitivity.reason.deletion": "Deleting and archiving",
+  "sensitivity.group.count": "{asking} of {total} ask",
+  "sensitivity.kind.approval": "Approve",
+  "sensitivity.kind.action": "Do yourself",
+  "sensitivity.row.prefix": "Any {name} request",
+  "sensitivity.row.switch": "Ask for a passkey: {label}",
+  "sensitivity.showAll": "Show all {n}",
+  "sensitivity.showFewer": "Show fewer",
+  "sensitivity.reset": "Ask for everything again",
+  "sensitivity.failed": "Couldn’t read what asks for your passkey.",
+  "sensitivity.retry": "Try again",
+  "sensitivity.notChanged": "Couldn’t change it",
+  "sensitivity.notChangedHint": "Nothing changed.",
+  "sensitivity.changedBy": "Changed {when}.",
 } as const;
 
 const cardFr: Catalog<typeof cardEn> = {
@@ -71,6 +95,30 @@ const cardFr: Catalog<typeof cardEn> = {
   "presence.retry": "Réessayer",
   "presence.notChanged": "Impossible de le modifier",
   "presence.notChangedHint": "Rien n’a changé.",
+  "sensitivity.title": "Ce qui demande votre clé d’accès",
+  "sensitivity.hint":
+    "Désactivez ce qu’une session connectée peut faire ici sans votre clé d’accès. Désactiver demande votre clé d’accès, et chaque administrateur du pod est prévenu.",
+  "sensitivity.mark":
+    "{asking, plural, one {# sur {total} demande} other {# sur {total} demandent}}",
+  "sensitivity.reportNote":
+    "Les approbations en personne sont désactivées : ce qui est activé ici est enregistré, pas refusé.",
+  "sensitivity.reason.deploy": "Déploiements",
+  "sensitivity.reason.setup": "Connexion d’apps, d’IA et de clés",
+  "sensitivity.reason.governance": "Qui peut faire quoi",
+  "sensitivity.reason.deletion": "Suppression et archivage",
+  "sensitivity.group.count": "{asking} sur {total}",
+  "sensitivity.kind.approval": "Approuver",
+  "sensitivity.kind.action": "Faire vous-même",
+  "sensitivity.row.prefix": "Toute demande {name}",
+  "sensitivity.row.switch": "Demander une clé d’accès : {label}",
+  "sensitivity.showAll": "Tout afficher ({n})",
+  "sensitivity.showFewer": "Afficher moins",
+  "sensitivity.reset": "Tout redemander",
+  "sensitivity.failed": "Impossible de lire ce qui demande votre clé d’accès.",
+  "sensitivity.retry": "Réessayer",
+  "sensitivity.notChanged": "Impossible de le modifier",
+  "sensitivity.notChangedHint": "Rien n’a changé.",
+  "sensitivity.changedBy": "Modifié {when}.",
 };
 
 export const en = { ...PRESENCE_WORDS.en, ...cardEn };

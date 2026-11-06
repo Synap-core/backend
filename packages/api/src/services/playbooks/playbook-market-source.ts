@@ -188,6 +188,49 @@ export interface PlaybookReconcilePlan {
 }
 
 /**
+ * A stage's `lessons` belong to the POD, not to the template or the owner: the
+ * lessons scanner revises them on the live row (`playbook-lessons-scanner.ts`,
+ * an approved `playbook/update`), and no template writes them. Compared as part
+ * of `stages`, one learned lesson made the live stages differ from the baseline,
+ * so the 3-way merge called the whole field OWNER-OWNED and no template change
+ * to any stage reached that pod again, silently ("Draft a first message",
+ * 6 Nov 2026: its goal followed the catalog, its stages kept text the catalog
+ * had dropped 3 days earlier). So the merge reads the live stages WITHOUT their
+ * lessons, and a stage the template advances keeps the lessons its live twin
+ * (same `key`) had learned, unless the template declares its own.
+ */
+function stagesWithoutLessons(stages: unknown): unknown {
+  if (!Array.isArray(stages)) return stages;
+  return stages.map((stage) => {
+    if (!stage || typeof stage !== "object" || !("lessons" in stage)) {
+      return stage;
+    }
+    const { lessons: _lessons, ...rest } = stage as Record<string, unknown>;
+    return rest;
+  });
+}
+
+function graftStageLessons(next: unknown, liveStages: unknown): unknown {
+  if (!Array.isArray(next) || !Array.isArray(liveStages)) return next;
+  const learned = new Map<string, unknown>();
+  for (const stage of liveStages) {
+    if (!stage || typeof stage !== "object") continue;
+    const { key, lessons } = stage as { key?: unknown; lessons?: unknown };
+    if (typeof key === "string" && Array.isArray(lessons) && lessons.length) {
+      learned.set(key, lessons);
+    }
+  }
+  if (learned.size === 0) return next;
+  return next.map((stage) => {
+    if (!stage || typeof stage !== "object") return stage;
+    const s = stage as Record<string, unknown>;
+    if (s.lessons !== undefined || typeof s.key !== "string") return stage;
+    const lessons = learned.get(s.key);
+    return lessons ? { ...s, lessons } : stage;
+  });
+}
+
+/**
  * Plan how an installed playbook row converges to its template element.
  *
  *  - Row carries a `marketSource` for ANOTHER package → `foreign`, untouched.
@@ -228,6 +271,8 @@ export function planPlaybookReconcile(args: {
   const desired = projectPlaybookDefinition(parsed) as Record<string, unknown>;
   const live: Record<string, unknown> = {};
   for (const k of PLAYBOOK_MANAGED_FIELDS) live[k] = row[k];
+  // Learned lessons are the pod's, never an owner edit (see stagesWithoutLessons).
+  live.stages = stagesWithoutLessons(row.stages);
 
   if (!source) {
     const patch: Record<string, unknown> = {};
@@ -242,6 +287,9 @@ export function planPlaybookReconcile(args: {
       } else {
         ownerOwned.push(k);
       }
+    }
+    if (patch.stages !== undefined) {
+      patch.stages = graftStageLessons(patch.stages, row.stages);
     }
     const stamp: MarketSource = buildMarketSource(desired, {
       packageSlug,
@@ -275,6 +323,9 @@ export function planPlaybookReconcile(args: {
   const r = threeWayMergeFields(mergeLive, source.baseline, desired);
   const patch: Record<string, unknown> = {};
   for (const k of r.applied) patch[k] = r.merged[k];
+  if (patch.stages !== undefined) {
+    patch.stages = graftStageLessons(patch.stages, row.stages);
+  }
   const baselineMoved = !deepEqual(r.nextBaseline, source.baseline);
   if (!r.changed && !baselineMoved) {
     return { ...none, ownerOwned: r.ownerOwned };

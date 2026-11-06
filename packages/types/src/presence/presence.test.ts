@@ -13,8 +13,17 @@ import {
   presenceMessage,
   presenceProofSchema,
   sensitiveApprovalReason,
-  PRESENCE_WORDS,
+  DEFAULT_PRESENCE_SENSITIVITY,
+  normalizePresenceSensitivity,
+  PRESENCE_LAST_PASSKEY,
+  PRESENCE_REQUEST_KINDS,
+  presenceSensitivityId,
+  presenceSensitivityRows,
   SENSITIVE_ACTIONS,
+  SENSITIVE_APPROVALS,
+  SENSITIVE_PROPOSAL_TYPE_PREFIXES,
+  sensitivityLoosens,
+  PRESENCE_WORDS,
   SENSITIVE_ACTION_TOKENS,
   sensitiveActionTitle,
   type SensitiveActionPath,
@@ -195,6 +204,113 @@ describe("sensitive actions (slice 3, founder decision 1)", () => {
     expect(presenceActionSubject("apiKeys.create", a)).toBe(
       `action:apiKeys.create:${a}`
     );
+  });
+});
+
+describe("what asks for your passkey (W5): the pod's choice", () => {
+  const deletion = { targetType: "entity", proposalType: "delete" };
+  const connect = { targetType: "agent", proposalType: "connect" };
+
+  it("the default is today's lists, every row on", () => {
+    const rows = presenceSensitivityRows();
+    expect(
+      rows.filter((r) => r.kind === "approval" && !r.prefix).map((r) => r.key)
+    ).toEqual(Object.keys(SENSITIVE_APPROVALS));
+    expect(rows.filter((r) => r.prefix).map((r) => r.key)).toEqual(
+      Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES)
+    );
+    expect(rows.filter((r) => r.kind === "action").map((r) => r.key)).toEqual(
+      Object.keys(SENSITIVE_ACTIONS)
+    );
+    for (const choice of [undefined, null, DEFAULT_PRESENCE_SENSITIVITY]) {
+      for (const key of Object.keys(SENSITIVE_APPROVALS)) {
+        const [targetType, proposalType] = key.includes("/")
+          ? (key.split("/") as [string, string])
+          : ["any", key];
+        expect(
+          sensitiveApprovalReason({ targetType, proposalType }, choice),
+          key
+        ).toBe(SENSITIVE_APPROVALS[key]);
+      }
+      for (const [path, reason] of Object.entries(SENSITIVE_ACTIONS)) {
+        expect(sensitiveActionReason(path, choice), path).toBe(reason);
+      }
+    }
+  });
+
+  it("a row switched off is not sensitive; the rows left on still are", () => {
+    const choice = normalizePresenceSensitivity({
+      approvalsOff: ["entity/delete", "governance."],
+      actionsOff: ["apiKeys.create"],
+    });
+    expect(sensitiveApprovalReason(deletion, choice)).toBeNull();
+    expect(sensitiveApprovalReason(connect, choice)).toBe("setup");
+    expect(
+      sensitiveApprovalReason(
+        {
+          targetType: "governance_rule",
+          proposalType: "governance.rule_create",
+        },
+        choice
+      )
+    ).toBeNull();
+    expect(sensitiveActionReason("apiKeys.create", choice)).toBeNull();
+    expect(sensitiveActionReason("apiKeys.rotate", choice)).toBe("setup");
+    expect(sensitiveActionReason("shares.share", choice)).toBeNull();
+  });
+
+  it("a stored choice keeps only known rows, each once, sorted", () => {
+    expect(
+      normalizePresenceSensitivity({
+        approvalsOff: [
+          "workspace/delete",
+          "nope/never",
+          "entity/delete",
+          "entity/delete",
+        ],
+        actionsOff: ["shares.share", "govConfig.set"],
+      })
+    ).toEqual({
+      approvalsOff: ["entity/delete", "workspace/delete"],
+      actionsOff: ["govConfig.set"],
+    });
+    expect(normalizePresenceSensitivity(null)).toEqual(
+      DEFAULT_PRESENCE_SENSITIVITY
+    );
+  });
+
+  it("switching a row off loosens; switching one back on does not", () => {
+    const none = DEFAULT_PRESENCE_SENSITIVITY;
+    const one = { approvalsOff: ["entity/delete"], actionsOff: [] };
+    expect(sensitivityLoosens(none, one)).toBe(true);
+    expect(sensitivityLoosens(one, none)).toBe(false);
+    expect(sensitivityLoosens(one, one)).toBe(false);
+    expect(
+      sensitivityLoosens(one, {
+        approvalsOff: [],
+        actionsOff: ["govConfig.set"],
+      })
+    ).toBe(true);
+  });
+
+  it("the proof names exactly the new choice, whatever its order", async () => {
+    const a = await presenceSensitivityId({
+      approvalsOff: ["workspace/delete", "entity/delete"],
+      actionsOff: [],
+    });
+    const b = await presenceSensitivityId({
+      approvalsOff: ["entity/delete", "workspace/delete"],
+      actionsOff: [],
+    });
+    const c = await presenceSensitivityId({
+      approvalsOff: ["entity/delete"],
+      actionsOff: [],
+    });
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    expect(PRESENCE_REQUEST_KINDS.presence_sensitivity).toBe("governance");
+    expect(isPresenceCode(PRESENCE_LAST_PASSKEY)).toBe(false);
   });
 });
 

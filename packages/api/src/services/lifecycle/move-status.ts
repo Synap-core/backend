@@ -44,6 +44,7 @@ import { dispatchLifecycleTransition } from "@synap/events";
 import {
   decideMoveHold,
   findLifecycleOption,
+  isTerminalLifecycleCategory,
   resolveOccurredAt,
   type Hold,
 } from "@synap-core/types/lifecycle";
@@ -108,6 +109,14 @@ export interface MoveStatusInput {
    * reaches it.
    */
   atSessionEnd?: boolean;
+  /**
+   * A session BIRTH move (a session started into a playbook's first stage,
+   * `writeBirthStageSubjectStatus`): one that would take the thing OUT of a
+   * done or lost option always proposes (governance-policy
+   * `lifecycleMove.atSessionBirth`, rung 2.076): the person confirms the
+   * reopen. Set ONLY by the birth writer; no request input reaches it.
+   */
+  atSessionBirth?: boolean;
 }
 
 const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
@@ -401,9 +410,17 @@ export async function moveStatus(
           ? "agent"
           : "intelligence"
         : "user",
-      lifecycleMove: input.atSessionEnd
-        ? { ...lifecycleMove, atSessionEnd: true }
-        : lifecycleMove,
+      lifecycleMove: {
+        ...lifecycleMove,
+        // A reopen: from a done/lost option to an open one, read from the
+        // lifecycle's own categories (the same derivation the end move's
+        // `already_settled` reads).
+        outOfTerminal:
+          isTerminalLifecycleCategory(fromCategory) &&
+          !isTerminalLifecycleCategory(toCategory),
+        ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
+        ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
+      },
       forcePropose: input.forcePropose,
       ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
       reasoning:

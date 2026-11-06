@@ -4,7 +4,9 @@
  * Pod security — who the pod trusts, and where its secrets live.
  *
  * First the pod's one switch for people: "Approvals need you in person"
- * (the proof-of-presence mode, W3 slice 3), above the sections it governs.
+ * (the proof-of-presence mode, W3 slice 3), then what asks for a passkey on
+ * this pod and your own passkeys (W5: the ONE passkeys card, shared with
+ * settings Security), above the sections they govern.
  *
  * Two sections, the active one in `?section=` so deep links land on it (the
  * old `/trust-keys?section=issuers&focus=<id>` redirects here with its query):
@@ -20,7 +22,9 @@ import { Suspense } from "react";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { UrlTabs } from "../components/url-tabs";
 import { IssuersSection } from "./_lib/issuers-section";
+import { PasskeysCard } from "../../_lib/passkeys/passkeys-card";
 import { PresenceModeCard } from "./_lib/presence-mode-card";
+import { SensitivityCard } from "./_lib/sensitivity-card";
 import { SecretsSection } from "./_lib/secrets-section";
 
 const TITLE = "Pod security";
@@ -32,8 +36,10 @@ function SecurityInner() {
     <PageShell>
       <PageHeader title={TITLE} description={DESCRIPTION} />
 
-      <div className="mb-6">
+      <div className="mb-6 flex flex-col gap-5">
         <PresenceModeCard />
+        <SensitivityCard />
+        <PasskeysCard returnTo="/security#passkeys" />
       </div>
 
       <UrlTabs

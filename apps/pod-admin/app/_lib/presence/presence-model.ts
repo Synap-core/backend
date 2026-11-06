@@ -30,6 +30,7 @@ import {
   sensitiveApprovalReason,
   type PresenceProof,
   type PresenceRequestKind,
+  type PresenceSensitivityChoice,
   type PresenceRefusalCode,
   type SensitiveActionPath,
 } from "@synap-core/types/presence";
@@ -118,20 +119,48 @@ export type ProvePresence = (
  * Clients prove such a request UP FRONT, so `report` mode already runs the
  * proof path that `enforce` will require (review bf96d410, lane A).
  */
-export function needsPresence(proposal: {
-  targetType?: string | null;
-  proposalType?: string | null;
-  data?: unknown;
-}): boolean {
+export function needsPresence(
+  proposal: {
+    targetType?: string | null;
+    proposalType?: string | null;
+    data?: unknown;
+  },
+  /**
+   * W5: what this pod asks a passkey for (`presence.sensitivity`). A row a
+   * pod admin switched off is not proved up front; null (not read yet, or a
+   * failed read) = the lists as written, so the client asks rather than
+   * skips. The pod decides either way: a refusal still asks.
+   */
+  choice?: PresenceSensitivityChoice | null
+): boolean {
   const data = proposal.data as { asPerson?: unknown } | null | undefined;
   if (data?.asPerson === true) return true;
   if (!proposal.targetType || !proposal.proposalType) return false;
   return (
-    sensitiveApprovalReason({
-      targetType: proposal.targetType,
-      proposalType: proposal.proposalType,
-    }) !== null
+    sensitiveApprovalReason(
+      {
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+      },
+      choice
+    ) !== null
   );
+}
+
+/**
+ * Is this subject proved UP FRONT (W5)? Every subject is, except a sensitive
+ * action a pod admin switched off (`presence.sensitivity`): that call goes
+ * without a proof, and a refusal from the pod (a choice changed since it was
+ * read) still asks. A request kind is decided by its door: always asked.
+ */
+export function asksUpFront(
+  subject: PresenceChallengeSubject,
+  choice?: PresenceSensitivityChoice | null
+): boolean {
+  if ("action" in subject && choice) {
+    return !choice.actionsOff.includes(subject.action.path);
+  }
+  return true;
 }
 
 const PRESENCE_CODES: ReadonlySet<string> = new Set([

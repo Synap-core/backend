@@ -86,6 +86,9 @@ const DOORS: Record<string, RegExp> = {
     /\bskills\s*\.\s*create\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.setMode":
     /\bpresence\s*\.\s*setMode\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // W5: what asks for a passkey; switching a row off takes a proof.
+  "tRPC presence.setSensitivity":
+    /\bpresence\s*\.\s*setSensitivity\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.authorizePasskeyChange":
     /\bpresence\s*\.\s*authorizePasskeyChange\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.devices.enroll":
@@ -171,9 +174,10 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   // Slice 3: presence.setMode (back to report), presence.authorizePasskeyChange
   // and presence.devices.enroll (a second factor) take a proof themselves.
   "presence.ts": {
-    inputs: 3,
+    inputs: 4,
     doors: [
       "tRPC presence.setMode",
+      "tRPC presence.setSensitivity",
       "tRPC presence.authorizePasskeyChange",
       "tRPC presence.devices.enroll",
     ],
@@ -254,6 +258,8 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         // W3 slice 3: the mode switched off, a passkey change.
         "tRPC presence.setMode",
         "tRPC presence.authorizePasskeyChange",
+        // W5: what asks for a passkey (switching a row off takes a proof).
+        "tRPC presence.setSensitivity",
         // W3 slice 3: the sensitive actions pod admin calls (derived doors).
         "action agentUsers.setPosture",
         "action apiKeys.adminCreateServiceKey",

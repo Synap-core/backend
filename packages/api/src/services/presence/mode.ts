@@ -24,6 +24,11 @@
  *
  * A failed read is NOT "report": it throws, and the approval or action that
  * asked fails with it.
+ *
+ * W5: the same row holds what asks for a passkey
+ * (`pod_settings.settings.presenceSensitivity`, the rows a pod admin switched
+ * off), read with the mode in one cached read and written only by
+ * `presence.setSensitivity` (`sensitivity-change.ts`).
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -36,7 +41,15 @@ import {
   gt,
   sql,
 } from "@synap/database";
-import { events, podSettings } from "@synap/database/schema";
+import {
+  events,
+  podSettings,
+  type PodSettingsBlob,
+} from "@synap/database/schema";
+import {
+  normalizePresenceSensitivity,
+  type PresenceSensitivityChoice,
+} from "@synap-core/types/presence";
 
 export type PresenceMode = "enforce" | "report";
 
@@ -51,9 +64,21 @@ export interface PresenceModeState {
 /** The mode of a pod whose admins never chose one. */
 export const PRESENCE_MODE_DEFAULT: PresenceMode = "enforce";
 
+/** The pod's choice of what asks for a passkey, and who last changed it. */
+export interface PresenceSensitivityState extends PresenceSensitivityChoice {
+  changedBy: string | null;
+  changedAt: string | null;
+}
+
+interface StoredPresence {
+  at: number;
+  state: PresenceModeState;
+  sensitivity: PresenceSensitivityState;
+}
+
 const CACHE_MS = 5_000;
-/** The stored setting only; the env floor is applied on every read. */
-let cached: { at: number; state: PresenceModeState } | null = null;
+/** The stored settings only; the env floor is applied on every read. */
+let cached: StoredPresence | null = null;
 
 function envForcesEnforce(): boolean {
   return process.env.SYNAP_PRESENCE_PROOF?.trim() === "enforce";
@@ -64,8 +89,8 @@ export function invalidatePresenceMode(): void {
   cached = null;
 }
 
-async function readStoredMode(): Promise<PresenceModeState> {
-  if (cached && Date.now() - cached.at < CACHE_MS) return cached.state;
+async function readStored(): Promise<StoredPresence> {
+  if (cached && Date.now() - cached.at < CACHE_MS) return cached;
   const [pod] = await db
     .select({ settings: podSettings.settings })
     .from(podSettings)
@@ -87,8 +112,69 @@ async function readStoredMode(): Promise<PresenceModeState> {
         changedBy: null,
         changedAt: null,
       };
-  cached = { at: Date.now(), state };
-  return state;
+  const chosen = pod?.settings?.presenceSensitivity;
+  const sensitivity: PresenceSensitivityState = {
+    ...normalizePresenceSensitivity(chosen),
+    changedBy: chosen?.changedBy ?? null,
+    changedAt: chosen?.changedAt ?? null,
+  };
+  cached = { at: Date.now(), state, sensitivity };
+  return cached;
+}
+
+async function readStoredMode(): Promise<PresenceModeState> {
+  return (await readStored()).state;
+}
+
+/**
+ * What asks for a passkey on this pod: the rows a pod admin switched off
+ * (none by default). A failed read throws, like the mode's.
+ */
+export async function readPresenceSensitivity(): Promise<PresenceSensitivityState> {
+  return (await readStored()).sensitivity;
+}
+
+/**
+ * Store what asks for a passkey. The caller (`sensitivity-change.ts`) has
+ * checked the pod admin and, when it switches a row off, the proof.
+ */
+export async function writePresenceSensitivity(input: {
+  choice: PresenceSensitivityChoice;
+  changedBy: string;
+}): Promise<PresenceSensitivityState> {
+  await mergePodSettings({
+    presenceSensitivity: {
+      ...normalizePresenceSensitivity(input.choice),
+      changedBy: input.changedBy,
+      changedAt: new Date().toISOString(),
+    },
+  });
+  invalidatePresenceMode();
+  return readPresenceSensitivity();
+}
+
+/** Merge `patch` into the singleton `pod_settings.settings` (creating the row). */
+async function mergePodSettings(
+  patch: Pick<PodSettingsBlob, "presence" | "presenceSensitivity">
+): Promise<void> {
+  const [existing] = await db
+    .select({ id: podSettings.id })
+    .from(podSettings)
+    .orderBy(podSettings.createdAt)
+    .limit(1);
+  if (existing) {
+    await db
+      .update(podSettings)
+      .set({
+        settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify(
+          patch
+        )}::jsonb`,
+        updatedAt: new Date(),
+      })
+      .where(eq(podSettings.id, existing.id));
+  } else {
+    await db.insert(podSettings).values({ settings: patch });
+  }
 }
 
 /** The mode in force: the operator env floor, else the pod setting. */
@@ -112,24 +198,7 @@ export async function writePresenceMode(input: {
     changedBy: input.changedBy,
     changedAt: new Date().toISOString(),
   };
-  const [existing] = await db
-    .select({ id: podSettings.id })
-    .from(podSettings)
-    .orderBy(podSettings.createdAt)
-    .limit(1);
-  if (existing) {
-    await db
-      .update(podSettings)
-      .set({
-        settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify(
-          { presence }
-        )}::jsonb`,
-        updatedAt: new Date(),
-      })
-      .where(eq(podSettings.id, existing.id));
-  } else {
-    await db.insert(podSettings).values({ settings: { presence } });
-  }
+  await mergePodSettings({ presence });
   invalidatePresenceMode();
   return readPresenceMode();
 }

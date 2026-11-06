@@ -19,6 +19,13 @@
  *  - a subject write that FAILS is reported on the reply and the session is
  *    still created (never swallowed, never a failed start).
  *
+ * A BIRTH THAT REOPENS PROPOSES (finding 2d84febb): an agent starting a
+ * session on a subject already done (or lost) took it straight back to the
+ * first stage's status, with no proposal. Now the move is filed for the
+ * person (`LIFECYCLE_REOPEN`, rung 2.076): nothing written, the reply says
+ * `proposed` with the proposal. An agent's birth on an OPEN subject still
+ * writes, and a person's own start (the person IS the one reopening) writes.
+ *
  * Harness: as process-follows-kind-lifecycle.pglite.test.ts (the session's own
  * `focus_session` gate stubbed so the start is granted; every entity move
  * reaches the REAL gate).
@@ -159,16 +166,24 @@ const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 const USER = randomUUID();
+const AGENT = randomUUID();
 const FINDING = randomUUID();
 const STATUS_DEF = randomUUID();
 const PHASE_DEF = randomUUID();
 
-async function seedFinding(): Promise<string> {
+const CATEGORY: Record<string, string> = {
+  open: "open",
+  fixing: "active",
+  fixed: "done",
+  dropped: "lost",
+};
+
+async function seedFinding(status = "open"): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into entities (id, user_id, type, profile_id, title, workspace_id, status, status_category, properties, created_at, updated_at)
-     values ($1, $2, 'finding', $3, 'A finding', null, 'open', 'open', '{"status":"open"}'::jsonb, now(), now())`,
-    [id, USER, FINDING]
+     values ($1, $2, 'finding', $3, 'A finding', null, $4, $5, $6::jsonb, now(), now())`,
+    [id, USER, FINDING, status, CATEGORY[status], JSON.stringify({ status })]
   );
   return id;
 }
@@ -196,9 +211,14 @@ const statusOf = async (id: string) =>
     )
   ).rows[0]?.status;
 
-async function startOn(subjectEntityId: string, templateId: string) {
+async function startOn(
+  subjectEntityId: string,
+  templateId: string,
+  opts: { agentUserId?: string } = {}
+) {
   const res = await createFocusSession({
     userId: USER,
+    ...(opts.agentUserId ? { agentUserId: opts.agentUserId } : {}),
     goal: `Fix the finding ${randomUUID()}`,
     templateId,
     subjectEntityId,
@@ -217,6 +237,11 @@ beforeAll(async () => {
     [USER]
   );
   await q(
+    `insert into users (id, name, email, user_type, agent_type, agent_metadata, created_by_user_id)
+     values ($1, 'Agent', 'a@x', 'agent', 'claude-code', '{}'::jsonb, $2)`,
+    [AGENT, USER]
+  );
+  await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints, created_at, updated_at)
      values ($1, 'finding', 'Finding', 'kind', 'system', 'pod', null, true, '{}'::jsonb, now(), now())`,
     [FINDING]
@@ -232,6 +257,7 @@ beforeAll(async () => {
           { key: "open", label: "Open", category: "open" },
           { key: "fixing", label: "Fixing", category: "active" },
           { key: "fixed", label: "Fixed", category: "done" },
+          { key: "dropped", label: "Dropped", category: "lost" },
         ],
       }),
       PHASE_DEF,
@@ -319,5 +345,64 @@ describe("a session born into its first stage moves its subject", () => {
       (res.subjectMove as { reason?: string } | undefined)?.reason
     ).toContain('This process moves "phase"');
     expect(await statusOf(finding)).toBe("open");
+  });
+});
+
+const pendingProposal = async (id: string) =>
+  (
+    await q<{ id: string; status: string; governance_reason: string | null }>(
+      `select id, status, governance_reason from proposals where id = $1`,
+      [id]
+    )
+  ).rows[0];
+
+describe("a session birth that would reopen a done or lost subject proposes", () => {
+  const fixStages = [
+    { key: "fix", name: "Fix", subjectStatus: "fixing" },
+    { key: "merged", name: "Merged", subjectStatus: "fixed" },
+  ];
+
+  for (const settled of ["fixed", "dropped"]) {
+    it(`an agent's start on a subject in "${settled}" files the reopen and writes nothing`, async () => {
+      const finding = await seedFinding(settled);
+      const playbook = await seedPlaybook(fixStages);
+      const res = await startOn(finding, playbook, { agentUserId: AGENT });
+      expect(res.session.currentStage).toBe("fix");
+      // Nothing written: the subject is still where the person left it.
+      expect(await statusOf(finding)).toBe(settled);
+      expect(res.subjectMove).toMatchObject({
+        status: "proposed",
+        property: "status",
+        value: "fixing",
+        via: "status_door",
+      });
+      const proposalId = (res.subjectMove as { proposalId?: string })
+        .proposalId;
+      expect(proposalId).toBeTruthy();
+      expect(await pendingProposal(proposalId!)).toMatchObject({
+        status: "pending",
+        governance_reason: "LIFECYCLE_REOPEN",
+      });
+    });
+  }
+
+  it("an agent's start on an OPEN subject still writes the first stage's status", async () => {
+    const finding = await seedFinding("open");
+    const playbook = await seedPlaybook(fixStages);
+    const res = await startOn(finding, playbook, { agentUserId: AGENT });
+    expect(await statusOf(finding)).toBe("fixing");
+    expect(res.subjectMove).toMatchObject({
+      status: "written",
+      value: "fixing",
+      via: "status_door",
+    });
+  });
+
+  it("a person's own start on a done subject writes: the person is the one reopening", async () => {
+    const finding = await seedFinding("fixed");
+    const playbook = await seedPlaybook(fixStages);
+    const res = await startOn(finding, playbook);
+    expect(await statusOf(finding)).toBe("fixing");
+    expect(res.subjectMove).toMatchObject({ status: "written" });
   });
 });

@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { useT } from "../../../../lib/i18n/locale-provider";
-import { en, fr } from "../copy";
-import { PasskeysCard } from "../SecurityView";
+import { en, fr } from "../../../_lib/passkeys/copy";
+import { PasskeysCard } from "../../../_lib/passkeys/passkeys-card";
+import { PASSKEYS_PATH } from "../passkeys-path";
 
 const CATALOGS = { en, fr };
 
@@ -28,7 +29,7 @@ export function PasskeysPage() {
           {t("passkeys.page.lead")}
         </p>
       </header>
-      <PasskeysCard />
+      <PasskeysCard returnTo={PASSKEYS_PATH} />
     </div>
   );
 }

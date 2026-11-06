@@ -90,6 +90,8 @@ describe("no raw err.message in recovery/security views", () => {
   for (const rel of [
     "recovery/RecoveryView.tsx",
     "settings/security/SecurityView.tsx",
+    // W5: the passkeys card moved out of SecurityView, shared with pod admin.
+    "_lib/passkeys/passkeys-card.tsx",
   ]) {
     it(rel, () => {
       const src = readFileSync(join(APP, rel), "utf8");
