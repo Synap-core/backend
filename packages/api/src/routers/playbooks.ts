@@ -144,7 +144,6 @@ import {
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
 import { setPlaybookRunChoiceGoverned } from "../services/playbooks/set-run-choice.js";
 import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
-import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
