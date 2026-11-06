@@ -168,9 +168,46 @@ describe("moveStatus door", () => {
     expect(h.perm.mock.calls[0][0].lifecycleMove).toEqual({
       intoTerminal: true,
       humanOnly: true,
+      outOfTerminal: false,
     });
     expect(h.apply).not.toHaveBeenCalled();
     expect(h.emit).not.toHaveBeenCalled();
+  });
+
+  // Finding 2d84febb: the door tells governance a move REOPENS a thing (from
+  // a done/lost option to an open one), read from the lifecycle's own
+  // categories, and passes the birth writer's flag through untouched.
+  it("a move out of done/lost tells governance it reopens; a birth says so", async () => {
+    h.perm.mockResolvedValue({
+      granted: false,
+      proposalId: "p8",
+      proposalType: "entity.transition",
+      reviewUrl: "x",
+    });
+    h.current = "lost";
+    await moveStatus({
+      entityId: "e1",
+      to: "negotiating",
+      actor: AGENT,
+      atSessionBirth: true,
+    });
+    expect(h.perm.mock.calls[0][0].lifecycleMove).toEqual({
+      intoTerminal: false,
+      humanOnly: false,
+      outOfTerminal: true,
+      atSessionBirth: true,
+    });
+    await moveStatus({ entityId: "e1", to: "draft", actor: AGENT });
+    expect(h.perm.mock.calls[1][0].lifecycleMove).toEqual({
+      intoTerminal: false,
+      humanOnly: false,
+      outOfTerminal: true,
+    });
+    // lost -> won stays among the settled: not a reopen
+    await moveStatus({ entityId: "e1", to: "won", actor: AGENT });
+    expect(h.perm.mock.calls[2][0].lifecycleMove).toMatchObject({
+      outOfTerminal: false,
+    });
   });
 
   it("an agent's false belief is a conflict before any proposal", async () => {
