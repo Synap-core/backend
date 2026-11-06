@@ -23,6 +23,10 @@ metadata:
 
 # Building an app on Synap
 
+## Apps are views of pod state
+
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+
 Synap is a sovereign data pod with a complete, typed API. You build an app on it
 the same way you'd build on any backend — except the backend is the user's own
 pod, and **every write is governed** (see `governance.md`).
