@@ -58,6 +58,10 @@ import {
 import { enrollRoomMember } from "../messaging/enroll-room-member.js";
 import { notifySessionNeedsYou } from "../focus-sessions/notify-needs-you.js";
 import {
+  addCreateTimeBlockers,
+  type CreateTimeBlockerReport,
+} from "../focus-sessions/session-blocked-by.js";
+import {
   HELD_RUN_META_KEY,
   mergeSessionMetadata,
 } from "../focus-sessions/session-metadata.js";
@@ -264,6 +268,13 @@ export interface RunPlaybookInput {
    */
   parentSessionId?: string;
   /**
+   * With `parentSessionId`: this run is a DETOUR the parent waits on. One line
+   * naming what the parent was about to do; recorded on the `spawned_from` edge
+   * and the parent becomes `blocked_by` the run's session (the same behaviour
+   * as `createFocusSession`). Absent ⇒ a slice that does not block the parent.
+   */
+  suspendedIntent?: string;
+  /**
    * The PROJECT this run is filed into (`focus_sessions.project_id`). Must be
    * visible to `userId`; refused otherwise.
    */
@@ -345,7 +356,14 @@ type PlaybookRunStarted = {
    * exists), but never silent — the same shape `createFocusSession` reports.
    */
   parentLink?:
-    | { status: "linked"; parentSessionId: string }
+    | {
+        status: "linked";
+        parentSessionId: string;
+        /** Only when `suspendedIntent` was asked for. */
+        suspendedIntentRecorded?: boolean;
+        /** Only when `suspendedIntent` was asked for: the parent's wait on this run. */
+        blocksParent?: CreateTimeBlockerReport | null;
+      }
     | { status: "failed"; parentSessionId: string; reason: string };
   /**
    * An agent started this run directly: the draft session exists, but the run
@@ -1524,14 +1542,40 @@ async function executeSingleRun(
         parentSessionId: input.parentSessionId,
         userId: input.userId,
         workspaceId: session.workspaceId,
+        ...(input.suspendedIntent
+          ? { suspendedIntent: input.suspendedIntent }
+          : {}),
       });
       parentLink = spawn.linked
-        ? { status: "linked", parentSessionId: input.parentSessionId }
+        ? {
+            status: "linked",
+            parentSessionId: input.parentSessionId,
+            ...(input.suspendedIntent
+              ? { suspendedIntentRecorded: spawn.suspendedIntentRecorded }
+              : {}),
+          }
         : {
             status: "failed",
             parentSessionId: input.parentSessionId,
             reason: spawn.reason,
           };
+      // A detour blocks the parent on this run's session — the same write door
+      // `createFocusSession` uses; a failure never costs the run.
+      if (parentLink.status === "linked" && input.suspendedIntent?.trim()) {
+        try {
+          const [report] = await addCreateTimeBlockers({
+            sessionId: input.parentSessionId,
+            blockerSessionIds: [session.id],
+            userId: input.userId,
+          });
+          parentLink = { ...parentLink, blocksParent: report ?? null };
+        } catch (blockErr) {
+          logger.warn(
+            { err: blockErr, sessionId: session.id },
+            "detour blocked_by edge failed — run and spawned_from kept"
+          );
+        }
+      }
     } catch (err) {
       logger.warn(
         { err, sessionId: session.id, parentSessionId: input.parentSessionId },

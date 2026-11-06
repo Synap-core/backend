@@ -6613,6 +6613,16 @@ export const tools = {
               description:
                 "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused.",
             },
+            parentSessionId: {
+              type: "string",
+              description:
+                "Optional UUID of the session this run is spawned FROM (a session you own): records `run session --spawned_from--> parent`, as synap_start_session does. Omitted: the session your call is bound to, if any.",
+            },
+            suspendedIntent: {
+              type: "string",
+              description:
+                "With parentSessionId: this run is a DETOUR that BLOCKS the parent — one line (max 400) naming what the parent was about to do; the parent waits until the run's session closes. Omit for a run that does not block the parent.",
+            },
             handToAgentId: {
               type: "string",
               description:

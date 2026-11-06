@@ -254,6 +254,12 @@ export async function runPlaybookDoor(
      * by name by `playbooks.run` when nobody could take it; never a fallback.
      */
     handToAgentId?: string;
+    /**
+     * Explicit parent session (overrides the caller's bound session) and, with
+     * it, the detour line that makes the parent wait on the run.
+     */
+    parentSessionId?: string;
+    suspendedIntent?: string;
     /** Synap AI for this run (`RunPlaybookInput.runOn`); never with handToAgentId. */
     runOn?: "synap_ai";
     /**
@@ -383,7 +389,12 @@ export async function runPlaybookDoor(
     // LINEAGE: the session the caller is working in. The run is spawned FROM
     // it, so the work map and the resume packet can say why the run exists.
     // Absent (no bound session) ⇒ no edge, never a guess.
-    ...(identity.sessionId ? { parentSessionId: identity.sessionId } : {}),
+    ...(input.parentSessionId || identity.sessionId
+      ? { parentSessionId: input.parentSessionId ?? identity.sessionId }
+      : {}),
+    ...(input.suspendedIntent
+      ? { suspendedIntent: input.suspendedIntent }
+      : {}),
     // HEADLESS DOOR — MCP, Raycast, the Hub REST run endpoint. There is no
     // form to put in front of anybody. An AGENT that launched the run gets the
     // missing param back as a refusal (founder decision E3, 2026-10-27): it was

@@ -46068,6 +46068,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runOn?: "synap_ai" | undefined;
 				source?: string | undefined;
 				subjectId?: string | undefined;
+				suspendedIntent?: string | undefined;
 				trackId?: string | undefined;
 				trackStage?: string | undefined;
 				workspaceId?: string | undefined;
@@ -46102,8 +46103,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
+					blocksParent?: CreateTimeBlockerReport | null;
 					parentSessionId: string;
 					status: "linked";
+					suspendedIntentRecorded?: boolean;
 				} | {
 					parentSessionId: string;
 					reason: string;
@@ -46148,8 +46151,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
+					blocksParent?: CreateTimeBlockerReport | null;
 					parentSessionId: string;
 					status: "linked";
+					suspendedIntentRecorded?: boolean;
 				} | {
 					parentSessionId: string;
 					reason: string;
