@@ -14089,6 +14089,18 @@ export interface SlotAskOption {
 	description?: string;
 	/** One short fact to weigh before picking it ("Skips 1,284 tests"). */
 	caution?: string;
+	/** What the person looks at before picking it. Mirrors `AskOptionMedia`. */
+	media?: {
+		alt?: string;
+		kind: "audio" | "image" | "video";
+		ref: {
+			url: string;
+		} | {
+			assetId: string;
+		} | {
+			entityId: string;
+		};
+	};
 }
 /** The question a choose option opens once picked: ONE level, 2–4 options. */
 export interface SlotAskFollowUp {
@@ -30442,6 +30454,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						entityId?: string | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						propertyKey?: string | undefined;
 						recommended?: boolean | undefined;
 						value: string;
@@ -36670,6 +36693,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						description?: string | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					};
@@ -36678,6 +36712,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						description?: string | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					} | undefined;
@@ -36883,6 +36928,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -36890,6 +36946,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					}[];
@@ -37189,6 +37256,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -37196,6 +37274,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -37222,6 +37311,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -37230,6 +37330,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -37272,6 +37383,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -37279,6 +37401,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -37305,6 +37438,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -37313,6 +37457,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -37379,6 +37534,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -37386,6 +37552,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -37506,6 +37683,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -37514,6 +37702,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -38352,6 +38551,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -38359,6 +38569,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -38385,6 +38606,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -38393,6 +38625,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -38435,6 +38678,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -38442,6 +38696,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -38468,6 +38733,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -38476,6 +38752,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -38542,6 +38829,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -38549,6 +38847,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -38669,6 +38978,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -38677,6 +38997,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -38809,6 +39140,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -38816,6 +39158,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -45329,6 +45682,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -45336,6 +45700,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -45495,6 +45870,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -45502,6 +45888,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -46344,6 +46741,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -46351,6 +46759,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -46502,6 +46921,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -46509,6 +46939,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -56853,6 +57294,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 											description?: string | undefined;
 											icon?: string | undefined;
 											label: string;
+											media?: {
+												alt?: string | undefined;
+												kind: "audio" | "image" | "video";
+												ref: {
+													url: string;
+												} | {
+													assetId: string;
+												} | {
+													entityId: string;
+												};
+											} | undefined;
 											recommended?: boolean | undefined;
 											value?: string | undefined;
 										}[];
@@ -56860,6 +57312,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									} | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -57020,6 +57483,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 												description?: string | undefined;
 												icon?: string | undefined;
 												label: string;
+												media?: {
+													alt?: string | undefined;
+													kind: "audio" | "image" | "video";
+													ref: {
+														url: string;
+													} | {
+														assetId: string;
+													} | {
+														entityId: string;
+													};
+												} | undefined;
 												recommended?: boolean | undefined;
 												value?: string | undefined;
 											}[];
@@ -57027,6 +57501,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										} | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
