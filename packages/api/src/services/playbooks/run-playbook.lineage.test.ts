@@ -82,7 +82,7 @@ describe("runPlaybook — lineage", () => {
   });
 
   it("writes no edge when the run was not started from a session", async () => {
-    await runPlaybook(INPUT).catch(() => undefined);
+    await runPlaybook(INPUT).catch((e) => console.log("ERR", String(e).slice(0, 300), e?.stack?.split("\n").slice(1, 4)));
     expect(instantiateSession).toHaveBeenCalledOnce();
     expect(recordSessionSpawn).not.toHaveBeenCalled();
   });
@@ -92,7 +92,7 @@ describe("runPlaybook — lineage", () => {
       ...INPUT,
       parentSessionId: "parent-1",
       suspendedIntent: "ship the post once the playbook is done",
-    }).catch(() => undefined);
+    }).catch((e) => console.log("ERR", String(e).slice(0, 300), e?.stack?.split("\n").slice(1, 4)));
     expect(recordSessionSpawn).toHaveBeenCalledWith(
       expect.objectContaining({
         parentSessionId: "parent-1",
