@@ -26007,146 +26007,37 @@
           "content": {
             "application/json": {
               "schema": {
-                "content": {
-                  "application/json": {
-                    "schema": {
-                      "def": {
+                "type": "object",
+                "properties": {
+                  "choice": {
+                    "oneOf": [
+                      {
                         "type": "object",
-                        "shape": {
-                          "choice": {
-                            "def": {
-                              "type": "union",
-                              "options": [
-                                {
-                                  "def": {
-                                    "type": "object",
-                                    "shape": {
-                                      "executor": {
-                                        "def": {
-                                          "type": "literal",
-                                          "values": ["is-agent"]
-                                        },
-                                        "type": "literal",
-                                        "values": {}
-                                      }
-                                    }
-                                  },
-                                  "type": "object"
-                                },
-                                {
-                                  "def": {
-                                    "type": "object",
-                                    "shape": {
-                                      "executor": {
-                                        "def": {
-                                          "type": "literal",
-                                          "values": ["external-agent"]
-                                        },
-                                        "type": "literal",
-                                        "values": {}
-                                      },
-                                      "agentUserId": {
-                                        "def": {
-                                          "type": "string",
-                                          "checks": [
-                                            {
-                                              "def": {
-                                                "type": "string",
-                                                "format": "uuid",
-                                                "check": "string_format",
-                                                "abort": false,
-                                                "pattern": {}
-                                              },
-                                              "type": "string"
-                                            }
-                                          ]
-                                        },
-                                        "type": "string",
-                                        "minLength": null,
-                                        "maxLength": null,
-                                        "format": "uuid"
-                                      }
-                                    }
-                                  },
-                                  "type": "object"
-                                }
-                              ],
-                              "discriminator": "executor",
-                              "inclusive": false
-                            },
-                            "type": "union",
-                            "options": [
-                              {
-                                "def": {
-                                  "type": "object",
-                                  "shape": {
-                                    "executor": {
-                                      "def": {
-                                        "type": "literal",
-                                        "values": ["is-agent"]
-                                      },
-                                      "type": "literal",
-                                      "values": {}
-                                    }
-                                  }
-                                },
-                                "type": "object"
-                              },
-                              {
-                                "def": {
-                                  "type": "object",
-                                  "shape": {
-                                    "executor": {
-                                      "def": {
-                                        "type": "literal",
-                                        "values": ["external-agent"]
-                                      },
-                                      "type": "literal",
-                                      "values": {}
-                                    },
-                                    "agentUserId": {
-                                      "def": {
-                                        "type": "string",
-                                        "checks": [
-                                          {
-                                            "def": {
-                                              "type": "string",
-                                              "format": "uuid",
-                                              "check": "string_format",
-                                              "abort": false,
-                                              "pattern": {}
-                                            },
-                                            "type": "string"
-                                          }
-                                        ]
-                                      },
-                                      "type": "string",
-                                      "minLength": null,
-                                      "maxLength": null,
-                                      "format": "uuid"
-                                    }
-                                  }
-                                },
-                                "type": "object"
-                              }
-                            ]
-                          },
-                          "reasoning": {
-                            "def": {
-                              "type": "optional",
-                              "innerType": {
-                                "def": { "type": "string", "checks": [{}] },
-                                "type": "string"
-                              }
-                            },
-                            "type": "optional"
-                          }
-                        }
+                        "properties": {
+                          "executor": { "type": "string", "enum": ["is-agent"] }
+                        },
+                        "required": ["executor"]
                       },
-                      "type": "object"
-                    }
+                      {
+                        "type": "object",
+                        "properties": {
+                          "executor": {
+                            "type": "string",
+                            "enum": ["external-agent"]
+                          },
+                          "agentUserId": { "type": "string", "format": "uuid" }
+                        },
+                        "required": ["executor", "agentUserId"]
+                      }
+                    ]
+                  },
+                  "reasoning": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "Why an agent or app asks for this choice (shown on its proposal)."
                   }
-                }
+                },
+                "required": ["choice"]
               }
             }
           }

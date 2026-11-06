@@ -400,9 +400,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       "Saves your choice for this playbook: Synap AI (`{executor: 'is-agent'}`) or one of your agents (`{executor: 'external-agent', agentUserId}`). A person's key applies it (200, `status: 'applied'`, with the new read). An agent or third-party app key files a proposal the person approves once (202, `status: 'proposed'`).",
     request: {
       params: z.object({ id: z.string().uuid() }),
-      body: {
-        content: { "application/json": { schema: SetRunChoiceBodySchema } },
-      },
+      body: SetRunChoiceBodySchema,
     },
     responses: {
       200: { description: "Saved", schema: SetRunChoiceResultSchema },
