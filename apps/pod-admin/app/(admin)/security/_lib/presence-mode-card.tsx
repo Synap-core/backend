@@ -157,7 +157,9 @@ export function PresenceModeCard() {
 
           <div className="flex flex-col gap-1.5 border-t border-foreground/[0.05] pt-3">
             <p className="text-[12px] text-foreground/65">
-              {t(view.missing.word, { n: view.missing.total })}
+              {view.missing.word === "presence.missing.none"
+                ? t(view.missing.word)
+                : t(view.missing.word, { n: view.missing.total })}
             </p>
             {view.missing.rows.length > 0 && (
               <ul className="flex flex-col gap-0.5 text-[12px] text-foreground/65">
