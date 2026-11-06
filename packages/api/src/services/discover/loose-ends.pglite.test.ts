@@ -35,6 +35,7 @@ import {
   automations,
   automationRuns,
   events,
+  playbookRuns,
 } from "@synap/database";
 import { readLooseEnds, leftOwedAfterClose } from "./loose-ends.js";
 
@@ -100,6 +101,15 @@ async function session(p: {
   return id;
 }
 
+/** The `playbook_runs` row beside a playbook session: `createdBy` opened it. */
+async function playbookRun(sessionId: string, createdBy: string) {
+  await q(
+    `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, started_at)
+     values ($1, $2, $3, 'agent', 'running', '{}'::jsonb, $4, $5)`,
+    [randomUUID(), randomUUID(), sessionId, createdBy, OLD]
+  );
+}
+
 async function proposal(agent: string, createdAt: string): Promise<string> {
   const id = randomUUID();
   await q(
@@ -130,6 +140,7 @@ beforeAll(async () => {
     automations,
     automationRuns,
     events,
+    playbookRuns,
   ])
     await h.client!.exec(ddlFor(t as PgTable));
 });
@@ -141,6 +152,7 @@ beforeEach(async () => {
     "automations",
     "automation_runs",
     "events",
+    "playbook_runs",
   ])
     await q(`delete from ${t}`);
 });
@@ -161,6 +173,19 @@ describe("looseEnds — only the calling agent's own work", () => {
     expect(r.sessions).toMatchObject({ count: 1 });
     const items = (r.sessions as { items: Array<{ id: string }> }).items;
     expect(items.map((s) => s.id)).toEqual([mine]);
+  });
+
+  it("lists the idle playbook session the agent opened, never a run a person started with the agent on it", async () => {
+    const mine = await session({ origin: "playbook", goal: "win a deal" });
+    await playbookRun(mine, AGENT);
+    const persons = await session({ origin: "playbook", goal: "person's run" });
+    await playbookRun(persons, PERSON);
+    await session({ origin: "automation", goal: "a worker's run" });
+
+    const r = await ends();
+    const items = (r.sessions as { items: Array<{ id: string }> }).items;
+    expect(items.map((s) => s.id)).toEqual([mine]);
+    expect(r.sessions).toMatchObject({ count: 1 });
   });
 
   it("never lists a receipt session: bookkeeping the reaper closes", async () => {
