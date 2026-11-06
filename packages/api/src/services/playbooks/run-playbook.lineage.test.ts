@@ -40,6 +40,12 @@ vi.mock("../agent-dispatch/agent-assignment.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   readStoredRunChoice: async () => null,
 }));
+// …and routes the run to the playbook's assigned agent through the db: no
+// assignment here.
+vi.mock("../agent-dispatch/route.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  route: async () => ({ kind: "none" }),
+}));
 vi.mock("./playbook-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   resolveRunnablePlaybook: async () => ({
