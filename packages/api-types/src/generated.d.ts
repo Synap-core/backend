@@ -4239,6 +4239,16 @@ export interface WorkerUnless {
 	present: true;
 }
 /**
+ * "Only a thing whose `property` is one of `in`": read off the thing when the
+ * worker fires, like {@link WorkerUnless}. Values compare trimmed and without
+ * case ("Short Video" = "short video"); a list property is kept when any of its
+ * items is listed. A thing with no value for it is left out.
+ */
+export interface WorkerOnly {
+	property: string;
+	in: string[];
+}
+/**
  * AutomationTriggerConfig
  *
  * Typed configuration stored as JSONB on the automations table.
@@ -4960,6 +4970,12 @@ export interface PlaybookRunWorkerSpec {
 	 * activator declares none (a rule compiled before it existed is unchanged).
 	 */
 	unless?: WorkerUnless;
+	/**
+	 * The activator's `only`: the runner keeps only a subject whose property
+	 * holds one of the values, before it proposes or starts anything. Omitted
+	 * when the activator declares none.
+	 */
+	only?: WorkerOnly;
 }
 export type AutomationNode = TriggerNodeDef | CommandNodeDef | ConditionNodeDef | DelayNodeDef | OutputNodeDef | LoopNodeDef | TransformNodeDef | FetchNodeDef | QueryNodeDef | EntityReadNodeDef | RelatedEntitiesNodeDef | ComputeNodeDef | SelectNodeDef | ClaimNodeDef | GuardNodeDef | MessagesQueryNodeDef | RunsQueryNodeDef | ProposalsQueryNodeDef | SwitchNodeDef | SkillNodeDef | CapabilityNodeDef | SubAutomationNodeDef | PlaybookRunNodeDef;
 export interface AutomationEdge {
@@ -13985,6 +14001,16 @@ export interface PlaybookActivator {
 	 */
 	unless?: {
 		present: true;
+		property: string;
+	};
+	/**
+	 * `created` / `enters_status` only: keep only a thing whose property holds
+	 * one of these values (trimmed, any case), e.g. `{ property: "post-format",
+	 * in: ["Short Video", "Long Video"] }`. Mirror of `WorkerOnly`
+	 * (`@synap-core/types/workers`).
+	 */
+	only?: {
+		in: string[];
 		property: string;
 	};
 }
@@ -45688,6 +45714,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					min?: number | undefined;
 					mode?: "propose" | "run" | undefined;
 					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					only?: {
+						in: string[];
+						property: string;
+					} | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 					unless?: {
@@ -46111,6 +46141,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						min?: number | undefined;
 						mode?: "propose" | "run" | undefined;
 						on: "count" | "created" | "enters_status" | "manual" | "schedule";
+						only?: {
+							in: string[];
+							property: string;
+						} | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
 						unless?: {
@@ -46762,6 +46796,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					min?: number | undefined;
 					mode?: "propose" | "run" | undefined;
 					on: "count" | "created" | "enters_status" | "manual" | "schedule";
+					only?: {
+						in: string[];
+						property: string;
+					} | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
 					status?: string | undefined;
 					unless?: {
@@ -47173,6 +47211,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						min?: number | undefined;
 						mode?: "propose" | "run" | undefined;
 						on: "count" | "created" | "enters_status" | "manual" | "schedule";
+						only?: {
+							in: string[];
+							property: string;
+						} | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
 						status?: string | undefined;
 						unless?: {
@@ -57366,6 +57408,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							min?: number | undefined;
 							mode?: "propose" | "run" | undefined;
 							on: "count" | "created" | "enters_status" | "manual" | "schedule";
+							only?: {
+								in: string[];
+								property: string;
+							} | undefined;
 							size?: "per_moment" | "per_thing" | undefined;
 							status?: string | undefined;
 							unless?: {
@@ -57785,6 +57831,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								min?: number | undefined;
 								mode?: "propose" | "run" | undefined;
 								on: "count" | "created" | "enters_status" | "manual" | "schedule";
+								only?: {
+									in: string[];
+									property: string;
+								} | undefined;
 								size?: "per_moment" | "per_thing" | undefined;
 								status?: string | undefined;
 								unless?: {

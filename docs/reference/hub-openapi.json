@@ -17166,6 +17166,29 @@
                                         },
                                         "required": ["property", "present"],
                                         "additionalProperties": false
+                                      },
+                                      "only": {
+                                        "type": "object",
+                                        "properties": {
+                                          "property": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120,
+                                            "pattern": "^[A-Za-z0-9_-]+$"
+                                          },
+                                          "in": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "minItems": 1,
+                                            "maxItems": 50
+                                          }
+                                        },
+                                        "required": ["property", "in"],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": ["on"],
@@ -17265,6 +17288,29 @@
                                       }
                                     },
                                     "required": ["property", "present"],
+                                    "additionalProperties": false
+                                  },
+                                  "only": {
+                                    "type": "object",
+                                    "properties": {
+                                      "property": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120,
+                                        "pattern": "^[A-Za-z0-9_-]+$"
+                                      },
+                                      "in": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 50
+                                      }
+                                    },
+                                    "required": ["property", "in"],
                                     "additionalProperties": false
                                   }
                                 },
@@ -20921,6 +20967,29 @@
                                         },
                                         "required": ["property", "present"],
                                         "additionalProperties": false
+                                      },
+                                      "only": {
+                                        "type": "object",
+                                        "properties": {
+                                          "property": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 120,
+                                            "pattern": "^[A-Za-z0-9_-]+$"
+                                          },
+                                          "in": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "minItems": 1,
+                                            "maxItems": 50
+                                          }
+                                        },
+                                        "required": ["property", "in"],
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": ["on"],
@@ -21020,6 +21089,29 @@
                                       }
                                     },
                                     "required": ["property", "present"],
+                                    "additionalProperties": false
+                                  },
+                                  "only": {
+                                    "type": "object",
+                                    "properties": {
+                                      "property": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 120,
+                                        "pattern": "^[A-Za-z0-9_-]+$"
+                                      },
+                                      "in": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 50
+                                      }
+                                    },
+                                    "required": ["property", "in"],
                                     "additionalProperties": false
                                   }
                                 },
@@ -26496,6 +26588,29 @@
                                 "present": { "type": "boolean", "enum": [true] }
                               },
                               "required": ["property", "present"],
+                              "additionalProperties": false
+                            },
+                            "only": {
+                              "type": "object",
+                              "properties": {
+                                "property": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120,
+                                  "pattern": "^[A-Za-z0-9_-]+$"
+                                },
+                                "in": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 50
+                                }
+                              },
+                              "required": ["property", "in"],
                               "additionalProperties": false
                             }
                           },
