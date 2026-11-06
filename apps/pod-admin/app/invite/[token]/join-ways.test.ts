@@ -52,6 +52,7 @@ const PASSKEY = {
   email: "ada@example.com",
   name: "Ada",
   returnTo: "https://admin.lab.pod.synap.live/invite/tok-1",
+  placement: "device" as const,
 };
 
 describe("joinWithPasskey", () => {
@@ -69,7 +70,8 @@ describe("joinWithPasskey", () => {
       traits: { email: "ada@example.com", name: "Ada" },
       transient_payload: { invite_token: "tok-1" },
     });
-    expect(d.createPasskey).toHaveBeenCalledWith('{"x":1}', {
+    // The person's answer reaches the one creation helper.
+    expect(d.createPasskey).toHaveBeenCalledWith('{"x":1}', "device", {
       name: "ada@example.com",
       displayName: "Ada",
     });

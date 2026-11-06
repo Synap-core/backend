@@ -65,6 +65,7 @@ import {
   createPasskey,
   isPasskeySupported,
   PasskeyCancelled,
+  type PasskeyPlacement,
 } from "../../../lib/passkey";
 import {
   recoveryApi,
@@ -82,6 +83,7 @@ import { useAuthorizePasskeyChange } from "../../_lib/presence/use-factor-doors"
 import { en as securityEn, fr as securityFr } from "./copy";
 import { passkeyAddStep } from "./passkey-add-model";
 import { PASSKEYS_PATH } from "./passkeys-path";
+import { PasskeyPlacementMenu } from "../../_lib/passkey-placement/passkey-placement-menu";
 
 const SECURITY_CATALOGS = { en: securityEn, fr: securityFr };
 
@@ -702,7 +704,7 @@ export function PasskeysCard() {
     }
   };
 
-  const add = async () => {
+  const add = async (placement: PasskeyPlacement) => {
     if (load.kind !== "ready") return;
     const flow = load.flow;
     const createData = nodeValue(flow, "passkey_create_data");
@@ -711,7 +713,7 @@ export function PasskeysCard() {
     setError(null);
     setNeedsReauth(false);
     try {
-      const register = await createPasskey(createData);
+      const register = await createPasskey(createData, placement);
       // The guard redeems the grant whatever happens next: one proof, one try.
       setGrantedUntil(null);
       const r = await submitSelfServiceFlow(flow, {
@@ -826,16 +828,13 @@ export function PasskeysCard() {
                 <p className="text-[12.5px] text-foreground/65">
                   {t("passkeys.grant.ready")}
                 </p>
-                <Button
-                  size="sm"
-                  radius="md"
-                  color="primary"
-                  startContent={<KeyRound className="h-3.5 w-3.5" />}
+                <PasskeyPlacementMenu
+                  button={{ size: "sm", radius: "md", color: "primary" }}
                   isLoading={busy}
-                  onPress={() => void add()}
+                  onChoose={(placement) => void add(placement)}
                 >
                   {t("passkeys.grant.create")}
-                </Button>
+                </PasskeyPlacementMenu>
               </div>
             ) : step === "authorize" ? (
               <div className="flex flex-col items-start gap-2">
@@ -859,17 +858,18 @@ export function PasskeysCard() {
                 </Button>
               </div>
             ) : (
-              <Button
-                size="sm"
-                radius="md"
-                variant="solid"
-                color="primary"
-                startContent={<KeyRound className="h-3.5 w-3.5" />}
+              <PasskeyPlacementMenu
+                button={{
+                  size: "sm",
+                  radius: "md",
+                  variant: "solid",
+                  color: "primary",
+                }}
                 isLoading={busy}
-                onPress={() => void add()}
+                onChoose={(placement) => void add(placement)}
               >
                 {t("passkeys.add")}
-              </Button>
+              </PasskeyPlacementMenu>
             )}
           </div>
         )}
