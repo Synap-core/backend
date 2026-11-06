@@ -110,6 +110,8 @@ const ACKNOWLEDGED: Record<string, string> = {
     "ctx.currentStage forwarded to an external agent payload, not a write",
   "api:routers/mcp/tools/index.ts":
     "JSON-schema property declaration for the MCP tool input",
+  "api:routers/hub-protocol/rest/automation-schema-doc.ts":
+    "doc string naming the session_update output's config field, not a write",
 
   // DECLARATION, NOT ADVANCE — `followPlaybookId` binds a LIVE session to a
   // playbook, and `followStageKey` names the stage the work is ALREADY in. The
@@ -162,6 +164,8 @@ const LEDGER_EXEMPT: Record<string, string> = {
   "api:services/event-end/run-event-end.ts":
     "argument to updateFocusSession (the door appends)",
   "api:routers/mcp/tools/index.ts": "JSON-schema property declaration",
+  "api:routers/hub-protocol/rest/automation-schema-doc.ts":
+    "doc string of the session_update config field",
   "api:services/tracks/tracks-service.ts":
     "project_tracks.current_stage: the track keeps its own ledger (0274)",
   "api:services/tracks/track-history.ts": "read projection, not a write",

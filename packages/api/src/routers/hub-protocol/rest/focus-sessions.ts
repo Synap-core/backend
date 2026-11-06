@@ -2301,17 +2301,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       );
       if (moveRefusal) return c.json({ error: moveRefusal }, 400);
 
-      // Step 3a0: DECLARED STAGES ONLY — the advance door's rule
-      // (`stage-declared.ts`), asked before this door's own multi-field
-      // UPDATE: a key the session's process does not declare is refused.
-      if (patch.currentStage !== undefined) {
-        const undeclared = await refuseUndeclaredStage(
-          existing,
-          patch.currentStage
-        );
-        if (undeclared) return c.json({ error: undeclared.reason }, 400);
-      }
-
       // Step 3a: STAGE GATE FLOOR — the MCP door's (`updateFocusSession`). An
       // agent cannot resume a gate-held session, advance it while held, or
       // jump over a gated stage; the gate's approval is the door. 409: the
@@ -2326,6 +2315,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           toStage: patch.currentStage,
         });
         if (refusal) return c.json({ error: refusal }, 409);
+      }
+
+      // Step 3b: DECLARED STAGES ONLY — the advance door's rule
+      // (`stage-declared.ts`), asked after the gate floor (its 409 names the
+      // approval) and before this door's own multi-field UPDATE: a key the session's process does not declare is refused.
+      if (patch.currentStage !== undefined) {
+        const undeclared = await refuseUndeclaredStage(
+          existing,
+          patch.currentStage
+        );
+        if (undeclared) return c.json({ error: undeclared.reason }, 400);
       }
 
       // Step 2d: AGENT HAND-OFF — an agent putting ANOTHER agent on the roster
