@@ -20,8 +20,8 @@ import { join } from "node:path";
  *     `normalizeExternalAgentStatus` — one fixture per documented session
  *     status / idle stop_reason (managed-agents-2026-04-01 event shapes).
  *
- * Template location: the Control Plane seed catalog beside synap-backend
- * (`SYNAP_CP_CHECKOUT` overrides). Missing = RED, never skip.
+ * Template location: the catalog home, synap-app beside synap-backend
+ * (`SYNAP_APP_CHECKOUT` overrides). Missing = RED, never skip.
  *
  * NOT covered: the IS isolate (`callProvider` is a stand-in mapping to the
  * vault handler like the Hub tool-execute route; the code runs in `new
@@ -30,11 +30,13 @@ import { join } from "node:path";
  */
 
 const REPO_ROOT = join(import.meta.dirname, "../../../../../..");
-const CP_ROOT =
-  process.env.SYNAP_CP_CHECKOUT ?? join(REPO_ROOT, "synap-control-plane-api");
+// The ONE catalog home (synap-app/packages/workspace-templates); the Control
+// Plane's copy was retired (control-plane-api 2c755f8e, 5 Nov 2026).
+const CATALOG_ROOT =
+  process.env.SYNAP_APP_CHECKOUT ?? join(REPO_ROOT, "synap-app");
 const TEMPLATE_PATH = join(
-  CP_ROOT,
-  "src/seeds/capability-templates/claude-managed-agents.capability.json"
+  CATALOG_ROOT,
+  "packages/workspace-templates/capabilities/claude-managed-agents.capability.json"
 );
 
 const { mockResolveVaultSecret, mockFindFirst, findGrant, resolveRule } =
@@ -130,13 +132,14 @@ type Template = {
 };
 
 const RAW = existsSync(TEMPLATE_PATH)
-  ? (JSON.parse(readFileSync(TEMPLATE_PATH, "utf8")) as Template)
+  ? // A catalog manifest ({apiVersion, kind, meta, spec}): `spec` is the template.
+    (JSON.parse(readFileSync(TEMPLATE_PATH, "utf8")) as { spec: Template }).spec
   : null;
 const tpl = () => {
   expect(
     RAW,
-    `Cannot read ${TEMPLATE_PATH}. Check out synap-control-plane-api beside ` +
-      `synap-backend (or set SYNAP_CP_CHECKOUT). Do not skip this test.`
+    `Cannot read ${TEMPLATE_PATH}. Check out synap-app (the catalog home) ` +
+      `beside synap-backend (or set SYNAP_APP_CHECKOUT). Do not skip this test.`
   ).not.toBeNull();
   return RAW!;
 };
