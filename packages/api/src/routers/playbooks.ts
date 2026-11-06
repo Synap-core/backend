@@ -2832,6 +2832,8 @@ export const playbooksRouter = router({
          * `data` so an approved run keeps its lineage too.
          */
         parentSessionId: z.string().uuid().optional(),
+        /** With parentSessionId: the run is a detour; the parent waits on it. */
+        suspendedIntent: z.string().max(400).optional(),
         /**
          * File the run into a PROJECT and, optionally, a TRACK (a method
          * running in that project, 0272). A track names its own project; a
@@ -3130,6 +3132,9 @@ export const playbooksRouter = router({
           ...(input.parentSessionId
             ? { parentSessionId: input.parentSessionId }
             : {}),
+          ...(input.parentSessionId && input.suspendedIntent
+            ? { suspendedIntent: input.suspendedIntent }
+            : {}),
           ...(filedProjectId ? { projectId: filedProjectId } : {}),
           ...(input.trackId ? { trackId: input.trackId } : {}),
           // The stage the run was proposed AT — re-validated by the replay.
@@ -3190,6 +3195,9 @@ export const playbooksRouter = router({
         subjectId,
         ...(input.parentSessionId
           ? { parentSessionId: input.parentSessionId }
+          : {}),
+        ...(input.parentSessionId && input.suspendedIntent
+          ? { suspendedIntent: input.suspendedIntent }
           : {}),
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         ...(input.trackId ? { trackId: input.trackId } : {}),

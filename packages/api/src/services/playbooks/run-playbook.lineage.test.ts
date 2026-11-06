@@ -19,6 +19,9 @@ const recordSessionSpawn = vi.fn(async () => ({
   linked: true as const,
   suspendedIntentRecorded: false,
 }));
+const addCreateTimeBlockers = vi.fn(async () => [
+  { blockerSessionId: "sess-new", status: "linked" },
+]);
 const instantiateSession = vi.fn(async () => ({
   id: "sess-new",
   workspaceId: "ws-1",
@@ -27,6 +30,10 @@ const instantiateSession = vi.fn(async () => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   recordSessionSpawn,
+}));
+vi.mock("../focus-sessions/session-blocked-by.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  addCreateTimeBlockers,
 }));
 vi.mock("./playbook-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -53,6 +60,7 @@ describe("runPlaybook — lineage", () => {
   beforeEach(() => {
     recordSessionSpawn.mockClear();
     instantiateSession.mockClear();
+    addCreateTimeBlockers.mockClear();
   });
 
   it("records the new run session as spawned from the session it was started from, floored on the HUMAN owner", async () => {
@@ -72,5 +80,31 @@ describe("runPlaybook — lineage", () => {
     await runPlaybook(INPUT).catch(() => undefined);
     expect(instantiateSession).toHaveBeenCalledOnce();
     expect(recordSessionSpawn).not.toHaveBeenCalled();
+  });
+
+  it("a detour (suspendedIntent) records the intent and blocks the parent on the run's session", async () => {
+    await runPlaybook({
+      ...INPUT,
+      parentSessionId: "parent-1",
+      suspendedIntent: "ship the post once the playbook is done",
+    }).catch(() => undefined);
+    expect(recordSessionSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionId: "parent-1",
+        suspendedIntent: "ship the post once the playbook is done",
+      })
+    );
+    expect(addCreateTimeBlockers).toHaveBeenCalledWith({
+      sessionId: "parent-1",
+      blockerSessionIds: ["sess-new"],
+      userId: "owner-1",
+    });
+  });
+
+  it("a slice (parent, no suspendedIntent) never blocks the parent", async () => {
+    await runPlaybook({ ...INPUT, parentSessionId: "parent-1" }).catch(
+      () => undefined
+    );
+    expect(addCreateTimeBlockers).not.toHaveBeenCalled();
   });
 });
