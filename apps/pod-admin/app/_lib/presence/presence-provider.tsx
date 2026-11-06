@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The proof-of-presence dialog (W3), mounted ONCE in `app/providers.tsx`.
+ * The proof-of-presence dialog, mounted ONCE in `app/providers.tsx`.
  * `usePresence().prove(subject, refusal)` opens it and resolves with a
  * `{kind: "passkey"}` proof, or rejects with `PresenceDeclined` when the
  * person does not confirm. The approve doors of this folder call it when the

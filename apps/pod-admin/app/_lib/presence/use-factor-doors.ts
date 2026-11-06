@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The proof of presence's own settings (W3 slice 3, backend#827), each with
+ * The proof of presence's own settings, each with
  * the proof the pod asks for:
  *  - `presence.setMode`: switching "Approvals need you in person" ON is free;
  *    switching it OFF (`report`) needs a proof for `presence_mode:report`, in

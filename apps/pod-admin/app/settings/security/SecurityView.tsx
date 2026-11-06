@@ -633,7 +633,7 @@ export function PasskeysCard() {
   const t = useT(SECURITY_CATALOGS);
   const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
-  // A passkey change needs a grant from an existing factor (W3 slice 3).
+  // A passkey change needs a grant from an existing factor.
   const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const devices = trpc.presence.devices.list.useQuery(undefined, {
     retry: false,

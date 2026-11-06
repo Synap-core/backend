@@ -1,5 +1,5 @@
 /**
- * The proof-of-presence dialog's states (review bf96d410, lane E): what it
+ * The proof-of-presence dialog's states (review bf96d410): what it
  * says and offers in each, so a failed read never reads as "no passkey",
  * and the dialog never promises a way that is not there.
  */

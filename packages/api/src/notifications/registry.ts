@@ -1419,7 +1419,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "informational",
   },
   {
-    // W3 slice 3 (founder decision 2): a passkey or a Relay device key was
+    // Founder decision 2 of 4 Nov: a passkey or a Relay device key was
     // added to or removed from the person's account. Every device hears it, so
     // a factor an AI or a thief added does not go unseen.
     type: "security.factor_changed",
