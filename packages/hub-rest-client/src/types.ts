@@ -1216,6 +1216,14 @@ export interface HubSlotAskOption {
   recommended?: boolean;
   /** One-line consequence of choosing it. */
   description?: string;
+  /** One short fact to weigh before picking it. */
+  caution?: string;
+  /** What the person looks at before picking it. Mirrors `AskOptionMedia`. */
+  media?: {
+    kind: "image" | "video" | "audio";
+    ref: { url: string } | { assetId: string } | { entityId: string };
+    alt?: string;
+  };
 }
 
 /** The typed half of an answer; the readable line stays on `text`. */

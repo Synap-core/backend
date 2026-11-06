@@ -24,7 +24,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 import { BLOCKED_REASONS } from "@synap/playbooks";
-import { ASK_MODES, ASK_PROVIDE_KINDS, AskSchema } from "@synap-core/types/ask";
+import {
+  ASK_MODES,
+  ASK_PROVIDE_KINDS,
+  AskOptionSchema,
+  AskSchema,
+} from "@synap-core/types/ask";
 import { tools } from "../routers/mcp/tools/index.js";
 
 const HUB_TYPES = resolve(
@@ -157,5 +162,31 @@ describe("tripwire: MCP slot schemas derive from their one source", () => {
     expect(hubUnionLiterals("HubSlotAsk", "kind")).toEqual([
       ...ASK_PROVIDE_KINDS,
     ]);
+  });
+
+  it("the option mirrors (playbooks SlotAskOption, hub HubSlotAskOption) carry every AskOption field", () => {
+    const optionKeys = Object.keys(AskOptionSchema.shape).sort();
+    expect(optionKeys).toContain("media");
+    expect(optionKeys).toContain("caution");
+    const mirrors: Array<[string, string, RegExp]> = [
+      [
+        "hub-rest-client HubSlotAskOption",
+        readFileSync(HUB_TYPES, "utf8"),
+        /export interface HubSlotAskOption \{([\s\S]*?)\n\}/,
+      ],
+      [
+        "playbooks SlotAskOption",
+        readFileSync(
+          resolve(import.meta.dirname, "../../../playbooks/src/index.ts"),
+          "utf8"
+        ),
+        /export interface SlotAskOption \{([\s\S]*?)\n\}/,
+      ],
+    ];
+    for (const [name, src, re] of mirrors) {
+      const body = re.exec(src)?.[1] ?? "";
+      const declared = [...body.matchAll(/^ {2}(\w+)\??:/gm)].map((m) => m[1]!);
+      expect(declared.sort(), name).toEqual(optionKeys);
+    }
   });
 });

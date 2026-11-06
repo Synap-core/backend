@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  PLAYBOOK_FOR_EACH_MAX_ITEMS,
   PLAYBOOK_STAGE_CATEGORIES,
   resolveStageCategory,
   type PlaybookStage,
@@ -270,6 +271,50 @@ describe("playbookStageSchema — stage.forEach (run once per item)", () => {
       over: "shots",
       as: "shot",
     });
+  });
+});
+
+describe("forEach / when — bounded and prototype-safe (declared, advisory)", () => {
+  const ok = (extra: Record<string, unknown>) =>
+    playbookStageSchema.safeParse({ ...validStage, ...extra }).success;
+
+  it("refuses a path segment that reaches the prototype chain", () => {
+    for (const seg of ["__proto__", "constructor", "prototype"]) {
+      expect(ok({ forEach: { over: `${seg}.x` } }), seg).toBe(false);
+      expect(ok({ forEach: { over: `subject.${seg}` } }), seg).toBe(false);
+      expect(ok({ forEach: { over: "shots", as: seg } }), seg).toBe(false);
+      expect(ok({ when: { param: `${seg}.x`, exists: true } }), seg).toBe(
+        false
+      );
+    }
+    expect(ok({ forEach: { over: "subject.shots", as: "shot" } })).toBe(true);
+  });
+
+  it("bounds the fan-out: max is an int in 1..the pod-wide cap", () => {
+    expect(ok({ forEach: { over: "shots", max: 12 } })).toBe(true);
+    expect(
+      ok({ forEach: { over: "shots", max: PLAYBOOK_FOR_EACH_MAX_ITEMS } })
+    ).toBe(true);
+    for (const max of [0, -1, 1.5, PLAYBOOK_FOR_EACH_MAX_ITEMS + 1, "9"]) {
+      expect(ok({ forEach: { over: "shots", max } }), String(max)).toBe(false);
+    }
+  });
+
+  it("says the item name is wrong, not the collection", () => {
+    const r = playbookStageSchema.safeParse({
+      ...validStage,
+      forEach: { over: "shots", as: "my shot" },
+    });
+    expect(!r.success && JSON.stringify(r.error.issues)).toContain(
+      "forEach.as"
+    );
+  });
+
+  it("when.equals is a scalar: no object, no array, no huge string", () => {
+    expect(ok({ when: { param: "p", equals: { a: 1 } } })).toBe(false);
+    expect(ok({ when: { param: "p", equals: ["a"] } })).toBe(false);
+    expect(ok({ when: { param: "p", equals: "x".repeat(501) } })).toBe(false);
+    expect(ok({ when: { param: "p", equals: null } })).toBe(true);
   });
 });
 

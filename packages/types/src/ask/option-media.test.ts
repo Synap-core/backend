@@ -6,6 +6,9 @@ import { describe, expect, it } from "vitest";
 import { AskSchema } from "./index.js";
 import { askOptionChips, followUpChips } from "./card.js";
 
+const A1 = "00000000-0000-4000-8000-0000000000a1";
+const E1 = "00000000-0000-4000-8000-0000000000e1";
+
 const ask = (media: unknown) => ({
   mode: "choose",
   options: [{ label: "Take 2", media }, { label: "Take 3" }],
@@ -15,8 +18,8 @@ describe("ask option media", () => {
   it("keeps each ref shape through the parse and the chip", () => {
     for (const ref of [
       { url: "https://example.com/t2.mp4" },
-      { assetId: "a-1" },
-      { entityId: "e-1" },
+      { assetId: A1 },
+      { entityId: E1 },
     ]) {
       const media = { kind: "video", ref, alt: "wide shot" };
       const parsed = AskSchema.parse(ask(media));
@@ -35,7 +38,7 @@ describe("ask option media", () => {
           followUp: {
             prompt: "Which?",
             options: [
-              { label: "A", media: { kind: "image", ref: { assetId: "x" } } },
+              { label: "A", media: { kind: "image", ref: { assetId: A1 } } },
               { label: "B" },
             ],
           },
@@ -54,5 +57,29 @@ describe("ask option media", () => {
       bad({ kind: "image", ref: { url: "https://a.b", assetId: "x" } })
     ).toBe(false);
     expect(bad({ kind: "image", ref: { url: "nope" } })).toBe(false);
+  });
+
+  it("refuses a script-capable or local url scheme", () => {
+    const bad = (url: string) =>
+      AskSchema.safeParse(ask({ kind: "image", ref: { url } })).success;
+    for (const url of [
+      "javascript:alert(1)",
+      "data:text/html,x",
+      "file:///etc/passwd",
+      "ftp://a.b/x.png",
+      "blob:https://a.b/1",
+    ]) {
+      expect(bad(url), url).toBe(false);
+    }
+    expect(bad("HTTPS://a.b/x.png")).toBe(true);
+    expect(bad("http://a.b/x.png")).toBe(true);
+  });
+
+  it("refuses an asset or entity ref that is not an id", () => {
+    const bad = (ref: unknown) =>
+      AskSchema.safeParse(ask({ kind: "image", ref })).success;
+    expect(bad({ assetId: "a-1" })).toBe(false);
+    expect(bad({ entityId: "../../etc" })).toBe(false);
+    expect(bad({ assetId: A1 })).toBe(true);
   });
 });

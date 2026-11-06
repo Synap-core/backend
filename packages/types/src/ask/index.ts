@@ -102,15 +102,34 @@ export type AskProvideKind = (typeof ASK_PROVIDE_KINDS)[number];
 // ─── Options (capture's chip, minus capture's own apply semantics) ──────────
 
 /**
+ * An http(s) URL and nothing else: `javascript:`, `data:`, `file:` and the rest
+ * are refused. Same stance as `MediaRef` (presentation): an external URL is
+ * drawn as a link chip, never an `<img>`; this only keeps a script-capable
+ * scheme out of storage.
+ */
+const HTTP_URL = /^https?:\/\//i;
+
+/**
  * A media ref on an option. Exactly one ref shape: a url, an uploaded asset,
  * or a pod entity.
+ *
+ * `assetId` and `entityId` are ids only. Nothing here checks the object exists
+ * or is visible to whoever answers: a surface MUST resolve either under the
+ * VIEWER's own access (as it does for any stored file or entity) and draw
+ * nothing when it cannot, never trust the writer's say-so.
  */
 export const AskOptionMediaSchema = z.object({
   kind: z.enum(["image", "video", "audio"]),
   ref: z.union([
-    z.strictObject({ url: z.string().url().max(2000) }),
-    z.strictObject({ assetId: z.string().min(1).max(200) }),
-    z.strictObject({ entityId: z.string().min(1).max(200) }),
+    z.strictObject({
+      url: z
+        .string()
+        .url()
+        .max(2000)
+        .refine((u) => HTTP_URL.test(u), { message: "url must be http(s)" }),
+    }),
+    z.strictObject({ assetId: z.string().uuid() }),
+    z.strictObject({ entityId: z.string().uuid() }),
   ]),
   alt: z.string().max(200).optional(),
 });

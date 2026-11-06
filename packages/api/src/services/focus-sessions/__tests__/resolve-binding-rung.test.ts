@@ -48,22 +48,6 @@ const at = (over: Partial<BindingSituation> = {}): BindingSituation => ({
   ...over,
 });
 
-describe("rung 1: the caller named it", () => {
-  it("binds the named playbook, whatever the other facts say", () => {
-    const named = pb({ name: "Named" });
-    const forIssue = pb({ subjectProfile: { profileSlug: "issue" } });
-    const d = resolveBindingRung(
-      at({ explicitPlaybookId: named.id, subject: issue() }),
-      [named, forIssue]
-    );
-    expect(d).toMatchObject({
-      kind: "bind",
-      rung: "explicit",
-      playbookId: named.id,
-    });
-  });
-});
-
 describe("rung 2: the subject's kind", () => {
   it("binds the ONE active playbook for that kind", () => {
     const fix = pb({

@@ -16,7 +16,8 @@
  * person activates it, and not before.
  *
  * The rungs, first that decides wins:
- *   1 `explicit`  — the caller named a playbook (`templateId`). Always binds.
+ *   1 `explicit`  — the caller named a playbook (`templateId`). Not decided
+ *                   here: the start door binds it and `stampBoundBy` records it.
  *   2 `subject`   — the subject's kind against the playbooks declaring it
  *                   (`subjectProfile.profileSlug`), keeping only those whose
  *                   subject filter passes and, when the playbook maps stages
@@ -65,8 +66,6 @@ export interface BindingPlaybook {
 }
 
 export interface BindingSituation {
-  /** The playbook the caller named, if any. */
-  explicitPlaybookId?: string | null;
   title?: string | null;
   /**
    * The space the session works in: the session's own, else its subject's.
@@ -185,19 +184,6 @@ export function resolveBindingRung(
   situation: BindingSituation,
   pool: readonly BindingPlaybook[]
 ): BindingDecision {
-  // Rung 1 — named by the caller. The start door already loaded and floored
-  // it; the ladder only records why it is followed.
-  if (situation.explicitPlaybookId) {
-    const named = pool.find((p) => p.id === situation.explicitPlaybookId);
-    return {
-      kind: "bind",
-      rung: "explicit",
-      playbookId: situation.explicitPlaybookId,
-      playbookName: named?.name ?? situation.explicitPlaybookId,
-      reason: "you named it",
-    };
-  }
-
   const ws = situation.workspaceId;
   const live = pool.filter((p) => bindable(p, ws));
   const subject = situation.subject ?? null;

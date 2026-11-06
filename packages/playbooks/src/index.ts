@@ -1053,10 +1053,17 @@ export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
 export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
 
 /**
+ * Pod-wide hard ceiling on the items one `forEach` stage may fan out to. The
+ * run handler that consumes `forEach` must never exceed it, whatever `max` says.
+ */
+export const PLAYBOOK_FOR_EACH_MAX_ITEMS = 200;
+
+/**
  * A stage that runs once per item of a collection (a UNIT), e.g. one run per
- * shot of a film. ADVISORY and declarative: it names WHAT to iterate, it does
- * not iterate. Nothing consumes it yet; the run handler that fans a stage out
- * over its items reads it when it lands.
+ * shot of a film. DECLARED, ADVISORY UNTIL THE EXECUTOR LANDS: it names WHAT to
+ * iterate, it does not iterate; a run executes the stage once. This is the one
+ * statement of that for `forEach` and `when`; the schema, the MCP stage schema
+ * and the tool text point here.
  */
 export interface PlaybookStageForEach {
   /**
@@ -1066,18 +1073,20 @@ export interface PlaybookStageForEach {
   over: string;
   /** Name the current item goes by inside the stage (default: `item`). */
   as?: string;
+  /** Items at most (1 to {@link PLAYBOOK_FOR_EACH_MAX_ITEMS}). */
+  max?: number;
 }
 
 /**
- * A condition under which a stage runs. ADVISORY and declarative: it names the
- * test, it does not evaluate it. Nothing consumes it yet; the run handler that
- * skips a stage reads it when it lands. Give `equals` or `exists` (or both).
+ * A condition under which a stage runs. DECLARED, ADVISORY UNTIL THE EXECUTOR
+ * LANDS (see {@link PlaybookStageForEach}): it names the test, it does not
+ * evaluate it. Give `equals` or `exists` (or both).
  */
 export interface PlaybookStageWhen {
   /** A run param or earlier output to test: a name or dotted path. A reference, never data. */
   param: string;
   /** The stage runs when the value at `param` equals this. */
-  equals?: unknown;
+  equals?: string | number | boolean | null;
   /** The stage runs when the value at `param` is present (true) or absent (false). */
   exists?: boolean;
 }

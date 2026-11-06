@@ -913,8 +913,7 @@
                                   "properties": {
                                     "assetId": {
                                       "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
+                                      "format": "uuid"
                                     }
                                   },
                                   "required": ["assetId"],
@@ -925,8 +924,7 @@
                                   "properties": {
                                     "entityId": {
                                       "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
+                                      "format": "uuid"
                                     }
                                   },
                                   "required": ["entityId"],
@@ -997,8 +995,7 @@
                                             "properties": {
                                               "assetId": {
                                                 "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 200
+                                                "format": "uuid"
                                               }
                                             },
                                             "required": ["assetId"],
@@ -1009,8 +1006,7 @@
                                             "properties": {
                                               "entityId": {
                                                 "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 200
+                                                "format": "uuid"
                                               }
                                             },
                                             "required": ["entityId"],
@@ -15387,8 +15383,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -15401,8 +15396,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -15489,8 +15483,7 @@
                                                                     "properties": {
                                                                       "assetId": {
                                                                         "type": "string",
-                                                                        "minLength": 1,
-                                                                        "maxLength": 200
+                                                                        "format": "uuid"
                                                                       }
                                                                     },
                                                                     "required": [
@@ -15503,8 +15496,7 @@
                                                                     "properties": {
                                                                       "entityId": {
                                                                         "type": "string",
-                                                                        "minLength": 1,
-                                                                        "maxLength": 200
+                                                                        "format": "uuid"
                                                                       }
                                                                     },
                                                                     "required": [
@@ -16208,8 +16200,7 @@
                                                                 "properties": {
                                                                   "assetId": {
                                                                     "type": "string",
-                                                                    "minLength": 1,
-                                                                    "maxLength": 200
+                                                                    "format": "uuid"
                                                                   }
                                                                 },
                                                                 "required": [
@@ -16222,8 +16213,7 @@
                                                                 "properties": {
                                                                   "entityId": {
                                                                     "type": "string",
-                                                                    "minLength": 1,
-                                                                    "maxLength": 200
+                                                                    "format": "uuid"
                                                                   }
                                                                 },
                                                                 "required": [
@@ -16313,8 +16303,7 @@
                                                                           "properties": {
                                                                             "assetId": {
                                                                               "type": "string",
-                                                                              "minLength": 1,
-                                                                              "maxLength": 200
+                                                                              "format": "uuid"
                                                                             }
                                                                           },
                                                                           "required": [
@@ -16327,8 +16316,7 @@
                                                                           "properties": {
                                                                             "entityId": {
                                                                               "type": "string",
-                                                                              "minLength": 1,
-                                                                              "maxLength": 200
+                                                                              "format": "uuid"
                                                                             }
                                                                           },
                                                                           "required": [
@@ -16989,6 +16977,11 @@
                                         "type": "string",
                                         "maxLength": 60,
                                         "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                                      },
+                                      "max": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 200
                                       }
                                     },
                                     "required": ["over"],
@@ -17002,7 +16995,17 @@
                                         "maxLength": 200,
                                         "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
                                       },
-                                      "equals": {},
+                                      "equals": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          { "type": "number" },
+                                          { "type": "boolean" },
+                                          { "type": "null" }
+                                        ]
+                                      },
                                       "exists": { "type": "boolean" }
                                     },
                                     "required": ["param"],
@@ -19135,8 +19138,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -19149,8 +19151,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -19237,8 +19238,7 @@
                                                                     "properties": {
                                                                       "assetId": {
                                                                         "type": "string",
-                                                                        "minLength": 1,
-                                                                        "maxLength": 200
+                                                                        "format": "uuid"
                                                                       }
                                                                     },
                                                                     "required": [
@@ -19251,8 +19251,7 @@
                                                                     "properties": {
                                                                       "entityId": {
                                                                         "type": "string",
-                                                                        "minLength": 1,
-                                                                        "maxLength": 200
+                                                                        "format": "uuid"
                                                                       }
                                                                     },
                                                                     "required": [
@@ -19956,8 +19955,7 @@
                                                                 "properties": {
                                                                   "assetId": {
                                                                     "type": "string",
-                                                                    "minLength": 1,
-                                                                    "maxLength": 200
+                                                                    "format": "uuid"
                                                                   }
                                                                 },
                                                                 "required": [
@@ -19970,8 +19968,7 @@
                                                                 "properties": {
                                                                   "entityId": {
                                                                     "type": "string",
-                                                                    "minLength": 1,
-                                                                    "maxLength": 200
+                                                                    "format": "uuid"
                                                                   }
                                                                 },
                                                                 "required": [
@@ -20061,8 +20058,7 @@
                                                                           "properties": {
                                                                             "assetId": {
                                                                               "type": "string",
-                                                                              "minLength": 1,
-                                                                              "maxLength": 200
+                                                                              "format": "uuid"
                                                                             }
                                                                           },
                                                                           "required": [
@@ -20075,8 +20071,7 @@
                                                                           "properties": {
                                                                             "entityId": {
                                                                               "type": "string",
-                                                                              "minLength": 1,
-                                                                              "maxLength": 200
+                                                                              "format": "uuid"
                                                                             }
                                                                           },
                                                                           "required": [
@@ -20737,6 +20732,11 @@
                                         "type": "string",
                                         "maxLength": 60,
                                         "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                                      },
+                                      "max": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 200
                                       }
                                     },
                                     "required": ["over"],
@@ -20750,7 +20750,17 @@
                                         "maxLength": 200,
                                         "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
                                       },
-                                      "equals": {},
+                                      "equals": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          { "type": "number" },
+                                          { "type": "boolean" },
+                                          { "type": "null" }
+                                        ]
+                                      },
                                       "exists": { "type": "boolean" }
                                     },
                                     "required": ["param"],
@@ -25661,8 +25671,7 @@
                                                       "properties": {
                                                         "assetId": {
                                                           "type": "string",
-                                                          "minLength": 1,
-                                                          "maxLength": 200
+                                                          "format": "uuid"
                                                         }
                                                       },
                                                       "required": ["assetId"],
@@ -25673,8 +25682,7 @@
                                                       "properties": {
                                                         "entityId": {
                                                           "type": "string",
-                                                          "minLength": 1,
-                                                          "maxLength": 200
+                                                          "format": "uuid"
                                                         }
                                                       },
                                                       "required": ["entityId"],
@@ -25759,8 +25767,7 @@
                                                                 "properties": {
                                                                   "assetId": {
                                                                     "type": "string",
-                                                                    "minLength": 1,
-                                                                    "maxLength": 200
+                                                                    "format": "uuid"
                                                                   }
                                                                 },
                                                                 "required": [
@@ -25773,8 +25780,7 @@
                                                                 "properties": {
                                                                   "entityId": {
                                                                     "type": "string",
-                                                                    "minLength": 1,
-                                                                    "maxLength": 200
+                                                                    "format": "uuid"
                                                                   }
                                                                 },
                                                                 "required": [
@@ -26384,6 +26390,11 @@
                               "type": "string",
                               "maxLength": 60,
                               "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                            },
+                            "max": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 200
                             }
                           },
                           "required": ["over"],
@@ -26397,7 +26408,14 @@
                               "maxLength": 200,
                               "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
                             },
-                            "equals": {},
+                            "equals": {
+                              "anyOf": [
+                                { "type": "string", "maxLength": 500 },
+                                { "type": "number" },
+                                { "type": "boolean" },
+                                { "type": "null" }
+                              ]
+                            },
                             "exists": { "type": "boolean" }
                           },
                           "required": ["param"],
@@ -33312,8 +33330,7 @@
                                                 "properties": {
                                                   "assetId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["assetId"],
@@ -33324,8 +33341,7 @@
                                                 "properties": {
                                                   "entityId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["entityId"],
@@ -33408,8 +33424,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -33422,8 +33437,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -34035,8 +34049,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -34047,8 +34060,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -34122,8 +34134,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -34134,8 +34145,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -34297,8 +34307,7 @@
                                                 "properties": {
                                                   "assetId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["assetId"],
@@ -34309,8 +34318,7 @@
                                                 "properties": {
                                                   "entityId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["entityId"],
@@ -34393,8 +34401,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -34407,8 +34414,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -34597,8 +34603,7 @@
                                                     "properties": {
                                                       "assetId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["assetId"],
@@ -34609,8 +34614,7 @@
                                                     "properties": {
                                                       "entityId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["entityId"],
@@ -34684,8 +34688,7 @@
                                                     "properties": {
                                                       "assetId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["assetId"],
@@ -34696,8 +34699,7 @@
                                                     "properties": {
                                                       "entityId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["entityId"],
@@ -34863,8 +34865,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -34875,8 +34876,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -34959,8 +34959,7 @@
                                                             "properties": {
                                                               "assetId": {
                                                                 "type": "string",
-                                                                "minLength": 1,
-                                                                "maxLength": 200
+                                                                "format": "uuid"
                                                               }
                                                             },
                                                             "required": [
@@ -34973,8 +34972,7 @@
                                                             "properties": {
                                                               "entityId": {
                                                                 "type": "string",
-                                                                "minLength": 1,
-                                                                "maxLength": 200
+                                                                "format": "uuid"
                                                               }
                                                             },
                                                             "required": [
@@ -35161,8 +35159,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -35173,8 +35170,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -35248,8 +35244,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -35260,8 +35255,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -35529,8 +35523,7 @@
                                                 "properties": {
                                                   "assetId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["assetId"],
@@ -35541,8 +35534,7 @@
                                                 "properties": {
                                                   "entityId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["entityId"],
@@ -35625,8 +35617,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -35639,8 +35630,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -37186,8 +37176,7 @@
                                                 "properties": {
                                                   "assetId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["assetId"],
@@ -37198,8 +37187,7 @@
                                                 "properties": {
                                                   "entityId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["entityId"],
@@ -37282,8 +37270,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -37296,8 +37283,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -37909,8 +37895,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -37921,8 +37906,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -37996,8 +37980,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -38008,8 +37991,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -38171,8 +38153,7 @@
                                                 "properties": {
                                                   "assetId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["assetId"],
@@ -38183,8 +38164,7 @@
                                                 "properties": {
                                                   "entityId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["entityId"],
@@ -38267,8 +38247,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -38281,8 +38260,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -38471,8 +38449,7 @@
                                                     "properties": {
                                                       "assetId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["assetId"],
@@ -38483,8 +38460,7 @@
                                                     "properties": {
                                                       "entityId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["entityId"],
@@ -38558,8 +38534,7 @@
                                                     "properties": {
                                                       "assetId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["assetId"],
@@ -38570,8 +38545,7 @@
                                                     "properties": {
                                                       "entityId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["entityId"],
@@ -38737,8 +38711,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -38749,8 +38722,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -38833,8 +38805,7 @@
                                                             "properties": {
                                                               "assetId": {
                                                                 "type": "string",
-                                                                "minLength": 1,
-                                                                "maxLength": 200
+                                                                "format": "uuid"
                                                               }
                                                             },
                                                             "required": [
@@ -38847,8 +38818,7 @@
                                                             "properties": {
                                                               "entityId": {
                                                                 "type": "string",
-                                                                "minLength": 1,
-                                                                "maxLength": 200
+                                                                "format": "uuid"
                                                               }
                                                             },
                                                             "required": [
@@ -39035,8 +39005,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -39047,8 +39016,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -39122,8 +39090,7 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -39134,8 +39101,7 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -39403,8 +39369,7 @@
                                                 "properties": {
                                                   "assetId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["assetId"],
@@ -39415,8 +39380,7 @@
                                                 "properties": {
                                                   "entityId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid"
                                                   }
                                                 },
                                                 "required": ["entityId"],
@@ -39499,8 +39463,7 @@
                                                           "properties": {
                                                             "assetId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -39513,8 +39476,7 @@
                                                           "properties": {
                                                             "entityId": {
                                                               "type": "string",
-                                                              "minLength": 1,
-                                                              "maxLength": 200
+                                                              "format": "uuid"
                                                             }
                                                           },
                                                           "required": [
@@ -40737,8 +40699,7 @@
                                           "properties": {
                                             "assetId": {
                                               "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 200
+                                              "format": "uuid"
                                             }
                                           },
                                           "required": ["assetId"],
@@ -40749,8 +40710,7 @@
                                           "properties": {
                                             "entityId": {
                                               "type": "string",
-                                              "minLength": 1,
-                                              "maxLength": 200
+                                              "format": "uuid"
                                             }
                                           },
                                           "required": ["entityId"],
@@ -40831,8 +40791,7 @@
                                                     "properties": {
                                                       "assetId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["assetId"],
@@ -40843,8 +40802,7 @@
                                                     "properties": {
                                                       "entityId": {
                                                         "type": "string",
-                                                        "minLength": 1,
-                                                        "maxLength": 200
+                                                        "format": "uuid"
                                                       }
                                                     },
                                                     "required": ["entityId"],
@@ -41487,8 +41445,7 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -41499,8 +41456,7 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -41561,8 +41517,7 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -41573,8 +41528,7 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -41876,8 +41830,7 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -41888,8 +41841,7 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -41950,8 +41902,7 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -41962,8 +41913,7 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid"
                                           }
                                         },
                                         "required": ["entityId"],

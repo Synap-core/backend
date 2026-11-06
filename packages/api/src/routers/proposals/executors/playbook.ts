@@ -740,6 +740,14 @@ export function registerPlaybookExecutors(): void {
           ...(typeof inner.parentSessionId === "string"
             ? { parentSessionId: inner.parentSessionId }
             : {}),
+          // A detour that blocks its parent: replayed with the parent, so an
+          // approved run waits the parent exactly as a direct run does (never
+          // a bare slice). Meaningless without a parent, so only with one.
+          ...(typeof inner.parentSessionId === "string" &&
+          typeof inner.suspendedIntent === "string" &&
+          inner.suspendedIntent.trim() !== ""
+            ? { suspendedIntent: inner.suspendedIntent }
+            : {}),
           // Filing: the project/track the run was proposed INTO. Re-validated
           // by the replay (`resolveTrackFiling` inside `runPlaybook`), so a
           // track archived since the proposal refuses rather than files.
