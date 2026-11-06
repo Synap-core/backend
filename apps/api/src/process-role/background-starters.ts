@@ -588,8 +588,13 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         const {
           reconcileChangedCapabilityTemplates,
           notifyCapabilityUpdatesAvailable,
+          installOfficialAgentTemplates,
         } = await import("@synap/api");
         registerOfficialCatalogSyncedHandler(async () => {
+          // The catalog installs every official agent template on every pod
+          // (founder decision D8). First, and it never throws, so a failed
+          // capability converge below cannot skip it.
+          await installOfficialAgentTemplates();
           const report = await reconcileChangedCapabilityTemplates();
           if (report) await notifyCapabilityUpdatesAvailable(report);
         });

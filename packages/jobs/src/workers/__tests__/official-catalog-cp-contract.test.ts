@@ -54,7 +54,7 @@ import {
 
 const DIR = path.join(__dirname, "fixtures", "official-catalog-cp");
 const FIXTURE_SET_SHA256 =
-  "4b2967b1671b3d497cad347d4b28fdc0de3514ecc78b6d78c708444a972575c5";
+  "37e2c5df97fac1c1533c225ae53871247426fd22a941b3fea598f9a2d01eb67e";
 
 const read = (name: string) => readFileSync(path.join(DIR, name));
 const contract = JSON.parse(read("contract.json").toString()) as {

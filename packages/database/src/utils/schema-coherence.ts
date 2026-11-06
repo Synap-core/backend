@@ -43,6 +43,7 @@ import { libraryGroups } from "../schema/library-groups.js";
 import { documentPassages } from "../schema/document-passages.js";
 import { statusWaitEpisode } from "../schema/status-wait-episode.js";
 import { agentConfigs } from "../schema/agent-configs.js";
+import { agentTemplates } from "../schema/agent-templates.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -2298,6 +2299,21 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0403_playbook_runs_run_on.sql",
   },
   {
+    table: "users",
+    column: "agent_template_slug",
+    addedBy: "0404_agent_templates.sql",
+  },
+  {
+    table: "agent_templates",
+    column: "wake",
+    addedBy: "0404_agent_templates.sql",
+  },
+  {
+    table: "agent_templates",
+    column: "metadata",
+    addedBy: "0404_agent_templates.sql",
+  },
+  {
     table: "automation_runs",
     column: "definition_snapshot",
     addedBy: "0198_workflow_attribution_spine.sql",
@@ -2851,6 +2867,9 @@ const REQUIRED_INDEX_TABLES = [
   // Presets (0390): the preset upsert conflicts on the partial unique index
   // `agent_configs_user_preset_unique`, which IS "one preset per key per agent".
   agentConfigs,
+  // Agent templates (0404): the install conflicts on `agent_templates_slug_unique`
+  // (ON CONFLICT DO NOTHING), which IS "one installed template per slug".
+  agentTemplates,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

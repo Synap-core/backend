@@ -129,6 +129,11 @@ export {
   type StandaloneKind,
   type DetachResult,
 } from "./services/capabilities/reconcile-standalone-configs-to-templates.js";
+// The catalog installs every official agent template on every pod (D8).
+export {
+  installOfficialAgentTemplates,
+  type OfficialAgentTemplatesReport,
+} from "./services/agent-templates/official.js";
 export {
   orderWorkspacesByTemplateDependencies,
   type OrderableWorkspaceRow,

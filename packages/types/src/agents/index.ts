@@ -1084,5 +1084,7 @@ export * from "./server-owned-message-meta.js";
 export * from "./session-post.js";
 // Can the pod get an agent working now (the roster's `wake`), and its template.
 export * from "./wake.js";
+// The catalog kind `agent`: the pod's reading of `definition.agent` (D8).
+export * from "./agent-template.js";
 // Who runs a playbook for a person: asked once, remembered (slice 5a).
 export * from "./run-choice.js";

@@ -14,8 +14,9 @@
  *   - may it take it   `namedVerdicts` — `route()`'s selector rung, batched,
  *                      with `HAND_OFF_ACCEPT`. So `canTakeYourWork` is exactly
  *                      what a hand-off naming this agent would be told;
- *   - template + wake  `resolveAgentTemplate` (the one template seam, which
- *                      the catalog's installed agent templates replace) and
+ *   - template + wake  `resolveAgentTemplate` (the one template seam: the
+ *                      agent's link, else its type, to an installed agent
+ *                      template, else the built-in registry) and
  *                      `deriveAgentWake` (THE wake rule) over the facts above.
  *
  * `handOff` previews what a hand-off FROM THE CALLING AGENT would do right now:
@@ -66,6 +67,7 @@ import { machineName } from "../machine-roster.js";
 import { actorComputer } from "../actor-computer.js";
 import { loadAgentDispatchSummaries } from "./agent-binding.js";
 import { deriveAgentWake, resolveAgentTemplate } from "./agent-wake.js";
+import { loadInstalledAgentTemplates } from "../agent-templates/installed.js";
 import {
   HAND_OFF_ACCEPT,
   namedVerdicts,
@@ -167,6 +169,7 @@ export async function readAgentsForHandoff(
         .select({
           id: users.id,
           agentType: users.agentType,
+          templateSlug: users.agentTemplateSlug,
           hostUserId: users.hostUserId,
         })
         .from(users)
@@ -214,23 +217,25 @@ export async function readAgentsForHandoff(
     machineRows.map((m) => [m.id, m.belongsTo ?? null] as const)
   );
 
-  const [presence, dispatch, verdicts, gate] = await Promise.all([
-    loadAgentPresence(agentIds, now),
-    loadAgentDispatchSummaries(agentIds),
-    namedVerdicts({ ownerId: userId, accept: HAND_OFF_ACCEPT }, agentIds),
-    // A person staffing their own session is never gated (agent-hand-off.ts).
-    caller
-      ? dryRunAgentGovernanceDecision({
-          db,
-          userId,
-          agentUserId: caller,
-          workspaceId: null,
-          subjectType: "focus_session",
-          action: "assign_agent",
-          door: "chat",
-        })
-      : null,
-  ]);
+  const [presence, dispatch, verdicts, gate, installedTemplates] =
+    await Promise.all([
+      loadAgentPresence(agentIds, now),
+      loadAgentDispatchSummaries(agentIds),
+      namedVerdicts({ ownerId: userId, accept: HAND_OFF_ACCEPT }, agentIds),
+      // A person staffing their own session is never gated (agent-hand-off.ts).
+      caller
+        ? dryRunAgentGovernanceDecision({
+            db,
+            userId,
+            agentUserId: caller,
+            workspaceId: null,
+            subjectType: "focus_session",
+            action: "assign_agent",
+            door: "chat",
+          })
+        : null,
+      loadInstalledAgentTemplates(),
+    ]);
 
   // At its proposal limit the caller's proposed hand-off is REFUSED, not
   // asked — the gate's own pair, read only when the gate would propose.
@@ -281,7 +286,13 @@ export async function readAgentsForHandoff(
       now,
     });
     const whyNot = verdicts.get(r.id)?.refusal ?? null;
-    const resolved = resolveAgentTemplate(kindOf.get(r.id)?.agentType);
+    const resolved = resolveAgentTemplate(
+      {
+        agentType: kindOf.get(r.id)?.agentType,
+        templateSlug: kindOf.get(r.id)?.templateSlug,
+      },
+      installedTemplates
+    );
     const template: AgentTemplateRef | null = resolved
       ? {
           slug: resolved.slug,
