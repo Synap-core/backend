@@ -412,6 +412,14 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
       playbookStageSchema.shape.tier.unwrap(),
       "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
     ),
+    forEach: deriveJsonSchema(
+      playbookStageSchema.shape.forEach.unwrap(),
+      "DECLARED, advisory until the executor lands: run this stage once per item of a collection, {over: '<param or dotted path>', as?: '<item name>', max?: n (1-200)}. Today a run executes the stage ONCE and ignores it; do not rely on a fan-out."
+    ),
+    when: deriveJsonSchema(
+      playbookStageSchema.shape.when.unwrap(),
+      "DECLARED, advisory until the executor lands: run this stage only when {param: '<param or dotted path>', equals?: string|number|boolean|null, exists?: boolean} holds. Today a run executes the stage unconditionally and ignores it; do not rely on a skip."
+    ),
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
@@ -444,7 +452,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? } (forEach and when are declared, advisory until the executor lands). `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
   items: {
     type: "object",
     properties: {

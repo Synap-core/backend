@@ -25,6 +25,7 @@ import {
   AWAITED_GATE_PROPOSAL_TYPES,
   type AwaitedGateProposalType,
   MAX_STAGE_LESSONS,
+  PLAYBOOK_FOR_EACH_MAX_ITEMS,
   PLAYBOOK_STAGE_TIERS,
   STAGE_LESSON_MAX_CHARS,
   type PlaybookStage,
@@ -70,7 +71,16 @@ export const relationTypeSlugSchema = z
       'relationToSubject must be a relation type slug (lowercase, e.g. "made_for")',
   });
 
-const FOR_EACH_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const IDENTIFIER_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A path segment that reaches the prototype chain when resolved against an object. */
+const UNSAFE_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+const hasNoUnsafeSegment = (path: string) =>
+  !path.split(".").some((seg) => UNSAFE_SEGMENTS.has(seg));
+const UNSAFE_SEGMENT_MESSAGE =
+  "a path may not contain __proto__, constructor or prototype";
+const FOR_EACH_AS_MESSAGE =
+  'forEach.as must be a plain identifier (e.g. "shot"), not prose';
 const FOR_EACH_MESSAGE =
   'forEach must name a collection as an identifier path (e.g. "shots" or "subject.shots"), not prose';
 
@@ -229,14 +239,18 @@ export const playbookStageSchema = z.looseObject({
       over: z
         .string()
         .trim()
-        .regex(FOR_EACH_PATH, { message: FOR_EACH_MESSAGE })
+        .regex(IDENTIFIER_PATH, { message: FOR_EACH_MESSAGE })
+        .refine(hasNoUnsafeSegment, { message: UNSAFE_SEGMENT_MESSAGE })
         .max(200),
       as: z
         .string()
         .trim()
-        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, { message: FOR_EACH_MESSAGE })
+        .regex(IDENTIFIER, { message: FOR_EACH_AS_MESSAGE })
+        .refine(hasNoUnsafeSegment, { message: UNSAFE_SEGMENT_MESSAGE })
         .max(60)
         .optional(),
+      /** Declared ceiling on items per run; never above the pod-wide cap. */
+      max: z.number().int().min(1).max(PLAYBOOK_FOR_EACH_MAX_ITEMS).optional(),
     })
     .optional(),
   /**
@@ -251,9 +265,12 @@ export const playbookStageSchema = z.looseObject({
       param: z
         .string()
         .trim()
-        .regex(FOR_EACH_PATH, { message: WHEN_PARAM_MESSAGE })
+        .regex(IDENTIFIER_PATH, { message: WHEN_PARAM_MESSAGE })
+        .refine(hasNoUnsafeSegment, { message: UNSAFE_SEGMENT_MESSAGE })
         .max(200),
-      equals: z.unknown().optional(),
+      equals: z
+        .union([z.string().max(500), z.number(), z.boolean(), z.null()])
+        .optional(),
       exists: z.boolean().optional(),
     })
     .refine((w) => w.equals !== undefined || w.exists !== undefined, {

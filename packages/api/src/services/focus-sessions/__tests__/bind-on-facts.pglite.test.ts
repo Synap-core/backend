@@ -156,6 +156,8 @@ const FIX = randomUUID(); // active, runs on an issue
 const DRAFT_FOR_TASK = randomUUID(); // draft, runs on a task
 const TASK_PROFILE = randomUUID();
 const OTHER = randomUUID(); // active, no subject
+const GRANT_PROFILE = randomUUID();
+const GRANTING = randomUUID(); // active, runs on a grant-kind, GRANTS a tool
 
 async function insertPlaybook(
   id: string,
@@ -249,6 +251,7 @@ beforeAll(async () => {
     [ISSUE_PROFILE, "issue"],
     [NOTE_PROFILE, "note"],
     [TASK_PROFILE, "task"],
+    [GRANT_PROFILE, "grant-kind"],
   ] as const) {
     await q(
       `insert into profiles (id, slug, display_name, scope, created_at, updated_at) values ($1, $2, $2, 'system', now(), now())`,
@@ -260,6 +263,14 @@ beforeAll(async () => {
     profileSlug: "task",
   });
   await insertPlaybook(OTHER, "Something else", "active", null);
+  await insertPlaybook(GRANTING, "Grants a tool", "active", {
+    profileSlug: "grant-kind",
+  });
+  await q(
+    `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
+     values ($1, null, 'playbook', $2, 'tool', 'some-tool', 'grants', '{}'::jsonb, $3, now())`,
+    [randomUUID(), GRANTING, USER]
+  );
 }, 120_000);
 
 describe("at start: a fact binds through the follow door", () => {
@@ -413,5 +424,25 @@ describe("later: the first subject re-runs the facts, once", () => {
     expect(up.session.playbookId).toBe(OTHER);
     expect(up.binding).toBeUndefined();
     expect((await rowOf(res.session.id)).metadata.boundBy).toBeUndefined();
+  });
+});
+
+describe("the capability-grant floor", () => {
+  it("a fact never binds a playbook that GRANTS capabilities: it says so and attaches nothing", async () => {
+    const res = await start({ subjectEntityId: await entityOf(GRANT_PROFILE) });
+    const row = await rowOf(res.session.id);
+    expect(row.playbook_id).toBeNull();
+    expect(row.metadata.boundBy).toBeUndefined();
+    expect(await runsOf(res.session.id)).toEqual([]);
+    expect(res.binding).toMatch(/grants 1 capability/);
+    expect(res.binding).toContain(GRANTING);
+  });
+
+  it("the same playbook still binds when the CALLER names it (a widening they asked for)", async () => {
+    const res = await start({
+      subjectEntityId: await entityOf(GRANT_PROFILE),
+      templateId: GRANTING,
+    });
+    expect((await rowOf(res.session.id)).playbook_id).toBe(GRANTING);
   });
 });
