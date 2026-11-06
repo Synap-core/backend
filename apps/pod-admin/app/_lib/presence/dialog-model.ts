@@ -9,8 +9,16 @@
  *  - a browser that cannot use a passkey: no primary action, no Try again;
  *  - Relay is offered only on a device the person enrolled, and only for
  *    what Relay can approve (never this page's own change, `inBrowserOnly`);
- *  - in a batch, the way out is "Stop here".
+ *  - in a batch, the way out is "Stop here";
+ *  - once the first prompt failed and the person's passkeys live in more
+ *    than one place (a password-manager extension took over WebAuthn), the
+ *    other prompt is offered beside Confirm: "Use this device’s passkey" or
+ *    "Use your password manager" (`planAssertion`, `lib/passkey.ts`);
+ *  - a prompt that ended with an error keeps the browser's own words behind
+ *    "Copy details", never in the sentence.
  */
+
+import type { PasskeyRoute } from "../../../lib/passkey";
 
 /** The words the view names, keys of `copy.ts`. */
 export type PresenceWord =
@@ -33,6 +41,10 @@ export interface PresenceDialogInput {
         passkey: boolean;
         deviceKeys: ReadonlyArray<{ label: string }>;
         note?: string | null;
+        /** The other prompt to offer after the first one failed, or null. */
+        fallback?: PasskeyRoute | null;
+        /** The failed prompt's error (name and message), for "Copy details". */
+        copyDetail?: string | null;
       };
   /** This browser can run `navigator.credentials.get`. */
   passkeySupported: boolean;
@@ -53,10 +65,16 @@ export interface PresenceDialogView {
   tone: "muted" | "warning" | "danger";
   /** The pod's own message under a failed read, small and muted. */
   detail: string | null;
+  /** A failed prompt's error, behind "Copy details"; null hides the control. */
+  copyDetail: string | null;
   notice: "noPasskey" | "unsupported" | null;
   primary: "confirm" | "tryAgain" | "addPasskey" | null;
-  /** Beside the primary: read again once a passkey is added, or open its tab again. */
-  secondary: "tryAgain" | "addPasskey" | null;
+  /**
+   * Beside the primary: read again once a passkey is added, or open its tab
+   * again; or, after a failed prompt, the other one (this device's own
+   * prompt, or the password manager's).
+   */
+  secondary: "tryAgain" | "addPasskey" | "useDevice" | "useManager" | null;
   decline: "notNow" | "stopHere";
   /** The enrolled Relay device to offer, or null: never promise Relay blind. */
   relayDevice: string | null;
@@ -71,6 +89,7 @@ export function presenceDialogView(
     input.progress && input.progress.total > 1 ? "stopHere" : "notNow";
   const base = {
     detail: null,
+    copyDetail: null,
     notice: null,
     secondary: null,
     decline,
@@ -144,7 +163,68 @@ export function presenceDialogView(
         : null,
     tone: signing ? "muted" : "warning",
     primary: "confirm",
+    secondary: signing
+      ? null
+      : phase.fallback === "native"
+        ? "useDevice"
+        : phase.fallback === "page"
+          ? "useManager"
+          : null,
+    copyDetail: signing ? null : phase.copyDetail?.trim() || null,
     relayDevice,
     busy: signing,
   };
+}
+
+/** The words of a passkey prompt that did not sign, keys of `copy.ts`. */
+export type FailedPromptWord =
+  | "cancelled"
+  | "ceremonyFailed"
+  | "fallback.device"
+  | "fallback.device.unnamed"
+  | "device.unreachable.mac"
+  | "device.unreachable"
+  | "device.closed.mac"
+  | "device.closed";
+
+/**
+ * Why the prompt did not sign, in words:
+ *  - the browser's own prompt (`native`) failed with an error: it cannot
+ *    reach the passkey on this device (a second extension or the system
+ *    answered instead); on a Mac, Safari can. Relay is offered by the
+ *    dialog's own Relay line, only where the person enrolled a device;
+ *  - it ended as a closed prompt: nothing was confirmed, and the same, IF
+ *    the prompt did not offer the passkey (a person closing it and a second
+ *    extension answering "no passkey" throw the same error);
+ *  - any other error: "ended with an error", its words behind Copy details;
+ *  - the page's prompt found nothing (or was closed) while this device's own
+ *    prompt is on offer: nothing was confirmed, and where the passkey may be;
+ *  - else: nothing was confirmed (closed, or no passkey here).
+ */
+export function failedPromptWord(input: {
+  /** The prompt threw NotAllowedError (closed, or no passkey where it looked). */
+  cancelled: boolean;
+  /** The prompt that failed. */
+  route: PasskeyRoute;
+  /** The other prompt the dialog offers now, or null. */
+  offer: PasskeyRoute | null;
+  /** The name of the store holding a device passkey ("iCloud Keychain"), or null. */
+  deviceName: string | null;
+  onMac: boolean;
+}): { word: FailedPromptWord; name?: string } {
+  if (input.route === "native") {
+    if (input.cancelled) {
+      return { word: input.onMac ? "device.closed.mac" : "device.closed" };
+    }
+    return {
+      word: input.onMac ? "device.unreachable.mac" : "device.unreachable",
+    };
+  }
+  if (!input.cancelled) return { word: "ceremonyFailed" };
+  if (input.offer === "native") {
+    return input.deviceName
+      ? { word: "fallback.device", name: input.deviceName }
+      : { word: "fallback.device.unnamed" };
+  }
+  return { word: "cancelled" };
 }

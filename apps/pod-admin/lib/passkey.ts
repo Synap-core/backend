@@ -22,6 +22,7 @@ import type { AppRouter } from "@synap-core/api-types";
 import {
   PRESENCE_CHALLENGE_TTL_SECONDS,
   type PasskeyAssertionJSON,
+  type PasskeyHolder,
 } from "@synap-core/types/presence";
 
 /** base64url (no padding) → bytes, as Kratos' `__oryWebAuthnBufferDecode`. */
@@ -156,9 +157,10 @@ export type PlacedCreationOptions = PublicKeyCredentialCreationOptions & {
  *    "hybrid" would open the USB or QR dialog first and bury it. With neither
  *    field, the browser and any password-manager extension offer everything.
  *
- * Both are requests, not guarantees: a password-manager extension replaces
- * `navigator.credentials.create` in the page and may take the passkey either
- * way (the words say how to pick the device then).
+ * Both are requests, not guarantees of the browser. A password-manager
+ * extension that replaced `navigator.credentials.create` in the page would
+ * take the passkey either way, so `createPasskey` sends `device` past it to
+ * the browser's own prompt ({@link passkeyRoute}).
  */
 export function placePasskey(
   options: PlacedCreationOptions,
@@ -180,6 +182,188 @@ export function placePasskey(
   return { ...rest, authenticatorSelection: selection };
 }
 
+// ─── Which prompt answers: past a password-manager extension ──────────────
+//
+// A password-manager extension (Bitwarden, 1Password, …) replaces
+// `navigator.credentials.get/create` with its own functions, as OWN
+// properties of the page's `navigator.credentials`. Its `get` looks only in
+// its vault: with no passkey of this pod there, it says "no passkey" and
+// throws NotAllowedError, which is also what a closed prompt throws, so a
+// passkey in iCloud Keychain or Windows Hello is never reached. The
+// browser's own methods stay on `CredentialsContainer.prototype`; calling
+// them on `navigator.credentials` opens the browser's own prompt (Touch ID,
+// Windows Hello, a phone, a security key) and skips the extension.
+//
+// Best effort, not a guarantee: a second extension may patch the prototype
+// itself (Dashlane did, 6 Nov 2026), and the operating system may hand the
+// browser's own prompt to a password-manager app. The `native` route then
+// still reaches that one; the dialog says so in words and offers Relay.
+
+/** Which call runs: the browser's own (`native`), or the page's, which an extension may have replaced. */
+export type PasskeyRoute = "native" | "page";
+
+type WebAuthnMethod = "get" | "create";
+type WebAuthnOptions = CredentialRequestOptions | CredentialCreationOptions;
+type WebAuthnCall = (options?: WebAuthnOptions) => Promise<Credential | null>;
+
+/** The WebAuthn method on `CredentialsContainer.prototype`, or null where there is none. */
+function prototypeWebAuthn(method: WebAuthnMethod): WebAuthnCall | null {
+  const container = (
+    globalThis as { CredentialsContainer?: { prototype: CredentialsContainer } }
+  ).CredentialsContainer;
+  const fn: unknown = container?.prototype?.[method];
+  return typeof fn === "function" ? (fn as WebAuthnCall) : null;
+}
+
+/** A function the browser wrote (its source reads `[native code]`), not a page or extension script. */
+function isNativeCode(fn: unknown): boolean {
+  if (typeof fn !== "function") return false;
+  try {
+    return Function.prototype.toString.call(fn).includes("[native code]");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Has something (a password-manager extension) replaced the browser's
+ * WebAuthn `method` in this page: on `navigator.credentials` (another
+ * function than the prototype's, or one that is not native code), or on
+ * `CredentialsContainer.prototype` itself (not native code).
+ */
+export function webauthnTakenOver(method: WebAuthnMethod): boolean {
+  const onPrototype = prototypeWebAuthn(method);
+  if (!onPrototype || typeof navigator === "undefined") return false;
+  const onInstance: unknown = navigator.credentials?.[method];
+  return (
+    onInstance !== onPrototype ||
+    !isNativeCode(onInstance) ||
+    !isNativeCode(onPrototype)
+  );
+}
+
+/** Run WebAuthn `method` by `route`: `native` calls the prototype's method on `navigator.credentials`. */
+function callWebAuthn(
+  method: WebAuthnMethod,
+  options: WebAuthnOptions,
+  route: PasskeyRoute
+): Promise<Credential | null> {
+  const own = route === "native" ? prototypeWebAuthn(method) : null;
+  if (own) return own.call(navigator.credentials, options);
+  return method === "get"
+    ? navigator.credentials.get(options as CredentialRequestOptions)
+    : navigator.credentials.create(options as CredentialCreationOptions);
+}
+
+/**
+ * A new passkey's route: `device` goes to the browser's own prompt when an
+ * extension has taken over `create` (or it would land in the extension's
+ * vault, not on this device); `manager` keeps the page's call, so the
+ * extension the person chose can take it.
+ */
+export function passkeyRoute(
+  placement: PasskeyPlacement,
+  takenOver: boolean
+): PasskeyRoute {
+  return placement === "device" && takenOver ? "native" : "page";
+}
+
+/** Which call a presence assertion runs first, and which one the dialog offers after it fails. */
+export interface AssertionPlan {
+  route: PasskeyRoute;
+  /** The other call, offered as a button once the first failed; null when it cannot help. */
+  fallback: PasskeyRoute | null;
+}
+
+/**
+ * Where to ask for the person's passkey, from where each one lives (the
+ * challenge's `holder`, `@synap-core/types/presence` `passkeyHolder`) and
+ * whether an extension has replaced `get` in this page:
+ *  - no extension: the page's call, nothing to route around;
+ *  - an extension, and no passkey held by a password manager: the browser's
+ *    own prompt (the extension could only answer "no passkey"); a passkey of
+ *    unknown home may still be the extension's, so it is offered after;
+ *  - an extension, and a manager-held passkey: the page's call (the
+ *    extension holds it); a device or unknown passkey is offered after.
+ * Never an automatic second call: a NotAllowedError is also the person
+ * closing the prompt.
+ */
+export function planAssertion(
+  holders: ReadonlyArray<PasskeyHolder>,
+  takenOver: boolean
+): AssertionPlan {
+  if (!takenOver) return { route: "page", fallback: null };
+  if (!holders.includes("manager")) {
+    return {
+      route: "native",
+      fallback: holders.includes("unknown") ? "page" : null,
+    };
+  }
+  return {
+    route: "page",
+    fallback: holders.some((h) => h !== "manager") ? "native" : null,
+  };
+}
+
+/** Once the prompt by `failed` did not sign: the plan's other prompt, offered as a button, or null. */
+export function otherRoute(
+  plan: AssertionPlan,
+  failed: PasskeyRoute
+): PasskeyRoute | null {
+  if (!plan.fallback) return null;
+  return failed === plan.route ? plan.fallback : plan.route;
+}
+
+/** A WebAuthn error's name, read from the name and never the class: an extension rethrows a plain Error named like the DOMException. */
+export function webauthnErrorName(err: unknown): string | null {
+  return err !== null &&
+    typeof err === "object" &&
+    "name" in err &&
+    typeof (err as { name: unknown }).name === "string"
+    ? (err as { name: string }).name
+    : null;
+}
+
+/** A caught WebAuthn error as "Copy details" carries it: its name and its message. */
+export function webauthnErrorDetail(err: unknown): string {
+  const name = webauthnErrorName(err);
+  const message =
+    err instanceof Error || (err !== null && typeof err === "object")
+      ? String((err as { message?: unknown }).message ?? "")
+      : String(err);
+  return [name, message].filter(Boolean).join(": ") || String(err);
+}
+
+/** Why a passkey could not be created; the words are the presence dialog's (`create.<reason>`). */
+export type PasskeyCreateReason = "exists" | "timeout" | "failed";
+
+/**
+ * A passkey creation that failed for a reason other than the person closing
+ * the prompt. Its `message` is the browser's error (name and message), for
+ * "Copy details"; the sentence to show is picked by `reason`.
+ */
+export class PasskeyCreateFailed extends Error {
+  readonly reason: PasskeyCreateReason;
+  constructor(browserError: unknown) {
+    super(webauthnErrorDetail(browserError));
+    this.name = "PasskeyCreateFailed";
+    this.reason = createFailureReason(browserError);
+  }
+}
+
+/** A creation error's reason, by WebAuthn error name. */
+export function createFailureReason(err: unknown): PasskeyCreateReason {
+  switch (webauthnErrorName(err)) {
+    case "InvalidStateError":
+      return "exists";
+    case "AbortError":
+    case "TimeoutError":
+      return "timeout";
+    default:
+      return "failed";
+  }
+}
+
 /** A created credential as Kratos reads it from the register field. */
 export function encodeAttestation(credential: PublicKeyCredential): string {
   const response = credential.response as AuthenticatorAttestationResponse;
@@ -196,17 +380,22 @@ export function encodeAttestation(credential: PublicKeyCredential): string {
 
 /** The person closed the passkey prompt or it timed out: not an error to report. */
 export class PasskeyCancelled extends Error {
-  constructor() {
+  /** What the prompt (or an extension) said, for "Copy details"; null when it returned nothing. */
+  readonly detail: string | null;
+  constructor(browserError?: unknown) {
     super("Passkey creation was cancelled.");
+    this.detail =
+      browserError === undefined ? null : webauthnErrorDetail(browserError);
   }
 }
 
 /**
  * Run the ceremony: ask for a new passkey where the person chose
- * ({@link placePasskey}) and return the value for the flow's register field.
- * Every pod-admin creation goes through here, so `placement` is required.
- * Throws {@link PasskeyCancelled} when the person dismisses the prompt
- * (WebAuthn `NotAllowedError`), an Error otherwise.
+ * ({@link placePasskey}, {@link passkeyRoute}) and return the value for the
+ * flow's register field. Every pod-admin creation goes through here, so
+ * `placement` is required. Throws {@link PasskeyCancelled} when the person
+ * dismisses the prompt (WebAuthn `NotAllowedError`), a
+ * {@link PasskeyCreateFailed} naming why otherwise.
  */
 export async function createPasskey(
   createData: string,
@@ -222,14 +411,16 @@ export async function createPasskey(
   );
   let credential: Credential | null;
   try {
-    credential = await navigator.credentials.create({ publicKey });
+    credential = await callWebAuthn(
+      "create",
+      { publicKey },
+      passkeyRoute(placement, webauthnTakenOver("create"))
+    );
   } catch (err) {
-    if (err instanceof DOMException && err.name === "NotAllowedError") {
+    if (webauthnErrorName(err) === "NotAllowedError") {
       throw new PasskeyCancelled();
     }
-    throw err instanceof Error
-      ? err
-      : new Error("This device could not create a passkey.");
+    throw new PasskeyCreateFailed(err);
   }
   if (!credential) throw new PasskeyCancelled();
   return encodeAttestation(credential as PublicKeyCredential);
@@ -305,26 +496,30 @@ export function encodeAssertion(
 }
 
 /**
- * Run the assertion: the browser asks for Touch ID, Windows Hello or the
- * security key, and the passkey signs the pod's challenge. Throws
- * {@link PasskeyCancelled} when the person closes the prompt, or when no
- * passkey of this pod is on this device (WebAuthn reports both as
- * `NotAllowedError`); an Error otherwise.
+ * Run the assertion by `route` ({@link planAssertion}): the browser asks for
+ * Touch ID, Windows Hello or the security key, and the passkey signs the
+ * pod's challenge. Throws {@link PasskeyCancelled} when the person closes
+ * the prompt, or when no passkey of this pod is where the prompt looked
+ * (WebAuthn, and an extension, report both as `NotAllowedError`); an Error
+ * otherwise.
  */
 export async function getPasskeyAssertion(
-  request: PresencePasskeyRequest
+  request: PresencePasskeyRequest,
+  route: PasskeyRoute = "page"
 ): Promise<PasskeyAssertionJSON> {
   if (!isPasskeyAssertionSupported()) {
     throw new Error("This browser can't use a passkey.");
   }
   let credential: Credential | null;
   try {
-    credential = await navigator.credentials.get({
-      publicKey: passkeyRequestOptions(request),
-    });
+    credential = await callWebAuthn(
+      "get",
+      { publicKey: passkeyRequestOptions(request) },
+      route
+    );
   } catch (err) {
-    if (err instanceof DOMException && err.name === "NotAllowedError") {
-      throw new PasskeyCancelled();
+    if (webauthnErrorName(err) === "NotAllowedError") {
+      throw new PasskeyCancelled(err);
     }
     throw err instanceof Error
       ? err
