@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { yourApps, type YourAppsPinRow } from "./your-apps.js";
+import { yourApps, type YourAppsPinRow, externalApps } from "./your-apps.js";
 
 const pin = (p: Partial<YourAppsPinRow> & { key: string }): YourAppsPinRow => ({
   profileSlug: null,
@@ -171,5 +171,64 @@ describe("yourApps", () => {
         links: [],
       })
     ).toEqual([]);
+  });
+});
+
+describe("externalApps — Your apps are the external ones (founder S4, 5 Nov 2026)", () => {
+  const pod = (over: Record<string, unknown> = {}) => ({
+    publicId: "app_1",
+    name: "Site CRM",
+    clientId: "https://crm.example.com/.well-known/client.json",
+    clientUri: "https://crm.example.com/app",
+    verified: false,
+    ...over,
+  });
+  const tool = {
+    id: "e1",
+    title: "Figma",
+    properties: { url: "https://figma.com", tags: ["tool"] },
+  };
+
+  it("a pod app opens at its client_uri; the websites follow; nothing else is an app", () => {
+    expect(externalApps({ podApps: [pod()], links: [tool as never] })).toEqual([
+      {
+        key: "app:app_1",
+        kind: "app",
+        name: "Site CRM",
+        publicId: "app_1",
+        domain: "crm.example.com",
+        url: "https://crm.example.com/app",
+        verified: false,
+      },
+      expect.objectContaining({ key: "website:e1", kind: "website" }),
+    ]);
+  });
+
+  it("with no client_uri it opens at its client_id's origin; a non-http one is left out", () => {
+    const [app] = externalApps({
+      podApps: [pod({ clientUri: null })],
+      links: [],
+    });
+    expect(app).toMatchObject({
+      url: "https://crm.example.com",
+      domain: "crm.example.com",
+    });
+    expect(
+      externalApps({
+        podApps: [pod({ clientUri: null, clientId: "dcr_abc" })],
+        links: [],
+      })
+    ).toEqual([]);
+  });
+
+  it("apps are ordered by name, a nameless app is named by its host", () => {
+    const keys = externalApps({
+      podApps: [
+        pod({ publicId: "b", name: "Zeta" }),
+        pod({ publicId: "a", name: "  " }),
+      ],
+      links: [],
+    }).map((a) => a.name);
+    expect(keys).toEqual(["crm.example.com", "Zeta"]);
   });
 });

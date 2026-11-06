@@ -84,6 +84,20 @@ export function sessionNeedsYouGroupKey(sessionId: string): string {
   return `${SESSION_NEEDS_YOU_NOTIFICATION_TYPE}:${sessionId}`;
 }
 
+/**
+ * One "back from Later" push per ask per Later (founder D3, 5 Nov 2026): its
+ * own key, so the session's earlier push (often within the dedupe window, a
+ * Later of three hours) never swallows the return, and a second delivery of
+ * the same return is still one push.
+ */
+export function laterReturnGroupKey(
+  sessionId: string,
+  label: string,
+  laterUntil: string
+): string {
+  return `${sessionNeedsYouGroupKey(sessionId)}:back:${normalizeExpectedLabel(label) ?? label}:${laterUntil}`;
+}
+
 /** One relay-awaiting-tap push per slot per window. */
 function relayAwaitsTapGroupKey(sessionId: string, label: string): string {
   return `${sessionNeedsYouGroupKey(sessionId)}:relay:${normalizeExpectedLabel(label) ?? label}`;
@@ -225,7 +239,12 @@ type Reason =
   | { kind: "slots"; before: unknown; after: unknown }
   | { kind: "question"; text: string; channelId: string }
   /** A commitment's relay, stamped on `slot.pendingRelay`, awaiting the tap. */
-  | { kind: "relay"; slot: ExpectedOutput };
+  | { kind: "relay"; slot: ExpectedOutput }
+  /**
+   * An owed ask back from the person's Later (`slot.laterUntil` has come):
+   * told again at its level, through the same derivation as a hand-over.
+   */
+  | { kind: "back"; slot: ExpectedOutput };
 
 /**
  * Tell the session's owner the session needs them. Returns true when a
@@ -281,6 +300,13 @@ export async function notifySessionNeedsYou(p: {
         `${heading} · ${ASK_COPY.awaitingYourTap(agent?.name ?? null)}${quote ? ` · ${ASK_COPY.youSaid(quote)}` : ""}`
       );
       groupKey = relayAwaitsTapGroupKey(p.sessionId, slot.label);
+    } else if (p.reason.kind === "back") {
+      const { slot } = p.reason;
+      if (!slot.laterUntil) return false;
+      fresh = [slot];
+      slotCount = 1;
+      summary = summarizeOwedSlots(fresh);
+      groupKey = laterReturnGroupKey(p.sessionId, slot.label, slot.laterUntil);
     } else if (p.reason.kind === "slots") {
       fresh = newlyOwedSlots(
         Array.isArray(p.reason.before)
@@ -320,10 +346,12 @@ export async function notifySessionNeedsYou(p: {
         ? { ...asked, quickAnswer: null, body: undefined }
         : asked;
 
-    const priority =
-      p.reason.kind === "slots"
-        ? needsYouNotificationPriority(fresh)
-        : undefined;
+    // A hand-over and an ask back from Later are told at their level; a relay
+    // or a room question keeps the registry's.
+    const atItsLevel = p.reason.kind === "slots" || p.reason.kind === "back";
+    const priority = atItsLevel
+      ? needsYouNotificationPriority(fresh)
+      : undefined;
     // What the push decision needs from the hand-over itself: whether an ask
     // is due within the hour (it breaks Focus), and which agent handed it
     // over (its own push limit). A relay's agent is the one that relayed.
@@ -332,9 +360,7 @@ export async function notifySessionNeedsYou(p: {
         ? p.reason.slot.pendingRelay?.relayedBy
         : (p.agentUserId ?? undefined);
     const facts = {
-      ...(p.reason.kind === "slots" && needsYouPushDueSoon(fresh)
-        ? { dueSoon: true }
-        : {}),
+      ...(atItsLevel && needsYouPushDueSoon(fresh) ? { dueSoon: true } : {}),
       ...(agentUserId ? { agentUserId } : {}),
     };
     const id = await NotificationService.create({

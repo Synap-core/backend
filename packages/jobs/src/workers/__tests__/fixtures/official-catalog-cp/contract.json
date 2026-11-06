@@ -9,7 +9,7 @@
   "verifyAt": "2026-10-25T00:00:00.000Z",
   "keysVersion": 1,
   "indexExpires": "2026-11-03T00:00:00.000Z",
-  "packageCount": 9,
+  "packageCount": 10,
   "limits": {
     "keyMaxLifetimeDays": 90,
     "keysStatementMaxLifetimeDays": 366,
@@ -28,7 +28,8 @@
       "template",
       "cell",
       "skill",
-      "view"
+      "view",
+      "agent"
     ],
     "kindAliases": {
       "workspace": "template",

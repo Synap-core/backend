@@ -2069,6 +2069,8 @@ export const focusSessionsRouter = router({
         ...(result.playbooks ? { playbooks: result.playbooks } : {}),
         ...(result.adopted ? { adopted: result.adopted } : {}),
         ...(result.targets ? { targets: result.targets } : {}),
+        // Born into a stage that moves the subject: what the move did.
+        ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
       };
     }),
 

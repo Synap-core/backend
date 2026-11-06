@@ -16454,7 +16454,7 @@ declare const MARKETPLACE_TRUST_LEVELS: readonly [
 	"showcase"
 ];
 export type MarketplaceTrust = (typeof MARKETPLACE_TRUST_LEVELS)[number];
-export type CatalogKind = "automation" | "capability" | "cell" | "skill" | "template" | "view";
+export type CatalogKind = "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 export interface KeyDetail {
 	grants: Array<{
 		clientId: string | null;
@@ -21136,6 +21136,38 @@ export type YourApp = {
 	name: string;
 	url: string;
 };
+/**
+ * "Your apps", as the founder settled it on 5 Nov 2026 (S4): "apps are the
+ * external ones; views, cells etc. on the pod itself are surfaces". So an
+ * app is something OUTSIDE the pod that opens on it:
+ *
+ *   app       a pod app the person connected (an App Connect app signed in
+ *             through the pod's own OAuth door, `apps.mode = 'oauth'`, not
+ *             revoked), opened at its `client_uri` (the homepage its client
+ *             metadata declares, same origin as its `client_id`), else at the
+ *             origin of its `client_id`;
+ *   website   a site they keep as a tool (the shared rule, as before).
+ *
+ * Pins, spaces and documents are SURFACES (Relay's "Your surfaces", the
+ * desktop's rail and spaces), never apps. Pinned and space rows stay in
+ * {@link yourApps} only until Relay and the desktop read this list; then that
+ * list goes. Ordered: apps by name, then websites by name.
+ */
+export type ExternalApp = {
+	/** Its host: the app's identity. */
+	domain: string;
+	/** `app:<publicId>`. */
+	key: string;
+	kind: "app";
+	name: string;
+	publicId: string;
+	/** Where it opens: its `client_uri`, else its `client_id`'s origin. */
+	url: string;
+	/** A Synap app (first-party origin) vs an unverified one. */
+	verified: boolean;
+} | Extract<YourApp, {
+	kind: "website";
+}>;
 export type PublishResult = {
 	proposalId: string;
 	status: "proposed";
@@ -23200,7 +23232,7 @@ export type StageSubjectStatusOutcome = {
 	value: string;
 	via?: "status_door";
 } | {
-	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
+	reason: "already_set" | "already_settled" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
 	status: "skipped";
 } | {
 	reason: string;
@@ -25186,6 +25218,14 @@ export interface Signal {
 	 * session". Absent otherwise, and on every other kind.
 	 */
 	keptOwedAt?: string;
+	/**
+	 * The person's Later on an `owed-slot` (`ExpectedOutput.laterUntil`, an ISO
+	 * instant), carried as it is stored: in the future, the ask is set aside
+	 * (its row is in Review later); past, it came BACK from Later and a surface
+	 * may mark it so (founder, 5 Nov 2026, D3). Absent when never set aside, and
+	 * on every other kind.
+	 */
+	laterUntil?: string;
 	/**
 	 * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
 	 * hands the whole row to the one card adapter (`askCardSlotOf`) and names
@@ -37524,6 +37564,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
 				subjectEntityId: string | null;
+				subjectMove?: StageSubjectStatusOutcome | undefined;
 				targets?: SessionTargetsWrite | undefined;
 				templateId: string | null;
 				title: string | null;
@@ -38813,6 +38854,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						toStage: string;
 					} | undefined;
 					tier?: "deep" | "quick" | "standard" | undefined;
+					forEach?: {
+						as?: string | undefined;
+						over: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -42837,7 +42882,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				slug: string;
 				source?: string | undefined;
 			};
@@ -42850,7 +42895,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				installMode: "install" | "open_site" | "propose" | "refuse";
 				installed: boolean | null;
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				name: string;
 				objectKind: string;
 				official: boolean;
@@ -42871,7 +42916,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					connectors?: boolean | undefined;
 					network?: boolean | undefined;
 				} | undefined;
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				params?: Record<string, unknown> | undefined;
 				slug: string;
 				source?: string | undefined;
@@ -42884,7 +42929,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cursor?: number | undefined;
-				kind?: "automation" | "capability" | "cell" | "skill" | "template" | "view" | undefined;
+				kind?: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view" | undefined;
 				limit?: number | undefined;
 				query?: string | undefined;
 				source?: string | undefined;
@@ -42917,7 +42962,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		preflight: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				slug: string;
 				source?: string | undefined;
 				workspaceId?: string | undefined;
@@ -45495,6 +45540,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						toStage: string;
 					} | undefined;
 					tier?: "deep" | "quick" | "standard" | undefined;
+					forEach?: {
+						as?: string | undefined;
+						over: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -46497,6 +46546,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						toStage: string;
 					} | undefined;
 					tier?: "deep" | "quick" | "standard" | undefined;
+					forEach?: {
+						as?: string | undefined;
+						over: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -47015,6 +47068,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				apps: YourApp[];
+				externalApps: ExternalApp[];
 			};
 		}>;
 	}>>;
@@ -56999,6 +57053,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								toStage: string;
 							} | undefined;
 							tier?: "deep" | "quick" | "standard" | undefined;
+							forEach?: {
+								as?: string | undefined;
+								over: string;
+							} | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;
 						subjectProfile?: {
@@ -57265,6 +57323,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentPausedBy: string | null;
 					agentRole: string | null;
 					agentTemplate: string | null;
+					agentTemplateSlug: string | null;
 					agentType: string | null;
 					avatarUrl: string | null;
 					computerBelongsTo: "agent" | "person" | "shared" | null;

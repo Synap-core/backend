@@ -232,6 +232,47 @@ describe("playbookStageSchema — stage.tier (advisory model tier)", () => {
   });
 });
 
+describe("playbookStageSchema — stage.forEach (run once per item)", () => {
+  it("accepts a collection path with an optional item name, and keeps absent absent", () => {
+    for (const forEach of [
+      { over: "shots" },
+      { over: "subject.shots", as: "shot" },
+    ]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, forEach });
+      expect(r.success && r.data.forEach).toEqual(forEach);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success && "forEach" in none.data).toBe(false);
+  });
+
+  it("refuses prose, a missing collection, a misspelled key and a bad item name", () => {
+    for (const bad of [
+      { over: "every shot in the film" },
+      { over: "" },
+      { over: "shots.", as: "shot" },
+      {},
+      { over: "shots", each: "x" },
+      { over: "shots", as: "my shot" },
+      "shots",
+      null,
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, forEach: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, forEach: { over: "shots", as: "shot" } },
+    ]);
+    expect(r.success && r.data[0].forEach).toEqual({
+      over: "shots",
+      as: "shot",
+    });
+  });
+});
+
 describe("a declared slot's `ask` is parsed at the playbook write doors", () => {
   const slot = (ask: unknown) => ({ kind: "decision", label: "Region", ask });
 
