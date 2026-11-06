@@ -866,6 +866,12 @@ export interface SlotAskOption {
   description?: string;
   /** One short fact to weigh before picking it ("Skips 1,284 tests"). */
   caution?: string;
+  /** What the person looks at before picking it. Mirrors `AskOptionMedia`. */
+  media?: {
+    kind: "image" | "video" | "audio";
+    ref: { url: string } | { assetId: string } | { entityId: string };
+    alt?: string;
+  };
 }
 
 /** The question a choose option opens once picked: ONE level, 2–4 options. */

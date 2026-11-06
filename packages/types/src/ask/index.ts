@@ -102,6 +102,21 @@ export type AskProvideKind = (typeof ASK_PROVIDE_KINDS)[number];
 // ─── Options (capture's chip, minus capture's own apply semantics) ──────────
 
 /**
+ * A media ref on an option. Exactly one ref shape: a url, an uploaded asset,
+ * or a pod entity.
+ */
+export const AskOptionMediaSchema = z.object({
+  kind: z.enum(["image", "video", "audio"]),
+  ref: z.union([
+    z.strictObject({ url: z.string().url().max(2000) }),
+    z.strictObject({ assetId: z.string().min(1).max(200) }),
+    z.strictObject({ entityId: z.string().min(1).max(200) }),
+  ]),
+  alt: z.string().max(200).optional(),
+});
+export type AskOptionMedia = z.infer<typeof AskOptionMediaSchema>;
+
+/**
  * One offered answer. The base of capture's `FollowUpChipSchema`, which extends
  * it with the capture-only apply fields (`action`, `entityId`, `propertyKey`)
  * and makes `value` required — so the two can never disagree on a label bound
@@ -125,6 +140,11 @@ export const AskOptionSchema = z.object({
    * a warning chip.
    */
   caution: z.string().min(1).max(ASK_LIMITS.optionCautionMaxChars).optional(),
+  /**
+   * What the person looks at before picking it (a shot, a take). Persisted and
+   * passed through on read; no surface is required to draw it yet.
+   */
+  media: AskOptionMediaSchema.optional(),
 });
 export type AskOption = z.infer<typeof AskOptionSchema>;
 
