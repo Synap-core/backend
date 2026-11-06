@@ -318,8 +318,8 @@ export interface PresenceModeSetting {
  * proof of presence and every pod admin is told.
  */
 export interface PresenceSensitivitySetting {
-  approvalsOff: string[];
-  actionsOff: string[];
+  approvalsOff: readonly string[];
+  actionsOff: readonly string[];
   /** User id of the pod admin who last changed it. */
   changedBy: string;
   changedAt: string;

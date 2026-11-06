@@ -50,7 +50,10 @@ vi.mock("../cells/renderables.js", () => ({
   listRenderables: async () => [],
 }));
 
+import { CELL_FRAME_MAX_BYTES } from "@synap-core/types/cell-bridge";
 import {
+  GRAMMAR_FIX,
+  PAGE_OVER_CAP_FIX,
   diagnoseDocument,
   diagnoseHtmlPage,
   podEmbedResolver,
@@ -392,6 +395,51 @@ describe("diagnoseHtmlPage — what the one frame policy refuses, said to the au
         "<!doctype html><html><body><div>chart</div><script>draw()</script></body></html>"
       )
     ).toEqual([]);
+  });
+
+  describe("a page larger than a host runs (CELL_FRAME_MAX_BYTES)", () => {
+    const SHELL = "<!doctype html><p></p>";
+    /** A page of exactly `bytes` UTF-8 bytes, padded with `fill`. */
+    const pageOf = (bytes: number, fill = "a") => {
+      const width = new TextEncoder().encode(fill).length;
+      const room = bytes - SHELL.length;
+      expect(room % width).toBe(0);
+      return SHELL.replace("<p>", `<p>${fill.repeat(room / width)}`);
+    };
+    const sizeOf = (html: string) => new TextEncoder().encode(html).length;
+
+    it("one byte over the cap is an error that says the page shows as source only, with its own fix", () => {
+      const html = pageOf(CELL_FRAME_MAX_BYTES + 1);
+      expect(sizeOf(html)).toBe(CELL_FRAME_MAX_BYTES + 1);
+      const out = diagnoseHtmlPage(html);
+      expect(out.map((d) => [d.code, d.severity])).toEqual([
+        ["over_cap", "error"],
+      ]);
+      expect(out[0]!.message).toContain(`${CELL_FRAME_MAX_BYTES + 1} bytes`);
+      expect(out[0]!.message).toMatch(/source only/);
+      expect(out[0]!.fix).toBe(PAGE_OVER_CAP_FIX);
+      expect(out[0]!.fix).not.toBe(GRAMMAR_FIX.over_cap);
+    });
+
+    it("exactly at the cap is not over it", () => {
+      const html = pageOf(CELL_FRAME_MAX_BYTES);
+      expect(sizeOf(html)).toBe(CELL_FRAME_MAX_BYTES);
+      expect(diagnoseHtmlPage(html)).toEqual([]);
+    });
+
+    it("GUARDRAIL: size is UTF-8 bytes, not characters: multi-byte text under the cap in characters is over it in bytes", () => {
+      // "é" is 2 bytes, "€" 3, "😀" 4 (a surrogate pair: 2 UTF-16 units).
+      for (const fill of ["é", "€", "😀"]) {
+        const width = sizeOf(fill);
+        const html = pageOf(
+          SHELL.length + width * Math.ceil(CELL_FRAME_MAX_BYTES / width),
+          fill
+        );
+        expect(html.length).toBeLessThan(CELL_FRAME_MAX_BYTES);
+        expect(sizeOf(html)).toBeGreaterThan(CELL_FRAME_MAX_BYTES);
+        expect(codes(diagnoseHtmlPage(html)), fill).toEqual(["over_cap"]);
+      }
+    });
   });
 });
 

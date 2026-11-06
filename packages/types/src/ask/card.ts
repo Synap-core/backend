@@ -32,6 +32,7 @@ import {
   type QuestionDisposition,
   type QuestionDispositionInput,
   type AskOption,
+  type AskOptionMedia,
   type AskProvideKind,
   type AskRisk,
   type AskSnapshot,
@@ -448,6 +449,8 @@ export interface AskOptionChip {
   description?: string;
   /** One short fact to weigh before picking it — a warning chip. */
   caution?: string;
+  /** What to show beside the label (a shot, a take). */
+  media?: AskOptionMedia;
 }
 
 function optionChip(o: AskOption): AskOptionChip {
@@ -459,6 +462,7 @@ function optionChip(o: AskOption): AskOptionChip {
     ...(o.recommended ? { recommended: true as const } : {}),
     ...(o.description ? { description: o.description } : {}),
     ...(o.caution ? { caution: o.caution } : {}),
+    ...(o.media ? { media: o.media } : {}),
   };
 }
 

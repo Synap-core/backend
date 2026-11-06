@@ -6,10 +6,12 @@
  * proactive write (the defaults as read, only `enabled` moved).
  */
 import { describe, expect, it } from "vitest";
+import type { DialQuery } from "../../../(admin)/settings/review/_lib/pod-defaults-model";
 import {
   DEFAULT_ROWS,
   defaultsStepRows,
   enabledSave,
+  factorNote,
   libraryDial,
   presenceDial,
   presenceSave,
@@ -22,11 +24,26 @@ import {
 const idle = { isPending: false, variables: undefined };
 const ready = <T>(data: T): QueryLike<T> => ({
   isLoading: false,
-  isError: false,
+  error: null,
   data,
 });
-const failed: QueryLike<never> = { isLoading: false, isError: true };
-const dialOn = ready({ enabled: true, canManage: true });
+const failed: QueryLike<never> = {
+  isLoading: false,
+  error: new Error("read failed"),
+  data: undefined,
+};
+const loading: QueryLike<never> = {
+  isLoading: true,
+  error: null,
+  data: undefined,
+};
+/** A setting's read already turned into a switch (`DialQuery`). */
+const dial = (enabled: boolean, canManage: boolean): DialQuery => ({
+  isLoading: false,
+  isError: false,
+  data: { enabled, canManage },
+});
+const dialOn = dial(true, true);
 
 function rowsWith(
   presence: QueryLike<PresenceModeData>,
@@ -86,7 +103,7 @@ describe("defaultsStepRows", () => {
   it("a row the pod says this person may not change is locked as admin-only", () => {
     const rows = rowsWith(ready({ mode: "enforce", source: "default" }), {
       reversible: {
-        read: ready({ enabled: true, canManage: false }),
+        read: dial(true, false),
         save: idle,
       },
     });
@@ -135,5 +152,21 @@ describe("proactiveInput", () => {
       enabled: false,
       canManage: true,
     });
+  });
+});
+
+describe("factorNote: what the presence row says about the person's factors", () => {
+  it("a new owner with no passkey and no Relay key is invited to add one", () => {
+    expect(factorNote(ready({ passkeys: 0, deviceKeys: 0 }))).toBe("none");
+  });
+
+  it("a passkey or a Relay key is enough: nothing more to say", () => {
+    expect(factorNote(ready({ passkeys: 1, deviceKeys: 0 }))).toBeNull();
+    expect(factorNote(ready({ passkeys: 0, deviceKeys: 2 }))).toBeNull();
+  });
+
+  it("GUARDRAIL: a failed read is said, never read as 'no passkey' or as fine", () => {
+    expect(factorNote(failed)).toBe("failed");
+    expect(factorNote(loading)).toBeNull();
   });
 });

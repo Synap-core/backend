@@ -1979,6 +1979,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // own agent, not the capture-path remap above: a person's start (or a
         // capture they made) is never re-shaped by a guessed template.
         matchTemplate: !!ctxAgentUserId,
+        // Facts bind for an agent's start, as on the MCP door (d01–d03).
+        bindOnFacts: !!ctxAgentUserId,
         // The same start offers the MCP door hands back (goals, near sessions,
         // and `homes` for a start that landed in no project) — suggestions
         // only, for an agent's start, so the CLI sees what MCP sees (S5).
@@ -2048,6 +2050,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(result.offers ? { offers: result.offers } : {}),
         ...(result.adopted ? { adopted: true } : {}),
         ...(result.targets ? { targets: result.targets } : {}),
+        // Born into a stage that moves the subject: what the move did.
+        ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
       });
     } catch (err) {
       // An agent's start that declares no criterion: a refusal, not a fault.

@@ -103,6 +103,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { AppRepository, runWithGrant, type KeyGrant } from "@synap/database";
 import { REVERSIBLE_CLASS_PATTERN } from "@synap/governance-policy";
+import { mintPresencePass } from "./presence/pass.js";
 import {
   checkPermissionOrPropose,
   previewPermissionDecision,
@@ -218,7 +219,12 @@ beforeAll(async () => {
   publicId = app.publicId;
   // THE door the CLI calls (`POST /apps/:id/key`): creates the app's agent,
   // gives it the approved reach, mints its key.
-  issued = await issueKey({ publicId, ownerUserId: OWNER, via: "cli" });
+  issued = await issueKey({
+    publicId,
+    ownerUserId: OWNER,
+    via: "cli",
+    presence: mintPresencePass("apps.issueKey", OWNER, true),
+  });
   appAgent = (await repo.getByPublicId(publicId))!.app.agentUserId!;
 }, 120_000);
 
@@ -526,6 +532,7 @@ describe("a re-approval re-derives the live key and the app's agent", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "ui",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     const agent = (await repo.getByPublicId(app.publicId))!.app.agentUserId!;
     const membershipsOf = async () =>

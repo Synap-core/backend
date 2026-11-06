@@ -507,7 +507,9 @@ describe("facets gate on the ROLE's space; a pod-wide parent must be in its reac
       profileId: ROLE,
       workspaceId: WS,
     });
-    expect(res).toMatchObject({ status: "attached" });
+    // POD_NOTE_2 already wears ROLE in W (that is its reach), so the attach
+    // answers `exists`. The grant runs first: a refusal would throw.
+    expect(res).toMatchObject({ status: "exists" });
   });
 
   it("CONTROL — the same role attaches onto an entity in W", async () => {

@@ -658,6 +658,9 @@ export const sessionHandlers: McpHandlerMap = {
         // `null` is the explicit opt-out of template matching; absent = match.
         templateId: readTemplateIdArg(args.templateId),
         matchTemplate: true,
+        // The pod binds the playbook the FACTS name (subject kind, parent's
+        // playbook, a `main red:` title); words only ever offer (d01–d03).
+        bindOnFacts: true,
         // F5/F6: the project's open goals (no trackId named) and the open
         // sessions on close work — suggestions on the reply, never applied.
         offerStartContext: true,
@@ -751,8 +754,13 @@ export const sessionHandlers: McpHandlerMap = {
     // outputs, lessons, grants), the same text the IS executor's kickoff
     // carries (`renderPlaybookMethod`, one renderer for both doors). Without
     // it an MCP agent bound a playbook and learned nothing from it.
+    // A bind the pod made from facts says so in ONE `binding` line instead,
+    // so the start reply stays lean (d01–d03); the playbook itself reads with
+    // synap_list_playbooks `playbookId`.
     const method =
-      result.status === "created" && result.session.playbookId
+      result.status === "created" &&
+      result.session.playbookId &&
+      !result.binding
         ? await (
             await import("../../../services/playbooks/playbook-method.js")
           ).loadBoundPlaybookMethod({
@@ -1860,6 +1868,9 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.followRefusal
             ? { followRefusal: result.followRefusal }
             : {}),
+          // The facts ladder ran once because a subject or a goal just
+          // arrived (d02): ONE line, what it bound and why, or the offer.
+          ...(result.binding ? { binding: result.binding } : {}),
           // Which track/step it landed in, and — when the step names another
           // domain — that the session was filed where it is, not moved.
           ...(result.trackFiling ? { trackFiling: result.trackFiling } : {}),

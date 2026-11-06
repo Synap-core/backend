@@ -347,6 +347,14 @@ export interface Signal {
    */
   keptOwedAt?: string;
   /**
+   * The person's Later on an `owed-slot` (`ExpectedOutput.laterUntil`, an ISO
+   * instant), carried as it is stored: in the future, the ask is set aside
+   * (its row is in Review later); past, it came BACK from Later and a surface
+   * may mark it so (founder, 5 Nov 2026, D3). Absent when never set aside, and
+   * on every other kind.
+   */
+  laterUntil?: string;
+  /**
    * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
    * hands the whole row to the one card adapter (`askCardSlotOf`) and names
    * the cause the same way the session page does. Absent on every other slot
@@ -585,6 +593,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "ask",
   "pendingRelay",
   "keptOwedAt",
+  "laterUntil",
   "paramName",
   "class",
   "lifetimeHours",
@@ -1147,6 +1156,9 @@ export interface OwedSlotSignalInput {
  *                                      awaiting the tap: the row's Confirm.
  *   keptOwedAt                      → `keptOwedAt` — kept past its session:
  *                                      the card's fate reads it.
+ *   laterUntil                      → `laterUntil` — the person's Later: its
+ *                                      class reads it, and a returned ask
+ *                                      (past) wears a "Back" mark (D3).
  *   paramName                       → `paramName` — the param a param slot
  *                                      asks for; the card adapter reads it.
  *   askedBy, askedByName            → `by` — the asker as a named mark, only
@@ -1199,12 +1211,12 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "keptOwedAt",
   "paramName",
   "blocksOpenPr",
+  // Read by the slot's class (`owedSlotClassOf`) AND carried: a returned ask
+  // (the time is past) wears a "Back" mark on the phone (founder D3).
+  "laterUntil",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
-  // Read by the slot's class only (`owedSlotClassOf`): a set-aside ask
-  // reaches the signal as its Review later fold, never as a second field.
-  "laterUntil",
   "sessionStatus",
   "workspaceId",
   "icon",
@@ -1450,6 +1462,7 @@ export function signalFromOwedSlot(
     ...(row.ask ? { ask: row.ask } : {}),
     ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
     ...(row.keptOwedAt ? { keptOwedAt: row.keptOwedAt } : {}),
+    ...(row.laterUntil ? { laterUntil: row.laterUntil } : {}),
     ...(row.paramName ? { paramName: row.paramName } : {}),
     ...(row.askedBy && row.askedByName
       ? {

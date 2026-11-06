@@ -81,9 +81,11 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
     summary: "List a space's conversations",
     description:
       "Every person the caller is reaching out to in one space, in one read, " +
-      "newest activity first: a person with a facet in the space and an " +
-      "external channel or an open send. Each row: the person (name, " +
-      "company), their channel ids, the last message, the draft waiting " +
+      "newest activity first: a person with an external channel or an " +
+      "open send who is a lead of the space, themselves (a role in it) or " +
+      "through the company they work at (`works_at` a company with a role " +
+      "in it). Each row: the person (name, company), the lead it is listed " +
+      "for (`lead`: kind, id, stage), their channel ids, the last message, the draft waiting " +
       "(`draft`, `held` = not sendable yet, or `failed` with its reason), " +
       "unread inbound messages and their LinkedIn reach. `needsYou=true` " +
       "keeps the people a draft, a failed send or an unread message waits " +

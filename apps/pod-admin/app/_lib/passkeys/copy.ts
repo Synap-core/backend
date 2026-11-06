@@ -12,6 +12,12 @@ export const en = {
     "Confirmed. Create your new passkey within 5 minutes.",
   "passkeys.grant.create": "Create the passkey",
   "passkeys.grant.failed": "Couldn’t confirm it’s you. Try again.",
+  "passkeys.grant.expired":
+    "Your confirmation ran out before the new passkey was created.",
+  "passkeys.grant.again": "Confirm again",
+  "passkeys.page.back": "Security",
+  "passkeys.page.lead":
+    "A passkey signs you in with this device’s lock, and confirms it’s you for sensitive approvals.",
   "passkeys.relayOnly":
     "Your account is protected by Face ID in Relay, so a new passkey needs a confirmation from Relay first, and Relay can’t give it yet.",
   "passkeys.devicesFailed":
@@ -60,6 +66,12 @@ export const fr: Catalog<typeof en> = {
     "Confirmé. Créez votre nouvelle clé d’accès dans les 5 minutes.",
   "passkeys.grant.create": "Créer la clé d’accès",
   "passkeys.grant.failed": "Impossible de confirmer que c’est vous. Réessayez.",
+  "passkeys.grant.expired":
+    "Votre confirmation a expiré avant la création de la nouvelle clé d’accès.",
+  "passkeys.grant.again": "Confirmer de nouveau",
+  "passkeys.page.back": "Sécurité",
+  "passkeys.page.lead":
+    "Une clé d’accès vous connecte avec le verrouillage de cet appareil, et confirme que c’est vous pour les approbations sensibles.",
   "passkeys.relayOnly":
     "Votre compte est protégé par Face ID dans Relay : une nouvelle clé d’accès doit d’abord être confirmée dans Relay, ce que Relay ne permet pas encore.",
   "passkeys.devicesFailed":

@@ -993,6 +993,28 @@ export const buildHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const trimmed = (v: unknown) =>
       typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    // Advisory schema: say in words what the pod would otherwise reject as a
+    // uuid / length error (same refusal as synap_start_session).
+    const parentArg = trimmed(args.parentSessionId);
+    if (parentArg && !isUuid(parentArg)) {
+      return ok({
+        error:
+          "parentSessionId must be a session UUID (the id of a session you own that you are running this playbook FROM).",
+      });
+    }
+    const intentArg = trimmed(args.suspendedIntent);
+    if (intentArg && intentArg.length > 400) {
+      return ok({
+        error:
+          "suspendedIntent must be at most 400 characters — ONE line naming what you were about to do.",
+      });
+    }
+    if (intentArg && !parentArg) {
+      return ok({
+        error:
+          "suspendedIntent needs parentSessionId: it is the line the parent waits on.",
+      });
+    }
     // The shared run door (`hub-protocol/playbook-doors.ts`) — the same one Hub
     // REST `POST /playbooks/:id/run` calls. Name resolution, the write-home
     // ladder and the governed `playbooks.run` delegation live there once.
@@ -1008,6 +1030,8 @@ export const buildHandlers: McpHandlerMap = {
       projectId: trimmed(args.projectId),
       trackId: trimmed(args.trackId),
       handToAgentId: trimmed(args.handToAgentId),
+      parentSessionId: trimmed(args.parentSessionId),
+      suspendedIntent: trimmed(args.suspendedIntent),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);

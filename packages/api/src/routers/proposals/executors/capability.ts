@@ -656,7 +656,7 @@ export function registerCapabilityExecutors(): void {
         // by applyProposalApproval, so setApproved does not ask again.
         presenceChecked: "applyProposalApproval",
         workspaceId: proposal.workspaceId ?? null,
-      } as unknown as Context);
+      });
       for (const id of skillIds) {
         await caller.setApproved({ id, approved: true });
       }
@@ -672,7 +672,7 @@ export function registerCapabilityExecutors(): void {
           // by applyProposalApproval, so setApproved does not ask again.
           presenceChecked: "applyProposalApproval",
           workspaceId: proposal.workspaceId ?? null,
-        } as unknown as Context);
+        });
         for (const id of toolIds) {
           await toolsCaller.setApproved({ id, approved: true });
         }

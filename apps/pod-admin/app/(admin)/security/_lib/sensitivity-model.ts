@@ -9,9 +9,9 @@
  *    here by existing.
  *  - Grouped by reason, deploys first (the founder's example), then setup,
  *    governance, deletions; inside a group, approvals then actions.
- *  - Named through the vocabulary door (an approval: its proposal's title
- *    words, `missingKindLabel`; an action: what the person does,
- *    `actionDoing`), never a raw token. A type prefix has no words of its own:
+ *  - Named through the one kind-words door the audit lens and the presence
+ *    card share (`presenceKindWords`: an approval's proposal title words, an
+ *    action's title), never a raw token. A type prefix has no words of its own:
  *    the card says "Any … request" around `humanizeToken`.
  */
 import {
@@ -21,7 +21,7 @@ import {
   type SensitiveReason,
 } from "@synap-core/types/presence";
 import { humanizeToken } from "@synap-core/types/vocabulary";
-import { missingKindLabel } from "./presence-mode-model";
+import { presenceKindWords } from "../../audit/_lib/presence-missing-link";
 
 /** The order the groups show in. */
 export const REASON_ORDER: readonly SensitiveReason[] = [
@@ -69,7 +69,7 @@ function rowLabel(row: {
 }): string {
   // A prefix (`governance.`): the type it starts, without the dot.
   if (row.prefix) return humanizeToken(row.key.replace(/\.$/, ""));
-  return missingKindLabel(row.key);
+  return presenceKindWords(row.key);
 }
 
 export function sensitivityView(

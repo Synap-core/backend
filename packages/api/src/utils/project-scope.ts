@@ -53,6 +53,7 @@ import {
   memberWorkspaceIds,
   podSharedEntityIdsFor,
   podSharedEntityIdsForSpaces,
+  podSharedFacetForSpacesWhere,
   homeSpaceSharedWhere,
   homeSpaceInLensWhere,
   homeSpaceInSpacesWhere,
@@ -643,6 +644,32 @@ export function roleInWorkspaceLensWhere(
     entityIdColumn,
     lensSpacesImIn(userId, lens)
   );
+}
+
+/**
+ * The FACET form of `roleInWorkspaceLensWhere`: a row predicate over
+ * `entity_facets` (joined to its entity, whose `workspace_id` column is
+ * `entityWorkspaceIdColumn`) for the live role facets that make an entity
+ * wear a role in the lens space(s) the caller is a member of: (a) a facet
+ * stamped in the space, or (b) a pod-wide facet whose role is granted to it,
+ * on a pod-wide entity. An entity matches `roleInWorkspaceLensWhere` exactly
+ * when one of its facets matches this, so a reader that needs the role
+ * itself (its status: a lead's stage) reads the same rule. Still a narrow:
+ * AND it with the entity's read floor.
+ */
+export function roleFacetInWorkspaceLensWhere(
+  entityWorkspaceIdColumn: AnyPgColumn,
+  userId: string,
+  lens: string | string[]
+): SQL {
+  const spaces = lensSpacesImIn(userId, lens);
+  return and(
+    isNull(entityFacets.deletedAt),
+    or(
+      inArray(entityFacets.workspaceId, spaces),
+      and(isNull(entityWorkspaceIdColumn), podSharedFacetForSpacesWhere(spaces))
+    )
+  )!;
 }
 
 /**

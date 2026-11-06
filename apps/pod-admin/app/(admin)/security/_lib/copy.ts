@@ -1,17 +1,16 @@
 /**
- * Pod security's words for the proof-of-presence mode (W3 slice 3) and what
- * asks for a passkey (W5), as
- * catalogs (`@synap-core/types/i18n`): English is the source and the type.
- * DRAFT French ("vous"), awaiting the founder's review.
+ * Pod security's words for the proof-of-presence mode and what asks
+ * for a passkey, as catalogs
+ * (`@synap-core/types/i18n`): English is the source and the type. The
+ * setting's name, its on/off words, what is sensitive and where to approve
+ * are the shared presence words (`PRESENCE_WORDS`), merged in here, never
+ * written twice. DRAFT French ("vous"), awaiting the founder's review.
  */
 import type { Catalog } from "@synap-core/types/i18n";
+import { PRESENCE_WORDS } from "@synap-core/types/presence";
 
-export const en = {
-  "presence.title": "Approvals need you in person",
-  "presence.hint":
-    "Sensitive approvals and changes need your passkey or Face ID, not only a signed-in browser.",
-  "presence.mark.on": "On",
-  "presence.mark.off": "Recording only",
+const cardEn = {
+  "presence.hint": "{sensitive} need you in person. {where}",
   "presence.line.on":
     "An app or an AI using a signed-in session can’t approve a sensitive request, or change keys and rules, on its own.",
   "presence.line.off":
@@ -26,12 +25,11 @@ export const en = {
     "In the last 30 days, {n, plural, one {# approval or change} other {# approvals or changes}} went through without a proof. With this on, the pod refuses {n, plural, one {it} other {them}}.",
   "presence.missing.before":
     "In the last 30 days, {n, plural, one {# approval or change} other {# approvals or changes}} went through without a proof.",
-  "presence.missing.showAll": "Show all",
-  "presence.switch": "Approvals need you in person",
+  "presence.missing.showAll": "Show all {n}",
   "presence.on.title": "Turn on approvals in person?",
   "presence.on.consequence":
-    "Sensitive approvals and changes will need your passkey here, or Face ID in Relay. Turning it off again needs one too: check that you have a passkey or Relay’s Face ID before you turn it on.",
-  "presence.on.passkeys": "Check your passkeys",
+    "You have no passkey or Relay Face ID yet. Turning it off again needs one, so add a passkey first.",
+  "presence.on.addPasskey": "Add a passkey",
   "presence.on.confirm": "Turn on",
   "presence.off.title": "Turn off approvals in person?",
   "presence.off.consequence":
@@ -40,7 +38,7 @@ export const en = {
   "presence.failed": "Couldn’t read whether approvals need you in person.",
   "presence.retry": "Try again",
   "presence.notChanged": "Couldn’t change it",
-  "presence.notChangedHint": "Nothing changed. Try again.",
+  "presence.notChangedHint": "Nothing changed.",
   "sensitivity.title": "What asks for your passkey",
   "sensitivity.hint":
     "Switch off what a signed-in session may do here without your passkey. Switching one off asks for your passkey, and every pod admin is told.",
@@ -62,16 +60,12 @@ export const en = {
   "sensitivity.failed": "Couldn’t read what asks for your passkey.",
   "sensitivity.retry": "Try again",
   "sensitivity.notChanged": "Couldn’t change it",
-  "sensitivity.notChangedHint": "Nothing changed. Try again.",
+  "sensitivity.notChangedHint": "Nothing changed.",
   "sensitivity.changedBy": "Changed {when}.",
-};
+} as const;
 
-export const fr: Catalog<typeof en> = {
-  "presence.title": "Les approbations demandent votre présence",
-  "presence.hint":
-    "Les approbations et modifications sensibles demandent votre clé d’accès ou Face ID, pas seulement un navigateur connecté.",
-  "presence.mark.on": "Activé",
-  "presence.mark.off": "Enregistrement seul",
+const cardFr: Catalog<typeof cardEn> = {
+  "presence.hint": "{sensitive} demandent votre présence. {where}",
   "presence.line.on":
     "Une app ou une IA qui utilise une session connectée ne peut pas approuver une demande sensible, ni modifier des clés et des règles, seule.",
   "presence.line.off":
@@ -86,12 +80,11 @@ export const fr: Catalog<typeof en> = {
     "Ces 30 derniers jours, {n, plural, one {# approbation ou modification est passée} other {# approbations ou modifications sont passées}} sans preuve. Activé, le pod {n, plural, one {la refuse} other {les refuse}}.",
   "presence.missing.before":
     "Ces 30 derniers jours, {n, plural, one {# approbation ou modification est passée} other {# approbations ou modifications sont passées}} sans preuve.",
-  "presence.missing.showAll": "Tout afficher",
-  "presence.switch": "Les approbations demandent votre présence",
+  "presence.missing.showAll": "Tout afficher ({n})",
   "presence.on.title": "Activer les approbations en personne ?",
   "presence.on.consequence":
-    "Les approbations et modifications sensibles demanderont votre clé d’accès ici, ou Face ID dans Relay. Pour désactiver ensuite, il en faudra une aussi : vérifiez que vous avez une clé d’accès ou Face ID dans Relay avant d’activer.",
-  "presence.on.passkeys": "Vérifier vos clés d’accès",
+    "Vous n’avez pas encore de clé d’accès ni Face ID dans Relay. Pour désactiver ensuite, il en faudra une : ajoutez d’abord une clé d’accès.",
+  "presence.on.addPasskey": "Ajouter une clé d’accès",
   "presence.on.confirm": "Activer",
   "presence.off.title": "Désactiver les approbations en personne ?",
   "presence.off.consequence":
@@ -101,7 +94,7 @@ export const fr: Catalog<typeof en> = {
     "Impossible de savoir si les approbations demandent votre présence.",
   "presence.retry": "Réessayer",
   "presence.notChanged": "Impossible de le modifier",
-  "presence.notChangedHint": "Rien n’a changé. Réessayez.",
+  "presence.notChangedHint": "Rien n’a changé.",
   "sensitivity.title": "Ce qui demande votre clé d’accès",
   "sensitivity.hint":
     "Désactivez ce qu’une session connectée peut faire ici sans votre clé d’accès. Désactiver demande votre clé d’accès, et chaque administrateur du pod est prévenu.",
@@ -124,6 +117,9 @@ export const fr: Catalog<typeof en> = {
   "sensitivity.failed": "Impossible de lire ce qui demande votre clé d’accès.",
   "sensitivity.retry": "Réessayer",
   "sensitivity.notChanged": "Impossible de le modifier",
-  "sensitivity.notChangedHint": "Rien n’a changé. Réessayez.",
+  "sensitivity.notChangedHint": "Rien n’a changé.",
   "sensitivity.changedBy": "Modifié {when}.",
 };
+
+export const en = { ...PRESENCE_WORDS.en, ...cardEn };
+export const fr: Catalog<typeof en> = { ...PRESENCE_WORDS.fr, ...cardFr };

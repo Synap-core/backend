@@ -5,8 +5,10 @@ import {
   RECONNECT_COMMAND,
   activityLine,
   agentsPhrase,
+  belongsToChangeNeedsConfirm,
   belongsToChoices,
   belongsToMark,
+  leaveAgentsConfirm,
   seedsRevokedLine,
   computerCounts,
   computerFilterOf,
@@ -361,6 +363,19 @@ describe("belongsToChoices — the three answers, each with what it changes", ()
       "Shared",
     ]);
     for (const c of choices) expect(c.line.length).toBeGreaterThan(20);
+  });
+
+  // Rules out (review M3): taking approvals back in one tap on a radio.
+  it("leaving An agent's is confirmed first; nothing else is", () => {
+    expect(belongsToChangeNeedsConfirm("agent", "person")).toBe(true);
+    expect(belongsToChangeNeedsConfirm("agent", "shared")).toBe(true);
+    expect(belongsToChangeNeedsConfirm("person", "agent")).toBe(false);
+    expect(belongsToChangeNeedsConfirm("shared", "person")).toBe(false);
+    expect(belongsToChangeNeedsConfirm(null, "person")).toBe(false);
+    const confirm = leaveAgentsConfirm("Build box", "person");
+    expect(confirm.title).toBe("Make Build box Personal?");
+    expect(confirm.consequence).toMatch(/loses every approval/);
+    expect(confirm.confirmLabel).toBe("Take back its approvals");
   });
 
   it("says what leaving an agent's box took back", () => {

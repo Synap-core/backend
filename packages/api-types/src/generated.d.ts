@@ -959,6 +959,41 @@ export interface RunChoiceOption {
 	wakeLabel: string | null;
 	/** At most one: Synap AI when the playbook allows it, else none. */
 	recommended: boolean;
+	/**
+	 * Only on Synap AI: the AI provider it runs on, ONE global choice per pod
+	 * (founder, run choice v3, 2026-11-05: the provider replaces the IS default
+	 * AI, it is never chosen per playbook). `null` for an agent.
+	 */
+	provider: RunChoiceProvider | null;
+}
+declare const RUN_CHOICE_PROVIDER_KEYS: readonly [
+	"person",
+	"space",
+	"pod",
+	"synap"
+];
+export type RunChoiceProviderKey = (typeof RUN_CHOICE_PROVIDER_KEYS)[number];
+/** The provider Synap AI uses now, read by the IS default's own rule. */
+export interface RunChoiceProvider {
+	/** `ai_providers.provider_id`; `null` = Synap credits. */
+	providerId: string | null;
+	/** The provider's name ("Anthropic"), or the Synap credits words. */
+	name: string;
+	key: RunChoiceProviderKey;
+}
+/**
+ * Agents the person has that cannot run it now, grouped by the one reason
+ * (decision D3: an option that cannot apply is absent, and the ask says why).
+ */
+export interface RunChoiceHidden {
+	why: AgentWakeRefusal;
+	/** The reason's words (`resolveAgentWakeRefusalLabel`). */
+	label: string;
+	count: number;
+	/** Their labels, as the options would show them. */
+	names: string[];
+	/** Their agent user ids, in the order of `names`. */
+	agentUserIds: string[];
 }
 /** `playbooks.runChoice` / Hub `GET /playbooks/:id/run-choice`. */
 export interface PlaybookRunChoice {
@@ -966,14 +1001,21 @@ export interface PlaybookRunChoice {
 	/** The person's remembered choice; `null` = never chosen. */
 	stored: RunChoice | null;
 	/**
-	 * Ask before the run: nothing is stored AND the person has an agent that
-	 * could take it, so there is a real choice. A launch that asks passes its
-	 * answer with `remember: true`; headless runs never ask.
+	 * Ask before the run: nothing is stored and something can run it (decision
+	 * D4, "never a silent default": even with one option, even with no agent).
+	 * A launch that asks passes its answer with `remember: true`. A headless run
+	 * (an automation, a schedule) never asks: it takes the playbook's default
+	 * and records `via: "default"` on the run.
 	 */
 	ask: boolean;
 	/** Synap AI may run it (`executor` is `is-agent` or `hybrid`). */
 	synapAiAllowed: boolean;
+	/** Synap AI (when allowed), then the agents that are awake or can wake. */
 	options: RunChoiceOption[];
+	/** The person's agents that cannot run it now, largest group first. */
+	hidden: RunChoiceHidden[];
+	/** "2 more can't run now"; `null` when nothing is hidden. */
+	hiddenLabel: string | null;
 	/** What the next run would do, by the same rule the run uses. */
 	next: RunOn;
 }
@@ -11178,7 +11220,8 @@ export interface EntityPropertyDiff {
 	 */
 	absentAfter?: string[];
 	/**
-	 * Entity COLUMNS an update changed (title; `preview` is the description).
+	 * Entity COLUMNS an update changed (title; `preview` is the description;
+	 * a pod-wide record's home space).
 	 * Revert restores one only while it still holds the written value.
 	 */
 	fields?: {
@@ -11187,7 +11230,7 @@ export interface EntityPropertyDiff {
 	};
 }
 /** The entity columns an update can change and revert can restore. */
-export type EntityDiffField = "preview" | "title";
+export type EntityDiffField = "homeWorkspaceId" | "preview" | "title";
 export type RevertTarget = {
 	id: string;
 	kind: "entity";
@@ -11467,6 +11510,15 @@ export interface Context {
 	 * field would have broken all seven with ZERO typecheck signal.
 	 */
 	governanceProposalId?: string;
+	/**
+	 * INTERNAL CHANNEL — never from a request (`createContext` never sets it).
+	 * A proposal executor calling a router through `createCaller` sets it when
+	 * `applyProposalApproval` already checked the proof of presence for this
+	 * approval, so the procedure does not ask again (`proofCheckedByApproval`,
+	 * `utils/presence-input.ts`). The tripwire `presence-gate-every-door` pins
+	 * which files set it.
+	 */
+	presenceChecked?: "applyProposalApproval";
 	/**
 	 * The message ID that triggered this hub-protocol request.
 	 * When set, proposals created during this request are linked to this message.
@@ -14038,6 +14090,18 @@ export interface SlotAskOption {
 	description?: string;
 	/** One short fact to weigh before picking it ("Skips 1,284 tests"). */
 	caution?: string;
+	/** What the person looks at before picking it. Mirrors `AskOptionMedia`. */
+	media?: {
+		alt?: string;
+		kind: "audio" | "image" | "video";
+		ref: {
+			url: string;
+		} | {
+			assetId: string;
+		} | {
+			entityId: string;
+		};
+	};
 }
 /** The question a choose option opens once picked: ONE level, 2–4 options. */
 export interface SlotAskFollowUp {
@@ -16454,7 +16518,7 @@ declare const MARKETPLACE_TRUST_LEVELS: readonly [
 	"showcase"
 ];
 export type MarketplaceTrust = (typeof MARKETPLACE_TRUST_LEVELS)[number];
-export type CatalogKind = "automation" | "capability" | "cell" | "skill" | "template" | "view";
+export type CatalogKind = "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 export interface KeyDetail {
 	grants: Array<{
 		clientId: string | null;
@@ -21136,6 +21200,38 @@ export type YourApp = {
 	name: string;
 	url: string;
 };
+/**
+ * "Your apps", as the founder settled it on 5 Nov 2026 (S4): "apps are the
+ * external ones; views, cells etc. on the pod itself are surfaces". So an
+ * app is something OUTSIDE the pod that opens on it:
+ *
+ *   app       a pod app the person connected (an App Connect app signed in
+ *             through the pod's own OAuth door, `apps.mode = 'oauth'`, not
+ *             revoked), opened at its `client_uri` (the homepage its client
+ *             metadata declares, same origin as its `client_id`), else at the
+ *             origin of its `client_id`;
+ *   website   a site they keep as a tool (the shared rule, as before).
+ *
+ * Pins, spaces and documents are SURFACES (Relay's "Your surfaces", the
+ * desktop's rail and spaces), never apps. Pinned and space rows stay in
+ * {@link yourApps} only until Relay and the desktop read this list; then that
+ * list goes. Ordered: apps by name, then websites by name.
+ */
+export type ExternalApp = {
+	/** Its host: the app's identity. */
+	domain: string;
+	/** `app:<publicId>`. */
+	key: string;
+	kind: "app";
+	name: string;
+	publicId: string;
+	/** Where it opens: its `client_uri`, else its `client_id`'s origin. */
+	url: string;
+	/** A Synap app (first-party origin) vs an unverified one. */
+	verified: boolean;
+} | Extract<YourApp, {
+	kind: "website";
+}>;
 export type PublishResult = {
 	proposalId: string;
 	status: "proposed";
@@ -22150,9 +22246,18 @@ export interface NotificationDef {
 	label: string;
 	icon: string;
 	priority: "high" | "low" | "normal" | "urgent";
-	/** Mustache-style template: {{variable}} */
+	/** Mustache-style template: {{variable}} (an ICU message under `messageSyntax: "icu"`). */
 	titleTemplate: string;
 	bodyTemplate: string;
+	/**
+	 * `"icu"`: `titleTemplate` and `bodyTemplate` are messages in the ICU subset
+	 * of `@synap-core/types/i18n` (`{name}`, `select`, `plural`; write ’, never
+	 * an ASCII apostrophe where ICU would quote), formatted in English with the
+	 * producer's `data` (`renderNotificationText`). Use it when the words depend
+	 * on a token the producer sends: the producer sends tokens, the registry owns
+	 * the words. Omit ⇒ mustache `{{variable}}` interpolation.
+	 */
+	messageSyntax?: "icu";
 	/** Default delivery channels (user prefs can override) */
 	defaultChannels: DeliveryChannel[];
 	/**
@@ -23200,7 +23305,7 @@ export type StageSubjectStatusOutcome = {
 	value: string;
 	via?: "status_door";
 } | {
-	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
+	reason: "already_set" | "already_settled" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
 	status: "skipped";
 } | {
 	reason: string;
@@ -23694,6 +23799,18 @@ export interface RunHandedTo {
 	name: string | null;
 	via: "assigned" | "named";
 }
+/** What the write door answers: applied with the new read, or proposed. */
+export type SetRunChoiceResult = {
+	message: null;
+	proposalId: null;
+	runChoice: PlaybookRunChoice;
+	status: "applied";
+} | {
+	message: string;
+	proposalId: string;
+	runChoice: null;
+	status: "proposed";
+};
 /**
  * Enrollment shapes exposed to the frontend (contract with the parallel
  * enrollment-UI agent — field names are load-bearing, do not rename).
@@ -25186,6 +25303,14 @@ export interface Signal {
 	 * session". Absent otherwise, and on every other kind.
 	 */
 	keptOwedAt?: string;
+	/**
+	 * The person's Later on an `owed-slot` (`ExpectedOutput.laterUntil`, an ISO
+	 * instant), carried as it is stored: in the future, the ask is set aside
+	 * (its row is in Review later); past, it came BACK from Later and a surface
+	 * may mark it so (founder, 5 Nov 2026, D3). Absent when never set aside, and
+	 * on every other kind.
+	 */
+	laterUntil?: string;
 	/**
 	 * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
 	 * hands the whole row to the one card adapter (`askCardSlotOf`) and names
@@ -30330,6 +30455,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						entityId?: string | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						propertyKey?: string | undefined;
 						recommended?: boolean | undefined;
 						value: string;
@@ -35023,6 +35159,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				facet: {
+					agentUserId: string | null;
+					contextEntityId: string | null;
+					correlationId: string | null;
+					createdAt: Date;
+					createdByKind: ProvenanceKind | null;
+					createdByUserId: string | null;
+					deletedAt: Date | null;
+					entityId: string;
+					id: string;
+					metadata: unknown;
+					profileId: string;
+					properties: unknown;
+					sourceProposalId: string | null;
+					status: string | null;
+					statusCategory: string | null;
+					updatedAt: Date;
+					userId: string;
+					workspaceId: string | null;
+				};
+				facetId: string;
+				message: string;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
+				status: "exists";
+			} | {
 				facet: Record<string, unknown> | null;
 				facetId?: undefined;
 				message: string;
@@ -35915,6 +36078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						to?: string | undefined;
 					} | null | undefined;
 				} | undefined;
+				homeWorkspaceId?: string | null | undefined;
 				id: string;
 				occurredAt?: string | undefined;
 				profileSlug?: string | undefined;
@@ -35943,6 +36107,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "proposed";
 				};
 			} | {
+				message: string;
+				notice?: string;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
+				status: string;
+				statusMove: {
+					status: "moved";
+					transition: StatusTransition;
+				} | {
+					current: string;
+					status: "unchanged";
+				};
+				written: {
+					documentId: string | null;
+					preview: string | null;
+					properties: unknown;
+					title: string | null;
+				};
+			} | {
 				deferred?: true | undefined;
 				message: string;
 				notice?: string;
@@ -35963,6 +36147,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unmodeled?: UnmodeledProperty[] | undefined;
 				written: {
 					documentId: string | null;
+					homeWorkspaceId?: string | null;
 					preview: string | null;
 					properties: unknown;
 					title: string | null;
@@ -36531,6 +36716,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						description?: string | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					};
@@ -36539,6 +36735,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						description?: string | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					} | undefined;
@@ -36744,6 +36951,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -36751,6 +36969,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 						icon?: string | undefined;
 						label: string;
+						media?: {
+							alt?: string | undefined;
+							kind: "audio" | "image" | "video";
+							ref: {
+								url: string;
+							} | {
+								assetId: string;
+							} | {
+								entityId: string;
+							};
+						} | undefined;
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					}[];
@@ -37050,6 +37279,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -37057,6 +37297,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -37083,6 +37334,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -37091,6 +37353,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -37133,6 +37406,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -37140,6 +37424,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -37166,6 +37461,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -37174,6 +37480,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -37240,6 +37557,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -37247,6 +37575,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -37367,6 +37706,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -37375,6 +37725,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -37497,6 +37858,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
 				subjectEntityId: string | null;
+				subjectMove?: StageSubjectStatusOutcome | undefined;
 				targets?: SessionTargetsWrite | undefined;
 				templateId: string | null;
 				title: string | null;
@@ -38212,6 +38574,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -38219,6 +38592,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -38245,6 +38629,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -38253,6 +38648,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -38295,6 +38701,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -38302,6 +38719,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[] | undefined;
@@ -38328,6 +38756,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -38336,6 +38775,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -38402,6 +38852,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -38409,6 +38870,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -38529,6 +39001,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							};
@@ -38537,6 +39020,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								description?: string | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							} | undefined;
@@ -38669,6 +39163,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -38676,6 +39181,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -38786,6 +39302,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						toStage: string;
 					} | undefined;
 					tier?: "deep" | "quick" | "standard" | undefined;
+					forEach?: {
+						as?: string | undefined;
+						over: string;
+					} | undefined;
+					when?: {
+						equals?: unknown;
+						exists?: boolean | undefined;
+						param: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -42810,7 +43335,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				slug: string;
 				source?: string | undefined;
 			};
@@ -42823,7 +43348,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				installMode: "install" | "open_site" | "propose" | "refuse";
 				installed: boolean | null;
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				name: string;
 				objectKind: string;
 				official: boolean;
@@ -42844,7 +43369,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					connectors?: boolean | undefined;
 					network?: boolean | undefined;
 				} | undefined;
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				params?: Record<string, unknown> | undefined;
 				slug: string;
 				source?: string | undefined;
@@ -42857,7 +43382,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cursor?: number | undefined;
-				kind?: "automation" | "capability" | "cell" | "skill" | "template" | "view" | undefined;
+				kind?: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view" | undefined;
 				limit?: number | undefined;
 				query?: string | undefined;
 				source?: string | undefined;
@@ -42890,7 +43415,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		preflight: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				slug: string;
 				source?: string | undefined;
 				workspaceId?: string | undefined;
@@ -45185,6 +45710,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -45192,6 +45728,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -45351,6 +45898,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -45358,6 +45916,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -45468,6 +46037,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						toStage: string;
 					} | undefined;
 					tier?: "deep" | "quick" | "standard" | undefined;
+					forEach?: {
+						as?: string | undefined;
+						over: string;
+					} | undefined;
+					when?: {
+						equals?: unknown;
+						exists?: boolean | undefined;
+						param: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -45920,6 +46498,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runOn?: "synap_ai" | undefined;
 				source?: string | undefined;
 				subjectId?: string | undefined;
+				suspendedIntent?: string | undefined;
 				trackId?: string | undefined;
 				trackStage?: string | undefined;
 				workspaceId?: string | undefined;
@@ -45954,8 +46533,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
+					blocksParent?: CreateTimeBlockerReport | null;
 					parentSessionId: string;
 					status: "linked";
+					suspendedIntentRecorded?: boolean;
 				} | {
 					parentSessionId: string;
 					reason: string;
@@ -46000,8 +46581,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
+					blocksParent?: CreateTimeBlockerReport | null;
 					parentSessionId: string;
 					status: "linked";
+					suspendedIntentRecorded?: boolean;
 				} | {
 					parentSessionId: string;
 					reason: string;
@@ -46113,9 +46696,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: "external-agent";
 				};
 				playbookId: string;
+				reasoning?: string | undefined;
 			};
 			meta: object;
-			output: PlaybookRunChoice;
+			output: SetRunChoiceResult;
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -46195,6 +46779,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									description?: string | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -46202,6 +46797,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 							icon?: string | undefined;
 							label: string;
+							media?: {
+								alt?: string | undefined;
+								kind: "audio" | "image" | "video";
+								ref: {
+									url: string;
+								} | {
+									assetId: string;
+								} | {
+									entityId: string;
+								};
+							} | undefined;
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
@@ -46353,6 +46959,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										description?: string | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -46360,6 +46977,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 								icon?: string | undefined;
 								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
@@ -46470,6 +47098,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						toStage: string;
 					} | undefined;
 					tier?: "deep" | "quick" | "standard" | undefined;
+					forEach?: {
+						as?: string | undefined;
+						over: string;
+					} | undefined;
+					when?: {
+						equals?: unknown;
+						exists?: boolean | undefined;
+						param: string;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -46988,6 +47625,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				apps: YourApp[];
+				externalApps: ExternalApp[];
 			};
 		}>;
 	}>>;
@@ -47192,6 +47830,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			}>;
 		}>>;
+		factors: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				deviceKeys: number;
+				passkeys: number;
+			};
+		}>;
 		mode: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
@@ -53442,6 +54088,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				fromDate?: string | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
+				presenceMissing?: {
+					kind?: string | undefined;
+				} | undefined;
 				subjectType?: string | null | undefined;
 				toDate?: string | undefined;
 				userId?: string | null | undefined;
@@ -56688,6 +57337,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 											description?: string | undefined;
 											icon?: string | undefined;
 											label: string;
+											media?: {
+												alt?: string | undefined;
+												kind: "audio" | "image" | "video";
+												ref: {
+													url: string;
+												} | {
+													assetId: string;
+												} | {
+													entityId: string;
+												};
+											} | undefined;
 											recommended?: boolean | undefined;
 											value?: string | undefined;
 										}[];
@@ -56695,6 +57355,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									} | undefined;
 									icon?: string | undefined;
 									label: string;
+									media?: {
+										alt?: string | undefined;
+										kind: "audio" | "image" | "video";
+										ref: {
+											url: string;
+										} | {
+											assetId: string;
+										} | {
+											entityId: string;
+										};
+									} | undefined;
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
@@ -56855,6 +57526,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 												description?: string | undefined;
 												icon?: string | undefined;
 												label: string;
+												media?: {
+													alt?: string | undefined;
+													kind: "audio" | "image" | "video";
+													ref: {
+														url: string;
+													} | {
+														assetId: string;
+													} | {
+														entityId: string;
+													};
+												} | undefined;
 												recommended?: boolean | undefined;
 												value?: string | undefined;
 											}[];
@@ -56862,6 +57544,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										} | undefined;
 										icon?: string | undefined;
 										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
@@ -56972,6 +57665,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								toStage: string;
 							} | undefined;
 							tier?: "deep" | "quick" | "standard" | undefined;
+							forEach?: {
+								as?: string | undefined;
+								over: string;
+							} | undefined;
+							when?: {
+								equals?: unknown;
+								exists?: boolean | undefined;
+								param: string;
+							} | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;
 						subjectProfile?: {
@@ -57238,6 +57940,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentPausedBy: string | null;
 					agentRole: string | null;
 					agentTemplate: string | null;
+					agentTemplateSlug: string | null;
 					agentType: string | null;
 					avatarUrl: string | null;
 					computerBelongsTo: "agent" | "person" | "shared" | null;

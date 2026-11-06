@@ -339,7 +339,8 @@ export const entityHandlers: McpHandlerMap = {
       args.properties !== undefined ||
       args.metadata !== undefined ||
       args.profileSlug !== undefined ||
-      args.documentId !== undefined;
+      args.documentId !== undefined ||
+      args.homeWorkspaceId !== undefined;
 
     let body: Record<string, unknown> | undefined;
     if (content !== undefined) {
@@ -411,6 +412,12 @@ export const entityHandlers: McpHandlerMap = {
         ? { documentId: args.documentId }
         : {}),
       ...(args.replaceBody === true ? { replaceBody: true } : {}),
+      // File a pod-wide record for a space, or clear it (finding a70f910f):
+      // checked and governed by `entities.update`.
+      ...(typeof args.homeWorkspaceId === "string" ||
+      args.homeWorkspaceId === null
+        ? { homeWorkspaceId: args.homeWorkspaceId as string | null }
+        : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Compare-and-set on the status; a stale move comes back as
@@ -544,6 +551,13 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
     const attachEntityId = args.entityId as string | undefined;
+    // An entity's body is read as markdown on Relay and the desktop; a page
+    // runs only at /open/<id>. Refused before anything is written.
+    if (args.type === "html" && attachEntityId) {
+      throw new Error(
+        'A `type: "html"` page is not attached with `entityId` (an entity body is read as markdown): create the page without `entityId`; it opens at /open/<id>.'
+      );
+    }
     const replaceBody = args.replaceBody === true;
     // Refuse an attach that would replace a body BEFORE the document exists.
     if (attachEntityId) {
@@ -995,6 +1009,13 @@ export const entityHandlers: McpHandlerMap = {
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
+    // The role is already worn: the door wrote nothing and filed nothing.
+    if (result.status === "exists") {
+      return ok({
+        ...result,
+        hint: "Use synap_update_facet with this facetId to change the role's fields.",
+      });
+    }
     return ok(result);
   },
   synap_detach_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -1005,62 +1026,9 @@ export const entityHandlers: McpHandlerMap = {
     // handle attach returns), or resolve entityId + facetSlug → facetId via the
     // entity's live facets (the ergonomic form an agent knows), then detach
     // through the SAME governed door — a lookup before the door, not a bypass.
-    let facetId = args.facetId as string | undefined;
-    if (!facetId) {
-      const entityId = args.entityId as string | undefined;
-      const facetSlug = args.facetSlug as string | undefined;
-      if (!entityId || !facetSlug) {
-        return ok({
-          error: "Provide facetId, or entityId + facetSlug, to detach a facet",
-        });
-      }
-      const entityCallerCtx = await createHubProtocolCallerContext(
-        userId,
-        apiKeyScopes,
-        (args.workspaceId as string) || undefined,
-        undefined,
-        undefined,
-        agentUserId
-      );
-      const entityCaller = regularEntitiesRouter.createCaller(entityCallerCtx);
-      const entityResult = await entityCaller.get({
-        id: entityId,
-        includeProfile: true,
-        ...(args.workspaceId
-          ? { workspaceId: args.workspaceId as string }
-          : {}),
-      });
-      const facets =
-        (
-          entityResult as {
-            facets?: Array<{
-              facet: { id: string; workspaceId: string | null };
-              profile: { slug?: string };
-            }>;
-          }
-        ).facets ?? [];
-      const matches = facets.filter((f) => f.profile?.slug === facetSlug);
-      if (matches.length === 0) {
-        return ok({
-          error: `No live '${facetSlug}' facet on entity ${entityId}`,
-        });
-      }
-      if (matches.length > 1) {
-        // Same role attached in more than one workspace lens — picking the
-        // first would detach a nondeterministic one, and the proposal card
-        // keys on the opaque facetId so a reviewer wouldn't catch it. Make
-        // the caller choose: pass workspaceId to narrow the lens, or the
-        // exact facetId.
-        return ok({
-          error: `Entity ${entityId} carries ${matches.length} live '${facetSlug}' facets — pass workspaceId or an explicit facetId`,
-          candidates: matches.map((f) => ({
-            facetId: f.facet.id,
-            workspaceId: f.facet.workspaceId,
-          })),
-        });
-      }
-      facetId = matches[0].facet.id;
-    }
+    const target = await resolveLiveFacetId(ctx, "detach");
+    if ("refusal" in target) return ok(target.refusal);
+    const { facetId } = target;
     // lensCaller: same governance-lens omission as attachFacet above.
     const result = await lensCaller.entities.detachFacet({
       userId,
@@ -1069,6 +1037,47 @@ export const entityHandlers: McpHandlerMap = {
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
+  },
+  synap_update_facet: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
+      ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    // The fields of a role the entity ALREADY wears. `synap_update_entity`
+    // writes the entity's own properties and `synap_attach_facet` on a worn
+    // role writes nothing, so without this door an agent could not change a
+    // role's fields at all. Resolved like detach (facetId, or entityId +
+    // facetSlug), then written ONLY through the one facet door
+    // (`entities.updateFacet`: partial merge, governed, may return `proposed`).
+    const properties = args.properties;
+    if (
+      !properties ||
+      typeof properties !== "object" ||
+      Array.isArray(properties) ||
+      Object.keys(properties).length === 0
+    ) {
+      return toolError(
+        "Provide `properties`: the role fields to change (merged into the role's current fields)."
+      );
+    }
+    const target = await resolveLiveFacetId(ctx, "update");
+    if ("refusal" in target) return ok(target.refusal);
+    const { facetId } = target;
+    // lensCaller: same governance-lens omission as attachFacet above.
+    const result = await lensCaller.entities.updateFacet({
+      userId,
+      facetId,
+      properties: properties as Record<string, unknown>,
+      // When `properties` carries the role's lifecycle status, the door moves
+      // it through the status door with this compare-and-set (the door's own
+      // contract; omitted = not sent).
+      ...(typeof args.expectedStatus === "string" ||
+      args.expectedStatus === null
+        ? { expectedStatus: args.expectedStatus as string | null }
+        : {}),
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+    });
+    return ok({ facetId, ...result });
   },
   synap_resolve_identity: async (
     ctx: McpToolContext
@@ -1127,3 +1136,74 @@ export const entityHandlers: McpHandlerMap = {
     return ok(await buildIdentityResolveResponse(resolution, userId, signals));
   },
 };
+
+/**
+ * The facet a role write targets: `args.facetId` (the handle attach returns),
+ * or `args.entityId` + `args.facetSlug` resolved against the entity's live
+ * facets — the ergonomic form an agent knows. A lookup BEFORE the governed door
+ * (`detachFacet` / `updateFacet`), never a write and never a bypass. Same rules
+ * for both verbs: no match, or more than one live facet of that role (the role
+ * worn in several workspace lenses), is a refusal naming what to pass.
+ */
+async function resolveLiveFacetId(
+  ctx: McpToolContext,
+  verb: "detach" | "update"
+): Promise<{ facetId: string } | { refusal: Record<string, unknown> }> {
+  const { args, userId, apiKeyScopes, agentUserId } = ctx;
+  const explicit = args.facetId as string | undefined;
+  if (explicit) return { facetId: explicit };
+  const entityId = args.entityId as string | undefined;
+  const facetSlug = args.facetSlug as string | undefined;
+  if (!entityId || !facetSlug) {
+    return {
+      refusal: {
+        error: `Provide facetId, or entityId + facetSlug, to ${verb} a facet`,
+      },
+    };
+  }
+  const entityCallerCtx = await createHubProtocolCallerContext(
+    userId,
+    apiKeyScopes,
+    (args.workspaceId as string) || undefined,
+    undefined,
+    undefined,
+    agentUserId
+  );
+  const entityCaller = regularEntitiesRouter.createCaller(entityCallerCtx);
+  const entityResult = await entityCaller.get({
+    id: entityId,
+    includeProfile: true,
+    ...(args.workspaceId ? { workspaceId: args.workspaceId as string } : {}),
+  });
+  const facets =
+    (
+      entityResult as {
+        facets?: Array<{
+          facet: { id: string; workspaceId: string | null };
+          profile: { slug?: string };
+        }>;
+      }
+    ).facets ?? [];
+  const matches = facets.filter((f) => f.profile?.slug === facetSlug);
+  if (matches.length === 0) {
+    return {
+      refusal: { error: `No live '${facetSlug}' facet on entity ${entityId}` },
+    };
+  }
+  if (matches.length > 1) {
+    // Same role attached in more than one workspace lens — picking the first
+    // would write a nondeterministic one, and the proposal card keys on the
+    // opaque facetId so a reviewer wouldn't catch it. Make the caller choose:
+    // pass workspaceId to narrow the lens, or the exact facetId.
+    return {
+      refusal: {
+        error: `Entity ${entityId} carries ${matches.length} live '${facetSlug}' facets — pass workspaceId or an explicit facetId`,
+        candidates: matches.map((f) => ({
+          facetId: f.facet.id,
+          workspaceId: f.facet.workspaceId,
+        })),
+      },
+    };
+  }
+  return { facetId: matches[0].facet.id };
+}

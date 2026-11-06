@@ -18,6 +18,7 @@ export { apiKeyService } from "./services/api-keys.js";
 export { ImportOrchestrator } from "./services/import-orchestrator.js";
 // The background approval job (handler slot of @synap/jobs proposal-approve).
 export { runApprovalJob } from "./services/proposals/approval-runs.js";
+export { runAskLaterReturn } from "./services/focus-sessions/ask-later.js";
 // The store-first bulk import job (handler slot of @synap/jobs import-units).
 export { runImportUnitsJob } from "./services/import/import-units-job.js";
 // The Library light read: the job handler + hourly sweep the app registers in
@@ -128,6 +129,11 @@ export {
   type StandaloneKind,
   type DetachResult,
 } from "./services/capabilities/reconcile-standalone-configs-to-templates.js";
+// The catalog installs every official agent template on every pod (D8).
+export {
+  installOfficialAgentTemplates,
+  type OfficialAgentTemplatesReport,
+} from "./services/agent-templates/official.js";
 export {
   orderWorkspacesByTemplateDependencies,
   type OrderableWorkspaceRow,

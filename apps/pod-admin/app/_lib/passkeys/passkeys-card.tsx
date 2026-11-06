@@ -41,6 +41,7 @@ import {
   createPasskey,
   isPasskeySupported,
   PasskeyCancelled,
+  type PasskeyPlacement,
 } from "../../../lib/passkey";
 import { formatDate } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
@@ -50,6 +51,7 @@ import { PresenceDeclined } from "../presence/presence-model";
 import { useAuthorizePasskeyChange } from "../presence/use-factor-doors";
 import { usePodSensitivity } from "../presence/use-sensitivity";
 import { en, fr } from "./copy";
+import { PasskeyPlacementMenu } from "../passkey-placement/passkey-placement-menu";
 import { passkeyAddStep } from "./passkey-add-model";
 import {
   passkeyRemoveBlock,
@@ -100,6 +102,21 @@ export function PasskeysCard({
   const sensitivity = usePodSensitivity();
   const authorize = useAuthorizePasskeyChange();
   const [grantedUntil, setGrantedUntil] = useState<number | null>(null);
+  /** A grant that ran out before the passkey was created: "Confirm again". */
+  const [grantExpired, setGrantExpired] = useState(false);
+  // The grant's end is a moment, not a render: fold the card back to
+  // "Confirm again" when it passes, even if nothing else re-renders it.
+  useEffect(() => {
+    if (grantedUntil === null) return;
+    const timer = window.setTimeout(
+      () => {
+        setGrantedUntil(null);
+        setGrantExpired(true);
+      },
+      Math.max(0, grantedUntil - Date.now())
+    );
+    return () => window.clearTimeout(timer);
+  }, [grantedUntil]);
   const [removing, setRemoving] = useState<PasskeyRow | null>(null);
   /** A fixed sentence; a caught error's own text goes behind "Copy details". */
   const [error, setError] = useState<{
@@ -133,6 +150,7 @@ export function PasskeysCard({
     setError(null);
     try {
       const grant = await authorize(userId, "add");
+      setGrantExpired(false);
       setGrantedUntil(Date.now() + grant.expiresInSeconds * 1000);
     } catch (err) {
       if (!(err instanceof PresenceDeclined))
@@ -164,7 +182,7 @@ export function PasskeysCard({
     else setError({ message: words.failed });
   };
 
-  const add = async () => {
+  const add = async (placement: PasskeyPlacement) => {
     if (load.kind !== "ready") return;
     const flow = load.flow;
     const createData = nodeValue(flow, "passkey_create_data");
@@ -173,7 +191,7 @@ export function PasskeysCard({
     setError(null);
     setNeedsReauth(false);
     try {
-      const register = await createPasskey(createData);
+      const register = await createPasskey(createData, placement);
       // The guard redeems the grant whatever happens next: one proof, one try.
       setGrantedUntil(null);
       const r = await submitSelfServiceFlow(flow, {
@@ -405,21 +423,22 @@ export function PasskeysCard({
                 <p className="text-[12.5px] text-foreground/65">
                   {t("passkeys.grant.ready")}
                 </p>
-                <Button
-                  size="sm"
-                  radius="md"
-                  color="primary"
-                  startContent={<KeyRound className="h-3.5 w-3.5" />}
+                <PasskeyPlacementMenu
+                  button={{ size: "sm", radius: "md", color: "primary" }}
                   isLoading={busy}
-                  onPress={() => void add()}
+                  onChoose={(placement) => void add(placement)}
                 >
                   {t("passkeys.grant.create")}
-                </Button>
+                </PasskeyPlacementMenu>
               </div>
             ) : step === "authorize" ? (
               <div className="flex flex-col items-start gap-2">
                 <p className="text-[12.5px] text-foreground/65">
-                  {t("passkeys.grant.why")}
+                  {t(
+                    grantExpired
+                      ? "passkeys.grant.expired"
+                      : "passkeys.grant.why"
+                  )}
                 </p>
                 <Button
                   size="sm"
@@ -430,21 +449,22 @@ export function PasskeysCard({
                   isDisabled={!me.data?.id}
                   onPress={() => void confirmFirst()}
                 >
-                  {t("passkeys.add")}
+                  {t(grantExpired ? "passkeys.grant.again" : "passkeys.add")}
                 </Button>
               </div>
             ) : (
-              <Button
-                size="sm"
-                radius="md"
-                variant="solid"
-                color="primary"
-                startContent={<KeyRound className="h-3.5 w-3.5" />}
+              <PasskeyPlacementMenu
+                button={{
+                  size: "sm",
+                  radius: "md",
+                  variant: "solid",
+                  color: "primary",
+                }}
                 isLoading={busy}
-                onPress={() => void add()}
+                onChoose={(placement) => void add(placement)}
               >
                 {t("passkeys.add")}
-              </Button>
+              </PasskeyPlacementMenu>
             )}
           </div>
         )}
