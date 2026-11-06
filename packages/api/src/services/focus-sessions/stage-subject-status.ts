@@ -21,6 +21,10 @@
  * A caller's reply carries the outcome as `subjectMove`
  * ({@link reportedSubjectMove}) whenever the stage asked for a move.
  *
+ * BIRTH (finding e100ddf6): a session born from a staged playbook is seeded
+ * INTO its first stage (`create-session.ts`), so that stage's value is written
+ * at birth by the same rule — {@link writeBirthStageSubjectStatus}.
+ *
  * NOT called (by the advance door) when:
  *  - the advance FOLLOWS the subject (`skipSubjectWrite`, `@synap/jobs`
  *    `utils/process-sync.ts`): the subject is the source of truth there, and a
@@ -55,12 +59,18 @@ import {
   entities,
   eq,
   getWorkspaceMembership,
+  resolveStatusMoveTarget,
   type StatusMoveActor,
 } from "@synap/database";
-import type { Hold } from "@synap-core/types/lifecycle";
+import {
+  findLifecycleOption,
+  isTerminalLifecycleCategory,
+  type Hold,
+} from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
+import { resolveStageGate } from "@synap/playbooks";
 import type { Context } from "../../types/context.js";
 import { moveStatus, type MoveStatusResult } from "../lifecycle/move-status.js";
 import { readSubjectProfile } from "../playbooks/playbook-activators.js";
@@ -88,6 +98,7 @@ export type StageSubjectStatusOutcome =
         | "no_status_property"
         | "stage_has_no_subject_status"
         | "already_set"
+        | "already_settled"
         | "subject_not_found"
         | "no_process"
         | "stage_not_found";
@@ -191,6 +202,38 @@ export async function writeStageSubjectStatus(input: {
 }
 
 /**
+ * BIRTH: a session seeded INTO its first stage (`create-session.ts`) writes
+ * that stage's `subjectStatus` by the rule an advance into it applies
+ * (`advance-stage.ts`): an UNGATED stage writes it on entry, through
+ * {@link writeStageSubjectStatus}; a GATED stage writes nothing — a stage held
+ * by its gate is not agreed yet, and its value belongs to the gate's pass.
+ * `undefined` when nothing was attempted (no subject, a gated stage); never
+ * throws (a write that could not happen is `failed`, and the session stands).
+ */
+export async function writeBirthStageSubjectStatus(
+  input: Parameters<typeof writeStageSubjectStatus>[0]
+): Promise<StageSubjectStatusOutcome | undefined> {
+  const { session } = input;
+  if (!session.subjectEntityId) return undefined;
+  try {
+    const proc = await loadSessionProcess({
+      sessionId: session.id,
+      playbookId: session.playbookId,
+    });
+    const stage = proc?.stages.find((s) => s?.key === input.toStage);
+    if (stage && resolveStageGate(stage)) return undefined;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      { err, sessionId: session.id, toStage: input.toStage },
+      "birth stage subject-status not written — the session stands"
+    );
+    return { status: "failed", reason };
+  }
+  return writeStageSubjectStatus(input);
+}
+
+/**
  * THE ONE WRITER of a process's status value onto ONE thing it works on — the
  * stage path above (the subject, on entering a stage) and the END path
  * (`session-end-moves.ts`: the subject and every target still open, on the
@@ -198,6 +241,8 @@ export async function writeStageSubjectStatus(input: {
  * the rules:
  *  - a ROLE process moves the role's FACET through the status door, or nothing;
  *  - a thing already at the value is left alone (`already_set`);
+ *  - an END move never takes a thing OUT of a done or lost status
+ *    (`already_settled`): see {@link endMoveCurrent};
  *  - a kind that DECLARES a lifecycle moves through `moveStatus` (its
  *    governance floor: an agent's move into done/lost proposes; a humanOnly
  *    option proposes for an agent) — the process's own `humanOnlyStatuses`
@@ -242,6 +287,26 @@ export async function writeSubjectStatusValue(input: {
       .limit(1);
     if (!subject) return { status: "skipped", reason: "subject_not_found" };
 
+    // A ROLE subject: the facet's status, through the door, or nothing.
+    const subjectProfile = proc.profileSlug
+      ? await readSubjectProfile(proc.profileSlug, session.workspaceId)
+      : null;
+    const isRole = subjectProfile?.profileKind === "role";
+    // The lens picks the role's facet when it is attached in several spaces:
+    // the run's own space first. A kind moves in its own space.
+    const roleWorkspaceId = session.workspaceId ?? subject.workspaceId ?? null;
+    const wsId = subject.workspaceId ?? session.workspaceId ?? null;
+
+    const atEnd = input.atSessionEnd
+      ? await endMoveCurrent(
+          isRole
+            ? { entityId, role: proc.profileSlug, workspaceId: roleWorkspaceId }
+            : { entityId, workspaceId: wsId }
+        )
+      : null;
+    if (atEnd?.settled && atEnd.current !== value)
+      return { status: "skipped", reason: "already_settled" };
+
     const humanOnly = proc.humanOnlyStatuses.includes(value);
     const moveInput = {
       entityId,
@@ -255,19 +320,16 @@ export async function writeSubjectStatusValue(input: {
       forcePropose: humanOnly || undefined,
       ...(input.pauseHold ? { pauseHold: input.pauseHold } : {}),
       ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
+      // An end move defends the status it found not settled: a thing settled
+      // meanwhile makes an agent's move a conflict, not a reopening.
+      ...(atEnd ? { expectedFrom: atEnd.current } : {}),
     };
 
-    // A ROLE subject: the facet's status, through the door, or nothing.
-    const subjectProfile = proc.profileSlug
-      ? await readSubjectProfile(proc.profileSlug, session.workspaceId)
-      : null;
-    if (subjectProfile?.profileKind === "role") {
+    if (isRole) {
       const move = await moveStatus({
         ...moveInput,
         role: proc.profileSlug,
-        // The lens picks the role's facet when it is attached in several
-        // spaces: the run's own space first.
-        workspaceId: session.workspaceId ?? subject.workspaceId ?? null,
+        workspaceId: roleWorkspaceId,
       });
       return fromMove(move, proc.statusProperty, value);
     }
@@ -276,8 +338,6 @@ export async function writeSubjectStatusValue(input: {
       proc.statusProperty
     ];
     if (current === value) return { status: "skipped", reason: "already_set" };
-
-    const wsId = subject.workspaceId ?? session.workspaceId ?? null;
 
     // THE status door (work model L2) when the playbook's statusProperty IS
     // the subject kind's declared lifecycle: compare-and-set, the lifecycle
@@ -341,6 +401,39 @@ export async function writeSubjectStatusValue(input: {
     );
     return { status: "failed", reason: why };
   }
+}
+
+/**
+ * What an END move finds the thing at, read through THE status door's own
+ * target resolver (`resolveStatusMoveTarget`: kind → entity row, role → facet
+ * row, and its declared lifecycle), the category from the lifecycle's own
+ * option (`findLifecycleOption` + `isTerminalLifecycleCategory`): no second
+ * derivation of what "done" means.
+ *
+ * An end move is cleanup of work that STOPPED: it never takes a thing out of
+ * a done or lost status. Another session (or a person) may have settled the
+ * session's subject or a target meanwhile — a stale session cancelled later
+ * must not move a verified finding back to "open" (finding 8f1c774f). The end
+ * move also skips the done/lost governance floor (`atSessionEnd`), so without
+ * this nothing would stop it. Subject and targets alike.
+ *
+ * `null` when there is no declared lifecycle to read (the door refuses, or
+ * the legacy plain-property path takes it): nothing is called settled there.
+ */
+async function endMoveCurrent(target: {
+  entityId: string;
+  role?: string | null;
+  workspaceId: string | null;
+}): Promise<{ current: string | null; settled: boolean } | null> {
+  const resolved = await resolveStatusMoveTarget(db, target);
+  if (!resolved.ok) return null;
+  const { lifecycle, current } = resolved.target;
+  return {
+    current,
+    settled: isTerminalLifecycleCategory(
+      findLifecycleOption(lifecycle, current)?.category
+    ),
+  };
 }
 
 /** The status door's answer → this write's outcome. */

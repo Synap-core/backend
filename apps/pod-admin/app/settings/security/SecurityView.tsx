@@ -81,6 +81,7 @@ import { PresenceDeclined } from "../../_lib/presence/presence-model";
 import { useAuthorizePasskeyChange } from "../../_lib/presence/use-factor-doors";
 import { en as securityEn, fr as securityFr } from "./copy";
 import { passkeyAddStep } from "./passkey-add-model";
+import { PASSKEYS_PATH } from "./passkeys-path";
 
 const SECURITY_CATALOGS = { en: securityEn, fr: securityFr };
 
@@ -627,17 +628,33 @@ export function passkeyCount(flow: KratosFlow): number {
   ).length;
 }
 
-function PasskeysCard() {
+/** The passkeys card: on Security, and alone on its own page (`PASSKEYS_PATH`). */
+export function PasskeysCard() {
   const t = useT(SECURITY_CATALOGS);
   const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
-  // A passkey change needs a grant from an existing factor (W3 slice 3).
+  // A passkey change needs a grant from an existing factor.
   const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const devices = trpc.presence.devices.list.useQuery(undefined, {
     retry: false,
   });
   const authorize = useAuthorizePasskeyChange();
   const [grantedUntil, setGrantedUntil] = useState<number | null>(null);
+  /** A grant that ran out before the passkey was created: "Confirm again". */
+  const [grantExpired, setGrantExpired] = useState(false);
+  // The grant's end is a moment, not a render: fold the card back to
+  // "Confirm again" when it passes, even if nothing else re-renders it.
+  useEffect(() => {
+    if (grantedUntil === null) return;
+    const timer = window.setTimeout(
+      () => {
+        setGrantedUntil(null);
+        setGrantExpired(true);
+      },
+      Math.max(0, grantedUntil - Date.now())
+    );
+    return () => window.clearTimeout(timer);
+  }, [grantedUntil]);
   /** A fixed sentence; a caught error's own text goes behind "Copy details". */
   const [error, setError] = useState<{
     message: string;
@@ -652,7 +669,7 @@ function PasskeysCard() {
       if ("flow" in r) setLoad({ kind: "ready", flow: r.flow });
       else
         window.location.assign(
-          `/login?return=${encodeURIComponent("/settings/security#passkeys")}`
+          `/login?return=${encodeURIComponent(PASSKEYS_PATH)}`
         );
     } catch (err) {
       setLoad({ kind: "failed", detail: errorDetail(err) });
@@ -672,6 +689,7 @@ function PasskeysCard() {
     setError(null);
     try {
       const grant = await authorize(userId);
+      setGrantExpired(false);
       setGrantedUntil(Date.now() + grant.expiresInSeconds * 1000);
     } catch (err) {
       if (!(err instanceof PresenceDeclined))
@@ -707,13 +725,13 @@ function PasskeysCard() {
         const errors = collectErrorMessages(r.flow);
         if (errors.length) setError({ message: errors.join(" ") });
         else if (r.flow.state === "success")
-          addToast({ title: "Passkey added", color: "default" });
+          addToast({ title: t("passkeys.added"), color: "default" });
       } else if (r.kind === "redirect") window.location.assign(r.to);
-      else setError({ message: "Couldn't add the passkey. Try again." });
+      else setError({ message: t("passkeys.addFailed") });
     } catch (err) {
       if (!(err instanceof PasskeyCancelled)) {
         setError({
-          message: "Couldn't add the passkey. Try again.",
+          message: t("passkeys.addFailed"),
           detail: errorDetail(err),
         });
       }
@@ -736,19 +754,13 @@ function PasskeysCard() {
   return (
     <div id="passkeys" className="scroll-mt-6">
       <SectionCard
-        title="Passkeys"
-        hint="Sign in with this device's lock, no password"
+        title={t("passkeys.title")}
+        hint={t("passkeys.hint")}
         actions={
           load.kind === "ready" ? (
             <StatusPill
               kind={count > 0 ? "healthy" : "unknown"}
-              label={
-                count === 0
-                  ? "None"
-                  : count === 1
-                    ? "1 passkey"
-                    : `${count} passkeys`
-              }
+              label={t("passkeys.count", { n: count })}
             />
           ) : null
         }
@@ -757,13 +769,13 @@ function PasskeysCard() {
           <div className="h-12 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
         ) : load.kind === "failed" ? (
           <LoadFailed
-            message="Couldn't load passkey settings."
+            message={t("passkeys.loadFailed")}
             detail={load.detail}
             onRetry={() => void start()}
           />
         ) : nodeValue(load.flow, "passkey_create_data") === null ? (
           <p className="text-[12.5px] text-foreground/65">
-            Passkeys aren&apos;t enabled on this pod.
+            {t("passkeys.disabled")}
           </p>
         ) : (
           <div className="flex flex-col items-start gap-3">
@@ -780,17 +792,16 @@ function PasskeysCard() {
                 {error.detail ? (
                   <CopyButton
                     text={error.detail}
-                    label="Copy details"
+                    label={t("passkeys.copyDetails")}
                     variant="light"
-                    ariaLabel="Copy the technical details of this error"
+                    ariaLabel={t("passkeys.copyDetailsA11y")}
                   />
                 ) : null}
               </div>
             ) : null}
             {!canAdd ? (
               <p className="text-[12.5px] text-foreground/65">
-                This browser can&apos;t create a passkey. Open this page on a
-                device that can.
+                {t("passkeys.unsupported")}
               </p>
             ) : step === "devicesFailed" ? (
               <div className="flex flex-wrap items-center gap-3">
@@ -829,7 +840,11 @@ function PasskeysCard() {
             ) : step === "authorize" ? (
               <div className="flex flex-col items-start gap-2">
                 <p className="text-[12.5px] text-foreground/65">
-                  {t("passkeys.grant.why")}
+                  {t(
+                    grantExpired
+                      ? "passkeys.grant.expired"
+                      : "passkeys.grant.why"
+                  )}
                 </p>
                 <Button
                   size="sm"
@@ -840,7 +855,7 @@ function PasskeysCard() {
                   isDisabled={!me.data?.id}
                   onPress={() => void confirmFirst()}
                 >
-                  Add a passkey
+                  {t(grantExpired ? "passkeys.grant.again" : "passkeys.add")}
                 </Button>
               </div>
             ) : (
@@ -853,7 +868,7 @@ function PasskeysCard() {
                 isLoading={busy}
                 onPress={() => void add()}
               >
-                Add a passkey
+                {t("passkeys.add")}
               </Button>
             )}
           </div>

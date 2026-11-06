@@ -115,6 +115,7 @@ import {
   getOAuthConsentContext,
 } from "../routers/oauth/consent.js";
 import { appsRouter } from "../routers/apps.js";
+import { router } from "../trpc.js";
 import { registerWebhooksRoutes } from "../routers/hub-protocol/rest/webhooks.js";
 import { registerAgentUsersRoutes } from "../routers/hub-protocol/rest/agent-users.js";
 import { registerAppsRoutes } from "../routers/hub-protocol/rest/apps.js";
@@ -260,8 +261,11 @@ const ctxOf = (userId: string, agentUserId?: string) =>
     session: { id: "s" },
     ...(agentUserId ? { agentUserId } : {}),
   }) as never;
+// Mounted under its root key, so each procedure runs with its full path
+// (`apps.setWriteMode`): the step-up middleware reads the path to ask the
+// proof-of-presence gate, whose pass the service requires.
 const caller = (userId: string, agentUserId?: string) =>
-  appsRouter.createCaller(ctxOf(userId, agentUserId));
+  router({ apps: appsRouter }).createCaller(ctxOf(userId, agentUserId)).apps;
 
 type Pair = { permission: string; workspaceId: string };
 

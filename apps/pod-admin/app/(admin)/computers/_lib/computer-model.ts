@@ -228,12 +228,9 @@ export function belongsToMark(
 
 /** What each answer to "whose computer is it" changes (decision c83e0661). */
 const BELONGS_TO_LINE: Record<ComputerBelongsTo, string> = {
-  person:
-    "Its owner's own computer. Each agent on it is approved on its own; the computer never inherits an agent's approval.",
-  agent:
-    "A box an agent works on. When its owner lets one agent on it change things without asking, the computer gets the same approval, so the agent is not held back.",
-  shared:
-    "Several people or agents work on it, like a cloud machine. The computer never inherits an agent's approval.",
+  person: "Each agent on it needs its own approval.",
+  agent: "It gets the approvals you give its agent.",
+  shared: "Used by several people or agents. It gets no agent's approvals.",
 };
 
 /**
@@ -250,6 +247,35 @@ export function belongsToChoices(): {
     label: resolveComputerBelongsToLabel(value),
     line: BELONGS_TO_LINE[value],
   }));
+}
+
+/**
+ * Leaving "An agent's" takes back the approvals the computer inherited from
+ * its agent (`seedsRevoked`), so it is confirmed first; every other change
+ * takes nothing back and applies on the tap.
+ */
+export function belongsToChangeNeedsConfirm(
+  from: ComputerBelongsTo | null | undefined,
+  to: ComputerBelongsTo
+): boolean {
+  return from === "agent" && to !== "agent";
+}
+
+/**
+ * The confirm for leaving "An agent's". The pod reports how many approvals it
+ * took back only once it has (`seedsRevokedLine`, the toast), so the confirm
+ * names what is taken back, not a number.
+ */
+export function leaveAgentsConfirm(
+  name: string,
+  to: ComputerBelongsTo
+): { title: string; consequence: string; confirmLabel: string } {
+  return {
+    title: `Make ${name} ${resolveComputerBelongsToLabel(to)}?`,
+    consequence:
+      "It loses every approval it got from its agent. That agent asks again before changing things it could change without asking.",
+    confirmLabel: "Take back its approvals",
+  };
 }
 
 /**

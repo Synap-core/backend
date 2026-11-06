@@ -10,6 +10,7 @@
  */
 
 import { resolveHarness } from "@synap-core/types/agents";
+import type { InstalledAgentTemplate } from "../agent-templates/installed.js";
 import type {
   AgentHarnessSlug,
   AgentReach,
@@ -27,25 +28,52 @@ export interface ResolvedAgentTemplate extends AgentTemplateRef {
 }
 
 /**
- * The harnesses whose agent template carries a `wake` block (plan v2 §2.1:
- * Claude Code `claude -p`, Codex `codex exec`). Hermes has no harness row yet:
- * it arrives as a catalog template.
+ * The harnesses whose BUILT-IN template carries a `wake` block (plan v2 §2.1:
+ * Claude Code `claude -p`, Codex `codex exec`). Read only on the fallback
+ * below, for a pod whose catalog has not installed the agent's template yet.
  */
 const WAKEABLE_HARNESSES: ReadonlySet<AgentHarnessSlug> =
   new Set<AgentHarnessSlug>(["claude-code", "codex"]);
 
+/** The agent as the template seam reads it. */
+export interface AgentTemplateSubject {
+  agentType: string | null | undefined;
+  /** `users.agent_template_slug`: the agent's link to its template. */
+  templateSlug?: string | null;
+}
+
 /**
- * THE seam the catalog replaces. Until agent templates are a catalog kind
- * installed on the pod (plan v2 slices 2-3), an agent's template is its
- * harness registry row (`AGENT_HARNESSES`), built in, so `version` is `null`.
- * Slice 3 makes this read the installed `agent_templates` row (version = its
- * `marketSource.packageVersion`, `wakes` = it has a `wake` block); no caller
- * changes. `null` = the agent's type names no template.
+ * THE seam that names an agent's template. In order:
+ *   1. its link (`users.agent_template_slug`) to an INSTALLED template;
+ *   2. the installed template whose `harness` is its type (an agent the
+ *      self-healing pass has not linked yet);
+ *   3. the built-in harness registry row (`AGENT_HARNESSES`), `version: null`
+ *      = built in, for a pod whose catalog has not installed it yet (the
+ *      official ones are installed by the catalog, founder decision D8).
+ * `version` is the catalog version the template was installed at; `wakes` =
+ * the template carries a `wake` block. `null` = no template names it.
+ * Pure: the caller reads the installed templates once
+ * (`loadInstalledAgentTemplates`).
  */
 export function resolveAgentTemplate(
-  agentType: string | null | undefined
+  agent: AgentTemplateSubject,
+  installed: readonly InstalledAgentTemplate[] = []
 ): ResolvedAgentTemplate | null {
-  const harness = resolveHarness(agentType);
+  const fromInstalled = (t: InstalledAgentTemplate): ResolvedAgentTemplate => ({
+    slug: t.slug,
+    label: t.name,
+    version: t.version,
+    wakes: t.wakes,
+  });
+  if (agent.templateSlug) {
+    const linked = installed.find((t) => t.slug === agent.templateSlug);
+    if (linked) return fromInstalled(linked);
+  }
+  if (agent.agentType) {
+    const byHarness = installed.find((t) => t.harness === agent.agentType);
+    if (byHarness) return fromInstalled(byHarness);
+  }
+  const harness = resolveHarness(agent.agentType);
   if (!harness) return null;
   return {
     slug: harness.slug,

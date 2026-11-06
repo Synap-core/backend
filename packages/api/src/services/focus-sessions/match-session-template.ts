@@ -5,8 +5,10 @@
  * Founder decision 2026-09-20 — discovery is a property of the DOOR, not a
  * plea in prose: "make sure AIs always fetch session playbooks before creating
  * a session". So the start door ALWAYS hands back the pod's existing processes,
- * ranked, with the reason each one matched, and the caller decides. Naming a
- * playbook with `templateId` is now the ONLY way one binds at start.
+ * ranked, with the reason each one matched, and the caller decides. WORDS
+ * never bind: a playbook binds when the caller names it (`templateId`, or
+ * `update_session followPlaybookId` later) or when a FACT names it
+ * (`resolve-binding-rung.ts`, founder decisions d01–d03 of 2026-11-05).
  *
  * WHAT WAS RETIRED, AND WHY. Until this date the door auto-applied a playbook
  * above a confidence threshold (a lexical floor for a lone candidate, an IS

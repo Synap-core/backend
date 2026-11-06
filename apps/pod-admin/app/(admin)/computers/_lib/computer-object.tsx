@@ -22,7 +22,11 @@ import { ArrowRight, Bot, KeyRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { isComputerBelongsTo, seenLine } from "@synap-core/types/computers";
+import {
+  isComputerBelongsTo,
+  seenLine,
+  type ComputerBelongsTo,
+} from "@synap-core/types/computers";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
@@ -51,6 +55,7 @@ import {
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
 import { ResourceRow, ResourceRowEmpty } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
+import { ConfirmModal } from "../../components/confirm-modal";
 import {
   ComputerKeyLifetimeModal,
   RenameComputerModal,
@@ -61,6 +66,7 @@ import { en, fr } from "./copy";
 import {
   RECONNECT_COMMAND,
   activityLine,
+  belongsToChangeNeedsConfirm,
   belongsToChoices,
   belongsToMark,
   computerSummary,
@@ -68,6 +74,7 @@ import {
   keyLifetimeLine,
   keyStatus,
   keysOnComputer,
+  leaveAgentsConfirm,
   ownerWords,
   platformLabel,
   revokeImpact,
@@ -123,6 +130,10 @@ export function ComputerObject({
   const utils = trpc.useUtils();
   const [dialog, setDialog] = useState<null | "rename" | "lifetime">(null);
   const [proposalId, setProposalId] = useState<string | null>(null);
+  // Leaving "An agent's" waits here for its confirm (it takes approvals back).
+  const [leaveAgents, setLeaveAgents] = useState<ComputerBelongsTo | null>(
+    null
+  );
   const scripts = computer ? scriptsOwnerWords(computer, viewerId) : null;
   // With the proof of presence (W3 slice 3): a sensitive action.
   const runsScripts = useSetMachineRunsScripts({
@@ -131,7 +142,7 @@ export function ComputerObject({
       addToast({
         title:
           out.status === "proposed"
-            ? "Waiting for review — nothing changed yet"
+            ? "Waiting for review. Nothing changed yet."
             : out.runsScripts
               ? `This computer now runs ${whose} scripts`
               : `This computer no longer runs ${whose} scripts`,
@@ -153,7 +164,7 @@ export function ComputerObject({
       addToast(
         out.status === "proposed"
           ? {
-              title: "Waiting for review — nothing changed yet",
+              title: "Waiting for review. Nothing changed yet.",
               color: "default",
             }
           : {
@@ -399,16 +410,26 @@ export function ComputerObject({
                   </SectionCard>
                 )}
                 {/* 0388: set at approval, changed only here. A row from
-                    before it (no `belongsTo`) offers no guessed answer. */}
-                {!revoked && c.belongsTo && (
+                    before it (no `belongsTo`) shows the choices with none
+                    selected: never a guessed answer, never a hidden door. */}
+                {!revoked && (
                   <SectionCard title="Whose computer it is">
+                    {!c.belongsTo && (
+                      <p className="mb-2 text-[12.5px] text-foreground/65">
+                        Not set yet. Choose one.
+                      </p>
+                    )}
                     <RadioGroup
                       aria-label="Whose computer it is"
                       size="sm"
-                      value={c.belongsTo}
+                      value={c.belongsTo ?? null}
                       isDisabled={belongsTo.isPending}
                       onValueChange={(v) => {
-                        if (isComputerBelongsTo(v) && v !== c.belongsTo)
+                        if (!isComputerBelongsTo(v) || v === c.belongsTo)
+                          return;
+                        if (belongsToChangeNeedsConfirm(c.belongsTo, v))
+                          setLeaveAgents(v);
+                        else
                           belongsTo.mutate({ machineId: c.id, belongsTo: v });
                       }}
                     >
@@ -422,6 +443,21 @@ export function ComputerObject({
                         </Radio>
                       ))}
                     </RadioGroup>
+                    {leaveAgents && (
+                      <ConfirmModal
+                        isOpen
+                        onClose={() => setLeaveAgents(null)}
+                        onConfirm={() => {
+                          setLeaveAgents(null);
+                          belongsTo.mutate({
+                            machineId: c.id,
+                            belongsTo: leaveAgents,
+                          });
+                        }}
+                        {...leaveAgentsConfirm(c.name, leaveAgents)}
+                        confirmColor="danger"
+                      />
+                    )}
                   </SectionCard>
                 )}
                 <SectionCard

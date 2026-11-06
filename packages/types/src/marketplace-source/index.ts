@@ -76,6 +76,7 @@ export const MARKETPLACE_PACKAGE_KINDS = [
   "cell",
   "skill",
   "view",
+  "agent",
 ] as const;
 export type MarketplacePackageKind = (typeof MARKETPLACE_PACKAGE_KINDS)[number];
 

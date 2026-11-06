@@ -362,8 +362,8 @@ Consumed by: `@synap/api` (`intent-registry`, `create-from-definition`,
 `schemas/playbook-definition.ts`), `synap-app/packages/workspace-templates`
 (`validate.ts` — the `taskIntents` check), and the CP's `seed-capability-templates.ts`
 (only the insert-only bootstrap of an empty CP — official capabilities are authored in
-the catalog, `synap-app/packages/workspace-templates/capabilities/`, and published with
-`synap catalog publish --official`).
+the catalog, `synap-app/packages/workspace-templates/capabilities/`; landing them on
+app-bases main publishes them).
 
 ### Which field on which surface
 
@@ -404,7 +404,10 @@ a package that consumes nothing would go stale in the one direction that is invi
    consumers typecheck against the built `dist/`, so a skipped rebuild makes your gate lie.
    Post-seed rows today: `publish_post` (0284, write), `delegate_agent_task`
    (0314, act — every verb of an external-agent binding, `tools.config.agentBinding`:
-   start / send / status / cancel) and `read_webpage` (0329).
+   start / send / status / cancel), `read_webpage` (0329, read), `search_web`
+   (0360, read) and `edit_video` (0370, act — sends the person's video to an
+   outside service; its one input, `{ video }`, is seeded on `input_schema` in
+   the same file).
 3. **Add it to mirror 2** — the same two lists in the control plane's
    `capability-intent-vocabulary.ts`.
 4. **Update the arity floors** — `SEED_SLUG_ARITY` / `EXTRA_SLUG_ARITY` in

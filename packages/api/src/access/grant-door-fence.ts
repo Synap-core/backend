@@ -876,6 +876,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_link_entities: WRITE,
     synap_attach_facet: WRITE,
     synap_detach_facet: WRITE,
+    synap_update_facet: WRITE,
     synap_define_role: WRITE,
     synap_define_kind: WRITE,
     synap_start_session: WRITE,

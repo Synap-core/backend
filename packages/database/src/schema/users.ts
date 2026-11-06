@@ -152,6 +152,10 @@ export const users = pgTable("users", {
   isPersonalAgent: boolean("is_personal_agent").notNull().default(false),
   agentTemplate: text("agent_template"),
   agentType: text("agent_type"),
+  // The agent's link to its installed agent template (0404), by
+  // `agent_templates.slug`; no FK (an agent can exist before its template is
+  // installed). NOT `agent_template` above, which means twin/assistant/custom.
+  agentTemplateSlug: text("agent_template_slug"),
   // How this agent-user came to exist — provenance for the Agent dashboard
   // ('cli' | 'intelligence-service' | 'ui' | 'system'). Null for humans and for
   // agents created before migration 0225. Stamped at each creation call-site.

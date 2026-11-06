@@ -2628,11 +2628,15 @@ export interface AttachFacetInput {
  * `entities.attachFacet` in `packages/api/src/routers/entities.ts`.
  */
 export interface HubAttachFacetResult {
-  status: "attached" | "proposed";
+  /**
+   * `exists`: the entity already wears this role on that key; nothing was
+   * written and no proposal filed. Change its fields with `updateFacet`.
+   */
+  status: "attached" | "exists" | "proposed";
   message?: string;
-  /** Present on the inline `attached` branch. */
+  /** Present on `attached` (the new row) and `exists` (the live row). */
   facetId?: string;
-  /** The materialized facet row on `attached`; `null` on `proposed`. */
+  /** The facet row on `attached` / `exists`; `null` on `proposed`. */
   facet?: Record<string, unknown> | null;
   /** Present on the `proposed` branch. */
   proposalId?: string;

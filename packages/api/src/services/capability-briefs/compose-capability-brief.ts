@@ -240,6 +240,11 @@ const TOOL_METADATA: Record<
     postureSlug: null,
     isWrite: true,
   },
+  synap_update_facet: {
+    governance: { subjectType: "facet", action: "update" },
+    postureSlug: null,
+    isWrite: true,
+  },
 };
 
 // ── Skills lookup cache (teaching core) — 60s TTL, keyed by the queried key set ──
