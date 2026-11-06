@@ -57,6 +57,7 @@ const DDL = `
   create table entities (
     id uuid primary key, user_id text not null, workspace_id uuid,
     profile_id uuid, type text not null, title text, preview text,
+    home_workspace_id uuid,
     document_id uuid, properties jsonb not null default '{}'::jsonb,
     source_proposal_id uuid,
     created_at timestamptz not null default now(),
