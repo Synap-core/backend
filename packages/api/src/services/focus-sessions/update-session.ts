@@ -2212,6 +2212,21 @@ export async function updateFocusSession(
     moveWorkspaceName = move.workspaceName;
   }
 
+  // DECLARED STAGES ONLY — the advance door's rule (`stage-declared.ts`),
+  // asked HERE because this door writes the stage inside its own multi-field
+  // UPDATE (and an agent's write may become a proposal applied later): a key
+  // the session's process does not declare is refused before anything is
+  // stored or proposed. A session with no stages keeps free keys.
+  if (params.currentStage !== undefined) {
+    const { refuseUndeclaredStage } =
+      await import("@synap/jobs/utils/stage-declared.js");
+    const undeclared = await refuseUndeclaredStage(
+      existing,
+      params.currentStage
+    );
+    if (undeclared) return { status: "denied", reason: undeclared.reason };
+  }
+
   // STAGE GATE FLOOR — an agent cannot resume a gate-held session, advance it
   // while held, or jump over a gated stage; the gate's approval is the door.
   // Before the membrane for the reason the floors above give. Dynamic because
