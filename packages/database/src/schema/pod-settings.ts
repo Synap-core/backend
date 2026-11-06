@@ -310,8 +310,24 @@ export interface PresenceModeSetting {
   changedAt: string;
 }
 
+/**
+ * What asks for a passkey on this pod (W5): the rows of the sensitive lists
+ * (`@synap-core/types/presence`) a pod admin switched OFF. Absent = every row
+ * on. Written only by `presence.setSensitivity`
+ * (services/presence/sensitivity-change.ts): switching a row off needs a
+ * proof of presence and every pod admin is told.
+ */
+export interface PresenceSensitivitySetting {
+  approvalsOff: readonly string[];
+  actionsOff: readonly string[];
+  /** User id of the pod admin who last changed it. */
+  changedBy: string;
+  changedAt: string;
+}
+
 export interface PodSettingsBlob {
   presence?: PresenceModeSetting;
+  presenceSensitivity?: PresenceSensitivitySetting;
   machineDefaults?: PodMachineDefaults;
   podApps?: PodAppsPolicySetting;
   intelligenceDefaults?: PodIntelligenceDefaults;

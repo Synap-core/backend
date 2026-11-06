@@ -74,8 +74,11 @@ vi.mock("@heroui/react", async (importOriginal) => {
   return { ...real, Button };
 });
 
-vi.mock("../../../lib/trpc", () => ({
+vi.mock("../../../lib/trpc", async () => ({
   trpc: {
+    presence: (
+      await import("../../_lib/presence/__tests__/trpc-double")
+    ).presenceTrpcDouble(),
     useUtils: () => ({}),
     useQueries: () => [],
     proposals: {

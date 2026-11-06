@@ -108,7 +108,11 @@ const { invalidatePresenceMode, readPresenceMode, writePresenceMode } =
   await import("./mode.js");
 const { PRESENCE_NO_FACTOR_HINT } = await import("./gate.js");
 const { changePresenceMode } = await import("./mode-change.js");
-const { redeemPasskeyChangeGrant } = await import("./passkey-change.js");
+const { redeemPasskeyChangeGrant, assertMayRemovePasskey } =
+  await import("./passkey-change.js");
+const { writePresenceSensitivity, readPresenceSensitivity } =
+  await import("./mode.js");
+const { changePresenceSensitivity } = await import("./sensitivity-change.js");
 const { enrollDeviceKey } = await import("./factors.js");
 const { assertPresencePass, mintPresencePass } = await import("./pass.js");
 const { passPresenceForAction, PRESENCE_KEY_CALLER_MESSAGE } =
@@ -977,5 +981,152 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     expect(decideAt).toBeGreaterThan(lockAt);
     expect(spendAt).toBeGreaterThan(decideAt);
     expect(insertAt).toBeGreaterThan(spendAt);
+  });
+});
+
+describe("what asks for your passkey (W5): the pod's choice", () => {
+  beforeEach(async () => {
+    process.env.PUBLIC_URL = POD;
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    h.events.length = 0;
+    h.notices.length = 0;
+    h.passkeys = [];
+    await noStoredMode();
+  });
+  afterEach(() => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    invalidatePresenceMode();
+  });
+
+  const proofFor = async (subject: string) => {
+    const c = await challengeFor(subject);
+    return {
+      kind: "device_key",
+      challengeId: c.challengeId,
+      keyId: deviceKeyId,
+      signature: deviceSign(c.message),
+    };
+  };
+  const action = (path: string, input: unknown) =>
+    assertPresenceForAction({ userId: PERSON, path, input, proof: null });
+
+  it("GUARDRAIL: with no choice stored, every row of today's lists asks", async () => {
+    expect(await readPresenceSensitivity()).toMatchObject({
+      approvalsOff: [],
+      actionsOff: [],
+    });
+    expect(await refusal(gate(SENSITIVE))).toBe("PRESENCE_REQUIRED");
+    expect(await refusal(gate(OTHER_SENSITIVE))).toBe("PRESENCE_REQUIRED");
+    expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+  });
+
+  it("GUARDRAIL: the gate honours a row switched off and still asks for the rows left on", async () => {
+    await writePresenceSensitivity({
+      choice: {
+        approvalsOff: ["entity/delete"],
+        actionsOff: ["apiKeys.create"],
+      },
+      changedBy: PERSON,
+    });
+    // Switched off: approved on the session alone, nothing recorded.
+    expect(await refusal(gate(OTHER_SENSITIVE))).toBe("accepted");
+    expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe("accepted");
+    expect(h.events).toEqual([]);
+    // Left on: still refused without a proof.
+    expect(await refusal(gate(SENSITIVE))).toBe("PRESENCE_REQUIRED");
+    expect(await refusal(action("apiKeys.rotate", { a: 1 }))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+    // A request filed AS THE PERSON is never switchable.
+    expect(await refusal(gate(AS_PERSON))).toBe("PRESENCE_REQUIRED");
+  });
+
+  it("GUARDRAIL: switching a row off needs a proof for that exact choice, in every mode; switching back on is free", async () => {
+    const { presenceSensitivityId } =
+      await import("@synap-core/types/presence");
+    const choice = { approvalsOff: ["entity/delete"], actionsOff: [] };
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
+    expect(
+      await refusal(changePresenceSensitivity({ userId: PERSON, choice }))
+    ).toBe("PRESENCE_REQUIRED");
+    expect((await readPresenceSensitivity()).approvalsOff).toEqual([]);
+    // A proof made for another choice does not switch this one off.
+    const other = await proofFor(
+      `presence_sensitivity:${await presenceSensitivityId({ approvalsOff: ["workspace/delete"], actionsOff: [] })}`
+    );
+    expect(
+      await refusal(
+        changePresenceSensitivity({
+          userId: PERSON,
+          choice,
+          proof: other as never,
+        })
+      )
+    ).toBe("PRESENCE_INVALID");
+    const proof = await proofFor(
+      `presence_sensitivity:${await presenceSensitivityId(choice)}`
+    );
+    expect(
+      await refusal(
+        changePresenceSensitivity({
+          userId: PERSON,
+          choice,
+          proof: proof as never,
+        })
+      )
+    ).toBe("accepted");
+    expect(await readPresenceSensitivity()).toMatchObject({
+      approvalsOff: ["entity/delete"],
+      changedBy: PERSON,
+    });
+    expect(h.events.map((e) => e.type)).toContain(
+      "presence.sensitivity_changed"
+    );
+    // Back on: free, and recorded too.
+    expect(
+      await refusal(
+        changePresenceSensitivity({
+          userId: PERSON,
+          choice: { approvalsOff: [], actionsOff: [] },
+        })
+      )
+    ).toBe("accepted");
+    expect((await readPresenceSensitivity()).approvalsOff).toEqual([]);
+  });
+
+  it("GUARDRAIL: the last passkey cannot be removed while the proof is on; a second one can", async () => {
+    h.passkeys = [{ id: "AQ==", public_key: "AQ==" }];
+    expect(await refusal(assertMayRemovePasskey(PERSON))).toBe(
+      "PRESENCE_LAST_PASSKEY"
+    );
+    h.passkeys = [
+      { id: "AQ==", public_key: "AQ==" },
+      { id: "Ag==", public_key: "Ag==" },
+    ];
+    expect(await refusal(assertMayRemovePasskey(PERSON))).toBe("accepted");
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
+    h.passkeys = [{ id: "AQ==", public_key: "AQ==" }];
+    expect(await refusal(assertMayRemovePasskey(PERSON))).toBe("accepted");
+  });
+
+  it("the router checks the removal BEFORE it spends the proof", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(
+      join(__dirname, "../../routers/presence.ts"),
+      "utf8"
+    );
+    const door = src.slice(
+      src.indexOf("  authorizePasskeyChange: protectedProcedure")
+    );
+    const checkAt = door.indexOf("assertMayRemovePasskey(");
+    const proofAt = door.indexOf("assertPresenceForRequest(");
+    expect(checkAt).toBeGreaterThan(0);
+    expect(proofAt).toBeGreaterThan(checkAt);
+    expect(src).toMatch(/return changePresenceSensitivity\(/);
   });
 });

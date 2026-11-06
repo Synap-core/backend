@@ -17,8 +17,13 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { PresenceProof } from "@synap-core/types/presence";
-import { approveWithPresence, type PresenceSubject } from "./presence-model";
+import {
+  approveWithPresence,
+  asksUpFront,
+  type PresenceSubject,
+} from "./presence-model";
 import { usePresence } from "./presence-provider";
+import { usePodSensitivity } from "./use-sensitivity";
 import type { ApproveError } from "./use-approve";
 
 /** The part of a tRPC mutation hook these doors use. */
@@ -67,19 +72,21 @@ export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
   defaults: DoorHandlers<OutputOf<M>, DoorInput<M>> = {}
 ) {
   const { prove } = usePresence();
+  // W5: a sensitive action a pod admin switched off is not proved up front.
+  const choice = usePodSensitivity();
   const [running, setRunning] = useState(false);
   // The input of the call in flight (or the last one), like `variables`.
   const [variables, setVariables] = useState<DoorInput<M> | undefined>();
   const [data, setData] = useState<OutputOf<M> | undefined>();
-  const latest = useRef({ mutation, subjectOf, defaults, prove });
-  latest.current = { mutation, subjectOf, defaults, prove };
+  const latest = useRef({ mutation, subjectOf, defaults, prove, choice });
+  latest.current = { mutation, subjectOf, defaults, prove, choice };
 
   const mutateAsync = useCallback(
     async (
       input: DoorInput<M>,
       handlers: DoorHandlers<OutputOf<M>, DoorInput<M>> = {}
     ) => {
-      const { mutation, subjectOf, defaults, prove } = latest.current;
+      const { mutation, subjectOf, defaults, prove, choice } = latest.current;
       const send = (presence?: PresenceProof) =>
         mutation.mutateAsync(
           (presence ? { ...input, presence } : input) as never
@@ -93,7 +100,7 @@ export function usePresenceDoor<M extends DoorMutation<never, unknown>>(
           ? await approveWithPresence({
               subject,
               prove,
-              upFront: true,
+              upFront: asksUpFront(subject, choice),
               attempt: send,
             })
           : await send();

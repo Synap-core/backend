@@ -210,6 +210,9 @@ export const GOVERNANCE_REASON_RULE_REACH = {
   // the ladder offers); a class/glob/profile-wide `auto` rule does not reach it.
   HUMAN_ONLY_STATUS: "floor",
   LIFECYCLE_TERMINAL: "below",
+  // A session birth that would reopen a done/lost thing: decided ABOVE 2.8,
+  // the person confirms every one (finding 2d84febb).
+  LIFECYCLE_REOPEN: "floor",
   CHANNEL_PROPOSE: "ambiguous",
   // The host step: the agent's COMPUTER asked (its own pass would have acted).
   // The rule the ladder offers is the AGENT's, which the computer's pass only

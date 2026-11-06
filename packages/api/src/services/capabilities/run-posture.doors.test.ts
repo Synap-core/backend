@@ -179,6 +179,38 @@ describe("run posture — behavioural, every door", () => {
     });
   });
 
+  it("MCP sections: an integration verb whose skill declares readOnly is auto, as the gate runs it", () => {
+    // synap_list_capabilities showed `propose` for the Unipile lookups the gate
+    // auto-runs (verbDeclaresReadOnly), 6 Nov 2026: stampRunPosture dropped the
+    // declaration the actions door already passed.
+    const lookup = {
+      ...toolVerb("li_get_profile", "read", false, "auto"),
+      declaredReadOnly: true,
+    };
+    const send = {
+      ...toolVerb("li_send_message", "action", false, "auto"),
+      declaredReadOnly: false,
+    };
+    const caps = [
+      toolRow(
+        "source-provider",
+        "LinkedIn",
+        [lookup, send] as CapabilityVerbState[],
+        "container-li"
+      ),
+    ];
+    const [li] = sectionCapabilities(caps as never).integrations;
+    expect(
+      Object.fromEntries(li.verbs.map((v) => [v.id, v.governance]))
+    ).toEqual({ li_get_profile: "auto", li_send_message: "propose" });
+    // The same verdict as the actions door, which already read it.
+    const actions = new Map(
+      projectRunnableActions(caps).map((a) => [a.verbId, a.governance])
+    );
+    expect(actions.get("li_get_profile")).toBe("auto");
+    expect(actions.get("li_send_message")).toBe("propose");
+  });
+
   it("flat registry row: skill rows by the builtin set, a tool row auto only when every verb is, none for nothing runnable", () => {
     expect(capabilityRowPosture(registry[0])).toBe("auto");
     expect(capabilityRowPosture(registry[1])).toBe("propose");

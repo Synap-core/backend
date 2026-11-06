@@ -23,6 +23,7 @@ import { TRPCError } from "@trpc/server";
 import {
   PRESENCE_REQUEST_KINDS,
   oauthConsentId,
+  passkeyHolder,
   presenceRequestSubject,
   presenceActionDigest,
   presenceActionSubject,
@@ -32,6 +33,7 @@ import {
   type PresenceRequestKind,
   PRESENCE_ENROLL_FRESH_SECONDS,
   enrollmentSubject,
+  presenceSensitivitySchema,
 } from "@synap-core/types/presence";
 import {
   and,
@@ -49,9 +51,17 @@ import {
   enrollDeviceKey,
   notifyFactorChanged,
 } from "../services/presence/factors.js";
-import { PASSKEY_CHANGE_GRANT_SECONDS } from "../services/presence/passkey-change.js";
-import { missingSince, readPresenceMode } from "../services/presence/mode.js";
+import {
+  assertMayRemovePasskey,
+  PASSKEY_CHANGE_GRANT_SECONDS,
+} from "../services/presence/passkey-change.js";
+import {
+  missingSince,
+  readPresenceMode,
+  readPresenceSensitivity,
+} from "../services/presence/mode.js";
 import { changePresenceMode } from "../services/presence/mode-change.js";
+import { changePresenceSensitivity } from "../services/presence/sensitivity-change.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { kratosCredentialTime } from "../utils/device-session.js";
@@ -211,9 +221,16 @@ export const presenceRouter = router({
                 rpId: passkeyRpId(podOrigin, toPodAdminOrigin(podOrigin)),
                 /** Every rp id the pod accepts (the host and each parent). */
                 rpIds: passkeyRpIds(podOrigin),
+                /**
+                 * Each passkey, with where it lives (`passkeyHolder`, from its
+                 * AAGUID): pod admin sends a device's passkey straight to the
+                 * browser's own prompt when a password-manager extension has
+                 * taken over WebAuthn in the page.
+                 */
                 allowCredentials: passkeys.map((p) => ({
                   id: p.id,
                   type: "public-key" as const,
+                  ...passkeyHolder(p.aaguid, p.displayName),
                 })),
                 userVerification: "required" as const,
               }
@@ -287,6 +304,46 @@ export const presenceRouter = router({
     }),
 
   /**
+   * What asks for a passkey on this pod (W5): the rows of the sensitive lists
+   * a pod admin switched off, none by default. Every signed-in person may read
+   * it, so a client asks for a proof only where the pod will. `mode` is the
+   * mode in force (read with the choice, one cached read): a member's
+   * Security page says up front that their last passkey stays while it is
+   * `enforce` (`presence.mode` itself is a pod admin read).
+   */
+  sensitivity: protectedProcedure.query(async () => {
+    const [choice, { mode }] = await Promise.all([
+      readPresenceSensitivity(),
+      readPresenceMode(),
+    ]);
+    return { ...choice, mode };
+  }),
+
+  /**
+   * Change what asks for a passkey. Switching a row OFF needs a proof of
+   * presence for `presence_sensitivity:<id of the new choice>`, in every
+   * mode; switching rows back ON is free. Recorded
+   * (`presence.sensitivity_changed`) and announced to every pod admin.
+   */
+  setSensitivity: podAdminProcedure
+    .input(
+      presenceSensitivitySchema.extend({
+        presence: presenceProofSchema.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      return changePresenceSensitivity({
+        userId: ctx.userId,
+        choice: {
+          approvalsOff: input.approvalsOff,
+          actionsOff: input.actionsOff,
+        },
+        proof: input.presence ?? null,
+      });
+    }),
+
+  /**
    * Before a passkey change in Kratos' settings flow (adding or removing one)
    * when the person already has a factor (founder decision 2): an existing
    * factor proves `passkey_change:<their user id>`. The consumed challenge is
@@ -294,9 +351,22 @@ export const presenceRouter = router({
    * PASSKEY_CHANGE_GRANT_SECONDS. The person's first passkey needs no grant.
    */
   authorizePasskeyChange: protectedProcedure
-    .input(z.object({ presence: presenceProofSchema }))
+    .input(
+      z.object({
+        presence: presenceProofSchema,
+        /**
+         * W5: what the grant is for. Removing the person's LAST passkey is
+         * refused while the proof of presence is on (pod admin proves only
+         * with a passkey), before the proof is used.
+         */
+        change: z.enum(["add", "remove"]).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, SIGNED_IN);
+      if (input.change === "remove") {
+        await assertMayRemovePasskey(ctx.userId);
+      }
       const verdict = await assertPresenceForRequest({
         userId: ctx.userId,
         kind: "passkey_change",

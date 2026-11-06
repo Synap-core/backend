@@ -10,7 +10,7 @@ const reads = vi.hoisted(() => ({
   gov: {} as Record<string, unknown>,
 }));
 
-vi.mock("../../../../lib/trpc", () => {
+vi.mock("../../../../lib/trpc", async () => {
   const query = (data: unknown) => ({
     data,
     isLoading: false,
@@ -26,6 +26,9 @@ vi.mock("../../../../lib/trpc", () => {
   };
   return {
     trpc: {
+      presence: (
+        await import("../../../_lib/presence/__tests__/trpc-double")
+      ).presenceTrpcDouble(),
       useUtils: () => ({}),
       useQueries: (fn: (t: typeof q) => unknown[]) => fn(q),
       agentUsers: {

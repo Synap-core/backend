@@ -1452,6 +1452,23 @@ export interface AgentPolicyInput {
      * holds. Set ONLY by the close door's writer (`moveStatus.atSessionEnd`).
      */
     atSessionEnd?: boolean;
+    /**
+     * The thing is CURRENTLY in a done or lost option and the move takes it
+     * to an open/active/paused one (a reopen). A fact the `moveStatus` door
+     * reads from the lifecycle's own option categories; on its own it decides
+     * nothing (an agent reopening a thing by hand applies, as before).
+     */
+    outOfTerminal?: boolean;
+    /**
+     * The move is a session BIRTH move: a session started into a playbook's
+     * first stage writes that stage's status onto its subject. With
+     * `outOfTerminal` it is a reopen nobody asked for — starting work on a
+     * finished thing may mean it regressed — so it ALWAYS proposes (rung
+     * 2.076, `LIFECYCLE_REOPEN`, above the rules store): the person confirms
+     * the reopen (finding 2d84febb). Set ONLY by the birth writer
+     * (`moveStatus.atSessionBirth`).
+     */
+    atSessionBirth?: boolean;
   };
   /**
    * The write adds a REQUIRED field or a DEFAULT to a kind the pod administrator
@@ -1863,6 +1880,22 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.HUMAN_ONLY_STATUS,
       reasonCode: "HUMAN_ONLY_STATUS",
+    };
+  }
+
+  // 2.076 A SESSION BIRTH THAT REOPENS → always propose; same placement and
+  // guarantees as 2.075. A session started into a playbook's first stage on a
+  // thing already done or lost would take it back to that stage's status:
+  // the person confirms the reopen, no rule widens it (finding 2d84febb).
+  // Stage advances and end moves never set `atSessionBirth`.
+  if (
+    input.lifecycleMove?.atSessionBirth === true &&
+    input.lifecycleMove.outOfTerminal === true
+  ) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.LIFECYCLE_REOPEN,
+      reasonCode: "LIFECYCLE_REOPEN",
     };
   }
 

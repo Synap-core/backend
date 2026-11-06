@@ -3634,6 +3634,7 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     "arbitrary-execution": "Running code on the pod",
     "human-only-status": "A status only a person sets",
     "lifecycle-terminal": "Closing it (done or lost)",
+    "lifecycle-reopen": "Reopening it by starting work",
     "host-asks-first": "Its computer asks first",
   };
 
