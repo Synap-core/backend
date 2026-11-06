@@ -258,6 +258,8 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         // W3 slice 3: the mode switched off, a passkey change.
         "tRPC presence.setMode",
         "tRPC presence.authorizePasskeyChange",
+        // W5: what asks for a passkey (switching a row off takes a proof).
+        "tRPC presence.setSensitivity",
         // W3 slice 3: the sensitive actions pod admin calls (derived doors).
         "action agentUsers.setPosture",
         "action apiKeys.adminCreateServiceKey",
