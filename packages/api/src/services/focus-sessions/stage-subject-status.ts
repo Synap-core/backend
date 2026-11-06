@@ -146,6 +146,11 @@ export async function writeStageSubjectStatus(input: {
   userId: string;
   /** Set when an agent drove the advance — the write is governed as the agent. */
   agentUserId?: string | null;
+  /**
+   * The session was BORN into this stage ({@link writeBirthStageSubjectStatus}
+   * sets it; an advance never does): a move out of done/lost proposes.
+   */
+  atSessionBirth?: boolean;
 }): Promise<StageSubjectStatusOutcome> {
   const { session } = input;
   if (!session.subjectEntityId)
@@ -190,6 +195,7 @@ export async function writeStageSubjectStatus(input: {
         ref: `stage:${stage.key}`,
         reason: reasoning,
       },
+      ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -209,6 +215,12 @@ export async function writeStageSubjectStatus(input: {
  * by its gate is not agreed yet, and its value belongs to the gate's pass.
  * `undefined` when nothing was attempted (no subject, a gated stage); never
  * throws (a write that could not happen is `failed`, and the session stands).
+ *
+ * A birth that would take the subject OUT of a done or lost status is
+ * PROPOSED, for anyone the governance engine decides (`atSessionBirth`, rung
+ * 2.076): starting work on a finished thing may mean it regressed, so the
+ * person confirms the reopen — never written directly, never skipped
+ * (finding 2d84febb). The reply then says `proposed` with the proposal.
  */
 export async function writeBirthStageSubjectStatus(
   input: Parameters<typeof writeStageSubjectStatus>[0]
@@ -230,7 +242,7 @@ export async function writeBirthStageSubjectStatus(
     );
     return { status: "failed", reason };
   }
-  return writeStageSubjectStatus(input);
+  return writeStageSubjectStatus({ ...input, atSessionBirth: true });
 }
 
 /**
@@ -243,6 +255,7 @@ export async function writeBirthStageSubjectStatus(
  *  - a thing already at the value is left alone (`already_set`);
  *  - an END move never takes a thing OUT of a done or lost status
  *    (`already_settled`): see {@link endMoveCurrent};
+ *  - a BIRTH move out of a done or lost status proposes (`atSessionBirth`);
  *  - a kind that DECLARES a lifecycle moves through `moveStatus` (its
  *    governance floor: an agent's move into done/lost proposes; a humanOnly
  *    option proposes for an agent) — the process's own `humanOnlyStatuses`
@@ -273,6 +286,12 @@ export async function writeSubjectStatusValue(input: {
    * A stage move never sets it.
    */
   atSessionEnd?: boolean;
+  /**
+   * A session BIRTH move (the session started into this stage): a move out
+   * of done/lost proposes (`moveStatus.atSessionBirth`). Set ONLY by
+   * {@link writeBirthStageSubjectStatus}.
+   */
+  atSessionBirth?: boolean;
 }): Promise<StageSubjectStatusOutcome> {
   const { session, entityId, value, reason, actor } = input;
   const proc = input.process;
@@ -320,6 +339,7 @@ export async function writeSubjectStatusValue(input: {
       forcePropose: humanOnly || undefined,
       ...(input.pauseHold ? { pauseHold: input.pauseHold } : {}),
       ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
+      ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
       // An end move defends the status it found not settled: a thing settled
       // meanwhile makes an agent's move a conflict, not a reopening.
       ...(atEnd ? { expectedFrom: atEnd.current } : {}),
