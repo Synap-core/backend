@@ -3346,8 +3346,8 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -3358,8 +3358,8 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -3439,8 +3439,8 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -3451,8 +3451,8 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -4143,8 +4143,8 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -4155,8 +4155,8 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -4236,8 +4236,8 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -4248,8 +4248,8 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -5126,8 +5126,8 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -5138,8 +5138,8 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -5219,8 +5219,8 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -5231,8 +5231,8 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -5925,8 +5925,8 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -5937,8 +5937,8 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -6018,8 +6018,8 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -6030,8 +6030,8 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -6643,8 +6643,8 @@
                                       "properties": {
                                         "assetId": {
                                           "type": "string",
-                                          "minLength": 1,
-                                          "maxLength": 200
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                         }
                                       },
                                       "required": ["assetId"],
@@ -6655,8 +6655,8 @@
                                       "properties": {
                                         "entityId": {
                                           "type": "string",
-                                          "minLength": 1,
-                                          "maxLength": 200
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                         }
                                       },
                                       "required": ["entityId"],
@@ -6732,8 +6732,8 @@
                                                 "properties": {
                                                   "assetId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid",
+                                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                   }
                                                 },
                                                 "required": ["assetId"],
@@ -6744,8 +6744,8 @@
                                                 "properties": {
                                                   "entityId": {
                                                     "type": "string",
-                                                    "minLength": 1,
-                                                    "maxLength": 200
+                                                    "format": "uuid",
+                                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                   }
                                                 },
                                                 "required": ["entityId"],
@@ -7995,8 +7995,8 @@
                                   "properties": {
                                     "assetId": {
                                       "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     }
                                   },
                                   "required": ["assetId"],
@@ -8007,8 +8007,8 @@
                                   "properties": {
                                     "entityId": {
                                       "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     }
                                   },
                                   "required": ["entityId"],
@@ -8081,8 +8081,8 @@
                                             "properties": {
                                               "assetId": {
                                                 "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 200
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                               }
                                             },
                                             "required": ["assetId"],
@@ -8093,8 +8093,8 @@
                                             "properties": {
                                               "entityId": {
                                                 "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 200
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                               }
                                             },
                                             "required": ["entityId"],
@@ -9419,7 +9419,7 @@
           "name": "stages",
           "type": "array<object>",
           "required": false,
-          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook."
+          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? } (forEach and when are declared, advisory until the executor lands). `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook."
         },
         {
           "name": "status",
@@ -9510,7 +9510,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? } (forEach and when are declared, advisory until the executor lands). `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -9761,8 +9761,8 @@
                                               "properties": {
                                                 "assetId": {
                                                   "type": "string",
-                                                  "minLength": 1,
-                                                  "maxLength": 200
+                                                  "format": "uuid",
+                                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                 }
                                               },
                                               "required": ["assetId"],
@@ -9773,8 +9773,8 @@
                                               "properties": {
                                                 "entityId": {
                                                   "type": "string",
-                                                  "minLength": 1,
-                                                  "maxLength": 200
+                                                  "format": "uuid",
+                                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                 }
                                               },
                                               "required": ["entityId"],
@@ -9859,8 +9859,8 @@
                                                         "properties": {
                                                           "assetId": {
                                                             "type": "string",
-                                                            "minLength": 1,
-                                                            "maxLength": 200
+                                                            "format": "uuid",
+                                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                           }
                                                         },
                                                         "required": ["assetId"],
@@ -9871,8 +9871,8 @@
                                                         "properties": {
                                                           "entityId": {
                                                             "type": "string",
-                                                            "minLength": 1,
-                                                            "maxLength": 200
+                                                            "format": "uuid",
+                                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                           }
                                                         },
                                                         "required": [
@@ -10295,6 +10295,47 @@
                   "type": "string",
                   "enum": ["deep", "standard", "quick"],
                   "description": "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+                },
+                "forEach": {
+                  "type": "object",
+                  "properties": {
+                    "over": {
+                      "type": "string",
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                    },
+                    "as": {
+                      "type": "string",
+                      "maxLength": 60,
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "max": { "type": "integer", "minimum": 1, "maximum": 200 }
+                  },
+                  "required": ["over"],
+                  "additionalProperties": false,
+                  "description": "DECLARED, advisory until the executor lands: run this stage once per item of a collection, {over: '<param or dotted path>', as?: '<item name>', max?: n (1-200)}. Today a run executes the stage ONCE and ignores it; do not rely on a fan-out."
+                },
+                "when": {
+                  "type": "object",
+                  "properties": {
+                    "param": {
+                      "type": "string",
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                    },
+                    "equals": {
+                      "anyOf": [
+                        { "type": "string", "maxLength": 500 },
+                        { "type": "number" },
+                        { "type": "boolean" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "exists": { "type": "boolean" }
+                  },
+                  "required": ["param"],
+                  "additionalProperties": false,
+                  "description": "DECLARED, advisory until the executor lands: run this stage only when {param: '<param or dotted path>', equals?: string|number|boolean|null, exists?: boolean} holds. Today a run executes the stage unconditionally and ignores it; do not rely on a skip."
                 }
               },
               "required": ["key", "name", "category"]
@@ -10558,8 +10599,8 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -10570,8 +10611,8 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -10651,8 +10692,8 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -10663,8 +10704,8 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -11159,7 +11200,7 @@
           "name": "stages",
           "type": "array<object>",
           "required": false,
-          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook."
+          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? } (forEach and when are declared, advisory until the executor lands). `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook."
         },
         {
           "name": "params",
@@ -11254,7 +11295,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? } (forEach and when are declared, advisory until the executor lands). `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -11505,8 +11546,8 @@
                                               "properties": {
                                                 "assetId": {
                                                   "type": "string",
-                                                  "minLength": 1,
-                                                  "maxLength": 200
+                                                  "format": "uuid",
+                                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                 }
                                               },
                                               "required": ["assetId"],
@@ -11517,8 +11558,8 @@
                                               "properties": {
                                                 "entityId": {
                                                   "type": "string",
-                                                  "minLength": 1,
-                                                  "maxLength": 200
+                                                  "format": "uuid",
+                                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                 }
                                               },
                                               "required": ["entityId"],
@@ -11603,8 +11644,8 @@
                                                         "properties": {
                                                           "assetId": {
                                                             "type": "string",
-                                                            "minLength": 1,
-                                                            "maxLength": 200
+                                                            "format": "uuid",
+                                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                           }
                                                         },
                                                         "required": ["assetId"],
@@ -11615,8 +11656,8 @@
                                                         "properties": {
                                                           "entityId": {
                                                             "type": "string",
-                                                            "minLength": 1,
-                                                            "maxLength": 200
+                                                            "format": "uuid",
+                                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                           }
                                                         },
                                                         "required": [
@@ -12039,6 +12080,47 @@
                   "type": "string",
                   "enum": ["deep", "standard", "quick"],
                   "description": "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+                },
+                "forEach": {
+                  "type": "object",
+                  "properties": {
+                    "over": {
+                      "type": "string",
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                    },
+                    "as": {
+                      "type": "string",
+                      "maxLength": 60,
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "max": { "type": "integer", "minimum": 1, "maximum": 200 }
+                  },
+                  "required": ["over"],
+                  "additionalProperties": false,
+                  "description": "DECLARED, advisory until the executor lands: run this stage once per item of a collection, {over: '<param or dotted path>', as?: '<item name>', max?: n (1-200)}. Today a run executes the stage ONCE and ignores it; do not rely on a fan-out."
+                },
+                "when": {
+                  "type": "object",
+                  "properties": {
+                    "param": {
+                      "type": "string",
+                      "maxLength": 200,
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                    },
+                    "equals": {
+                      "anyOf": [
+                        { "type": "string", "maxLength": 500 },
+                        { "type": "number" },
+                        { "type": "boolean" },
+                        { "type": "null" }
+                      ]
+                    },
+                    "exists": { "type": "boolean" }
+                  },
+                  "required": ["param"],
+                  "additionalProperties": false,
+                  "description": "DECLARED, advisory until the executor lands: run this stage only when {param: '<param or dotted path>', equals?: string|number|boolean|null, exists?: boolean} holds. Today a run executes the stage unconditionally and ignores it; do not rely on a skip."
                 }
               },
               "required": ["key", "name", "category"]
@@ -12327,8 +12409,8 @@
                                         "properties": {
                                           "assetId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["assetId"],
@@ -12339,8 +12421,8 @@
                                         "properties": {
                                           "entityId": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "maxLength": 200
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                           }
                                         },
                                         "required": ["entityId"],
@@ -12420,8 +12502,8 @@
                                                   "properties": {
                                                     "assetId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["assetId"],
@@ -12432,8 +12514,8 @@
                                                   "properties": {
                                                     "entityId": {
                                                       "type": "string",
-                                                      "minLength": 1,
-                                                      "maxLength": 200
+                                                      "format": "uuid",
+                                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                                     }
                                                   },
                                                   "required": ["entityId"],
@@ -16882,8 +16964,8 @@
                                   "properties": {
                                     "assetId": {
                                       "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     }
                                   },
                                   "required": ["assetId"],
@@ -16894,8 +16976,8 @@
                                   "properties": {
                                     "entityId": {
                                       "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                     }
                                   },
                                   "required": ["entityId"],
@@ -16968,8 +17050,8 @@
                                             "properties": {
                                               "assetId": {
                                                 "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 200
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                               }
                                             },
                                             "required": ["assetId"],
@@ -16980,8 +17062,8 @@
                                             "properties": {
                                               "entityId": {
                                                 "type": "string",
-                                                "minLength": 1,
-                                                "maxLength": 200
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                                               }
                                             },
                                             "required": ["entityId"],
