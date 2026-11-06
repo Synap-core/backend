@@ -2060,6 +2060,63 @@ export const tools = {
         },
       },
       {
+        name: "synap_update_facet",
+        annotations: {
+          title: "Update facet",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Change the fields of a ROLE an entity already wears (Kind + Facets) — e.g. a lead's nextAction / nextActionAt. A role's fields live on its facet, NOT on the entity: synap_update_entity does not reach them, and synap_attach_facet on a role the entity already has writes nothing (it answers status 'exists' with the facetId). Target the facet by entityId + facetSlug, or by facetId (the handle attach returns). `properties` MERGES into the role's current fields (keys you omit are kept). If `properties` carries the role's status field, it moves through the status door: pass `expectedStatus` (the status you saw). Governed like any write: may return 'proposed' — NEVER treat that as an error.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description:
+                "UUID of the entity wearing the role (with facetSlug).",
+            },
+            facetSlug: {
+              type: "string",
+              description:
+                "Role-profile slug of the role to change (paired with entityId), e.g. 'lead'.",
+            },
+            facetId: {
+              type: "string",
+              description:
+                "Alternative to entityId+facetSlug: the facet's own UUID (the handle synap_attach_facet returns).",
+            },
+            properties: {
+              type: "object",
+              description:
+                "The role fields to set. Merged into the role's current fields: keys you omit are kept.",
+            },
+            expectedStatus: {
+              type: ["string", "null"],
+              description:
+                "Only when `properties` changes the role's status field: the status you saw (compare-and-set; a stale one is refused). null = the role had no status.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace lens used to resolve the facet when targeting it by entityId + facetSlug (needed when the role is worn in several spaces).",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["properties"],
+        },
+      },
+      {
         name: "synap_define_role",
         annotations: {
           title: "Define role type",

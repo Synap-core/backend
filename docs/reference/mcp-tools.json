@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 112,
+  "toolCount": 113,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -53,6 +53,7 @@
       "synap_link_entities",
       "synap_attach_facet",
       "synap_detach_facet",
+      "synap_update_facet",
       "synap_move_entities",
       "synap_organize_library"
     ],
@@ -2398,6 +2399,106 @@
           }
         },
         "required": []
+      }
+    },
+    {
+      "name": "synap_update_facet",
+      "title": "Update facet",
+      "group": "data",
+      "annotations": {
+        "title": "Update facet",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Change the fields of a ROLE an entity already wears (Kind + Facets) — e.g. a lead's nextAction / nextActionAt. A role's fields live on its facet, NOT on the entity: synap_update_entity does not reach them, and synap_attach_facet on a role the entity already has writes nothing (it answers status 'exists' with the facetId). Target the facet by entityId + facetSlug, or by facetId (the handle attach returns). `properties` MERGES into the role's current fields (keys you omit are kept). If `properties` carries the role's status field, it moves through the status door: pass `expectedStatus` (the status you saw). Governed like any write: may return 'proposed' — NEVER treat that as an error.",
+      "parameters": [
+        {
+          "name": "entityId",
+          "type": "string",
+          "required": false,
+          "description": "UUID of the entity wearing the role (with facetSlug)."
+        },
+        {
+          "name": "facetSlug",
+          "type": "string",
+          "required": false,
+          "description": "Role-profile slug of the role to change (paired with entityId), e.g. 'lead'."
+        },
+        {
+          "name": "facetId",
+          "type": "string",
+          "required": false,
+          "description": "Alternative to entityId+facetSlug: the facet's own UUID (the handle synap_attach_facet returns)."
+        },
+        {
+          "name": "properties",
+          "type": "object",
+          "required": true,
+          "description": "The role fields to set. Merged into the role's current fields: keys you omit are kept."
+        },
+        {
+          "name": "expectedStatus",
+          "type": "string | null",
+          "required": false,
+          "description": "Only when `properties` changes the role's status field: the status you saw (compare-and-set; a stale one is refused). null = the role had no status."
+        },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "Optional workspace lens used to resolve the facet when targeting it by entityId + facetSlug (needed when the role is worn in several spaces)."
+        },
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "entityId": {
+            "type": "string",
+            "description": "UUID of the entity wearing the role (with facetSlug)."
+          },
+          "facetSlug": {
+            "type": "string",
+            "description": "Role-profile slug of the role to change (paired with entityId), e.g. 'lead'."
+          },
+          "facetId": {
+            "type": "string",
+            "description": "Alternative to entityId+facetSlug: the facet's own UUID (the handle synap_attach_facet returns)."
+          },
+          "properties": {
+            "type": "object",
+            "description": "The role fields to set. Merged into the role's current fields: keys you omit are kept."
+          },
+          "expectedStatus": {
+            "type": ["string", "null"],
+            "description": "Only when `properties` changes the role's status field: the status you saw (compare-and-set; a stale one is refused). null = the role had no status."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace lens used to resolve the facet when targeting it by entityId + facetSlug (needed when the role is worn in several spaces)."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["properties"]
       }
     },
     {

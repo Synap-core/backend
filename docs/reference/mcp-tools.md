@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 112 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 113 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -31,6 +31,7 @@ The pod's MCP server lists 112 tools. A new agent key lists the `entry` tools; t
 | [`synap_link_entities`](#synap_link_entities)                             | Link entities                     | data         | no        |
 | [`synap_attach_facet`](#synap_attach_facet)                               | Attach facet                      | data         | no        |
 | [`synap_detach_facet`](#synap_detach_facet)                               | Detach facet                      | data         | no        |
+| [`synap_update_facet`](#synap_update_facet)                               | Update facet                      | data         | no        |
 | [`synap_define_role`](#synap_define_role)                                 | Define role type                  | schema       | no        |
 | [`synap_define_kind`](#synap_define_kind)                                 | Define entity kind                | schema       | no        |
 | [`synap_orient`](#synap_orient)                                           | Orient in pod                     | entry        | yes       |
@@ -500,6 +501,23 @@ Detach (soft-delete) a role from an entity (Kind + Facets). Provide the entityId
 | `workspaceId` | string | no       | Optional workspace lens used to resolve the facet when detaching by entityId + facetSlug.                                                                                                                                                                                                                                                                 |
 | `reasoning`   | string | no       | Why you are making this write, in the person's words — shown to the human who reviews it. One line.                                                                                                                                                                                                                                                       |
 | `sessionId`   | string | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
+
+## synap_update_facet
+
+**Update facet** · Group: `data` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Change the fields of a ROLE an entity already wears (Kind + Facets) — e.g. a lead's nextAction / nextActionAt. A role's fields live on its facet, NOT on the entity: synap_update_entity does not reach them, and synap_attach_facet on a role the entity already has writes nothing (it answers status 'exists' with the facetId). Target the facet by entityId + facetSlug, or by facetId (the handle attach returns). `properties` MERGES into the role's current fields (keys you omit are kept). If `properties` carries the role's status field, it moves through the status door: pass `expectedStatus` (the status you saw). Governed like any write: may return 'proposed' — NEVER treat that as an error.
+
+| Parameter        | Type           | Required | Description                                                                                                                                                                                                                                                                                                                                               |
+| ---------------- | -------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `entityId`       | string         | no       | UUID of the entity wearing the role (with facetSlug).                                                                                                                                                                                                                                                                                                     |
+| `facetSlug`      | string         | no       | Role-profile slug of the role to change (paired with entityId), e.g. 'lead'.                                                                                                                                                                                                                                                                              |
+| `facetId`        | string         | no       | Alternative to entityId+facetSlug: the facet's own UUID (the handle synap_attach_facet returns).                                                                                                                                                                                                                                                          |
+| `properties`     | object         | yes      | The role fields to set. Merged into the role's current fields: keys you omit are kept.                                                                                                                                                                                                                                                                    |
+| `expectedStatus` | string \| null | no       | Only when `properties` changes the role's status field: the status you saw (compare-and-set; a stale one is refused). null = the role had no status.                                                                                                                                                                                                      |
+| `workspaceId`    | string         | no       | Optional workspace lens used to resolve the facet when targeting it by entityId + facetSlug (needed when the role is worn in several spaces).                                                                                                                                                                                                             |
+| `reasoning`      | string         | no       | Why you are making this write, in the person's words — shown to the human who reviews it. One line.                                                                                                                                                                                                                                                       |
+| `sessionId`      | string         | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
 
 ## synap_define_role
 
