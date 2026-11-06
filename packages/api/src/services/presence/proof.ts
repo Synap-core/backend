@@ -15,9 +15,19 @@
  *    flag itself), origin = the pod or its console, rpId = the pod host or a
  *    parent domain (Kratos' `rp.id` is one of them).
  *
+ *  - `totp` / `recovery_code` (the recovery ladder, founder, 6 Nov 2026): a
+ *    code the person TYPES in pod admin's dialog, from their 2FA app or their
+ *    recovery codes. Bound to the challenge like the others (the challenge
+ *    names the subject and is spent), accepted once (the app's step moves
+ *    forward, the recovery code is spent), refused from a Synap app's device
+ *    session, and limited to `PRESENCE_TYPED_FAILURES_MAX` wrong codes per
+ *    person in `PRESENCE_TYPED_FAILURE_WINDOW_SECONDS`.
+ *
  * A challenge is consumed by the first proof that answers it (conditional
  * update), lives `PRESENCE_CHALLENGE_TTL_SECONDS`, and belongs to one person and
- * one subject. Every refusal is a typed `PresenceError`; nothing is half-applied.
+ * one subject. Every refusal is a typed `PresenceError`; nothing is half-applied
+ * (a typed code that verified is spent even when its challenge then loses a
+ * race: one use, never two).
  */
 
 import crypto from "node:crypto";
@@ -29,26 +39,45 @@ import {
   PRESENCE_CHALLENGE_TTL_SECONDS,
   PRESENCE_EXPIRED,
   PRESENCE_INVALID,
+  PRESENCE_TYPED_FAILURE_WINDOW_SECONDS,
+  PRESENCE_TYPED_FAILURES_MAX,
   PRESENCE_USED,
+  isTypedPresenceProof,
   presenceMessage,
+  presenceWaysIn,
+  type PresenceFactorCounts,
   type PresenceProof,
+  type PresenceProofKind,
   type PresenceRefusalCode,
   type PasskeyAssertionJSON,
 } from "@synap-core/types/presence";
+import { normalizeRecoveryCode } from "@synap-core/types/account-recovery";
 import {
+  AccountRecoveryCodeRepository,
+  accountRecoveryCodes,
   and,
   count,
   db,
   eq,
   gt,
+  isNotNull,
   isNull,
   presenceChallenges,
   presenceDeviceKeys,
+  presenceDisownedPasskeys,
+  presenceProofFailures,
+  presenceTotpFactors,
 } from "@synap/database";
 import { verifyAuthenticationResponse } from "@simplewebauthn/server";
 
 import { podAudience } from "../../utils/jwks-client.js";
+import {
+  isBrowserPersonSession,
+  isDeviceSession,
+} from "../../utils/device-session.js";
 import { toPodAdminOrigin } from "../../utils/pod-admin-origin.js";
+import { matchRecoveryCode } from "../account-recovery/codes.js";
+import { acceptTotpCode } from "./totp-code.js";
 
 export class PresenceError extends Error {
   constructor(
@@ -256,8 +285,10 @@ export function passkeysFromKratos(
     }));
 }
 
-/** The person's passkeys, read from Kratos (the one place they are registered). */
-export async function readPasskeys(userId: string): Promise<PodPasskey[]> {
+/** Every passkey Kratos holds for the person, a finished recovery's included. */
+export async function readKratosPasskeys(
+  userId: string
+): Promise<PodPasskey[]> {
   const { data } = await kratosAdmin.getIdentity({
     id: userId,
     includeCredential: ["passkey" as never],
@@ -271,18 +302,41 @@ export async function readPasskeys(userId: string): Promise<PodPasskey[]> {
 }
 
 /**
- * Does the person hold a factor that can prove presence: a Relay device key
- * not revoked, or a passkey in Kratos? A failed read of their passkeys
- * throws: it is never "no factor", which would let a session add one
- * unapproved. (Here, beside `readPasskeys`, so the gate can ask it without
- * the factor-change graph of `factors.ts`, which re-exports it.)
+ * The person's passkeys that PROVE presence: those Kratos holds (the one place
+ * they are registered), minus those a finished recovery disowned
+ * (`presence_disowned_passkeys`: Kratos v1.3.1 cannot remove a passkey
+ * through its admin API, so the pod stops accepting it instead).
  */
-export async function hasProofFactor(
+export async function readPasskeys(
   userId: string,
-  /** A transaction to read the device keys in (the enrolment's, under its lock). */
+  /** A transaction to read the disowned list in (an enrolment's, under its lock). */
   executor: Pick<typeof db, "select"> = db
-): Promise<boolean> {
-  const [row] = await executor
+): Promise<PodPasskey[]> {
+  const all = await readKratosPasskeys(userId);
+  if (all.length === 0) return all;
+  const disowned = new Set(
+    (
+      await executor
+        .select({ id: presenceDisownedPasskeys.credentialId })
+        .from(presenceDisownedPasskeys)
+        .where(eq(presenceDisownedPasskeys.userId, userId))
+    ).map((r) => r.id)
+  );
+  return all.filter((p) => !disowned.has(p.id));
+}
+
+/**
+ * What the person holds that can prove presence, counted: their passkeys
+ * (`readPasskeys`), their device keys not revoked, their 2FA app, their unused
+ * recovery codes. The pod-held ones are read in `executor` (an enrolment's
+ * transaction, under its lock). A failed read throws: it is never "no
+ * factor", which would let a session add one unapproved.
+ */
+export async function presenceFactorCounts(
+  userId: string,
+  executor: Pick<typeof db, "select"> = db
+): Promise<PresenceFactorCounts> {
+  const [devices] = await executor
     .select({ n: count() })
     .from(presenceDeviceKeys)
     .where(
@@ -291,8 +345,133 @@ export async function hasProofFactor(
         isNull(presenceDeviceKeys.revokedAt)
       )
     );
-  if (Number(row?.n ?? 0) > 0) return true;
-  return (await readPasskeys(userId)).length > 0;
+  const [totp] = await executor
+    .select({ n: count() })
+    .from(presenceTotpFactors)
+    .where(
+      and(
+        eq(presenceTotpFactors.userId, userId),
+        isNotNull(presenceTotpFactors.confirmedAt),
+        isNull(presenceTotpFactors.revokedAt)
+      )
+    );
+  const [codes] = await executor
+    .select({ n: count() })
+    .from(accountRecoveryCodes)
+    .where(
+      and(
+        eq(accountRecoveryCodes.userId, userId),
+        isNull(accountRecoveryCodes.usedAt)
+      )
+    );
+  return {
+    passkeys: (await readPasskeys(userId, executor)).length,
+    deviceKeys: Number(devices?.n ?? 0),
+    totp: Number(totp?.n ?? 0) > 0,
+    recoveryCodes: Number(codes?.n ?? 0),
+  };
+}
+
+/**
+ * Does the person hold a factor that can prove presence (a passkey, a device
+ * key, a 2FA app, an unused recovery code)? Throws on a failed read. (Here,
+ * beside `readPasskeys`, so the gate can ask it without the factor-change
+ * graph of `factors.ts`, which re-exports it.)
+ */
+export async function hasProofFactor(
+  userId: string,
+  /** A transaction to read the pod-held factors in (an enrolment's, under its lock). */
+  executor: Pick<typeof db, "select"> = db
+): Promise<boolean> {
+  return presenceWaysIn(await presenceFactorCounts(userId, executor)) > 0;
+}
+
+/**
+ * Record a typed try BEFORE the code is read, then count the tries in the
+ * window, this one included: of N tries sent at once, the k-th sees at least
+ * k rows, so at most `PRESENCE_TYPED_FAILURES_MAX` are ever read (a count
+ * taken before the insert let a burst through, review of backend#885). A try
+ * past the limit is taken back and refused; a right code takes its row back.
+ * A failed write fails the proof: an unrecorded try would escape the limit.
+ */
+async function recordTypedTry(userId: string, method: string): Promise<string> {
+  const [row] = await db
+    .insert(presenceProofFailures)
+    .values({ userId, method })
+    .returning({ id: presenceProofFailures.id });
+  if (!row) throw new Error("a typed try could not be recorded");
+  const since = new Date(
+    Date.now() - PRESENCE_TYPED_FAILURE_WINDOW_SECONDS * 1000
+  );
+  const [counted] = await db
+    .select({ n: count() })
+    .from(presenceProofFailures)
+    .where(
+      and(
+        eq(presenceProofFailures.userId, userId),
+        gt(presenceProofFailures.createdAt, since)
+      )
+    );
+  if (Number(counted?.n ?? 0) > PRESENCE_TYPED_FAILURES_MAX) {
+    await forgetTypedTry(row.id);
+    throw new PresenceError(
+      PRESENCE_INVALID,
+      "Too many wrong codes. Wait 15 minutes, or confirm with your passkey or Face ID."
+    );
+  }
+  return row.id;
+}
+
+async function forgetTypedTry(id: string): Promise<void> {
+  await db
+    .delete(presenceProofFailures)
+    .where(eq(presenceProofFailures.id, id));
+}
+
+/**
+ * Check a TYPED code (2FA app, recovery code) and spend it. Every try is
+ * counted first (`recordTypedTry`); a right code takes its try back.
+ */
+async function verifyTypedCode(
+  userId: string,
+  proof: Extract<PresenceProof, { kind: "totp" | "recovery_code" }>
+): Promise<void> {
+  // An allowlist: only a person's browser session (pod admin) may type a
+  // code. A device token, a key, or any door that opened no such scope (Hub
+  // REST, an executor) is refused before the code is read.
+  if (isDeviceSession() || !isBrowserPersonSession()) {
+    throw new PresenceError(
+      PRESENCE_INVALID,
+      isDeviceSession()
+        ? "A code is typed in pod admin, signed in in your browser. Here, confirm with Face ID or Touch ID."
+        : "A code is typed in pod admin, signed in in your browser."
+    );
+  }
+  const tryId = await recordTypedTry(userId, proof.kind);
+  let accepted = false;
+  if (proof.kind === "totp") {
+    accepted = await acceptTotpCode(userId, proof.code);
+  } else {
+    const codes = new AccountRecoveryCodeRepository(
+      db as unknown as ConstructorParameters<
+        typeof AccountRecoveryCodeRepository
+      >[0]
+    );
+    const matched = await matchRecoveryCode(
+      normalizeRecoveryCode(proof.code),
+      await codes.listUnused(userId)
+    );
+    accepted = matched !== null && (await codes.claim(matched, new Date()));
+  }
+  if (!accepted) {
+    throw new PresenceError(
+      PRESENCE_INVALID,
+      proof.kind === "totp"
+        ? "This code doesn't match your 2FA app, or it was already used. Type the code it shows now."
+        : "This recovery code doesn't match one of yours, or it was already used."
+    );
+  }
+  await forgetTypedTry(tryId);
 }
 
 async function verifyPasskey(
@@ -336,7 +515,7 @@ async function verifyPasskey(
 }
 
 export interface PresenceVerdict {
-  method: "passkey" | "device_key";
+  method: PresenceProofKind;
   deviceKeyId: string | null;
   deviceLabel: string | null;
   challengeId: string;
@@ -403,6 +582,11 @@ export async function verifyAndConsumePresence(args: {
     deviceLabel = key.label;
   } else if (proof.kind === "passkey") {
     await verifyPasskey(userId, proof.credential, webauthnChallengeOf(message));
+  } else if (isTypedPresenceProof(proof.kind)) {
+    await verifyTypedCode(
+      userId,
+      proof as Extract<PresenceProof, { kind: "totp" | "recovery_code" }>
+    );
   } else {
     throw new PresenceError(PRESENCE_INVALID, "Unknown kind of proof.");
   }

@@ -38,6 +38,7 @@ import {
   useSetReversibleDefault,
 } from "../../_lib/presence/use-sensitive-actions";
 import { PASSKEYS_PATH } from "../../settings/security/passkeys-path";
+import { SECOND_WAY_HREF } from "../../settings/security/two-factor-path";
 import { en, fr } from "./_lib/copy";
 import {
   defaultsStepRows,
@@ -369,6 +370,17 @@ function DefaultSwitchRow({
             className="inline-flex min-h-10 items-center font-medium text-primary underline-offset-2 hover:underline"
           >
             {t("presence.factors.add")}
+          </Link>
+        </p>
+      )}
+      {factors?.note === "one" && (
+        <p className="flex flex-wrap items-center gap-x-2 text-[12px] text-foreground/65">
+          {t("presence.twoWays")}
+          <Link
+            href={SECOND_WAY_HREF}
+            className="inline-flex min-h-10 items-center font-medium text-primary underline-offset-2 hover:underline"
+          >
+            {t("presence.factors.addSecond")}
           </Link>
         </p>
       )}

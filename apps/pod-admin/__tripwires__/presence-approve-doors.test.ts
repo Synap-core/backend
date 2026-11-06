@@ -91,6 +91,9 @@ const DOORS: Record<string, RegExp> = {
     /\bpresence\s*\.\s*setSensitivity\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.authorizePasskeyChange":
     /\bpresence\s*\.\s*authorizePasskeyChange\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // The recovery ladder (6 Nov): a 2FA app added by a person who holds a factor.
+  "tRPC presence.totp.confirm":
+    /\bpresence\s*\.\s*totp\s*\.\s*confirm\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.devices.enroll":
     /\bdevices\s*\.\s*enroll\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
 };
@@ -173,13 +176,16 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   },
   // Slice 3: presence.setMode (back to report), presence.authorizePasskeyChange
   // and presence.devices.enroll (a second factor) take a proof themselves.
+  // The recovery ladder (6 Nov): presence.totp.confirm (a 2FA app added by a
+  // person who already holds a factor) takes one too.
   "presence.ts": {
-    inputs: 4,
+    inputs: 5,
     doors: [
       "tRPC presence.setMode",
       "tRPC presence.setSensitivity",
       "tRPC presence.authorizePasskeyChange",
       "tRPC presence.devices.enroll",
+      "tRPC presence.totp.confirm",
     ],
   },
   "tools.ts": { inputs: 1, doors: ["tRPC tools.setApproved"] },
@@ -260,6 +266,8 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "tRPC presence.authorizePasskeyChange",
         // W5: what asks for a passkey (switching a row off takes a proof).
         "tRPC presence.setSensitivity",
+        // The recovery ladder (6 Nov): a 2FA app added with a factor's proof.
+        "tRPC presence.totp.confirm",
         // W3 slice 3: the sensitive actions pod admin calls (derived doors).
         "action agentUsers.setPosture",
         "action apiKeys.adminCreateServiceKey",

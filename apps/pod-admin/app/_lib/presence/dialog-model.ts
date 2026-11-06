@@ -16,6 +16,11 @@
  *    "Use your password manager" (`planAssertion`, `lib/passkey.ts`);
  *  - a prompt that ended with an error keeps the browser's own words behind
  *    "Copy details", never in the sentence.
+ *  - a person with a 2FA app or recovery codes may TYPE a code instead (the
+ *    recovery ladder, founder, 6 Nov 2026): "Use a code instead" is offered
+ *    in every ready state, and in code mode the code is the primary action
+ *    and no passkey notice shows. With no passkey but a code, the dialog
+ *    opens in code mode.
  */
 
 import type { PasskeyRoute } from "../../../lib/passkey";
@@ -30,7 +35,8 @@ export type PresenceWord =
   | "addPasskey"
   | "comeBack"
   | "notNow"
-  | "stopHere";
+  | "stopHere"
+  | "confirmCode";
 
 export interface PresenceDialogInput {
   phase:
@@ -57,6 +63,10 @@ export interface PresenceDialogInput {
   inBrowserOnly?: boolean;
   /** "Add a passkey" opened its tab: the person adds it there, then comes back. */
   addPasskeyOpened?: boolean;
+  /** The person may type a code here (a 2FA app, or unused recovery codes). */
+  typed?: boolean;
+  /** The person chose "Use a code instead" (or holds no passkey but a code). */
+  codeMode?: boolean;
 }
 
 export interface PresenceDialogView {
@@ -68,7 +78,11 @@ export interface PresenceDialogView {
   /** A failed prompt's error, behind "Copy details"; null hides the control. */
   copyDetail: string | null;
   notice: "noPasskey" | "unsupported" | null;
-  primary: "confirm" | "tryAgain" | "addPasskey" | null;
+  primary: "confirm" | "tryAgain" | "addPasskey" | "confirmCode" | null;
+  /** Show the code field (a 2FA app code or a recovery code). */
+  codeField: boolean;
+  /** Offer "Use a code instead" (a link that switches to the code field). */
+  useCode: boolean;
   /**
    * Beside the primary: read again once a passkey is added, or open its tab
    * again; or, after a failed prompt, the other one (this device's own
@@ -94,6 +108,8 @@ export function presenceDialogView(
     secondary: null,
     decline,
     relayDevice: null,
+    codeField: false,
+    useCode: false,
   } as const;
   if (phase.kind === "reading") {
     return {
@@ -118,6 +134,23 @@ export function presenceDialogView(
     !input.inBrowserOnly && phase.deviceKeys.length > 0
       ? phase.deviceKeys[0]!.label.trim() || ""
       : null;
+  if (input.typed && (input.codeMode || !phase.passkey)) {
+    const signing = phase.kind === "signing";
+    return {
+      ...base,
+      status: signing
+        ? { word: "checking" }
+        : phase.note
+          ? { note: phase.note }
+          : null,
+      tone: signing ? "muted" : "warning",
+      primary: "confirmCode",
+      codeField: true,
+      relayDevice,
+      busy: signing,
+    };
+  }
+  const useCode = Boolean(input.typed);
   if (!phase.passkey && input.addPasskeyOpened) {
     return {
       ...base,
@@ -127,6 +160,7 @@ export function presenceDialogView(
       primary: "tryAgain",
       secondary: "addPasskey",
       relayDevice,
+      useCode,
       busy: false,
     };
   }
@@ -139,6 +173,7 @@ export function presenceDialogView(
       primary: "addPasskey",
       secondary: "tryAgain",
       relayDevice,
+      useCode,
       busy: false,
     };
   }
@@ -150,6 +185,7 @@ export function presenceDialogView(
       notice: "unsupported",
       primary: null,
       relayDevice,
+      useCode,
       busy: false,
     };
   }
@@ -172,6 +208,7 @@ export function presenceDialogView(
           : null,
     copyDetail: signing ? null : phase.copyDetail?.trim() || null,
     relayDevice,
+    useCode: useCode && !signing,
     busy: signing,
   };
 }

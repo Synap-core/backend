@@ -15,6 +15,7 @@
  */
 
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   afterEach,
   beforeAll,
@@ -34,6 +35,9 @@ const h = vi.hoisted(() => ({
   notices: [] as Array<{ type: string; userId: string }>,
   /** When set, every passkey read waits here (the race test's rendezvous). */
   kratosGate: null as null | (() => Promise<void>),
+  /** The person's active Kratos sessions, and the ones the pod ended. */
+  sessions: [] as Array<{ id: string }>,
+  disabled: [] as string[],
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -80,6 +84,10 @@ vi.mock("@synap/auth", () => ({
         },
       };
     },
+    listIdentitySessions: async () => ({ data: h.sessions }),
+    disableSession: async ({ id }: { id: string }) => {
+      h.disabled.push(id);
+    },
   },
 }));
 
@@ -118,6 +126,9 @@ const { assertPresencePass, mintPresencePass } = await import("./pass.js");
 const { passPresenceForAction, PRESENCE_KEY_CALLER_MESSAGE } =
   await import("./gate.js");
 const { issuePresenceChallenge, passkeyRpId } = await import("./proof.js");
+const { beginTotpEnrolment, confirmTotpEnrolment } = await import("./totp.js");
+const { base32Decode, totpCode, totpStepAt } = await import("./totp-code.js");
+const { runAsBrowserPerson } = await import("../../utils/device-session.js");
 const { presenceMessage, enrollmentSubject } =
   await import("@synap-core/types/presence");
 
@@ -305,6 +316,27 @@ async function agePastRateWindow(): Promise<void> {
   );
 }
 
+/** Recovery codes for a person, hashed as the account recovery door does. */
+async function seedRecoveryCodes(userId: string, codes: string[]) {
+  const { hashRecoveryCode, newBatchSalt } =
+    await import("../account-recovery/codes.js");
+  const { normalizeRecoveryCode } =
+    await import("@synap-core/types/account-recovery");
+  const salt = newBatchSalt();
+  const batch = crypto.randomUUID();
+  for (const code of codes) {
+    const hash = await hashRecoveryCode(normalizeRecoveryCode(code)!, salt);
+    await (
+      h.client as unknown as {
+        query: (s: string, p: unknown[]) => Promise<unknown>;
+      }
+    ).query(
+      `insert into account_recovery_codes (user_id, code_hash, batch_id) values ($1, $2, $3)`,
+      [userId, hash, batch]
+    );
+  }
+}
+
 /** A pod whose admins never chose a mode: no stored setting, cache dropped. */
 async function noStoredMode(): Promise<void> {
   await h.client!.exec("delete from pod_settings");
@@ -333,6 +365,20 @@ describe("proof of presence: the gate", () => {
         public_key text not null, last_used_at timestamptz, revoked_at timestamptz,
         created_at timestamptz not null default now());
     `);
+    // The recovery ladder's tables, from the migrations as written (0294:
+    // recovery codes; 0405: 2FA app, typed-code failures, recovery requests,
+    // disowned passkeys).
+    for (const file of [
+      "0294_account_recovery_codes.sql",
+      "0405_presence_recovery.sql",
+    ]) {
+      await h.client!.exec(
+        readFileSync(
+          new URL(`../../../../database/migrations/${file}`, import.meta.url),
+          "utf8"
+        )
+      );
+    }
     await (
       h.client as unknown as {
         query: (s: string, p: unknown[]) => Promise<unknown>;
@@ -715,11 +761,19 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     );
   });
 
-  it("GUARDRAIL: the pod setting drives the mode; ON is free, OFF needs a proof and tells the admins", async () => {
+  it("GUARDRAIL: the pod setting drives the mode; ON needs two ways in, OFF needs a proof and tells the admins", async () => {
     delete process.env.SYNAP_PRESENCE_PROOF;
     await reportByChoice();
     expect((await readPresenceMode()).mode).toBe("report");
     expect(await refusal(action("apiKeys.create", { a: 1 }))).toBe("accepted");
+    // PERSON holds ONE way in (a device key): turning enforce on is refused
+    // (the recovery ladder: one lost factor must not lock them out).
+    expect(
+      await refusal(changePresenceMode({ userId: PERSON, mode: "enforce" }))
+    ).toBe("PRESENCE_NEEDS_TWO_WAYS");
+    expect((await readPresenceMode()).mode).toBe("report");
+    // A second way (recovery codes): ON needs no proof.
+    await seedRecoveryCodes(PERSON, ["ABCD-EFGH-JKMN-PQRS"]);
     await changePresenceMode({ userId: PERSON, mode: "enforce" });
     expect(await readPresenceMode()).toMatchObject({
       mode: "enforce",
@@ -746,6 +800,7 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     ).toBe("accepted");
     expect((await readPresenceMode()).mode).toBe("report");
     expect(h.events.map((e) => e.type)).toContain("presence.mode_changed");
+    await h.client!.exec("delete from account_recovery_codes");
   });
 
   it("GUARDRAIL: a pod with no setting enforces by default; an explicit choice, either way, wins", async () => {
@@ -1128,5 +1183,375 @@ describe("what asks for your passkey (W5): the pod's choice", () => {
     expect(checkAt).toBeGreaterThan(0);
     expect(proofAt).toBeGreaterThan(checkAt);
     expect(src).toMatch(/return changePresenceSensitivity\(/);
+  });
+});
+
+describe("proof of presence: the recovery ladder (6 Nov 2026)", () => {
+  const LADDER = crypto.randomUUID();
+  let secret = "";
+
+  const q = (sql: string, params: unknown[] = []) =>
+    (
+      h.client as unknown as {
+        query: (
+          s: string,
+          p: unknown[]
+        ) => Promise<{ rows: Array<Record<string, unknown>> }>;
+      }
+    ).query(sql, params);
+
+  /** The code a 2FA app shows `stepsFromNow` steps from now. */
+  const appCode = (stepsFromNow = 0) =>
+    totpCode(base32Decode(secret), totpStepAt(new Date()) + stepsFromNow);
+
+  const typed = async (
+    kind: "totp" | "recovery_code",
+    code: string,
+    proposal = SENSITIVE,
+    userId = LADDER
+  ) => {
+    const c = await challengeFor(proposal.id, userId);
+    // As pod admin sends it: a person's browser session (tRPC, `kratos`).
+    return runAsBrowserPerson(() =>
+      gate(proposal, { kind, challengeId: c.challengeId, code }, userId)
+    );
+  };
+
+  beforeAll(async () => {
+    process.env.SYNAP_SERVICE_ENCRYPTION_KEY = "test-service-key-for-totp";
+    await q(
+      `insert into users (id, email, name) values ($1, 'l@x.test', 'Ladder')`,
+      [LADDER]
+    );
+  });
+  beforeEach(async () => {
+    process.env.PUBLIC_URL = POD;
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    h.events.length = 0;
+    h.notices.length = 0;
+    h.passkeys = [];
+    await agePastRateWindow();
+    await h.client!.exec("delete from presence_proof_failures");
+    await noStoredMode();
+  });
+  afterEach(() => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    invalidatePresenceMode();
+  });
+
+  it("a first 2FA app needs no proof; its first code proves the app holds the secret", async () => {
+    const begun = await beginTotpEnrolment({
+      userId: LADDER,
+      label: "Authenticator",
+      account: "l@x.test",
+      issuer: "Synap (pod.example.test)",
+    });
+    secret = begun.secret;
+    expect(begun.otpauthUri).toMatch(/^otpauth:\/\/totp\/.+secret=/);
+    // The secret is stored encrypted, never as typed.
+    const [row] = (
+      await q(`select secret from presence_totp_factors where id = $1`, [
+        begun.id,
+      ])
+    ).rows;
+    expect(row!.secret).not.toContain(secret);
+    expect(
+      await refusal(
+        confirmTotpEnrolment({ userId: LADDER, id: begun.id, code: "000000" })
+      )
+    ).toMatch(/doesn't match/);
+    // Confirmed two steps back, so the code of NOW is a later step.
+    const past = new Date(Date.now() - 60_000);
+    const pastCode = totpCode(base32Decode(secret), totpStepAt(past));
+    expect(
+      await refusal(
+        confirmTotpEnrolment({
+          userId: LADDER,
+          id: begun.id,
+          code: pastCode,
+          now: past,
+        })
+      )
+    ).toBe("accepted");
+  });
+
+  it("GUARDRAIL: a key never carries a typed code: refused before the code is read", async () => {
+    // A challenge for exactly this request: only the caller being a key is
+    // wrong. A wrong code, so no app step is spent for the tests after.
+    const c = await challengeFor(`recovery_codes:${LADDER}`, LADDER);
+    const asKey = await assertPresenceForRequest({
+      userId: LADDER,
+      kind: "recovery_codes",
+      id: LADDER,
+      proof: { kind: "totp", challengeId: c.challengeId, code: "000000" },
+      door: "test",
+      keyCaller: true,
+    }).catch((e: Error) => e);
+    expect((asKey as Error).message).toMatch(/A key can't send one/);
+    // Never read: no wrong try counted against the person.
+    const { rows } = await q(
+      `select count(*)::int as n from presence_proof_failures where user_id = $1`,
+      [LADDER]
+    );
+    expect(rows[0]!.n).toBe(0);
+  });
+
+  it("GUARDRAIL: a 2FA app code proves presence ONCE, for the approval its challenge names", async () => {
+    const code = appCode();
+    expect(await refusal(typed("totp", code))).toBe("accepted");
+    const proved = h.events.find((e) => e.type === "presence.proved");
+    expect(proved?.data).toMatchObject({ method: "totp" });
+    expect(String(proved?.data.actor)).toContain("2FA app");
+    // The same code again: refused (its step was used).
+    expect(await refusal(typed("totp", code))).toBe("PRESENCE_INVALID");
+    // An earlier step's code: refused too.
+    expect(await refusal(typed("totp", appCode(-1)))).toBe("PRESENCE_INVALID");
+    // A challenge made for another approval: refused before any code is read.
+    const other = await challengeFor(OTHER_SENSITIVE.id, LADDER);
+    expect(
+      await refusal(
+        gate(
+          SENSITIVE,
+          { kind: "totp", challengeId: other.challengeId, code: appCode(1) },
+          LADDER
+        )
+      )
+    ).toBe("PRESENCE_INVALID");
+  });
+
+  it("GUARDRAIL: a recovery code proves presence once, and is spent", async () => {
+    await seedRecoveryCodes(LADDER, [
+      "TVWX-YZ01-2345-6789",
+      "0123-4567-89AB-CDEF",
+    ]);
+    expect(await refusal(typed("recovery_code", "tvwx yz01 2345 6789"))).toBe(
+      "accepted"
+    );
+    expect(
+      h.events.find((e) => e.type === "presence.proved")?.data
+    ).toMatchObject({ method: "recovery_code" });
+    expect(await refusal(typed("recovery_code", "TVWX-YZ01-2345-6789"))).toBe(
+      "PRESENCE_INVALID"
+    );
+    const [left] = (
+      await q(
+        `select count(*)::int as n from account_recovery_codes where user_id = $1 and used_at is null`,
+        [LADDER]
+      )
+    ).rows;
+    expect(left!.n).toBe(1);
+  });
+
+  it("GUARDRAIL: a typed code is refused from a Synap app's device session", async () => {
+    const { runAsDeviceSession } =
+      await import("../../utils/device-session.js");
+    const verdict = await runAsDeviceSession(
+      { id: crypto.randomUUID(), authTime: new Date() },
+      () => refusal(typed("recovery_code", "0123-4567-89AB-CDEF"))
+    );
+    expect(verdict).toBe("PRESENCE_INVALID");
+    // The code was not spent by the refusal.
+    expect(await refusal(typed("recovery_code", "0123-4567-89AB-CDEF"))).toBe(
+      "accepted"
+    );
+  });
+
+  it("GUARDRAIL: a typed code outside a person's browser session (a Hub door, an executor) is refused unread", async () => {
+    const c = await challengeFor(SENSITIVE.id, LADDER);
+    // No scope opened: what a Hub REST approve with the person's CLI key is.
+    expect(
+      await refusal(
+        gate(
+          SENSITIVE,
+          { kind: "totp", challengeId: c.challengeId, code: "000000" },
+          LADDER
+        )
+      )
+    ).toBe("PRESENCE_INVALID");
+    const { rows } = await q(
+      `select count(*)::int as n from presence_proof_failures where user_id = $1`,
+      [LADDER]
+    );
+    expect(rows[0]!.n).toBe(0);
+  });
+
+  it("GUARDRAIL: a burst of wrong codes sent at once reads at most five", async () => {
+    const tries = await Promise.all(
+      Array.from({ length: 9 }, () => refusal(typed("totp", "123456")))
+    );
+    expect(tries.every((t) => t === "PRESENCE_INVALID")).toBe(true);
+    // At most five were read (each read one stays as a wrong try); a try
+    // that counted more than five before reading took its row back. Read
+    // before counting, all nine would have been read (nine rows).
+    const { rows } = await q(
+      `select count(*)::int as n from presence_proof_failures where user_id = $1`,
+      [LADDER]
+    );
+    expect(rows[0]!.n).toBeLessThanOrEqual(5);
+  });
+
+  it("GUARDRAIL: five wrong typed codes in 15 minutes stop the sixth, even a right one", async () => {
+    for (let i = 0; i < 5; i++) {
+      expect(await refusal(typed("totp", "123456"))).toBe("PRESENCE_INVALID");
+    }
+    const sixth = await typed("totp", appCode(1)).catch((e: Error) => e);
+    expect((sixth as Error).message).toMatch(/Too many wrong codes/);
+    // An hour later the window has passed.
+    await h.client!.exec(
+      "update presence_proof_failures set created_at = created_at - interval '1 hour'"
+    );
+    expect(await refusal(typed("totp", appCode(1)))).toBe("accepted");
+  });
+
+  it("GUARDRAIL: a second 2FA app is refused while one is in use; adding one when holding a factor needs a proof from it", async () => {
+    expect(
+      await refusal(
+        beginTotpEnrolment({
+          userId: PERSON,
+          label: "App",
+          account: "a@x.test",
+          issuer: "Synap",
+        }).then(async (b) => {
+          const code = totpCode(base32Decode(b.secret), totpStepAt(new Date()));
+          // PERSON holds a device key: no proof, refused under enforce.
+          return confirmTotpEnrolment({ userId: PERSON, id: b.id, code });
+        })
+      )
+    ).toBe("PRESENCE_REQUIRED");
+    expect(
+      await refusal(
+        beginTotpEnrolment({
+          userId: LADDER,
+          label: "Second",
+          account: "l@x.test",
+          issuer: "Synap",
+        })
+      )
+    ).toMatch(/already use a 2FA app/);
+  });
+
+  it("GUARDRAIL: under enforce a removal never leaves fewer than two ways in; report lets it", async () => {
+    const { assertKeepsTwoWaysIn } = await import("./factors.js");
+    // LADDER: a 2FA app (one way) and no recovery code left.
+    await h.client!.exec(
+      `update account_recovery_codes set used_at = now() where user_id = '${LADDER}'`
+    );
+    const removeApp = () =>
+      assertKeepsTwoWaysIn({
+        userId: LADDER,
+        after: (c) => ({ ...c, totp: false }),
+      });
+    expect(await refusal(removeApp())).toBe("PRESENCE_NEEDS_TWO_WAYS");
+    await seedRecoveryCodes(LADDER, ["ABCD-EFGH-JKMN-PQRS"]);
+    // Two ways (app + codes): removing the app would leave one. Still refused.
+    expect(await refusal(removeApp())).toBe("PRESENCE_NEEDS_TWO_WAYS");
+    // Every passkey together is ONE way: two passkeys + the app = two ways.
+    h.passkeys = [
+      { id: "AQ==", public_key: "AQ==", authenticator: {} },
+      { id: "Ag==", public_key: "Ag==", authenticator: {} },
+    ];
+    const { presenceFactorCounts } = await import("./proof.js");
+    const { presenceWaysIn } = await import("@synap-core/types/presence");
+    expect(presenceWaysIn(await presenceFactorCounts(LADDER))).toBe(3);
+    expect(await refusal(removeApp())).toBe("accepted");
+    h.passkeys = [];
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
+    expect(
+      await refusal(
+        assertKeepsTwoWaysIn({
+          userId: LADDER,
+          after: () => ({
+            passkeys: 0,
+            deviceKeys: 0,
+            totp: false,
+            recoveryCodes: 0,
+          }),
+        })
+      )
+    ).toBe("accepted");
+  });
+
+  it("GUARDRAIL: 'I lost my passkey' waits 24 h, any session cancels it, and finishing it clears every factor", async () => {
+    const {
+      requestPresenceRecovery,
+      cancelPresenceRecovery,
+      completePresenceRecovery,
+      readPresenceRecovery,
+    } = await import("./recovery.js");
+    const { readPasskeys, hasProofFactor } = await import("./proof.js");
+    const now = new Date();
+    const asked = await requestPresenceRecovery({ userId: LADDER, now });
+    expect(asked.status).toBe("pending");
+    expect(asked.maturesAt.getTime() - now.getTime()).toBe(24 * 3600 * 1000);
+    expect(h.notices).toContainEqual({
+      type: "security.presence_recovery",
+      userId: LADDER,
+    });
+    // Asking again returns the same request.
+    expect((await requestPresenceRecovery({ userId: LADDER })).id).toBe(
+      asked.id
+    );
+    // Cancelled from any session: nothing changes.
+    expect((await cancelPresenceRecovery({ userId: LADDER })).status).toBe(
+      "cancelled"
+    );
+    expect(
+      await refusal(
+        completePresenceRecovery({ userId: LADDER, keepSessionId: null })
+      )
+    ).toMatch(/no reset waiting/);
+
+    const again = await requestPresenceRecovery({ userId: LADDER, now });
+    expect(again.id).not.toBe(asked.id);
+    // Before 24 h: refused.
+    expect(
+      await refusal(
+        completePresenceRecovery({
+          userId: LADDER,
+          keepSessionId: null,
+          now: new Date(now.getTime() + 23 * 3600 * 1000),
+        })
+      )
+    ).toMatch(/can be finished from/);
+    // LADDER holds a passkey (in Kratos), a device key, a 2FA app, codes.
+    h.passkeys = [
+      {
+        id: credentialId.toString("base64"),
+        public_key: coseKey(passkey.publicKey).toString("base64"),
+        authenticator: { sign_count: 0 },
+      },
+    ];
+    await q(
+      `insert into presence_device_keys (user_id, label, public_key) values ($1, 'Lost phone', 'x')`,
+      [LADDER]
+    );
+    expect(await hasProofFactor(LADDER)).toBe(true);
+
+    // Three browsers are signed in; the person finishes from "here".
+    h.sessions = [{ id: "here" }, { id: "laptop" }, { id: "stolen" }];
+    h.disabled = [];
+    expect(h.disabled).toEqual([]); // nothing ended before the finish
+    const done = await completePresenceRecovery({
+      userId: LADDER,
+      keepSessionId: "here",
+      now: new Date(now.getTime() + 24 * 3600 * 1000 + 1000),
+    });
+    // Every other browser is signed out; the one that finished stays.
+    expect([...h.disabled].sort()).toEqual(["laptop", "stolen"]);
+    expect(done.signedOut).toEqual({ listed: true, ended: 2, failed: 0 });
+    h.sessions = [];
+    expect(done.status).toBe("completed");
+    expect(done.cleared.passkeys).toBe(1);
+    expect(done.cleared.totp).toBeGreaterThanOrEqual(1);
+    expect(done.cleared.recoveryCodes).toBeGreaterThanOrEqual(1);
+    expect(done.cleared.deviceKeys).toBeGreaterThanOrEqual(1);
+    // The passkey still exists in Kratos, but proves nothing here any more.
+    expect(await readPasskeys(LADDER)).toEqual([]);
+    expect(await hasProofFactor(LADDER)).toBe(false);
+    expect((await readPresenceRecovery(LADDER))?.status).toBe("completed");
+    // The way back in: a first factor needs no proof.
+    expect(await refusal(enrol(LADDER))).toBe("accepted");
+    h.passkeys = [];
   });
 });

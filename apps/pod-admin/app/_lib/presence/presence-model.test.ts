@@ -18,6 +18,7 @@ import {
   needsPresence,
   presenceRefusal,
   proveEachUpFront,
+  typedProof,
   type ProvePresence,
   type PresenceProgress,
   type ProveOptions,
@@ -402,3 +403,25 @@ function proofOf(n: number): PresenceProof {
     signature: `s${n}`,
   };
 }
+
+describe("typedProof: a typed code becomes the proof the pod checks", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  it("six digits are a 2FA app code, spaces dropped", () => {
+    expect(typedProof(id, " 123 456 ")).toEqual({
+      kind: "totp",
+      challengeId: id,
+      code: "123456",
+    });
+  });
+  it("anything else is a recovery code, as typed (the pod normalises it)", () => {
+    expect(typedProof(id, "ABCD-EFGH-JKMN-PQRS")).toEqual({
+      kind: "recovery_code",
+      challengeId: id,
+      code: "ABCD-EFGH-JKMN-PQRS",
+    });
+    expect(typedProof(id, "1234567")?.kind).toBe("recovery_code");
+  });
+  it("nothing typed is no proof", () => {
+    expect(typedProof(id, "   ")).toBeNull();
+  });
+});

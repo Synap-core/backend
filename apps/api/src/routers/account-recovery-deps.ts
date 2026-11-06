@@ -11,9 +11,18 @@
 import { courierStatus, kratosIdentityHasPodHeldCredential } from "@synap/auth";
 import {
   appSessionMiddleware,
+  assertPresenceForRequest,
+  hasProofFactor,
   isPodAdmin,
+  kratosCredentialTime,
   refuseGuestSession,
+  runAsBrowserPerson,
 } from "@synap/api";
+import {
+  PRESENCE_ENROLL_FRESH_SECONDS,
+  presenceProofSchema,
+} from "@synap-core/types/presence";
+import { TRPCError } from "@trpc/server";
 import {
   AccountRecoveryCodeRepository,
   EventRepository,
@@ -32,6 +41,7 @@ import { createUnifiedEvent } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 import type { CloudTrustMode } from "@synap-core/types/account-recovery";
 import { readCloudTrust } from "../cloud-trust.js";
+import { signedInAtPodWithin } from "../account-recovery/policy.js";
 import {
   POD_ADMIN_ROLES,
   POD_ADMIN_SYSTEM_SLUG,
@@ -42,6 +52,8 @@ import {
   KRATOS_RECOVERY_EXPIRES_IN,
   type AccountRecoveryDeps,
   type KratosRecoveryLink,
+  type NewCodesRefusal,
+  type NewCodesSession,
   type PodAccount,
 } from "./account-recovery.js";
 
@@ -222,6 +234,73 @@ export async function audit(entry: {
   }
 }
 
+/**
+ * New recovery codes by a person who already holds a proof factor: the
+ * presence gate, for `recovery_codes:<user id>` (its modes and audit
+ * included). A malformed proof is a refused one.
+ */
+async function presenceForNewCodes(
+  userId: string,
+  proof: unknown,
+  session: NewCodesSession
+): Promise<NewCodesRefusal | null> {
+  if (!(await hasProofFactor(userId))) {
+    // A FIRST factor (recovery codes prove presence): only on a credential
+    // presented AT the pod within PRESENCE_ENROLL_FRESH_SECONDS, like
+    // presence.totp.begin. A Synap Cloud (federated) sign-in is not one.
+    if (
+      !signedInAtPodWithin(
+        session,
+        (k) => kratosCredentialTime(k as never),
+        new Date(),
+        PRESENCE_ENROLL_FRESH_SECONDS
+      )
+    ) {
+      return {
+        error: "reauth_required",
+        reasonCode: "STEP_UP_REQUIRED",
+        message:
+          "Sign in again with your password or an email code, then create your codes within 10 minutes.",
+      };
+    }
+    return null;
+  }
+  const parsed =
+    proof === null || proof === undefined
+      ? null
+      : presenceProofSchema.safeParse(proof);
+  if (parsed && !parsed.success) {
+    return {
+      error: "presence_required",
+      reasonCode: "PRESENCE_INVALID",
+      message: "This proof is malformed. Confirm it is you again.",
+    };
+  }
+  const gate = () =>
+    assertPresenceForRequest({
+      userId,
+      kind: "recovery_codes",
+      id: userId,
+      proof: parsed ? parsed.data : null,
+      door: "account-recovery.codes",
+    });
+  try {
+    // A typed code counts only in a person's browser session (pod admin).
+    await (session.device ? gate() : runAsBrowserPerson(gate));
+    return null;
+  } catch (err) {
+    if (err instanceof TRPCError && err.code === "FORBIDDEN") {
+      const cause = err.cause as { reasonCode?: unknown } | undefined;
+      return {
+        error: "presence_required",
+        reasonCode: String(cause?.reasonCode ?? "PRESENCE_REQUIRED"),
+        message: err.message,
+      };
+    }
+    throw err;
+  }
+}
+
 const codes = new AccountRecoveryCodeRepository();
 
 export const accountRecoveryDeps: AccountRecoveryDeps = {
@@ -258,6 +337,7 @@ export const accountRecoveryDeps: AccountRecoveryDeps = {
   podAdminConfig: () => configuredPodAdminBase(),
   isPodAdmin,
   countCloudOnlyOwners,
+  presenceForNewCodes,
   audit,
 };
 

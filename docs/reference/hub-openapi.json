@@ -13588,6 +13588,31 @@
                           }
                         },
                         "required": ["kind", "challengeId", "credential"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["totp"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": { "type": "string", "pattern": "^\\d{6}$" }
+                        },
+                        "required": ["kind", "challengeId", "code"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["recovery_code"]
+                          },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          }
+                        },
+                        "required": ["kind", "challengeId", "code"]
                       }
                     ]
                   }
@@ -14409,6 +14434,31 @@
                           }
                         },
                         "required": ["kind", "challengeId", "credential"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["totp"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": { "type": "string", "pattern": "^\\d{6}$" }
+                        },
+                        "required": ["kind", "challengeId", "code"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["recovery_code"]
+                          },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          }
+                        },
+                        "required": ["kind", "challengeId", "code"]
                       }
                     ]
                   }

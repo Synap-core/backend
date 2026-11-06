@@ -5782,3 +5782,52 @@ CREATE TABLE IF NOT EXISTS "presence_device_keys" (
 
 CREATE INDEX IF NOT EXISTS "presence_device_keys_user_idx"
   ON "presence_device_keys" ("user_id");
+
+-- 0405: proof of presence, the recovery ladder (2FA app, typed-code failures,
+-- recovery requests, disowned passkeys) — mirrors 0405_presence_recovery.sql.
+CREATE TABLE IF NOT EXISTS "presence_totp_factors" (
+  "id"             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"        text        NOT NULL,
+  "label"          text        NOT NULL,
+  "secret"         text        NOT NULL,
+  "confirmed_at"   timestamptz,
+  "last_used_step" bigint,
+  "revoked_at"     timestamptz,
+  "created_at"     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS "presence_totp_factors_user_idx"
+  ON "presence_totp_factors" ("user_id");
+
+CREATE TABLE IF NOT EXISTS "presence_proof_failures" (
+  "id"         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"    text        NOT NULL,
+  "method"     text        NOT NULL,
+  "created_at" timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS "presence_proof_failures_user_idx"
+  ON "presence_proof_failures" ("user_id", "created_at");
+
+CREATE TABLE IF NOT EXISTS "presence_recovery_requests" (
+  "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"      text        NOT NULL,
+  "status"       text        NOT NULL DEFAULT 'pending',
+  "requested_at" timestamptz NOT NULL DEFAULT now(),
+  "matures_at"   timestamptz NOT NULL,
+  "cancelled_at" timestamptz,
+  "completed_at" timestamptz,
+  CONSTRAINT "presence_recovery_requests_status_check"
+    CHECK ("status" IN ('pending', 'cancelled', 'completed'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "presence_recovery_requests_one_pending"
+  ON "presence_recovery_requests" ("user_id") WHERE "status" = 'pending';
+
+CREATE TABLE IF NOT EXISTS "presence_disowned_passkeys" (
+  "user_id"             text        NOT NULL,
+  "credential_id"       text        NOT NULL,
+  "recovery_request_id" uuid        NOT NULL,
+  "disowned_at"         timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("user_id", "credential_id")
+);

@@ -317,3 +317,18 @@ export async function approveEachWithPresence<R>(args: {
   }
   return out;
 }
+
+/**
+ * The typed code as a proof: six digits are a 2FA app's code, anything else
+ * a recovery code (16 Crockford symbols, typed with or without dashes).
+ */
+export function typedProof(
+  challengeId: string,
+  typed: string
+): PresenceProof | null {
+  const code = typed.replace(/\s+/g, "");
+  if (!code) return null;
+  return /^\d{6}$/.test(code)
+    ? { kind: "totp", challengeId, code }
+    : { kind: "recovery_code", challengeId, code: code.slice(0, 64) };
+}

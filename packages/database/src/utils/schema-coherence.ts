@@ -1386,6 +1386,28 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "redeemed_at",
     addedBy: "0401_presence_redeemed.sql",
   },
+  // The recovery ladder (0405): every typed proof and every recovery request
+  // reads these; absence means each one would 42P01.
+  {
+    table: "presence_totp_factors",
+    column: "last_used_step",
+    addedBy: "0405_presence_recovery.sql",
+  },
+  {
+    table: "presence_proof_failures",
+    column: "method",
+    addedBy: "0405_presence_recovery.sql",
+  },
+  {
+    table: "presence_recovery_requests",
+    column: "matures_at",
+    addedBy: "0405_presence_recovery.sql",
+  },
+  {
+    table: "presence_disowned_passkeys",
+    column: "credential_id",
+    addedBy: "0405_presence_recovery.sql",
+  },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
   {
