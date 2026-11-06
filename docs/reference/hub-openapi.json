@@ -16604,9 +16604,7 @@
                                         "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
                                       },
                                       "equals": {},
-                                      "exists": {
-                                        "type": "boolean"
-                                      }
+                                      "exists": { "type": "boolean" }
                                     },
                                     "required": ["param"],
                                     "additionalProperties": false
@@ -20091,9 +20089,7 @@
                                         "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
                                       },
                                       "equals": {},
-                                      "exists": {
-                                        "type": "boolean"
-                                      }
+                                      "exists": { "type": "boolean" }
                                     },
                                     "required": ["param"],
                                     "additionalProperties": false
@@ -25615,9 +25611,7 @@
                               "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
                             },
                             "equals": {},
-                            "exists": {
-                              "type": "boolean"
-                            }
+                            "exists": { "type": "boolean" }
                           },
                           "required": ["param"],
                           "additionalProperties": false
