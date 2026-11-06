@@ -180,6 +180,23 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   },
   "tools.ts": { inputs: 1, doors: ["tRPC tools.setApproved"] },
   "trusted-issuers.ts": { inputs: 1, doors: ["tRPC trustedIssuers.approve"] },
+  // Review of 6 Nov (backend#874): the Hub twins of sensitive actions take
+  // the proof of the SAME action (`action:<tRPC path>:<digest>`). Pod admin
+  // calls the tRPC doors, through use-sensitive-actions.
+  "hub-protocol/rest/_presence.ts": {
+    inputs: 1,
+    doors: [
+      "action apps.issueKey",
+      "action apps.setRedirectUris",
+      "action apps.setWriteMode",
+      "action agentUsers.create",
+      "action agentUsers.setPosture",
+    ],
+  },
+  "hub-protocol/services.ts": {
+    inputs: 1,
+    doors: ["action intelligenceRegistry.register"],
+  },
 };
 
 function walk(dir: string, keep: (name: string) => boolean): string[] {

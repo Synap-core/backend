@@ -75,6 +75,7 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { GrantRepository } from "@synap/database";
+import { mintPresencePass } from "./presence/pass.js";
 import {
   AI_READ_PROPOSE_ROLE_ID,
   GRANT_PRESETS,
@@ -627,6 +628,7 @@ describe('a NEW agent from /setup/agent starts with "AI — read & propose"', ()
       name: "Named",
       agentType: "named-fresh",
       createdByUserId: OWNER,
+      presence: mintPresencePass("agentUsers.create", OWNER, true),
     });
     const caps = (
       await q<{ caps: string[] }>(

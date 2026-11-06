@@ -96,6 +96,7 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { AppRepository, runWithActingAgent } from "@synap/database";
+import { mintPresencePass } from "./presence/pass.js";
 import { applyProposalApproval } from "../routers/proposals/apply-approval.js";
 import { apiKeyService } from "./api-keys.js";
 import { issueKey, requestAccess, revokeApp } from "./app-connect.js";
@@ -274,6 +275,7 @@ describe("invariant 2 — the key's plaintext lives only in the one-time respons
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     // The one delivery: the caller gets it, whole.
     expect(issued.apiKey).toMatch(/^synap_/);
@@ -322,6 +324,7 @@ describe("D8 — an app key does not expire; rotation is a re-issue", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     const [key] = (
       await q<{ expires_at: string | null }>(
@@ -348,6 +351,7 @@ describe("invariant 4 — revoke stops the key at once", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     // Validates — and is now in the 30s verification cache.
     const before = await apiKeyService.validateApiKey(issued.apiKey);
@@ -375,6 +379,7 @@ describe("invariant 4 — revoke stops the key at once", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     expect((await apiKeyService.validateApiKey(first.apiKey))?.id).toBe(
       first.keyId
@@ -383,6 +388,7 @@ describe("invariant 4 — revoke stops the key at once", () => {
       publicId: app.publicId,
       ownerUserId: OWNER,
       via: "cli",
+      presence: mintPresencePass("apps.issueKey", OWNER, true),
     });
     expect(await apiKeyService.validateApiKey(first.apiKey)).toBeNull();
     expect((await apiKeyService.validateApiKey(second.apiKey))?.id).toBe(
