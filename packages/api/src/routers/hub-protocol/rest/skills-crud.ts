@@ -26,6 +26,7 @@
  *   DELETE /skills/:id         — delete a skill (proposal-gated; reuses skillsRouter.delete)
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
 import { z } from "@hono/zod-openapi";
 import { and, db, eq, skills } from "@synap/database";
 
@@ -114,6 +115,8 @@ const DeleteSkillResponseSchema = z.object({
 
 const ApproveSkillRequestSchema = z.object({
   approved: z.boolean().default(true),
+  /** Proof of presence (W3): turning a verb ON is setup. */
+  presence: presenceProofSchema.optional(),
 });
 
 const ApproveSkillResponseSchema = z.object({
@@ -466,7 +469,11 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       );
       const caller = skillsRouter.createCaller(ctx as never);
       // Reuse the governed setApproved — owner/pod-admin gate runs inside.
-      await caller.setApproved({ id, approved });
+      await caller.setApproved({
+        id,
+        approved,
+        ...(parsed.data.presence ? { presence: parsed.data.presence } : {}),
+      });
 
       return c.json({ id, approved }, 200);
     } catch (err) {

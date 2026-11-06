@@ -294,6 +294,12 @@ export const PROTECTED_FIELDS_BY_TYPE: Readonly<
   ],
 };
 
+/**
+ * The fields of a `messaging.external.send` a key limited to spaces may still
+ * revise: the words, never the recipient or the account.
+ */
+export const MESSAGE_WORD_FIELDS: readonly string[] = ["body", "subject"];
+
 export const PROTECTED_ENVELOPE_FIELDS = [
   "sourceFile",
   "sourceId",
@@ -334,6 +340,13 @@ export const PROTECTED_ENVELOPE_FIELDS = [
   // could add one would widen a scope the person never saw.
   "requiredToolIds",
   "requiredToolNames",
+  // `asPerson` / `instanceLabel` (W3): a request the CLI filed AS THE PERSON
+  // needs a proof of presence in every mode, and the audit names the computer
+  // it came from. A revise that could clear `asPerson` would drop that proof
+  // in report mode; one that could rewrite `instanceLabel` would put another
+  // computer's name on the approval.
+  "asPerson",
+  "instanceLabel",
 ] as const;
 
 /**
@@ -470,6 +483,10 @@ const PROTECTED_FIELD_REASON: Record<
     "it is the tool scope the person approves with the skill; propose the skill again to change it",
   requiredToolNames:
     "it names the tool scope the person approves with the skill; propose the skill again to change it",
+  asPerson:
+    "it records that the request was filed as the person, which requires a proof of presence to approve",
+  instanceLabel:
+    "it names the computer the request came from, stamped from that computer's own key",
 };
 
 export interface ComputeRevisedEnvelopeParams {
@@ -493,6 +510,20 @@ export interface ComputeRevisedEnvelopeParams {
    * one — recorded as `actingAgentUserId` on the entry. Attribution only.
    */
   actingAgentUserId?: string | null;
+}
+
+/** A nested `cell/define` envelope whose payload carries the content to stamp. */
+function isCellDefineEnvelope(
+  envelope: Record<string, unknown>
+): envelope is Record<string, unknown> & { data: Record<string, unknown> } {
+  return (
+    envelope.targetType === "cell" &&
+    envelope.changeType === "define" &&
+    isNestedEnvelope(envelope) &&
+    !!envelope.data &&
+    typeof envelope.data === "object" &&
+    !Array.isArray(envelope.data)
+  );
 }
 
 /**
@@ -645,17 +676,8 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // the merged payload, never taken from the patch. The approve executor then
   // refuses only a payload changed outside a door
   // (`services/cells/cell-content-fingerprint.ts`).
-  if (
-    merged.targetType === "cell" &&
-    merged.changeType === "define" &&
-    isNestedEnvelope(merged) &&
-    merged.data &&
-    typeof merged.data === "object" &&
-    !Array.isArray(merged.data)
-  ) {
-    merged.data = withCellContentFingerprint(
-      merged.data as Record<string, unknown>
-    );
+  if (isCellDefineEnvelope(merged)) {
+    merged.data = withCellContentFingerprint(merged.data);
   }
 
   // `by` is the HUMAN the call acts for (every door passes the key owner), so an
@@ -893,8 +915,20 @@ export async function mergeProposalRevision(
     // approval runs: a payload patch or a re-target passes no gate, so its
     // own proposal (filed in-grant) could be pointed outside the grant before
     // the person approves it (issue 314a6554). Every other key: unchanged.
+    // One exception: the WORDS of a message (its body and subject). Who it
+    // goes to, through which account, is pinned (`PROTECTED_FIELDS_BY_TYPE`,
+    // and the executor sends to the row's target), so rewording a draft
+    // cannot point it outside the grant (CRM Messages contract b4f8c2cd, D:
+    // the person edits the proposed draft in the message box, then sends).
+    const rewordsMessageOnly =
+      existing.proposalType === "messaging.external.send" &&
+      !!patch &&
+      Object.keys(patch.fields).every((k) => MESSAGE_WORD_FIELDS.includes(k)) &&
+      params.workspaceId === undefined &&
+      params.projectId === undefined;
     if (
       isFencedGrant(getRequestGrant()) &&
+      !rewordsMessageOnly &&
       ((patch && Object.keys(patch.fields).length > 0) ||
         params.workspaceId !== undefined ||
         params.projectId !== undefined)
@@ -946,6 +980,21 @@ export async function mergeProposalRevision(
       actingAgentUserId:
         params.attributionAgentUserId ?? actingAgentUserId ?? null,
     });
+    // The stamp `computeRevisedEnvelope` derived knows no row; stamped again
+    // here against the row this approval writes, at the scope it now targets
+    // (a revision may re-target it, or rename the cell it writes), read in
+    // this transaction. Same door as the gate (`stampCellDefinePayload`).
+    if (isCellDefineEnvelope(merged)) {
+      const { stampCellDefinePayload } =
+        await import("../cells/define-cell.js");
+      merged.data = await stampCellDefinePayload(
+        merged.data,
+        params.workspaceId !== undefined
+          ? params.workspaceId
+          : (existing.workspaceId ?? null),
+        tx
+      );
+    }
 
     // A revision that changes the PAYLOAD was checked before the lock by
     // what its approval will run (`REVISED_PAYLOAD_VALIDATORS`); refused here,

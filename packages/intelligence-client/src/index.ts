@@ -73,6 +73,7 @@ export {
 export type {
   HeadlessChatRequest,
   HeadlessTaskExecuteRequest,
+  RunToolProfile,
 } from "./is-headless-transport.js";
 
 // IS call budgets + attributed failures — the SSOT every backend→IS fetch uses

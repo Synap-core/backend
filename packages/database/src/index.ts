@@ -276,6 +276,11 @@ export {
 } from "./utils/machine-written-properties.js";
 // provenance / provider — the `source` split (decision 2026-09-14)
 export { PROVENANCE_VALUES, type Provenance } from "./utils/provenance.js";
+// A person's LinkedIn reach (CRM wave 2, S4a): the system person kind's values.
+export {
+  LINKEDIN_CONNECTION_VALUES,
+  type LinkedinConnection,
+} from "./utils/linkedin-reach-values.js";
 
 // DEPRECATED: ensureDefaultViews is no longer auto-called. The frontend
 // renders views ephemerally from profile data and persists them only when

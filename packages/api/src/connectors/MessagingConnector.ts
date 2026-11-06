@@ -60,6 +60,26 @@ export interface StartedChat {
 export type NetworkDistance =
   "SELF" | "FIRST_DEGREE" | "SECOND_DEGREE" | "THIRD_DEGREE" | "OUT_OF_NETWORK";
 
+/**
+ * A connection request between the account owner and a person (Unipile v2
+ * `specifics.relation_request` + `specifics.relation_request_status`).
+ */
+export interface RelationRequest {
+  /** `sent` = the owner asked them; `received` = they asked the owner; `null` = not said. */
+  direction: "sent" | "received" | null;
+  /** `null` when the provider gives no status. */
+  status: "pending" | "ignored" | "withdrawn" | null;
+  /** When it was sent (ISO), when the provider says. */
+  sentAt: string | null;
+}
+
+/**
+ * Whether the account owner can message this person on the provider:
+ * `connected` (a 1st-degree connection), `pending` (the owner's connection
+ * request waits for them), `not_connected` (neither).
+ */
+export type ProfileConnection = "connected" | "pending" | "not_connected";
+
 /** A person's profile on the provider, looked up by provider id or handle. */
 export interface MessagingProfile {
   /** The id to send to (`users_ids`); LinkedIn: the member id `ACo…`. */
@@ -69,6 +89,33 @@ export interface MessagingProfile {
   name: string;
   /** `null` when the provider does not say (any provider but LinkedIn). */
   networkDistance: NetworkDistance | null;
+  /**
+   * LinkedIn: connected / pending / not connected. Absent or `null` = the
+   * provider does not say (any provider but LinkedIn, or a LinkedIn answer
+   * with no distance): not measured, never "not connected".
+   */
+  connection?: ProfileConnection | null;
+  /** The connection request between them, when there is one. */
+  relationRequest?: RelationRequest | null;
+}
+
+/** One connection request the account owner sent (Unipile v2 `RelationRequest`, type `sent`). */
+export interface SentInvitation {
+  /** The provider's id of the request. */
+  id: string;
+  /** The person asked: their provider id (LinkedIn member id `ACo…`). */
+  providerId: string;
+  publicIdentifier: string | null;
+  name: string | null;
+  /** When it was sent (ISO), when the provider says. */
+  sentAt: string | null;
+}
+
+/** One page of sent connection requests. */
+export interface SentInvitationPage {
+  invitations: SentInvitation[];
+  /** Pass back to get the next page; absent on the last page. */
+  nextCursor?: string;
 }
 
 /** A chat and, when it is 1to1, the person on the other side. */
@@ -133,6 +180,22 @@ export type WebhookEvent =
       accountExternalId: string;
       provider: string;
       userId: string;
+    }
+  | {
+      /**
+       * A new two-way relation between the account owner and a person
+       * (Unipile v2 `relation.new`: on LinkedIn, a connection request was
+       * accepted; up to 6 h late). Payload: a User Relation object.
+       */
+      type: "relation.created";
+      accountExternalId: string;
+      provider: string;
+      /** The person's provider id (LinkedIn member id `ACo…`). */
+      providerId: string;
+      publicIdentifier: string | null;
+      name: string | null;
+      /** When it was established (ISO), as the provider reports it. */
+      at: string;
     };
 
 export interface MessagingConnector {
@@ -194,6 +257,15 @@ export interface MessagingConnector {
     externalAccountId: string,
     identifier: string
   ): Promise<MessagingProfile | null>;
+  /**
+   * One page of the connection requests the account owner SENT and that are
+   * still waiting (LinkedIn), cursor-paged. A failed read throws (never an
+   * empty page).
+   */
+  listSentInvitations?(
+    externalAccountId: string,
+    cursor?: string
+  ): Promise<SentInvitationPage>;
   /** One chat and its 1to1 counterpart. `null` = no such chat (404). */
   getChat?(
     externalAccountId: string,

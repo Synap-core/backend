@@ -30,6 +30,7 @@ import {
   VaultGrantError,
 } from "../utils/vault-resolver.js";
 import { encryptServerSide } from "@synap/database";
+import { assertFreshAuthentication } from "../utils/device-session.js";
 
 // ─── Shared types ─────────────────────────────────────────────────────────────
 
@@ -1304,6 +1305,9 @@ export const devplaneRouter = router({
   resolveEntitySecret: workspaceProcedure
     .input(z.object({ vaultRef: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // It hands back a secret's plaintext: a Synap app's device session
+      // must have signed in recently (as `secretsVault.reveal`).
+      assertFreshAuthentication(ctx);
       const parsed = parseVaultReference(input.vaultRef);
       if (!parsed) {
         throw new TRPCError({

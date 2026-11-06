@@ -12,6 +12,8 @@ import {
   type ProposalExecutorDeps,
   type ProposalRow,
 } from "../execution-registry.js";
+import { leaveRowToOtherAttempt } from "../failure-classification.js";
+import { ProposalStatus } from "@synap/database/schema";
 import type { FailureErrorClass } from "../../../connectors/external-dispatch.js";
 import { redactForStorage } from "../../../utils/redact-secrets.js";
 import { CLASS_TRPC_CODE } from "../failure-classification.js";
@@ -62,10 +64,9 @@ export function reportApproved(
  *
  *  - CAS-claims `external_dispatched_at` before running. Claim LOST (a prior
  *    attempt that failed-and-kept its claim, or a concurrent approval owns it):
- *    throw CONFLICT — the caller must NOT mark APPROVED; we didn't send and can't
- *    confirm the other attempt did. Surfaces as APPROVAL_FAILED (actionable),
- *    never a silent false-success (the bug the prior unconditional fall-through
- *    to APPROVED introduced).
+ *    throw — the caller must NOT mark APPROVED; we didn't send. The error says
+ *    which of those it is, read from the row (`claimLostError`), never a false
+ *    success and never a false "being dispatched".
  *  - `send()` returns `{ delivered: false }` — a DEFINITE not-sent (connector
  *    refused, skill not_found/deny, provider !executed): RELEASE the claim so a
  *    Retry re-dispatches cleanly, then throw.
@@ -92,7 +93,7 @@ export async function dispatchExternalOnce(
       }
     | { delivered: true }
   >,
-  executor: Pick<typeof db, "update"> = db
+  executor: Pick<typeof db, "update" | "select"> = db
 ): Promise<void> {
   const [claim] = await executor
     .update(proposals)
@@ -102,12 +103,7 @@ export async function dispatchExternalOnce(
     )
     .returning({ id: proposals.id });
 
-  if (!claim) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: "This action is already being dispatched — nothing was re-sent.",
-    });
-  }
+  if (!claim) throw await claimLostError(proposalId, executor);
 
   const result = await send(); // ambiguous throw → claim kept, propagates
 
@@ -130,13 +126,103 @@ export async function dispatchExternalOnce(
             : "UNPROCESSABLE_CONTENT",
         message: `Couldn't apply — ${
           result.reason
-            ? redactForStorage(result.reason, PROVIDER_REASON_MAX)
+            ? // The sentence ends here with its own full stop: a reason that
+              // already ends with one read "run it again.." (fff9cebc).
+              redactForStorage(result.reason, PROVIDER_REASON_MAX).replace(
+                /[.\s]+$/,
+                ""
+              )
             : "the external action was not dispatched"
         }.`,
       }),
       { errorClass: result.errorClass, providerRef: result.providerRef }
     );
   }
+}
+
+/**
+ * A claim held this long by an attempt that never recorded an end did not
+ * finish (its process died): no external send in an approval runs this long.
+ */
+export const STALE_DISPATCH_CLAIM_MS = 15 * 60 * 1000;
+
+/**
+ * Why the claim was lost, said from the row — never a blanket "already being
+ * dispatched". That sentence was shown when nothing was running and nothing
+ * had been sent (e74a086c): a double approval whose twin had already failed
+ * and released the claim. Four facts, four sentences:
+ *
+ *  - the row is approved: the other attempt sent it;
+ *  - the claim is free again: the other attempt ended without sending (its
+ *    reason is on the row), so approving again really retries;
+ *  - the claim is held by an attempt that ENDED (the failure was recorded
+ *    after the claim) or that stopped long ago: the send may have reached the
+ *    far side, so this proposal can never be sent again — a refusal that says
+ *    so, and is recorded on the row;
+ *  - otherwise an approval is running right now.
+ *
+ * In the first, second and fourth case the row belongs to the OTHER attempt,
+ * which records its own outcome: the error is marked so the approval catch
+ * does not write this attempt's sentence over it.
+ */
+async function claimLostError(
+  proposalId: string,
+  executor: Pick<typeof db, "select">
+): Promise<TRPCError> {
+  const [row] = await executor
+    .select({
+      status: proposals.status,
+      externalDispatchedAt: proposals.externalDispatchedAt,
+      reviewedAt: proposals.reviewedAt,
+    })
+    .from(proposals)
+    .where(eq(proposals.id, proposalId))
+    .limit(1);
+
+  if (!row) {
+    return new TRPCError({
+      code: "NOT_FOUND",
+      message: "This proposal no longer exists. Nothing was sent.",
+    });
+  }
+  if (row.status === ProposalStatus.APPROVED) {
+    return leaveRowToOtherAttempt(
+      new TRPCError({
+        code: "CONFLICT",
+        message:
+          "This action already ran: another approval sent it. Nothing was sent again.",
+      })
+    );
+  }
+  const claimedAt = row.externalDispatchedAt;
+  if (!claimedAt) {
+    return leaveRowToOtherAttempt(
+      new TRPCError({
+        code: "CONFLICT",
+        message:
+          "Another approval of this action just ran and did not go through, so nothing was sent. Its reason is on the proposal; fix it, then approve again.",
+      })
+    );
+  }
+  const ended =
+    row.status === ProposalStatus.APPROVAL_FAILED &&
+    row.reviewedAt !== null &&
+    row.reviewedAt.getTime() >= claimedAt.getTime();
+  const stale = Date.now() - claimedAt.getTime() > STALE_DISPATCH_CLAIM_MS;
+  if (ended || stale) {
+    return new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "An earlier approval of this action stopped without a clear answer, so it may already have reached the service. Nothing was sent again: check the service, and if nothing happened there, ask for a new run.",
+    });
+  }
+  return leaveRowToOtherAttempt(
+    new TRPCError({
+      code: "CONFLICT",
+      message:
+        "Another approval of this action is running right now. Nothing was sent again; its result will show on this proposal.",
+    })
+  );
 }
 
 /**

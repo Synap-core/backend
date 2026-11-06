@@ -44,6 +44,7 @@ import {
   requireAppPublicIdParam,
   type HubHono,
   type HubVariables,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import {
   issueKey,
@@ -113,6 +114,8 @@ function fail(c: Ctx, err: unknown, what: string) {
 export function registerAppsRoutes(app: HubHono): void {
   // ── POST /apps — register/upsert (idempotent by owner+name) ───────────────
   app.post("/apps", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -206,6 +209,8 @@ export function registerAppsRoutes(app: HubHono): void {
 
   // ── POST /apps/:id/key — mint AFTER approval (the owner, never an agent) ──
   app.post("/apps/:id/key", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -230,6 +235,8 @@ export function registerAppsRoutes(app: HubHono): void {
 
   // ── PUT /apps/:id/redirect-uris — where sign-in codes go (the owner) ──────
   app.put("/apps/:id/redirect-uris", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -262,6 +269,8 @@ export function registerAppsRoutes(app: HubHono): void {
 
   // ── DELETE /apps/:id — revoke the app (the owner, never an agent) ─────────
   app.delete("/apps/:id", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -309,6 +318,8 @@ export function registerAppsRoutes(app: HubHono): void {
 
   // ── POST /apps/:id/narrow — keep only some of the approval (the owner) ────
   app.post("/apps/:id/narrow", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -339,6 +350,8 @@ export function registerAppsRoutes(app: HubHono): void {
 
   // ── PUT /apps/:id/write-mode — "apply automatically" (the owner, F6) ─────
   app.put("/apps/:id/write-mode", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }

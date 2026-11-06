@@ -182,6 +182,7 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
         parentSessionId: str(d.parentSessionId),
         suspendedIntent: str(d.suspendedIntent),
         blockedBySessionIds: d.blockedBySessionIds as string[] | undefined,
+        targets: d.targets as string[] | undefined,
         criteria: d.criteria as never,
         trackId: str(d.trackId),
         trackStage: str(d.trackStage),
@@ -217,6 +218,14 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
         agentUserId: w.agentUserId,
       }),
     });
+  },
+  // A whole capture graph (finding 590ca76a): replayed through the capture
+  // door, which lands all of it or files it for review. Its placement was
+  // stored with it, so the join's space is not passed again.
+  "entity/capture.graph": async (w) => {
+    const { replayKeptCaptureGraph } =
+      await import("../capture-agent/submit-capture-graph.js");
+    return replayKeptCaptureGraph(w);
   },
 };
 

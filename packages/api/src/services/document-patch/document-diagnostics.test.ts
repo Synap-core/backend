@@ -77,6 +77,10 @@ function fakeResolver(status: Record<string, ReferentStatus>): EmbedResolver {
         ],
         ["bento-only", { placements: ["bento"], requiredConfig: [] }],
         [
+          "lens-section",
+          { placements: ["bento", "inline"], requiredConfig: ["section"] },
+        ],
+        [
           "entity-list",
           { placements: ["bento", "inline"], requiredConfig: ["profileSlug"] },
         ],
@@ -139,6 +143,44 @@ describe("diagnoseDocument", () => {
     expect(out[1]!.message).toMatch(/not embeddable in a document/);
     expect(out[2]!.message).toMatch(/props\.profileSlug/);
     expect(out[3]!.message).toMatch(/props\.source/);
+  });
+
+  it("catalog: a work block's props are read in author mode — every problem a reader would fall back on is said", async () => {
+    // Review A5: the reader falls back quietly on a bad `empty` or `limit`
+    // (founder Q1), so only the document's diagnostics can tell its author,
+    // whichever door (MCP, patch, the editor) wrote it.
+    const block = (props: string) =>
+      [
+        ':::synap-cell{cellKey="lens-section"}',
+        "```json",
+        props,
+        "```",
+        ":::",
+        "",
+      ].join("\n");
+    const md = [
+      block('{"section":"blocking"}'),
+      block('{"section":"blocking","empty":"shout"}'),
+      block('{"section":"happening","limit":"lots"}'),
+      block('{"section":"nowhere"}'),
+      block('{"section":"doneWhen"}'),
+      block('{"section":"produced","empty":"explain","limit":4}'),
+    ].join("\n");
+    const out = await diagnoseDocument(md, fakeResolver({}));
+    expect(out.map((d) => [d.code, d.severity])).toEqual([
+      ["bad_props", "warning"],
+      ["bad_props", "warning"],
+      ["bad_props", "error"],
+      ["bad_props", "error"],
+    ]);
+    expect(out[0]!.message).toMatch(/props\.empty "shout"/);
+    expect(out[1]!.message).toMatch(/props\.limit "lots"/);
+    expect(out[2]!.message).toMatch(/"nowhere"/);
+    expect(out[3]!.message).toMatch(/"doneWhen" belongs to the work page/);
+    for (const d of out) {
+      expect(d.ref).toEqual({ cellKey: "lens-section" });
+      expect(d.fix).toContain("blocking");
+    }
   });
 
   it("catalog: a snapshot chart needs no query keys; a live-only chart still does", async () => {

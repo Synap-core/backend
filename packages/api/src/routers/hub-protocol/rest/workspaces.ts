@@ -78,6 +78,7 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
   rejectAgentPurger,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { summarizePackageContents } from "../../../services/package-contents-summary.js";
@@ -739,6 +740,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
    * Registered BEFORE /:workspaceId dynamic routes.
    */
   app.post("/workspaces/enroll-agent", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     const scopes = c.get("scopes") as string[];
     if (!hasScope(scopes, "hub-protocol.write")) {
       return c.json(
@@ -852,6 +855,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
    * Registered BEFORE /workspaces/from-definition and /:workspaceId routes.
    */
   app.post("/workspaces/provision-agent", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     const scopes = c.get("scopes") as string[];
     if (!hasScope(scopes, "hub-protocol.write")) {
       return c.json(
@@ -1045,6 +1050,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
    * workspace id.
    */
   app.post("/workspaces/from-definition", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     const scopes = c.get("scopes") as string[];
     if (!hasScope(scopes, "hub-protocol.write")) {
       return c.json(

@@ -69,8 +69,22 @@ export async function applyCellDefineProposal(
   // nobody reviewed what it now holds. Refused before any write: the proposal
   // stays as it is. No stamp = filed before fingerprints (or a legacy
   // `widget/register` payload): applied as before.
+  // Resolved against the row this approval writes, as the stamp was (a kept
+  // `builtin` mechanism or egress grant is in both), so a row that changed
+  // since the filing is refused too: approving would write content nobody saw.
   const stamp = stampedCellFingerprint(innerData);
-  const content = proposedCellContent(innerData);
+  const { defineCell, storedCellContentForPayload } =
+    await import("../../../services/cells/define-cell.js");
+  const content = stamp
+    ? proposedCellContent(
+        innerData,
+        await storedCellContentForPayload(
+          innerData,
+          proposal.workspaceId ?? null,
+          db
+        )
+      )
+    : null;
   if (stamp && content) {
     const actual = cellContentFingerprint(content);
     if (actual !== stamp) {
@@ -78,8 +92,9 @@ export async function applyCellDefineProposal(
         code: "CONFLICT",
         message:
           `This cell proposal no longer holds the content it was filed with ` +
-          `(fingerprint ${actual.slice(0, 12)}, filed as ${stamp.slice(0, 12)}), ` +
-          `and nothing was written. Reject it and file the cell again.`,
+          `(fingerprint ${actual.slice(0, 12)}, filed as ${stamp.slice(0, 12)}: ` +
+          `the proposal or the stored cell changed since), and nothing was ` +
+          `written. Reject it and file the cell again.`,
         cause: { reasonCode: "CELL_CONTENT_FINGERPRINT_MISMATCH" },
       });
     }
@@ -108,7 +123,6 @@ export async function applyCellDefineProposal(
     );
   }
 
-  const { defineCell } = await import("../../../services/cells/define-cell.js");
   await defineCell({
     name,
     rendererSource,

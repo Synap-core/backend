@@ -22,6 +22,7 @@ import { createLogger } from "@synap-core/core";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { EventNames } from "@synap-core/types/events";
 import { deterministicUuidFromKey } from "../../utils/write-door-idempotency.js";
+import { withoutServerOwnedMessageMeta } from "@synap-core/types/agents";
 
 const logger = createLogger({ module: "open-process-channel" });
 
@@ -98,6 +99,9 @@ async function insertSeedMessage(params: {
       ? MessageCategory.SYSTEM_NOTIFICATION
       : MessageCategory.CHAT;
   const hash = computeMessageHash(params.id, params.content);
+  // Seeds arrive from the tRPC `openProcessChannel` caller: the server-owned
+  // keys (`roomPost`, `sessionPost`, `routeChoice`) are never theirs to set.
+  const metadata = withoutServerOwnedMessageMeta(params.metadata);
 
   const inserted = await db
     .insert(messages)
@@ -111,7 +115,7 @@ async function insertSeedMessage(params: {
       userId: params.userId,
       hash,
       previousHash: "",
-      metadata: params.metadata ?? null,
+      metadata: metadata ?? null,
     })
     .onConflictDoNothing({ target: messages.id })
     .returning({ id: messages.id });
@@ -134,7 +138,7 @@ async function insertSeedMessage(params: {
         timestamp: new Date(),
         previousHash: "",
         hash,
-        metadata: params.metadata ?? undefined,
+        metadata: metadata ?? undefined,
       },
       userId: params.userId,
     },

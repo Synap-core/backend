@@ -4,6 +4,9 @@
  * Manages registration and discovery of external intelligence services
  */
 
+import { presenceInput } from "../utils/presence-input.js";
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import { z } from "zod";
 import {
   router,
@@ -146,6 +149,7 @@ export const intelligenceRegistryRouter = router({
    * Pod admin only (see above).
    */
   register: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(RegisterServiceSchema)
     .mutation(async ({ input }) => {
@@ -293,6 +297,7 @@ export const intelligenceRegistryRouter = router({
    * Update an intelligence service
    */
   update: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(UpdateServiceSchema)
     .mutation(async ({ input }) => {
@@ -346,6 +351,7 @@ export const intelligenceRegistryRouter = router({
    * Separate from update() to make key rotation an explicit, auditable action.
    */
   rotateKey: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       z.object({
@@ -552,9 +558,22 @@ export const intelligenceRegistryRouter = router({
    * auto-approved at registration time.
    */
   approveMcp: workspaceProcedure
-    .input(z.object({ serviceId: z.string().min(1) }))
+    .input(
+      z.object({
+        serviceId: z.string().min(1),
+        /** Proof of presence (W3): an AI service's MCP endpoint is setup. */
+        presence: presenceProofSchema.optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       await assertPodAdmin(ctx.userId);
+      await assertPresenceForRequest({
+        userId: ctx.userId,
+        kind: "intelligence_mcp",
+        id: input.serviceId,
+        proof: input.presence ?? null,
+        door: "trpc.intelligenceRegistry.approveMcp",
+      });
 
       const service = await db.query.intelligenceServices.findFirst({
         where: eq(intelligenceServices.serviceId, input.serviceId),

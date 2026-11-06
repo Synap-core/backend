@@ -59,6 +59,8 @@ export {
 } from "./failure-classification.js";
 import {
   classifyThrownFailure,
+  leavesRowToOtherAttempt,
+  keepsRowAsRecorded,
   safeApprovalError,
   safeFailureSentence,
   type ProposalFailureMeta,
@@ -449,7 +451,13 @@ export async function dispatchProposalApproval(
       "proposal approval failed"
     );
     const safe = safeFailureSentence(err, failure);
-    await onApprovalFailed(args.input.proposalId, safe, failure);
+    // A lost dispatch claim whose row another attempt owns: that attempt
+    // records its own outcome, so this one tells only its caller.
+    // An executor that recorded its own outcome (a held send stays pending)
+    // is not overwritten with a failure either.
+    if (!leavesRowToOtherAttempt(err) && !keepsRowAsRecorded(err)) {
+      await onApprovalFailed(args.input.proposalId, safe, failure);
+    }
     // NEVER `throw err`. The original message is raw upstream text and
     // `init-trpc.ts` puts `shape.message` on the wire verbatim (and
     // `batchApprove` copies it into `item.error`), so a raw re-throw hands the

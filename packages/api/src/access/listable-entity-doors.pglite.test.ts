@@ -730,6 +730,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "capture duplicate door scope + strong-match write gate (dedup)",
   "services/capture-agent/degraded-capture-identity.ts":
     "degraded capture: strong-match recheck by id + duplicate door scope (dedup)",
+  "services/channels/linkedin-reach-read.ts":
+    "one person's LinkedIn reach: the person read by id (POST /channels/linkedin-reach/:personId)",
   "services/channels/person-channels.ts":
     "one person's channels: the person read by id (GET /entities/:id/channels)",
   "services/diagnose/index.ts": "diagnose one object, by id",
@@ -754,6 +756,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/projects/create-project.ts": "validates evidence ids",
   "services/proposals/redecide-graph-revision.ts":
     "the capture duplicate door's record scope, re-run for a revised graph (dedup)",
+  "services/retrieval/grant-bounded-search-hits.ts":
+    "narrows hits a door already passed through withoutUnlistableEntityHits (search.search applies the rule first)",
   "services/runs/index.ts": "one run's produced records, by id",
   "services/status/status-facts.ts":
     "a step's wait: the asked things and the one each step names, by id",

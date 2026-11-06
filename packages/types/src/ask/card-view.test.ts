@@ -12,6 +12,7 @@ import {
   AskSchema,
   ASK_COPY,
   askCardView,
+  askCardDue,
   askFate,
   answerProvenanceMark,
   answerWasRelayed,
@@ -85,6 +86,66 @@ describe("askCardView — the founder's card", () => {
   });
 });
 
+describe("askCardView — the deadline and what the answer does (decision 9bc9f75c)", () => {
+  const MIN = 60_000;
+  const at = (ms: number) => new Date(NOW + ms).toISOString();
+  const slot = (a: unknown): AskCardSlot => ({
+    label: "Publish the launch post",
+    owner: "human",
+    blockedReason: "decision",
+    ask: ask(a),
+    owedSince: daysAgo(0),
+  });
+
+  it("within the hour: the span, warning, soon (the window that breaks Focus)", () => {
+    expect(askCardDue(at(40 * MIN), NOW)).toMatchObject({
+      label: "Needed in 40m",
+      spoken: "Needed in 40 minutes",
+      tone: "warning",
+      soon: true,
+    });
+    expect(askCardDue(at(60 * MIN), NOW)?.soon).toBe(true);
+  });
+
+  it("past it: how late, in the error tone", () => {
+    expect(askCardDue(at(-12 * MIN), NOW)).toMatchObject({
+      label: "Overdue by 12m",
+      spoken: "Overdue by 12 minutes",
+      tone: "error",
+      soon: true,
+    });
+  });
+
+  it("later than the hour: the time, quiet, not soon", () => {
+    const due = askCardDue(at(3 * 60 * MIN), NOW)!;
+    expect(due.label).toMatch(/^Needed by \S/);
+    expect(due).toMatchObject({ tone: "textSecondary", soon: false });
+    // Another day names its date too.
+    expect(askCardDue(at(3 * DAY), NOW)!.label).toMatch(/^Needed by .+, \S/);
+  });
+
+  it("no time, or an unreadable one: no mark", () => {
+    expect(askCardDue(undefined, NOW)).toBeNull();
+    expect(askCardDue("tomorrow", NOW)).toBeNull();
+  });
+
+  it("the card carries both, read from the ask", () => {
+    const view = askCardView(
+      slot({
+        mode: "confirm",
+        answerBy: at(30 * MIN),
+        consequence: " Publishes the post to LinkedIn ",
+      }),
+      { now: NOW }
+    );
+    expect(view.due).toMatchObject({ label: "Needed in 30m", soon: true });
+    expect(view.consequence).toBe("Publishes the post to LinkedIn");
+    const bare = askCardView(slot({ mode: "confirm" }), { now: NOW });
+    expect(bare.due).toBeNull();
+    expect(bare.consequence).toBeNull();
+  });
+});
+
 describe("askCardView — heading and context", () => {
   it("non-confirm: the label is the heading, prefix stripped", () => {
     expect(
@@ -138,7 +199,7 @@ describe("askCardView — the asker", () => {
   it("a criterion / param slot names its cause from its own stamps", () => {
     expect(askCardView({ label: "X", criterionKey: "k" }).asker).toMatchObject({
       kind: "cause",
-      label: "From the session's checks",
+      label: "From the job's checks",
     });
     expect(
       askCardView({ label: "X", paramName: "channel" }).asker
@@ -247,7 +308,7 @@ describe("askFate — the owed ask's fate on silence", () => {
         { label: "a", ask: confirm, owedSince: daysAgo(2) },
         { now: NOW }
       ).ageFate.label
-    ).toBe("Asked 2d ago · Ends with the session");
+    ).toBe("Asked 2d ago · Ends with the job");
   });
 
   it("a fate with no deadline is never amber; it reads as the proposal's", () => {
@@ -278,6 +339,18 @@ describe("askFate — the owed ask's fate on silence", () => {
       kind: "review_later",
       since: new Date(NOW - DAY).toISOString(),
     });
+  });
+
+  it("set aside by the person (Later): Review later until its time, not after", () => {
+    const fresh = daysAgo(1);
+    const at = (ms: number) => new Date(NOW + ms).toISOString();
+    expect(
+      isAskReviewLater({ owedSince: fresh, laterUntil: at(3_600_000) }, NOW)
+    ).toBe(true);
+    expect(
+      isAskReviewLater({ owedSince: fresh, laterUntil: at(-60_000) }, NOW)
+    ).toBe(false);
+    expect(isAskReviewLater({ owedSince: fresh }, NOW)).toBe(false);
   });
 
   it("a criterion grade never retires with its session, though its ask is a choose", () => {

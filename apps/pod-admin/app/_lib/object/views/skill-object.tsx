@@ -24,10 +24,12 @@
 import { Button } from "@heroui/react";
 import { useState } from "react";
 import {
+  buildObjectActionTitle,
   humanizeToken,
   resolveActionLabel,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { useSetSkillApproved } from "../../presence/use-request-doors";
 import { formatRelative, readableError } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
 import { openIn } from "../../../../lib/open-in";
@@ -62,21 +64,31 @@ export function SkillObject({ id, frame }: { id: string; frame: ObjectFrame }) {
   });
   const [confirming, setConfirming] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const setApproved = trpc.skills.setApproved.useMutation({
-    onSuccess: async () => {
-      // The page stays: its mark turns to On, which is the whole receipt.
-      setConfirming(false);
-      setRefusal(null);
-      await Promise.all([
-        utils.skills.get.invalidate({ id }),
-        utils.skills.list.invalidate(),
-      ]);
-    },
-    onError: (err) => {
-      // The pod's own words: who may turn it on is its call, not this page's.
-      setRefusal(readableError(err.message) ?? t("skill.notTurnedOn"));
-    },
-  });
+  // With the proof of presence: turning a verb ON is setup (W3).
+  const setApproved = useSetSkillApproved(
+    query.data?.skill.name
+      ? buildObjectActionTitle({
+          action: "turn_on",
+          objectKind: "skill",
+          objectName: query.data.skill.name,
+        })
+      : null,
+    {
+      onSuccess: async () => {
+        // The page stays: its mark turns to On, which is the whole receipt.
+        setConfirming(false);
+        setRefusal(null);
+        await Promise.all([
+          utils.skills.get.invalidate({ id }),
+          utils.skills.list.invalidate(),
+        ]);
+      },
+      onError: (err) => {
+        // The pod's own words: who may turn it on is its call, not this page's.
+        setRefusal(readableError(err.message) ?? t("skill.notTurnedOn"));
+      },
+    }
+  );
   useReauthOnUnauthorized(query.error, setApproved.error);
 
   if (query.isLoading) return frame.loading(t("loading"));

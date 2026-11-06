@@ -33,6 +33,8 @@ import {
   type AddableTrust,
 } from "@synap-core/types/marketplace-source";
 import { trpc } from "../../../../lib/trpc";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { useApproveKeyChange } from "../../../_lib/presence/use-request-doors";
 import { formatDate, readableError } from "../../../../lib/format";
 import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
 import { AdvancedPanel } from "../../../_lib/object/advanced-panel";
@@ -510,17 +512,29 @@ function KeyReviewModal({
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
-  const approve = trpc.marketplace.sources.approveKeyChange.useMutation({
-    onSuccess: () => {
-      onClose();
-      addToast({ title: "New key trusted", color: "success" });
-    },
-    onSettled: () =>
-      void Promise.all([
-        utils.marketplace.sources.list.invalidate(),
-        utils.marketplace.list.invalidate(),
-      ]),
-  });
+  const refresh = () =>
+    void Promise.all([
+      utils.marketplace.sources.list.invalidate(),
+      utils.marketplace.list.invalidate(),
+    ]);
+  // With the proof of presence: trusting a new signing key is governance (W3).
+  const approve = useApproveKeyChange(
+    source
+      ? buildObjectActionTitle({
+          action: "approve",
+          objectKind: "signing_key",
+          objectName: source.name,
+        })
+      : null,
+    {
+      onSuccess: () => {
+        refresh();
+        onClose();
+        addToast({ title: "New key trusted", color: "success" });
+      },
+      onError: refresh,
+    }
+  );
   const previous = formatKeyFingerprint(source?.keyFingerprint);
   const next = formatKeyFingerprint(source?.pendingFingerprint);
 

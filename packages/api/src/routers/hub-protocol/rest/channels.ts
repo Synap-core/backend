@@ -1120,9 +1120,12 @@ export function registerChannelsRoutes(app: HubHono): void {
     summary: "List a channel's proposed messages",
     description:
       "The messages waiting for the person's approval before they go out in " +
-      "this channel, oldest first: each is a pending `messaging.external.send` " +
-      "proposal (its id, text, who drafted it and where to review it). 404 " +
-      "when the caller cannot read the channel.",
+      "this channel, oldest first: each is a `messaging.external.send` " +
+      "proposal (its id, text, who drafted it and where to review it). " +
+      "`state`: draft (waits for approval), held (waits, but cannot go out " +
+      "yet: not a connection, `reason` names the next step) or failed " +
+      "(approved and not sent, `reason` says why). 404 when the caller " +
+      "cannot read the channel.",
     request: { params: z.object({ channelId: uuidPathParam }) },
     responses: {
       200: {

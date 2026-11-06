@@ -23,6 +23,7 @@ import {
   logger,
   type HubHono,
   type HubVariables,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import {
   createForm,
@@ -74,6 +75,8 @@ export function registerFormsRoutes(app: HubHono): void {
   });
 
   app.post("/forms", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -107,6 +110,8 @@ export function registerFormsRoutes(app: HubHono): void {
   });
 
   app.put("/forms/:id", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }

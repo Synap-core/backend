@@ -20,9 +20,11 @@
  * resolves a key into a person. That is the boundary: a key
  * minted for an agent must never become a human session on `/trpc`, where
  * nothing routes its writes through governance. Keys keep their own doors
- * (`/mcp`, `/api/hub/*`), which in turn never resolve a device token (it is no
- * `api_keys` row). Tests: `app-session.test.ts` (tripwire
- * `app-session-bearer`).
+ * (`/mcp`, `/api/hub/*`). `/mcp` never resolves a device token (it is no
+ * `api_keys` row); Hub REST resolves it as the person through the same
+ * `resolvePersonDeviceSession`, apart from the key lookup, and marks the
+ * device session the same way (hub `authenticatePersonDevice`). Tests:
+ * `app-session.test.ts` (tripwire `app-session-bearer`).
  *
  * A device token that does not resolve answers 401 `invalid_token` — never
  * a fall-through to an ambient cookie, which may be someone else's — so the

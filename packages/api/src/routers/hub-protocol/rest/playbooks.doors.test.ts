@@ -136,17 +136,24 @@ vi.mock(
   }
 );
 
-// The hand-off resolver (a users + route read) records what reached it; its
-// own refusals are pinned on PGlite (`playbooks.run-hand-off.pglite.test.ts`).
+// The run-choice resolver (a users + route read) records what reached it; its
+// own refusals are pinned on PGlite (`playbooks.run-hand-off.pglite.test.ts`,
+// `playbooks.run-choice.pglite.test.ts`).
 vi.mock(
   "../../../services/playbooks/run-playbook.js",
   async (importOriginal) => {
     const actual = await importOriginal<Record<string, unknown>>();
     return {
       ...actual,
-      resolveRunHandOff: vi.fn(async (input: Record<string, unknown>) => {
-        h.handOffs.push(input);
-        return { agentUserId: input.handToAgentId, reach: "pull" };
+      // The run-choice rule (slice 5a) is what the door asks now; it reads
+      // the hand-off for a named agent.
+      resolveRunChoice: vi.fn(async (input: Record<string, unknown>) => {
+        const { userId, agentUserId, handToAgentId } = input;
+        h.handOffs.push({ userId, agentUserId, handToAgentId });
+        return {
+          handOff: { agentUserId: handToAgentId, reach: "pull" },
+          runOn: { via: "named" },
+        };
       }),
     };
   }

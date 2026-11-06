@@ -455,6 +455,21 @@ export function consentClientKind(clientId: string): ConsentClientKind {
 }
 
 /**
+ * The domain a client registered by its metadata document speaks for: the
+ * host of its https `client_id`. It is the client's identity on the consent
+ * screen (its `client_name` is its own words); null for a client named by an
+ * id (a built-in Synap app, a self-registered MCP client, an `app_` id).
+ */
+export function clientDomain(clientId: string): string | null {
+  if (!/^https:\/\//i.test(clientId)) return null;
+  try {
+    return new URL(clientId).host || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The consent card's width, from the request alone so it never jumps once
  * the offer loads: a pod app lists every permission × space it asks for and
  * reads wider (`md`, founder 2026-10-23); every other consent is one decision.

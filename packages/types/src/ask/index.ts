@@ -74,6 +74,14 @@ export const ASK_LIMITS = {
   lookedAtIdMaxChars: 200,
   /** "What it unblocks" — one line on a human-owned slot (decision E). */
   unblocksMaxChars: 200,
+  /** "What the answer does" — one line on the ticket (`consequence`). */
+  consequenceMaxChars: 200,
+  /** The asker's own handle for one ticket (`dedupeKey`). */
+  dedupeKeyMaxChars: 120,
+  /** An ISO-8601 instant (`answerBy`). */
+  instantMaxChars: 40,
+  /** The one-line question `synap_ask_person` files as the slot's label. */
+  questionMaxChars: 200,
 } as const;
 
 // ─── Modes ──────────────────────────────────────────────────────────────────
@@ -549,6 +557,108 @@ const stakesField = {
     ),
 };
 
+// ─── The ticket: urgency, deadline, consequence, dedupe ──────────────────────
+
+/**
+ * The asker's HINT of how soon (founder, 2026-11-04, research 353be97e §4.1):
+ *   `today`    — the default (absent reads `today`): no lowering;
+ *   `whenever` — no hurry: the ask ranks lower (P2 at most).
+ * A hint only: the pod derives the priority from facts (`needsYouPriority`,
+ * `../needs-you/priority.ts`), and `urgency` can only LOWER it, never raise it.
+ * There is no louder value on purpose: "it matters within the hour" is
+ * `answerBy`, a fact. The priority RANKS the feed, and an ask due within the
+ * hour (P0) is the one ask push that breaks through Focus
+ * (`pushInterruptionLevel`, `../push/index.ts`).
+ */
+export const ASK_URGENCIES = ["today", "whenever"] as const;
+export type AskUrgency = (typeof ASK_URGENCIES)[number];
+
+/**
+ * An ISO-8601 instant WITH its offset (`2026-11-05T17:00:00Z`,
+ * `…+01:00`): a deadline with no zone is a different moment on every device.
+ */
+const ISO_INSTANT =
+  /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}:[0-9]{2})$/;
+
+/** True for an ISO-8601 instant with an offset that names a real moment. */
+export function isAskInstant(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    ISO_INSTANT.test(value) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
+/**
+ * Is this `answerBy` already past at the moment the ask is WRITTEN? Every
+ * write door refuses such an ask (review 5 Nov 2026, reviews backend #1 /
+ * oversight 2): a deadline in the past is not a deadline, and the pod reads
+ * "overdue" as P0, the level whose push breaks through the person's Focus.
+ * Read-time stays lenient: a stored ask that went past its time is simply
+ * overdue. Anything that is not an instant is not "past" here (the schema
+ * refuses it on its own).
+ */
+export function isAskAnswerByPast(
+  answerBy: unknown,
+  now: Date | number = Date.now()
+): boolean {
+  if (!isAskInstant(answerBy)) return false;
+  const at = now instanceof Date ? now.getTime() : now;
+  return Date.parse(answerBy) <= at;
+}
+
+/** The refusal every write door gives for {@link isAskAnswerByPast}. */
+export const ASK_ANSWER_BY_PAST_MESSAGE =
+  "answerBy is already past: give the time the answer is still useful, in the future, or leave answerBy out.";
+
+/**
+ * Shared by every mode, like `stakes`: what makes one ask a TICKET the pod can
+ * rank. Every field is optional and absent reads as today's behaviour.
+ */
+const ticketFields = {
+  urgency: z
+    .enum(ASK_URGENCIES)
+    .optional()
+    .describe(
+      "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+    ),
+  answerBy: z
+    .string()
+    .max(ASK_LIMITS.instantMaxChars)
+    .refine(isAskInstant, {
+      message:
+        "answerBy must be an ISO-8601 instant with its offset, e.g. 2026-11-05T17:00:00Z",
+    })
+    .optional()
+    .describe(
+      "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+    ),
+  consequence: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ASK_LIMITS.consequenceMaxChars)
+    .optional()
+    .describe(
+      "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+    ),
+  reversible: z
+    .boolean()
+    .optional()
+    .describe(
+      "Whether what the answer does can be undone. Omit when you do not know."
+    ),
+  dedupeKey: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ASK_LIMITS.dedupeKeyMaxChars)
+    .optional()
+    .describe(
+      "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+    ),
+};
+
 /**
  * The stakes the pod ACTS on. An agent may only RAISE them: its declared
  * `stakes` counts when it says `commitment`, never to lower what the pod
@@ -635,6 +745,7 @@ const AskModesSchema = z.discriminatedUnion("mode", [
     no: AskConfirmAnswerSchema.optional(),
     ...lookedAtField,
     ...stakesField,
+    ...ticketFields,
   }),
   z.object({
     mode: z.literal("choose"),
@@ -655,6 +766,7 @@ const AskModesSchema = z.discriminatedUnion("mode", [
     allowOther: z.boolean().optional(),
     ...lookedAtField,
     ...stakesField,
+    ...ticketFields,
   }),
   z.object({
     mode: z.literal("form"),
@@ -666,6 +778,7 @@ const AskModesSchema = z.discriminatedUnion("mode", [
     }),
     ...lookedAtField,
     ...stakesField,
+    ...ticketFields,
   }),
   z.object({
     mode: z.literal("act"),
@@ -677,12 +790,14 @@ const AskModesSchema = z.discriminatedUnion("mode", [
       .optional(),
     ...lookedAtField,
     ...stakesField,
+    ...ticketFields,
   }),
   z.object({
     mode: z.literal("provide"),
     provide: AskProvideSchema,
     ...lookedAtField,
     ...stakesField,
+    ...ticketFields,
   }),
 ]);
 
@@ -1477,11 +1592,15 @@ export {
   askOptionForChip,
   followUpChips,
   askRiskView,
+  askIsSwipeSafe,
+  askSwipeAnswer,
+  type AskSwipeInput,
   actView,
   askRecommendationOutcome,
   answerProvenanceMark,
   ASK_MODES_ENDING_WITH_SESSION,
   askCardView,
+  askCardDue,
   askEndsWithSession,
   askFate,
   isAskReviewLater,
@@ -1502,6 +1621,7 @@ export {
   type RoomQuestionConfirmDoor,
   type AskCardAnswer,
   type AskCardAsker,
+  type AskCardDue,
   type AskCardSlot,
   type AskCardView,
   type AskCardViewOptions,

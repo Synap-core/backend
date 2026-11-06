@@ -6,6 +6,15 @@
  * Skills are stored in the backend, executed in the Intelligence Service.
  */
 
+import { proofCheckedByApproval } from "../utils/presence-input.js";
+import {
+  bornOnUnlessUnproved,
+  personSkillBornOn,
+} from "../services/presence/skill-birth.js";
+import {
+  presenceProofSchema,
+  type PresenceProof,
+} from "@synap-core/types/presence";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -307,6 +316,12 @@ async function requiredToolsWidened(
 export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
   agentUserId?: string;
   /**
+   * A person's proof of presence for `skill:new:<name>` (W3 slice 3): a skill
+   * a person's door would create ON is born on only with it, or in `report`
+   * mode (`personSkillBornOn`).
+   */
+  presence?: PresenceProof | null;
+  /**
    * The skill's AUTHOR, when this door runs as someone else. A composite
    * proposal's skill step re-enters here with no `agentUserId` (the governance
    * decision was already made, so the gate must grant, not re-propose), but
@@ -354,6 +369,7 @@ export async function insertSkillGoverned(
   const {
     agentUserId,
     skillAuthor,
+    presence,
     auditSource,
     adoptId,
     id: _ignoredId,
@@ -422,7 +438,7 @@ export async function insertSkillGoverned(
   const authorAgentUserId = agentUserId ?? skillAuthor?.agentUserId;
   const personApprovedProposal =
     !agentUserId && skillAuthor?.personApproved === true;
-  const approved = skillBornApproved({
+  const bornOn = skillBornApproved({
     kind: values.kind,
     code: values.code,
     providerSpec: values.providerSpec,
@@ -434,6 +450,16 @@ export async function insertSkillGoverned(
     // executor writes them after, and re-decides with them).
     requiredTools: [],
   });
+  // A person's door creating a skill ON: only with a proof (or report mode).
+  const approved =
+    bornOn && !authorAgentUserId && !personApprovedProposal
+      ? await personSkillBornOn({
+          userId: values.userId,
+          name: values.name,
+          proof: presence ?? null,
+          door: auditSource ?? "insertSkillGoverned",
+        })
+      : bornOn;
 
   const [skill] = await db
     .insert(skills)
@@ -1234,6 +1260,12 @@ export const skillsRouter = router({
          *  marketplace source-link (`marketSource`) a standalone-install stamps
          *  so a published fix can reconcile the installed skill. */
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * A proof of presence for `skill:new:<name>` (W3 slice 3): a skill
+         * this door would create ON is born on only with it (or in report
+         * mode).
+         */
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1463,16 +1495,25 @@ export const skillsRouter = router({
           // source-link); omitted → the column default `{}` applies.
           ...(metadata ? { metadata } : {}),
           status: "active",
-          approved: skillBornApproved({
-            kind,
-            code: input.code,
-            providerSpec: input.providerSpec,
-            agentUserId: input.agentUserId,
-            executionMode: input.executionMode,
-            metadata,
-            // Declared now, linked just below: the rule must see them.
-            requiredTools: requiredToolIds,
-          }),
+          approved: await bornOnUnlessUnproved(
+            skillBornApproved({
+              kind,
+              code: input.code,
+              providerSpec: input.providerSpec,
+              agentUserId: input.agentUserId,
+              executionMode: input.executionMode,
+              metadata,
+              // Declared now, linked just below: the rule must see them.
+              requiredTools: requiredToolIds,
+            }),
+            input.agentUserId,
+            {
+              userId,
+              name: input.name,
+              proof: input.presence ?? null,
+              door: "skills.create",
+            }
+          ),
         })
         .returning();
 
@@ -2187,7 +2228,14 @@ export const skillsRouter = router({
    * backend/IS executor and is not loaded as an agent tool.
    */
   setApproved: protectedProcedure
-    .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        approved: z.boolean(),
+        /** Proof of presence (W3): turning a verb ON is setup. */
+        presence: presenceProofSchema.optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // One door with `capabilities.setToolEnabled`: same gate, audit, resync.
       const skill = await setSkillApproved({
@@ -2195,6 +2243,12 @@ export const skillsRouter = router({
         skillId: input.id,
         approved: input.approved,
         agentUserId: ctx.agentUserId,
+        presence: input.presence ?? null,
+        // The capability.enable executor: its approval checked the proof.
+        ...(proofCheckedByApproval(ctx)
+          ? { presenceChecked: "applyProposalApproval" as const }
+          : {}),
+        door: "trpc.skills.setApproved",
       });
       return { skill };
     }),

@@ -16,6 +16,7 @@
 import { Fragment, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import {
+  linkObjectIds,
   parseMarkdown,
   readEmbed,
   resolvePatternMarkers,
@@ -26,8 +27,10 @@ import {
   contentHref,
   contentMeasureClass,
   EXTERNAL_REL,
+  objectRefOf,
   type ContentMeasure,
 } from "./markdown-model";
+import { ObjectRefChip } from "./object-ref";
 import { MermaidFence } from "./mermaid-fence";
 import { isMermaidFence } from "./mermaid-model";
 
@@ -269,8 +272,16 @@ function renderNode(node: MdastNode): ReactNode {
       );
     case "break":
       return <br />;
-    case "link":
+    case "link": {
+      // A reference (a marker, or a bare id written alone) is a chip that
+      // names its object; any other link follows `contentHref`.
+      const ref = objectRefOf(node.url);
+      if (ref)
+        return (
+          <ObjectRefChip objectRef={ref} label={textOf(node as AnyNode)} />
+        );
       return <ContentLink url={node.url}>{children(node)}</ContentLink>;
+    }
     case "image":
       return <ImageMention url={node.url} alt={node.alt ?? ""} />;
     case "imageReference":
@@ -296,8 +307,8 @@ function renderNode(node: MdastNode): ReactNode {
  * `EmbedBlock` (a snapshot chart from its numbers; an HTML cell running in
  * its isolated frame; a record, a view or any other cell as a door). A body
  * already in its readable form simply has no embeds left. Object markers
- * (`[[entity:id|Ana]]`) become their console pages; the rest follows
- * `renderNode`.
+ * (`[[entity:id|Ana]]`) and bare ids in prose (`linkObjectIds`) become chips
+ * that name their object (`ObjectRefChip`); the rest follows `renderNode`.
  */
 export default function MarkdownView({
   source,
@@ -307,7 +318,7 @@ export default function MarkdownView({
   measure?: ContentMeasure;
 }) {
   const tree = useMemo(
-    () => parseMarkdown(resolvePatternMarkers(source)),
+    () => linkObjectIds(parseMarkdown(resolvePatternMarkers(source))),
     [source]
   );
   return (

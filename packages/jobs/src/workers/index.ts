@@ -120,6 +120,11 @@ import {
   IMPORT_CORPUS_QUEUE,
 } from "./import-corpus-worker.js";
 import {
+  handleImportUnits,
+  IMPORT_UNITS_QUEUE,
+  IMPORT_UNITS_EXPIRE_SECONDS,
+} from "./import-units-worker.js";
+import {
   handleProposalApprove,
   PROPOSAL_APPROVE_EXPIRE_SECONDS,
   PROPOSAL_APPROVE_QUEUE,
@@ -173,8 +178,10 @@ import {
 import {
   handleMessagingHistoryImport,
   handleMessagingWebhookEnsure,
+  handleLinkedinReachSweep,
   MESSAGING_HISTORY_IMPORT_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
+  LINKEDIN_REACH_SWEEP_QUEUE,
 } from "./messaging-sync.js";
 import {
   handleEntityMediaCopy,
@@ -385,6 +392,8 @@ const ALL_QUEUES = [
   FEED_SOURCE_ITEMS_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
   IMPORT_CORPUS_QUEUE,
+  // A store-first bulk import (one job per manifest; handler slot, IoC).
+  IMPORT_UNITS_QUEUE,
   // A large approved proposal, applied in the background (handler slot, IoC).
   PROPOSAL_APPROVE_QUEUE,
   // The Library light read (one item) + its hourly re-enqueue sweep.
@@ -435,6 +444,8 @@ const ALL_QUEUES = [
   // and the hourly webhook self-registration (messaging-sync.ts).
   MESSAGING_HISTORY_IMPORT_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
+  // A person's LinkedIn reach (daily): sent requests → pending, 21 days → ignored.
+  LINKEDIN_REACH_SWEEP_QUEUE,
   // Entity media copy (on-demand, D2): enqueued by the api-side reactor on an
   // entity create/update; copies its external images into the pod.
   ENTITY_MEDIA_COPY_QUEUE,
@@ -558,6 +569,10 @@ const LONG_WALK_QUEUES = new Map<string, number>([
   // No reaper: a dead worker's run is read as `stalled` once its heartbeat
   // stops (services/proposals/approval-runs.ts), and resuming is idempotent.
   [PROPOSAL_APPROVE_QUEUE, PROPOSAL_APPROVE_EXPIRE_SECONDS],
+  // A store-first bulk import (import-units-worker.ts): one delivery creates
+  // every unit's entity, so a redelivery while it runs would create them
+  // twice. Each unit also carries the create door's idempotency key.
+  [IMPORT_UNITS_QUEUE, IMPORT_UNITS_EXPIRE_SECONDS],
 ]);
 
 /**
@@ -937,6 +952,14 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: import-corpus");
 
+  // Store-first bulk import (on-demand — one job stores a whole manifest of
+  // units through the store-unit door). Handler slot filled by the api layer
+  // at boot (IoC).
+  await boss.work(IMPORT_UNITS_QUEUE, async ([job]: any[]) =>
+    handleImportUnits(job)
+  );
+  logger.info("Registered worker: import-units");
+
   // Large approved proposal (on-demand — the approve door hands a composite
   // at or above the background threshold here). Handler slot filled by the
   // api layer at boot (IoC). One worker: two large applies run one after the
@@ -1051,6 +1074,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleMessagingWebhookEnsure(job)
   );
   logger.info("Registered worker: messaging-webhook-ensure");
+
+  // A person's LinkedIn reach (cron: daily) — the requests the person sent
+  // and that still wait mark their people pending; 21 days → ignored.
+  await boss.work(LINKEDIN_REACH_SWEEP_QUEUE, async ([job]: any[]) =>
+    handleLinkedinReachSweep(job)
+  );
+  logger.info("Registered worker: linkedin-reach-sweep");
 
   // Inbound attachment ingest (on-demand) — the inbound sensor recorder enqueues
   // one job per inbound message that carried attachments; the api-side runner

@@ -1,5 +1,5 @@
 {
-  "$note": "THE multi-repo layout of Synap (R8 option C1, wave e902fc95). One row per repo: the directory it is checked out under beside its siblings (`dir`, the developer root's name), its GitHub name under `owner` (`slug`), the other names people and tools use for it (`aliases`), and the override variable a test may set to point at a checkout elsewhere (`env`). `layouts` name the sibling sets each caller lays out beside its own checkout. Read by scripts/layout/layout.mjs (the resolver) and scripts/sibling-checkout.mjs; the devbox gate and the app/relay CI read it from backend main. Add a repo or a caller here, never in a caller.",
+  "$note": "THE multi-repo layout of Synap (R8 option C1, wave e902fc95). One row per repo: the directory it is checked out under beside its siblings (`dir`, the developer root's name), its GitHub name under `owner` (`slug`), the other names people and tools use for it (`aliases`), and the override variable a test may set to point at a checkout elsewhere (`env`). A repo whose default branch is not the top-level `defaultBranch` names its own (`defaultBranch`: synap-bridge lands on master). `layouts` name the sibling sets each caller lays out beside its own checkout. Read by scripts/layout/layout.mjs (the resolver) and scripts/sibling-checkout.mjs; the devbox gate and the app/relay CI read it from backend main. Add a repo or a caller here, never in a caller.",
   "owner": "Synap-core",
   "defaultBranch": "main",
   "repos": {
@@ -55,6 +55,19 @@
       "slug": "intelligence-hub",
       "aliases": ["intelligence-hub", "is"],
       "env": "SYNAP_IS_DIR",
+      "public": false
+    },
+    "synap-bridge": {
+      "slug": "synap-bridge",
+      "aliases": ["bridge"],
+      "env": "SYNAP_BRIDGE_DIR",
+      "public": false,
+      "defaultBranch": "master"
+    },
+    "site-content-studio": {
+      "slug": "site-content-studio",
+      "aliases": ["content-studio"],
+      "env": "SYNAP_CONTENT_STUDIO_DIR",
       "public": false
     }
   },

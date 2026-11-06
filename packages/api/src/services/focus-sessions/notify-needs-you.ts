@@ -56,6 +56,13 @@ import {
   quickAnswerPushBody,
   type PushTarget,
 } from "@synap-core/types/push";
+import {
+  NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL,
+  loudestNeedsYouPriority,
+  needsYouPriority,
+  type NeedsYouPriority,
+} from "@synap-core/types/needs-you";
+import type { NotificationPriority } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { NOTIFICATION_REGISTRY } from "../../notifications/registry.js";
@@ -80,6 +87,53 @@ export function sessionNeedsYouGroupKey(sessionId: string): string {
 /** One relay-awaiting-tap push per slot per window. */
 function relayAwaitsTapGroupKey(sessionId: string, label: string): string {
   return `${sessionNeedsYouGroupKey(sessionId)}:relay:${normalizeExpectedLabel(label) ?? label}`;
+}
+
+/**
+ * The level the `session.needs_you` row is stamped with: the loudest P-level
+ * (`needsYouPriority`) of the asks it announces, on the EXISTING
+ * `notifications.priority` scale. Read as the headline: the agent just handed
+ * these over, and the asking itself is not work (`rule.ts`). The row's class
+ * can move later (the read derives it live); this stamp is the level at
+ * filing, for display. `undefined` = the registry's default.
+ */
+export function needsYouNotificationPriority(
+  slots: readonly ExpectedOutput[],
+  now: Date = new Date()
+): NotificationPriority | undefined {
+  const loudest = loudestSlotPriority(slots, now);
+  return loudest ? NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL[loudest] : undefined;
+}
+
+/** The loudest P-level of the asks a `session.needs_you` row announces. */
+function loudestSlotPriority(
+  slots: readonly ExpectedOutput[],
+  now: Date
+): NeedsYouPriority | null {
+  return loudestNeedsYouPriority(
+    slots.map((s) =>
+      needsYouPriority(
+        {
+          needsYouClass: "needs_you",
+          urgency: s.ask?.urgency,
+          answerBy: s.ask?.answerBy,
+        },
+        now
+      )
+    )
+  );
+}
+
+/**
+ * Does this hand-over's push break through Focus? Only when one of the asks
+ * it announces is P0 — due within the hour or overdue (founder decision
+ * 9bc9f75c; `pushInterruptionLevel`). Any other ask is a normal push.
+ */
+export function needsYouPushDueSoon(
+  slots: readonly ExpectedOutput[],
+  now: Date = new Date()
+): boolean {
+  return loudestSlotPriority(slots, now) === "P0";
 }
 
 /** Longest `why` / question quoted in the notification body. */
@@ -188,6 +242,12 @@ export async function notifySessionNeedsYou(p: {
    */
   byAgent: boolean;
   /**
+   * The agent that handed it over, when the door knows it (its verified
+   * principal). Stamped on the push so a daily limit the person set on that
+   * agent can count it (`PushFacts.agentUserId`). Absent = no agent limit.
+   */
+  agentUserId?: string | null;
+  /**
    * Who to tell, when it is not the session's `userId`. An agent-started RUN
    * is owned by the agent user (`run-playbook.ts` `actorId`), so the run door
    * names the person (`input.userId`) explicitly.
@@ -260,8 +320,26 @@ export async function notifySessionNeedsYou(p: {
         ? { ...asked, quickAnswer: null, body: undefined }
         : asked;
 
+    const priority =
+      p.reason.kind === "slots"
+        ? needsYouNotificationPriority(fresh)
+        : undefined;
+    // What the push decision needs from the hand-over itself: whether an ask
+    // is due within the hour (it breaks Focus), and which agent handed it
+    // over (its own push limit). A relay's agent is the one that relayed.
+    const agentUserId =
+      p.reason.kind === "relay"
+        ? p.reason.slot.pendingRelay?.relayedBy
+        : (p.agentUserId ?? undefined);
+    const facts = {
+      ...(p.reason.kind === "slots" && needsYouPushDueSoon(fresh)
+        ? { dueSoon: true }
+        : {}),
+      ...(agentUserId ? { agentUserId } : {}),
+    };
     const id = await NotificationService.create({
       type: SESSION_NEEDS_YOU_NOTIFICATION_TYPE,
+      ...(priority ? { priority } : {}),
       // The session's OWNER — for an agent key that is its operator.
       userId: p.recipientUserId ?? session.userId,
       workspaceId: session.workspaceId ?? null,
@@ -277,13 +355,14 @@ export async function notifySessionNeedsYou(p: {
         ? {
             target: { kind: push.target.kind, id: push.target.id },
             push: {
+              facts,
               slot: push.slot,
               quickAnswer: push.quickAnswer,
               threadId: session.id,
               ...(push.body ? { body: push.body } : {}),
             },
           }
-        : { push: { threadId: session.id } }),
+        : { push: { facts, threadId: session.id } }),
       data: {
         sessionId: session.id,
         sessionTitle: resolveSessionTitle(session),

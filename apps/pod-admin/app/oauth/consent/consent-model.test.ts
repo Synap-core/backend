@@ -6,6 +6,7 @@ import {
 
 import {
   allowBlockedReason,
+  clientDomain,
   consentHeadline,
   consentClientKind,
   consentWidth,
@@ -1450,5 +1451,22 @@ describe("pod-wide reads (decision e1b59d38 B)", () => {
     expect(allowBlockedReason(offer, new Set())).toBe(
       "You have no space to give it yet."
     );
+  });
+});
+
+describe("a document-registered client is named by its domain", () => {
+  it("is the client_id's host for an https client_id", () => {
+    expect(
+      clientDomain("https://www.synap.live/oauth/clients/desktop.json")
+    ).toBe("www.synap.live");
+  });
+  it.each([
+    "synap-desktop",
+    "app_1a2b3c",
+    "dcr_x",
+    "http://evil.example/x.json",
+    "nonsense",
+  ])("CONTROL — %s has none", (clientId) => {
+    expect(clientDomain(clientId)).toBeNull();
   });
 });

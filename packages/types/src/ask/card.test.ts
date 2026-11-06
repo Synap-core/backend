@@ -297,7 +297,7 @@ describe("answerProvenanceMark", () => {
       { closed: { reason: "session_ended" } },
       {
         tone: "textMuted",
-        label: "Closed · the session ended",
+        label: "Closed · the job ended",
         disposition: "closed_session_ended",
       },
     ],

@@ -416,9 +416,11 @@ describe("judge rung — the session room is part of the material", () => {
     expect(retried.length).toBeLessThanOrEqual(LEGACY_IS_MATERIAL_MAX);
     // The long DOCUMENT is what gets cut; the room's one message is not.
     expect(retried).toContain(`[agent] ${gateOutput}`);
-    expect(retried.startsWith("NOTE: CLIPPED MATERIAL — 1 section below")).toBe(
-      true
-    );
+    expect(
+      retried.startsWith(
+        "NOTE: CLIPPED MATERIAL — 1 of 3 sections below was cut"
+      )
+    ).toBe(true);
   });
 
   it("a room the owner cannot read is stated as NOT READABLE, and the judge still runs", async () => {
@@ -497,7 +499,9 @@ describe("buildJudgeMaterial — fair budget", () => {
     ]);
     expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(
-      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+      material.startsWith(
+        "NOTE: CLIPPED MATERIAL — 1 of 2 sections below was cut"
+      )
     ).toBe(true);
     // The count is the truth: kept + omitted = the document's length.
     const omitted = Number(
@@ -506,6 +510,31 @@ describe("buildJudgeMaterial — fair budget", () => {
     const kept = (material.match(/x/g) ?? []).length;
     expect(kept + omitted).toBe(60_000);
     expect(material).toContain("SMALL-DOC");
+  });
+
+  it("the CLIPPED note counts cut of total sections and asks the judge to name a cut it answered unmeasured for", () => {
+    const material = buildJudgeMaterial(
+      S,
+      [],
+      undefined,
+      [
+        { kind: "document", title: "Huge", text: "x".repeat(60_000) },
+        { kind: "document", title: "Small", text: "SMALL-DOC" },
+      ],
+      { status: "ok", messages: [{ author: "agent", text: "done" }] }
+    );
+    expect(
+      material.startsWith(
+        "NOTE: CLIPPED MATERIAL — 1 of 3 sections below was cut"
+      )
+    ).toBe(true);
+    expect(material).toContain(
+      "If you answer unmeasured because of a cut, say so in the rationale."
+    );
+    // Nothing dropped from the room: its heading stays the plain count.
+    expect(material).toContain(
+      "SESSION ROOM (latest 1 message, oldest first):"
+    );
   });
 
   it("a material that fits whole carries no note and no mark", () => {
@@ -531,7 +560,9 @@ describe("buildJudgeMaterial — fair budget", () => {
     });
     expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(
-      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+      material.startsWith(
+        "NOTE: CLIPPED MATERIAL — 1 of 1 section below was cut"
+      )
     ).toBe(true);
     // The whole room fits a readable slice each: all 20, each clipped and
     // saying so.
@@ -568,8 +599,13 @@ describe("buildJudgeMaterial — fair budget", () => {
     expect(kept).toBeGreaterThan(1);
     expect(kept).toBeLessThan(20);
     expect(marks).toBe(kept + 1);
+    // The heading counts what is SHOWN, and names how many older messages
+    // were dropped (it used to say "latest 20" over a room showing fewer).
+    expect(roomPart).not.toContain("latest 20 messages");
     expect(roomPart).toMatch(
-      /\(latest 20 messages, oldest first\):\n…\[clipped: \d+ chars omitted\]…\n\[agent\] msg-\d+ /
+      new RegExp(
+        `^SESSION ROOM \\(latest ${kept} messages, oldest first; ${20 - kept} older dropped to fit\\):\\n…\\[clipped: \\d+ chars omitted\\]…\\n\\[agent\\] msg-\\d+ `
+      )
     );
   });
 
@@ -580,7 +616,9 @@ describe("buildJudgeMaterial — fair budget", () => {
     });
     expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(
-      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+      material.startsWith(
+        "NOTE: CLIPPED MATERIAL — 1 of 1 section below was cut"
+      )
     ).toBe(true);
     expect(material).toMatch(/\[clipped: \d+ chars omitted\]/);
   });
@@ -594,7 +632,9 @@ describe("buildJudgeMaterial — fair budget", () => {
     );
     expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(
-      material.startsWith("NOTE: CLIPPED MATERIAL — 2 sections below were cut")
+      material.startsWith(
+        "NOTE: CLIPPED MATERIAL — 2 of 2 sections below were cut"
+      )
     ).toBe(true);
     expect(material).toMatch(/\[clipped: \d+ chars omitted\]…$/);
   });
@@ -658,7 +698,9 @@ describe("buildJudgeMaterial — criterion-scoped excerpt", () => {
     expect(material.length).toBeLessThanOrEqual(MATERIAL_MAX);
     expect(material).toContain("SOURCES-MARKER [1] Smith 2024");
     expect(
-      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+      material.startsWith(
+        "NOTE: CLIPPED MATERIAL — 1 of 1 section below was cut"
+      )
     ).toBe(true);
     expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
     expect(material).toMatch(/OUTLINE \(13 sections, \d+ chars\)/);
@@ -755,7 +797,9 @@ describe("buildJudgeMaterial — criterion-scoped excerpt", () => {
     expect(material).toContain("### document: Draft notes");
     expect(material).toMatch(/…\[clipped: \d+ chars omitted\]…/);
     expect(
-      material.startsWith("NOTE: CLIPPED MATERIAL — 1 section below was cut")
+      material.startsWith(
+        "NOTE: CLIPPED MATERIAL — 1 of 2 sections below was cut"
+      )
     ).toBe(true);
   });
 

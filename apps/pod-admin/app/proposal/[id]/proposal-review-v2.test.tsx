@@ -67,7 +67,8 @@ vi.mock("@heroui/react", async (importOriginal) => {
 
 vi.mock("../../../lib/trpc", () => ({
   trpc: {
-    useUtils: () => ({}),
+    // The approve hook reads the page's cached request (proof up front).
+    useUtils: () => ({ proposals: { get: { getData: () => undefined } } }),
     useQueries: () => [],
     proposals: {
       get: {
@@ -121,6 +122,7 @@ vi.mock("../../../lib/trpc", () => ({
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
+      setActionMode: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
   },
 }));

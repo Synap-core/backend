@@ -102,6 +102,12 @@ vi.mock("@synap/jobs/workers/inbound-attachment-worker.js", () => ({
 vi.mock("@synap/jobs/workers/messaging-sync.js", () => ({
   MESSAGING_HISTORY_IMPORT_QUEUE: "messaging-history-import",
 }));
+// The withdraw path (a draft sent outside the pod) has its own DB test,
+// channels-inbound.pglite.test.ts; here it is a collaborator like the others,
+// and held-sends reaches the proposal and permission modules this file stubs.
+vi.mock("../channels/held-sends.js", () => ({
+  withdrawDraftsSentOutside: vi.fn(async () => []),
+}));
 vi.mock("./participant-lookup.js", () => ({
   storedProviderId: vi.fn(async () => null),
 }));

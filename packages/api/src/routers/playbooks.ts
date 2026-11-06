@@ -64,6 +64,7 @@ import {
   links,
   loadFacetSlugsBatch,
   isUniqueViolation,
+  canonicalLifecycleOptionKey,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -72,6 +73,7 @@ import type {
   Automation,
 } from "@synap/database/schema";
 import {
+  readSubjectLifecycle,
   resolveStageCategory,
   type PlaybookStageCategory,
 } from "@synap/playbooks";
@@ -136,9 +138,12 @@ import {
 } from "../services/playbooks/playbook-lifecycle.js";
 import {
   runPlaybook,
-  resolveRunHandOff,
+  resolveRunChoice,
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
+import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
+import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
@@ -1261,6 +1266,68 @@ async function assertSubjectProfileResolves(
 }
 
 /**
+ * `subjectProfile.onEnd` names statuses of the subject's lifecycle: each value
+ * must be an OPTION of the lifecycle its profile declares (the status door's
+ * own normaliser: case and separator only), or the write is refused with the
+ * options — a value no move could reach would only fail at every close.
+ * Refused too: an `onEnd` with no subject kind, and one on a kind that
+ * declares no lifecycle and names no `statusProperty` (nothing to move). A
+ * kind with no declared lifecycle but a `statusProperty` keeps the legacy
+ * plain-property path, whose values no declaration lists: not checked.
+ *
+ * On an update, only an `onEnd` this write CHANGES is checked (`previousOnEnd`
+ * = the stored one): a patch that carries the stored one over unchanged is not
+ * refused for a value it did not introduce.
+ */
+async function assertOnEndOptionsDeclared(
+  subjectProfile: unknown,
+  workspaceId: string | null,
+  previousOnEnd: unknown
+): Promise<void> {
+  if (!subjectProfile || typeof subjectProfile !== "object") return;
+  const { onEnd, profileSlug, statusProperty } =
+    readSubjectLifecycle(subjectProfile);
+  const values = Object.entries(onEnd);
+  if (values.length === 0) return;
+  if (
+    previousOnEnd !== undefined &&
+    JSON.stringify(readSubjectLifecycle({ onEnd: previousOnEnd }).onEnd) ===
+      JSON.stringify(onEnd)
+  ) {
+    return;
+  }
+  if (!profileSlug) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "subjectProfile.onEnd needs subjectProfile.profileSlug — an end move moves the subject's status",
+    });
+  }
+  const { readSubjectProfile } =
+    await import("../services/playbooks/playbook-activators.js");
+  const subject = await readSubjectProfile(profileSlug, workspaceId);
+  if (!subject.lifecycleOptions) {
+    if (statusProperty) return;
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `subjectProfile.onEnd: ${profileSlug} declares no lifecycle — declare one (or name the statusProperty the process moves) before saying what a session end moves it to`,
+    });
+  }
+  const options = subject.lifecycleOptions;
+  const decl = { options: options.map((key) => ({ key })) } as Parameters<
+    typeof canonicalLifecycleOptionKey
+  >[0];
+  for (const [status, value] of values) {
+    if (!options.includes(canonicalLifecycleOptionKey(decl, value))) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `subjectProfile.onEnd.${status}: "${value}" is not a status of ${profileSlug} (${options.join(", ")})`,
+      });
+    }
+  }
+}
+
+/**
  * The ONE definition check a playbook write gets BEFORE the governance gate,
  * shared by `create`, `update` (every door: browser, MCP `synap_create_playbook`
  * / `synap_update_playbook`, Hub `POST`/`PATCH /playbooks`) and a revision of a
@@ -1275,11 +1342,30 @@ async function assertSubjectProfileResolves(
  */
 export async function assertPlaybookDefinitionWritable(
   database: Parameters<typeof assertKnownProfileSlug>[0],
-  write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
-  previous?: { goalTemplate: unknown; params: unknown }
+  write: {
+    goalTemplate?: unknown;
+    params?: unknown;
+    subjectProfile?: unknown;
+    /** The space the playbook lives in (picks its profile of a slug). */
+    workspaceId?: string | null;
+  },
+  previous?: {
+    goalTemplate: unknown;
+    params: unknown;
+    subjectProfile?: unknown;
+    workspaceId?: string | null;
+  }
 ): Promise<void> {
   if (write.subjectProfile !== undefined) {
     await assertSubjectProfileResolves(database, write.subjectProfile);
+    await assertOnEndOptionsDeclared(
+      write.subjectProfile,
+      write.workspaceId ?? previous?.workspaceId ?? null,
+      previous
+        ? ((previous.subjectProfile as { onEnd?: unknown } | null)?.onEnd ??
+            null)
+        : undefined
+    );
   }
   if (!previous) {
     assertGoalPlaceholdersDeclared({
@@ -1899,6 +1985,7 @@ export const playbooksRouter = router({
         goalTemplate: input.goalTemplate,
         params: input.params,
         subjectProfile: input.subjectProfile,
+        workspaceId: ctx.workspaceId ?? null,
       });
       // The id this playbook lands under, minted BEFORE the gate and handed to
       // it as `data.id`, so a proposal's `targetId` IS the playbook's id once it
@@ -2791,6 +2878,20 @@ export const playbooksRouter = router({
          * the proposal `data` so an approved run is handed too.
          */
         handToAgentId: z.string().uuid().optional(),
+        /**
+         * RUN CHOICE for this run: `"synap_ai"` = Synap AI runs it, whatever
+         * the person remembered (`RunPlaybookInput.runOn`). Never with
+         * `handToAgentId`.
+         */
+        runOn: z.enum(["synap_ai"]).optional(),
+        /**
+         * Remember this run's choice (`runOn` or `handToAgentId`) as the
+         * person's for this playbook, so the next launch does not ask
+         * (`setRunChoice`, the assignment edge). A PERSON's act: refused for
+         * an agent. Remembering is part of running this playbook, so the
+         * run's own grant (`playbook.run`) covers it.
+         */
+        remember: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2952,15 +3053,36 @@ export const playbooksRouter = router({
         }
       }
 
-      // HAND-OFF — refuse an agent nobody could hand this run to BEFORE a
-      // proposal is filed (same placement as FILING above), with exactly the
-      // arguments `runPlaybook` resolves it with again when the run starts.
-      if (input.handToAgentId) {
-        await resolveRunHandOff({
+      // RUN CHOICE — refuse a choice this run cannot take (an agent nobody
+      // could hand it to, Synap AI on a playbook that runs only on agents, or
+      // both at once) BEFORE a proposal is filed (same placement as FILING
+      // above), with exactly the arguments `runPlaybook` resolves it with
+      // again when the run starts.
+      if (input.handToAgentId || input.runOn) {
+        await resolveRunChoice({
           userId: ctx.userId,
           agentUserId: input.agentUserId,
           handToAgentId: input.handToAgentId,
+          runOn: input.runOn,
+          playbook,
         });
+      }
+      if (input.remember) {
+        if (input.agentUserId || ctx.agentUserId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only a person can choose who runs this from now on — an agent cannot.",
+            cause: { reasonCode: "PERSON_ONLY" },
+          });
+        }
+        if (!input.runOn && !input.handToAgentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
+          });
+        }
       }
 
       const perm = await checkPermissionOrPropose({
@@ -3021,10 +3143,23 @@ export const playbooksRouter = router({
           ...(input.handToAgentId
             ? { handToAgentId: input.handToAgentId }
             : {}),
+          ...(input.runOn ? { runOn: input.runOn } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      // The person's choice is remembered once the run is allowed, before it
+      // starts, so this run already follows it and the next launch does not
+      // ask (`readPlaybookRunChoice`).
+      if (input.remember) {
+        await setRunChoice({
+          callerId: ctx.userId,
+          playbookId: playbook.id,
+          choice: input.handToAgentId
+            ? { executor: "external-agent", agentUserId: input.handToAgentId }
+            : { executor: "is-agent" },
+        });
       }
       if ("proposalId" in perm) {
         return {
@@ -3069,6 +3204,7 @@ export const playbooksRouter = router({
           : {}),
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
+        ...(input.runOn ? { runOn: input.runOn } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
@@ -3127,6 +3263,94 @@ export const playbooksRouter = router({
    * playbook's name and goalTemplate. `automationId: null` signals the caller
    * that no automation exists yet (saveFlow will create one on first save).
    */
+  /**
+   * WHO RUNS IT, for the caller (slice 5a, plan v2 66d229dc): their
+   * remembered choice, whether a launch should ask first, the answers to
+   * offer (Synap AI first when the playbook allows it, then their agents
+   * with each one's wake mark) and what the next run would do, by the same
+   * rule the run uses (`readPlaybookRunChoice`).
+   */
+  runChoice: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      return readPlaybookRunChoice({ userId: ctx.userId, playbook });
+    }),
+
+  /**
+   * Choose who runs this playbook for the caller from now on: Synap AI, or one
+   * of their agents (`setRunChoice`, the assignment edge, one per person per
+   * playbook). HUMAN-ONLY. Returns the read the page draws next.
+   */
+  setRunChoice: protectedProcedure
+    .input(
+      z.object({
+        playbookId: z.string().uuid(),
+        choice: z.discriminatedUnion("executor", [
+          z.object({ executor: z.literal("is-agent") }),
+          z.object({
+            executor: z.literal("external-agent"),
+            agentUserId: z.string().uuid(),
+          }),
+        ]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only a person can choose who runs this — an agent key cannot.",
+          cause: { reasonCode: "PERSON_ONLY" },
+        });
+      }
+      const playbook = await scopedDb(
+        AccessContext.from(ctx)
+      ).findFirst<Playbook>(playbooks, {
+        where: eq(playbooks.id, input.playbookId),
+      });
+      if (!playbook) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      // A key that is not an agent is still bounded by its grant: choosing who
+      // runs a playbook is part of running it, the same grant `remember` on
+      // `playbooks.run` rides on (`playbook.run`).
+      await assertKeyMayWrite({
+        subjectType: "playbook",
+        action: "run",
+        workspaceId: playbook.workspaceId ?? null,
+      });
+      if (
+        input.choice.executor === "is-agent" &&
+        playbook.executor === "external-agent"
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This process runs only on an agent, so Synap AI cannot run it: choose one of your agents.",
+        });
+      }
+      await setRunChoice({
+        callerId: ctx.userId,
+        playbookId: playbook.id,
+        choice: input.choice,
+      });
+      return readPlaybookRunChoice({ userId: ctx.userId, playbook });
+    }),
+
   getFlow: protectedProcedure
     .input(z.object({ playbookId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {

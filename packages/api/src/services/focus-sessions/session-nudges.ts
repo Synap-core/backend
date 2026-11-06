@@ -356,6 +356,7 @@ export async function loadSessionNudges(p: {
         workspaceId: p.session.workspaceId,
         title: p.session.title,
         goal: p.session.goal,
+        excludeGoalTemplates: true,
       });
       // Nothing matched: no stamp, so a later update (new words) may still
       // match. Something matched: offer it only if THIS call won the stamp.

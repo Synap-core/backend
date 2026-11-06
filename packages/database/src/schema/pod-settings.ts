@@ -295,7 +295,23 @@ export interface OnboardingMilestonesSync {
   sentAt: string;
 }
 
+/**
+ * Proof of presence (W3 slice 3): whether a sensitive approval or action with
+ * no proof is refused (`enforce`) or applied and recorded (`report`). Absent =
+ * enforce (founder, 5 Nov 2026: on by default, the admin may change it); an
+ * explicit choice either way wins. Written only by `presence.setMode` (services/presence/mode.ts):
+ * turning it on is free, turning it off needs a proof of presence. The
+ * operator env `SYNAP_PRESENCE_PROOF=enforce` forces it on whatever this says.
+ */
+export interface PresenceModeSetting {
+  mode: "report" | "enforce";
+  /** User id of the pod admin who last changed it. */
+  changedBy: string;
+  changedAt: string;
+}
+
 export interface PodSettingsBlob {
+  presence?: PresenceModeSetting;
   machineDefaults?: PodMachineDefaults;
   podApps?: PodAppsPolicySetting;
   intelligenceDefaults?: PodIntelligenceDefaults;

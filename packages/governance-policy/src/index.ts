@@ -76,7 +76,8 @@
  *                                    byte-identical — see below). An `auto`
  *                                    rule on a move INTO done/lost applies
  *                                    only if it names the write; else 2.85
- *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute)
+ *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute;
+ *        a session END move skips 2.85, its end being the guardrail)
  *   2.88 NAMED_RULE_ONLY_EVENT_KEYS → propose (a capability run or a session's
  *                                    tool grant that no rule NAMING it widened
  *                                    at 2.8; ownership and the auto-approve
@@ -1429,7 +1430,20 @@ export interface AgentPolicyInput {
    *                     origin/ceiling floors (2.55/2.56) still apply above.
    * Absent → no effect (every existing verdict unchanged).
    */
-  lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
+  lifecycleMove?: {
+    intoTerminal: boolean;
+    humanOnly: boolean;
+    /**
+     * The move is a session END move (`subjectProfile.onEnd`, applied by the
+     * one close door after the session closed): the session having to END is
+     * the guardrail, so the done/lost default (2.85) and its named-rule-only
+     * widening do NOT apply — the move is governed like any other write of the
+     * closer (founder, 2026-11-05, plan b38e5e64 §7.2): a `propose` rule (an
+     * "ask first" agent) still proposes, and the humanOnly floor (2.075) still
+     * holds. Set ONLY by the close door's writer (`moveStatus.atSessionEnd`).
+     */
+    atSessionEnd?: boolean;
+  };
   /**
    * The write adds a REQUIRED field or a DEFAULT to a kind the pod administrator
    * owns (a system kind, or a shared kind with no home workspace), and the
@@ -2074,9 +2088,14 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
     input.governanceRuleVerdict === "auto" &&
     isNamedRuleOnlyWrite(eventKey) &&
     input.governanceRuleNamesWrite !== true;
+  // The done/lost floor: a terminal move, unless it is a session END move
+  // (the session's end is its guardrail, `lifecycleMove.atSessionEnd`).
+  const terminalFloor =
+    input.lifecycleMove?.intoTerminal === true &&
+    input.lifecycleMove.atSessionEnd !== true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
-    input.lifecycleMove?.intoTerminal === true &&
+    terminalFloor &&
     input.governanceRuleNamesWrite !== true &&
     !(organise && input.governanceRuleIsOwnOrganise === true);
   if (
@@ -2104,7 +2123,7 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   // names the write (see 2.8 above); above ownership and the
   // auto-approve lists so neither silently decides a status move.
   if (input.lifecycleMove) {
-    if (input.lifecycleMove.intoTerminal) {
+    if (terminalFloor) {
       return {
         verdict: "propose",
         reason: PROPOSE_REASON.LIFECYCLE_TERMINAL,
@@ -2316,6 +2335,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "channel/bind": "disruptive", // scope: wires a room to a bridge
   "channel/create_branch": "disruptive", // struct: a new room the person must see
   "channel/create_external": "disruptive", // effect: an outside channel
+  "channel/delete_external": "disruptive", // destroy: the mirrored conversation and its messages
   "channel/merge_branch": "disruptive", // destroy (merge)
   "channel/unbind": "disruptive", // scope
   "command/execute": "disruptive", // effect: a shell (2.06)
@@ -2352,6 +2372,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   // (founder 2026-10-18: an agent only PROPOSES Library organisation); classed
   // disruptive so no `@reversible` class rule can widen it either.
   "library/organize": "disruptive",
+  "messaging/delete_account": "disruptive", // destroy: removes the account at the provider
   "messaging/import_history": "disruptive", // effect: reads every chat of an account into people's channels
   "playbook/archive": "disruptive", // destroy
   "playbook/create": "disruptive", // struct (2.09)
@@ -2581,6 +2602,11 @@ export const GATE_WRITE_DOORS = {
   "channel/bind": "gate",
   "channel/create_branch": "gate",
   "channel/create_external": "gate",
+  // `DELETE /messaging/channels/:id` (2026-11-04, finding 6a6bcb5f): unlinking
+  // an external conversation deletes its channel and every mirrored message.
+  // `delete` is a DESTRUCTIVE_ACTIONS token, so an agent's ask always proposes;
+  // approving deletes it as the approver (`routers/proposals/executors/messaging.ts`).
+  "channel/delete_external": "gate",
   "channel/merge_branch": "gate",
   "channel/unbind": "gate",
   "command/execute": "gate",
@@ -2645,6 +2671,11 @@ export const GATE_WRITE_DOORS = {
   // `POST /messaging/accounts/:id/import-history` (founder, 2026-11-03): an
   // agent ASKS for an account's history import; the person's approval queues
   // it (`routers/proposals/executors/messaging.ts`).
+  // `DELETE /messaging/accounts/:id` (2026-11-04, finding 6a6bcb5f): an
+  // agent ASKS to disconnect the person's account at the provider (reconnecting
+  // needs the person's own login); approving disconnects it as the approver,
+  // who must own it (`routers/proposals/executors/messaging.ts`).
+  "messaging/delete_account": "gate",
   "messaging/import_history": "gate",
   "playbook/archive": "gate",
   "playbook/create": "gate",

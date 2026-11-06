@@ -10,6 +10,9 @@
  * An allowlist, never a passthrough:
  *   - `{ action: "intent", slug, source }` → `onboarding.recordStartStep`
  *     `{ step: "intent", patch: { slug, source } }` (S1 Continue);
+ *   - `{ action: "defaults" }` → `onboarding.recordStartStep`
+ *     `{ step: "defaults", patch: {} }` (the defaults step's Continue: each
+ *     switch already wrote through its own setting's door);
  *   - `{ action: "skip" }` → `onboarding.dismissJourney` on the pod lens
  *     (S1 "Skip setup for now").
  * The pod re-checks everything (pod admin, a listed start, a cloud answer that
@@ -46,12 +49,15 @@ export async function POST(req: Request) {
     }
     procedure = "onboarding.recordStartStep";
     input = { step: "intent", patch: { slug: body.slug, source: body.source } };
+  } else if (body?.action === "defaults") {
+    procedure = "onboarding.recordStartStep";
+    input = { step: "defaults", patch: {} };
   } else if (body?.action === "skip") {
     procedure = "onboarding.dismissJourney";
     input = { lens: POD_LENS };
   } else {
     return Response.json(
-      { error: "action must be intent or skip" },
+      { error: "action must be intent, defaults or skip" },
       { status: 400 }
     );
   }

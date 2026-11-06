@@ -13,10 +13,23 @@
  * (`subjectProfile`) is read the same way: the snapshot's when the run froze
  * one (`buildDefinitionSnapshot`), the live playbook's for an older run that
  * did not.
+ *
+ * ONE RESOLUTION of the status property (finding bfae3b84): a process that
+ * names no `statusProperty` follows the lifecycle its subject kind (or role)
+ * DECLARES — what `synap_create_playbook` tells agents to do ("omit
+ * statusProperty: the process follows the lifecycle the kind declares"). It is
+ * resolved HERE, where every runtime reader loads the process (the stage
+ * write, the subject-first advance, the close door's end moves, the reverse
+ * follow in `process-sync.ts`), never per caller. A named `statusProperty`
+ * keeps winning; a kind with no declared lifecycle stays `null` (each reader
+ * reports its skip). The declaration is read live (a kind that declares its
+ * lifecycle later is followed from then on), through `readSubjectProfile`,
+ * the one reader the activators use too.
  */
 
 import {
   db,
+  focusSessions,
   playbooks,
   playbookRuns,
   eq,
@@ -24,7 +37,12 @@ import {
   desc,
   liveRunStatusWhere,
 } from "@synap/database";
-import { readSubjectLifecycle, type PlaybookStage } from "@synap/playbooks";
+import {
+  readSubjectLifecycle,
+  type PlaybookOnEnd,
+  type PlaybookStage,
+} from "@synap/playbooks";
+import { readSubjectProfile } from "./subject-profile.js";
 
 export interface SessionProcess {
   stages: PlaybookStage[];
@@ -33,8 +51,19 @@ export interface SessionProcess {
    * status lives on its facet, so the forward write must name it.
    */
   profileSlug: string | null;
+  /**
+   * The subject's property the process moves: the one it names, else the
+   * property its subject profile DECLARES as its lifecycle (header); null
+   * when neither.
+   */
   statusProperty: string | null;
   humanOnlyStatuses: string[];
+  /**
+   * What each session END moves the subject (and every target still open)
+   * to — `subjectProfile.onEnd`, frozen with the rest of the process. Read by
+   * the one close door BEFORE it settles the run, so it is the snapshot's.
+   */
+  onEnd: PlaybookOnEnd;
 }
 
 export async function loadSessionProcess(input: {
@@ -75,7 +104,20 @@ export async function loadSessionProcess(input: {
     }
   }
   if (!stages) return null;
-  const { profileSlug, statusProperty, humanOnlyStatuses } =
-    readSubjectLifecycle(subjectProfile);
-  return { stages, profileSlug, statusProperty, humanOnlyStatuses };
+  const lifecycle = readSubjectLifecycle(subjectProfile);
+  const { profileSlug, humanOnlyStatuses, onEnd } = lifecycle;
+  let statusProperty = lifecycle.statusProperty;
+  if (!statusProperty && profileSlug) {
+    // The process names none: it follows the lifecycle the profile declares,
+    // as the session's space sees that slug (header).
+    const [session] = await db
+      .select({ workspaceId: focusSessions.workspaceId })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, input.sessionId))
+      .limit(1);
+    statusProperty = (
+      await readSubjectProfile(profileSlug, session?.workspaceId ?? null)
+    ).lifecycleProperty;
+  }
+  return { stages, profileSlug, statusProperty, humanOnlyStatuses, onEnd };
 }

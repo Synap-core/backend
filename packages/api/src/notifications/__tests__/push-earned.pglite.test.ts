@@ -11,7 +11,7 @@
  *    (`writePushPrefs` → `notification_preferences.push_prefs`): a category
  *    turned off stops its pushes; a workspace override row never shadows it.
  * 3. A blocking ask (`blockExpectedOutput` with a typed ask) pushes to
- *    `owed/<sessionId>?slot=<label>`, time-sensitive, threaded by session,
+ *    `owed/<sessionId>?slot=<label>`, a normal (active) push, threaded by session,
  *    with a quick answer — and that quick answer, sent unchanged through the
  *    owed page's own answer service, ANSWERS the slot (the seam, not a shape).
  *
@@ -113,7 +113,7 @@ import {
   apiKeys,
 } from "@synap/database";
 import { askFingerprint, type Ask } from "@synap-core/types/ask";
-import type { PushQuickAnswer } from "@synap-core/types/push";
+import { PUSH_DAILY_CAP, type PushQuickAnswer } from "@synap-core/types/push";
 import { NotificationService } from "../NotificationService.js";
 import { writePushPrefs, readPushPrefs } from "../push-prefs.js";
 import { blockExpectedOutput } from "../../services/focus-sessions/block-output.js";
@@ -242,12 +242,14 @@ describe("W8 — a push is earned", () => {
   });
 
   // ── 1. proposal pushes only when blocking ──────────────────────────────────
-  it("a proposal filed from an OPEN session the agent named pushes, time-sensitive", async () => {
+  it("a proposal filed from an OPEN session the agent named pushes, as a normal push", async () => {
     const p = await seedProposal({ sessionId: await seedSession("active") });
     expect(await proposalCreated(p)).toBeTruthy();
     expect(h.pushes).toHaveLength(1);
     expect(h.pushes[0]).toMatchObject({
-      interruptionLevel: "time-sensitive",
+      // Push levels (decision 9bc9f75c): waiting on you is not breaking Focus.
+      interruptionLevel: "active",
+      channelId: "needs-you",
       sound: "default",
       data: { pushCategory: "decision-blocking", kind: "proposal", id: p },
     });
@@ -408,7 +410,7 @@ describe("W8 — a push is earned", () => {
       categoryId: string;
       data: Record<string, unknown>;
     };
-    expect(push.interruptionLevel).toBe("time-sensitive");
+    expect(push.interruptionLevel).toBe("active");
     // The body shows the question Yes/No answers: the PROMPT, not the why.
     expect((push as unknown as { body: string }).body).toBe(
       "Tone: Casual tone?"
@@ -513,5 +515,130 @@ describe("W8 — a push is earned", () => {
       [sessionId]
     );
     expect(row.rows[0]!.s).not.toBe("done");
+  });
+
+  // ── 4. push levels (founder decision 9bc9f75c, 2026-11-04) ────────────────
+  const blockAsk = (sessionId: string, ask: Ask) =>
+    blockExpectedOutput({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      expectedLabel: "Tone",
+      blockedReason: "decision",
+      why: "casual or formal",
+      ask,
+    } as Parameters<typeof blockExpectedOutput>[0]);
+
+  it("an ask due within the hour breaks through Focus; one due tomorrow does not", async () => {
+    const soon = new Date(Date.now() + 30 * 60_000).toISOString();
+    const later = new Date(Date.now() + 26 * 3_600_000).toISOString();
+    await blockAsk(await seedSession("active"), {
+      mode: "confirm",
+      prompt: "Casual tone?",
+      answerBy: soon,
+    } as Ask);
+    await blockAsk(await seedSession("active"), {
+      mode: "confirm",
+      prompt: "Casual tone?",
+      answerBy: later,
+    } as Ask);
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[0]).toMatchObject({
+      interruptionLevel: "time-sensitive",
+      channelId: "breaks-focus",
+    });
+    expect(h.pushes[1]).toMatchObject({
+      interruptionLevel: "active",
+      channelId: "needs-you",
+    });
+  });
+
+  it("one agent breaks through Focus once a day: its next due-soon ask is a normal push (review 5 Nov 2026)", async () => {
+    const soon = () => new Date(Date.now() + 20 * 60_000).toISOString();
+    for (let i = 0; i < 2; i++) {
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+        answerBy: soon(),
+      } as Ask);
+    }
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[0]).toMatchObject({
+      interruptionLevel: "time-sensitive",
+      channelId: "breaks-focus",
+    });
+    // The same agent's second due-soon ask that day: a normal push.
+    expect(h.pushes[1]).toMatchObject({
+      interruptionLevel: "active",
+      channelId: "needs-you",
+    });
+  });
+
+  it("a due-soon ask past the budget is held back by the person's daily cap like any other push", async () => {
+    const soon = () => new Date(Date.now() + 20 * 60_000).toISOString();
+    for (let i = 0; i < PUSH_DAILY_CAP + 2; i++) {
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+        answerBy: soon(),
+      } as Ask);
+    }
+    // The first breaks through and is never capped; the rest are normal
+    // pushes, and the cap holds the ones past it.
+    expect(h.pushes).toHaveLength(PUSH_DAILY_CAP);
+  });
+
+  it("an answerBy already past is refused at write: nothing is asked, nothing rings", async () => {
+    const sessionId = await seedSession("active");
+    const result = await blockAsk(sessionId, {
+      mode: "confirm",
+      prompt: "Casual tone?",
+      answerBy: new Date(Date.now() - 60_000).toISOString(),
+    } as Ask);
+    expect(result).toMatchObject({ status: "ask_refused" });
+    expect(h.pushes).toHaveLength(0);
+  });
+
+  it("an agent has no push limit by default; the limit its person sets holds back its pushes past it", async () => {
+    // Default: no limit — three asks, three pushes, each stamped with AGENT.
+    for (let i = 0; i < 3; i++) {
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+      });
+    }
+    expect(h.pushes).toHaveLength(3);
+    const stamped = await q<{ n: number }>(
+      `select count(*)::int as n from notifications where push_agent_id = $1 and pushed_at is not null`,
+      [AGENT]
+    );
+    expect(stamped.rows[0]!.n).toBe(3);
+
+    // The person limits AGENT to 1 a day (under their own budget of 3, so
+    // only the agent's limit can hold the push back).
+    await q(
+      `update users set agent_metadata = '{"pushDailyLimit": 1}'::jsonb where id = $1`,
+      [AGENT]
+    );
+    try {
+      await q(`delete from notifications`);
+      h.pushes.length = 0;
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+      });
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+      });
+      expect(h.pushes).toHaveLength(1);
+      const rows = await q<{ total: number; pushed: number }>(
+        `select count(*)::int as total, count(pushed_at)::int as pushed from notifications where type = 'session.needs_you'`
+      );
+      // Both asks land in the bell; only one rang the phone.
+      expect(rows.rows[0]).toEqual({ total: 2, pushed: 1 });
+    } finally {
+      await q(`update users set agent_metadata = null where id = $1`, [AGENT]);
+    }
   });
 });

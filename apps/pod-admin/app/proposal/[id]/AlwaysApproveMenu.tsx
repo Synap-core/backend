@@ -14,7 +14,11 @@
  *
  * "This tool" writes a `targetKind: "capability"` row, the ONLY rule that can
  * authorize a tool run: the capability gate consults the resolver, which
- * skips every broad rule for a run (the outward floor). There is no
+ * skips every broad rule for a run (the outward floor). It goes through the
+ * person door `governanceRules.setActionMode` (founder, 5 Nov 2026: "approve
+ * always for that action"): the action then runs on its own for every AI on
+ * the pod, in every space, and its tool's page shows it and takes it back
+ * ("Asks first"). There is no
  * "Everything, always" here: `deriveGovernanceGrantOptions` writes no wildcard
  * rule in pod admin.
  *
@@ -53,6 +57,12 @@ import {
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { showApprovalProgressToast } from "../../_lib/approval-progress/approval-progress-toast";
+import { useApproveProposal } from "../../_lib/presence/use-approve";
+import {
+  useCreateGovernanceRule,
+  useSetActionMode,
+  type CreateGovernanceRuleInput,
+} from "../../_lib/presence/use-sensitive-actions";
 import {
   decisionFailure,
   decisionReceipt,
@@ -67,12 +77,12 @@ import { showReceipt } from "../../_lib/receipt/decision-receipt-toast";
 import { alwaysApproveT } from "./copy";
 import { approveInput, renderedRevision } from "./use-proposal-decision";
 
-type CreateRuleInput = Parameters<
-  ReturnType<typeof trpc.governanceRules.create.useMutation>["mutate"]
->[0];
+type CreateRuleInput = CreateGovernanceRuleInput;
 
 interface Granularity {
   key: GovernanceGrantOption["id"];
+  /** "This tool": the action whose run mode it sets (`setActionMode`). */
+  action?: string;
   label: string;
   /** What the rule covers and what still asks. */
   covers: string;
@@ -204,7 +214,14 @@ function deriveGrantOptions(p: ProposalForRule, t: T): Granularity[] {
   return options.flatMap((o) => {
     const words = grantWords(t, o.id, p, o.value);
     return words
-      ? [{ key: o.id, ...words, input: o.rule as CreateRuleInput }]
+      ? [
+          {
+            key: o.id,
+            ...words,
+            input: o.rule as CreateRuleInput,
+            ...(o.id === "capability" && o.value ? { action: o.value } : {}),
+          },
+        ]
       : [];
   });
 }
@@ -226,8 +243,11 @@ export function AlwaysApproveMenu({
     setRunningState(value);
     onRunningChange?.(value);
   };
-  const approve = trpc.proposals.approve.useMutation();
-  const createRule = trpc.governanceRules.create.useMutation();
+  // With the proof of presence when the pod asks for one (W3).
+  const approve = useApproveProposal();
+  // With the proof of presence (W3 slice 3): both are sensitive actions.
+  const createRule = useCreateGovernanceRule();
+  const setActionMode = useSetActionMode();
 
   const t = alwaysApproveT();
   const granularities = deriveGrantOptions(proposal, t);
@@ -254,7 +274,17 @@ export function AlwaysApproveMenu({
         return;
       }
       try {
-        await createRule.mutateAsync(g.input);
+        // An action runs on its own for every AI, pod-wide: the same mode
+        // its tool's page sets and takes back.
+        if (g.action) {
+          await setActionMode.mutateAsync({
+            action: g.action,
+            mode: "auto",
+            sourceProposalId: proposal.id,
+          });
+        } else {
+          await createRule.mutateAsync(g.input);
+        }
         const body = t("always.done.body", { label: g.label });
         showReceipt(
           outcome
@@ -337,7 +367,7 @@ export function RejectNeverMenu({
     onRunningChange?.(value);
   };
   const reject = trpc.proposals.reject.useMutation();
-  const createRule = trpc.governanceRules.create.useMutation();
+  const createRule = useCreateGovernanceRule();
 
   const t = alwaysApproveT();
   const never = deriveGovernanceNeverOption(grantContext(proposal));

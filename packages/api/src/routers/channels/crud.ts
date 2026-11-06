@@ -15,6 +15,8 @@ import { AccessContext } from "../../access/index.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+import { resolveChannelLinkedObject } from "./linked-object.js";
+import { rosterReadFor } from "../../access/session-visibility.js";
 
 import { TRPCError } from "@trpc/server";
 import {
@@ -73,6 +75,7 @@ import {
   resolveContextItemNames,
 } from "./helpers.js";
 import { createLogger } from "@synap-core/core";
+import { withoutServerOwnedMessageMeta } from "@synap-core/types/agents";
 
 const logger = createLogger({ module: "channels" });
 
@@ -742,6 +745,9 @@ export const crudProcedures = {
             ? MessageAuthorType.BOT
             : MessageAuthorType.AI_AGENT;
       const hash = computeMessageHash(msgId, input.content);
+      // `roomPost`, `sessionPost`, `routeChoice` are server-owned: a narrated
+      // system line must not carry a forged "who should answer?" chip.
+      const metadata = withoutServerOwnedMessageMeta(input.metadata);
       const inserted = await db
         .insert(messages)
         .values({
@@ -757,7 +763,7 @@ export const crudProcedures = {
           userId: ctx.userId,
           hash,
           previousHash: "",
-          metadata: input.metadata ?? null,
+          metadata: metadata ?? null,
         })
         .onConflictDoNothing({ target: messages.id })
         .returning({ id: messages.id });
@@ -777,7 +783,7 @@ export const crudProcedures = {
               timestamp: new Date(),
               previousHash: "",
               hash,
-              metadata: input.metadata,
+              metadata,
             },
             userId: ctx.userId,
           },
@@ -1151,8 +1157,17 @@ export const crudProcedures = {
         branchTree = buildBranchTree(allBranches, input.channelId);
       }
 
+      // What this conversation belongs to (its session, entity, parent…),
+      // read through each object's own visibility door.
+      const linkedObject = await resolveChannelLinkedObject(channel, {
+        userId: ctx.userId,
+        access: AccessContext.from(ctx),
+        roster: rosterReadFor(ctx),
+      });
+
       return {
         channel,
+        linkedObject,
         contextItems: input.includeContext ? contextItems : undefined,
         branchTree: input.includeBranches ? branchTree : undefined,
       };

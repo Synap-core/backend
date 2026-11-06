@@ -110,7 +110,12 @@ import {
 import { openLink } from "../../utils/deep-links.js";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import { captureGraphMemberVerdict } from "./capture-graph-governance.js";
-import { refuseAtAgentPendingCap } from "../../utils/permission-check.js";
+import {
+  parkWriteOnWorkspaceJoin,
+  proposedMessageFor,
+  refuseAtAgentPendingCap,
+} from "../../utils/permission-check.js";
+import type { DeferredWrite } from "@synap-core/types/proposals/deferred-writes";
 import {
   fenceCaptureGraphOperations,
   grantMayLinkRecord,
@@ -573,6 +578,20 @@ export interface SubmitCaptureGraphResult {
    * can have failed. Omitted when nothing failed.
    */
   relationsFailed?: MaterializeRelationFailure[];
+  /**
+   * The agent is not a member of a space this graph lands in, so NOTHING was
+   * written: the whole graph is kept on that space's workspace-JOIN request
+   * (`proposalId` names the join) and replayed, all of it, as the agent once a
+   * person approves the join (finding 590ca76a). `deferred: false` when the
+   * join could not keep it (the agent retries after approval). Omitted
+   * otherwise.
+   */
+  joinGate?: {
+    proposalId: string;
+    deferred: boolean;
+    ref?: string;
+    message: string;
+  };
   writeReceipt: {
     /**
      * `partial` is the Hub Protocol receipt word for exactly this shape (see
@@ -1447,6 +1466,103 @@ export async function submitCaptureGraph(
   }
   const homes = computeImportHomes(operations);
   const isPlan = hasComposedSteps(operations);
+
+  // ── WORKSPACE JOIN: the whole graph, or nothing (finding 590ca76a) ───────
+  // An agent that is not a member of a space the graph lands in used to reach
+  // the gate one write at a time: the first write into that space was kept on
+  // the join, the materializer then stopped, and approving the join replayed
+  // that ONE entity (the receipt read `approval_failed`, the rest was lost).
+  // Asked here, before either terminal and before anything is written: the
+  // graph is kept WHOLE on the join and replayed through this same door once
+  // the join is approved, where it auto-applies or files for review as a
+  // member's graph would. After validation, so a graph that could never apply
+  // is refused now rather than kept.
+  if (input.agentUserId) {
+    const kept: KeptCaptureGraph = {
+      // Names the row on the join's review card (`deriveDeferredWritesReview`).
+      title: summary,
+      entities: input.entities,
+      relations: input.relations ?? [],
+      bindings: input.bindings ?? [],
+      ...(input.plan ? { plan: input.plan } : {}),
+      // Where it was placed now: the replay lands in the same space.
+      workspaceId,
+      projectId: resolvedProjectId,
+      ...(input.summary ? { summary: input.summary } : {}),
+      source,
+      ...(input.channelId ? { channelId: input.channelId } : {}),
+      ...(input.sourceMessageId
+        ? { sourceMessageId: input.sourceMessageId }
+        : {}),
+      ...(input.sessionSource ? { sessionSource: input.sessionSource } : {}),
+      ...(input.rawSource ? { rawSource: input.rawSource } : {}),
+      ...(input.sourceDocumentIds?.length
+        ? { sourceDocumentIds: input.sourceDocumentIds }
+        : {}),
+    };
+    const park = await parkWriteOnWorkspaceJoin({
+      userId,
+      agentUserId: input.agentUserId,
+      workspaceIds: [
+        workspaceId,
+        ...operations.map(
+          (op) =>
+            (op as { targetWorkspaceId?: string | null }).targetWorkspaceId
+        ),
+      ],
+      permissionAction: "create",
+      subjectType: CAPTURE_GRAPH_JOIN_PAIR.subjectType,
+      action: CAPTURE_GRAPH_JOIN_PAIR.action,
+      data: kept as unknown as Record<string, unknown>,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      projectId: resolvedProjectId,
+      ...(input.sourceMessageId
+        ? { sourceMessageId: input.sourceMessageId }
+        : {}),
+      ...(input.channelId ? { threadId: input.channelId } : {}),
+    });
+    if (park && "denied" in park && park.denied) {
+      throw new TRPCError({ code: "FORBIDDEN", message: park.reason });
+    }
+    if (park && "proposalId" in park && park.proposalId) {
+      const joinId = park.proposalId;
+      const deferred = park.deferred === true;
+      const parkedScope: StoredCaptureScope = {
+        workspaceId,
+        projectId: resolvedProjectId,
+        sessionId: input.sessionId ?? null,
+      };
+      return {
+        proposalId: joinId,
+        entityCount: graphEntities.length,
+        relationCount: relations.length,
+        bindingCount: bindings.length,
+        reviewUrl: park.reviewUrl,
+        summary,
+        applied: false,
+        ...(isPlan ? { plan: { steps: planStepReceipts(operations) } } : {}),
+        sessionId: parkedScope.sessionId,
+        scope: parkedScope,
+        joinGate: {
+          proposalId: joinId,
+          deferred,
+          ...(park.deferredRef ? { ref: park.deferredRef } : {}),
+          message: proposedMessageFor(park.proposalType, summary, deferred),
+        },
+        ...(projectOutcome ? { project: projectOutcome } : {}),
+        ...placementReceipt,
+        writeReceipt: {
+          state: "pending",
+          proposalId: joinId,
+          ...(park.reviewUrl ? { reviewUrl: park.reviewUrl } : {}),
+          effectiveWorkspaceId: workspaceId,
+          ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+          ...(projectOutcome ? { project: projectOutcome } : {}),
+          source,
+        },
+      };
+    }
+  }
   // A project step below the agent evidence floor is shown to a human with
   // its marker — it can never be auto-applied past that human.
   const planNeedsReview = operations.some(
@@ -1945,6 +2061,78 @@ export async function submitCaptureGraph(
       source,
     },
   };
+}
+
+/**
+ * The pair a capture graph is kept under on a workspace join: the capture
+ * door's own governed-door key (`entity/capture.graph`), replayable
+ * (`REPLAYABLE_DEFERRED_PAIRS`).
+ */
+export const CAPTURE_GRAPH_JOIN_PAIR = {
+  subjectType: "entity",
+  action: "capture.graph",
+} as const;
+
+/** A whole capture graph as the join keeps it (`DeferredWrite.data`). */
+interface KeptCaptureGraph {
+  title: string;
+  entities: CaptureGraphEntity[];
+  relations: CaptureGraphRelation[];
+  bindings: CaptureGraphBinding[];
+  plan?: CapturePlanInput;
+  workspaceId: string | null;
+  projectId: string | null;
+  summary?: string;
+  source: HubWriteSource;
+  channelId?: string;
+  sourceMessageId?: string;
+  sessionSource?: SubmitCaptureGraphInput["sessionSource"];
+  rawSource?: SubmitCaptureGraphInput["rawSource"];
+  sourceDocumentIds?: string[];
+}
+
+/**
+ * Replay a graph kept on an APPROVED join (`services/governance/
+ * deferred-writes.ts` calls it as the agent, inside the key's grant): the
+ * whole graph goes through this door again, now as a member, and lands as a
+ * member's graph would: auto-applied, or filed for review. The answer is in
+ * the replay table's words (`readDoorAnswer`).
+ */
+export async function replayKeptCaptureGraph(
+  w: DeferredWrite
+): Promise<Record<string, unknown>> {
+  const d = w.data as unknown as KeptCaptureGraph;
+  const result = await submitCaptureGraph({
+    userId: w.userId,
+    agentUserId: w.agentUserId,
+    workspaceId: d.workspaceId,
+    projectId: d.projectId,
+    ...(w.sessionId ? { sessionId: w.sessionId } : {}),
+    ...(d.sessionSource ? { sessionSource: d.sessionSource } : {}),
+    source: d.source,
+    ...(d.channelId ? { channelId: d.channelId } : {}),
+    ...(d.sourceMessageId ? { sourceMessageId: d.sourceMessageId } : {}),
+    ...(d.rawSource ? { rawSource: d.rawSource } : {}),
+    ...(d.sourceDocumentIds?.length
+      ? { sourceDocumentIds: d.sourceDocumentIds }
+      : {}),
+    entities: d.entities,
+    relations: d.relations,
+    bindings: d.bindings,
+    ...(d.plan ? { plan: d.plan } : {}),
+    ...(d.summary ? { summary: d.summary } : {}),
+  });
+  if (result.joinGate) {
+    // Another space still misses the agent: never a write, said as one.
+    return {
+      status: "proposed",
+      proposalType: "join",
+      proposalId: result.proposalId,
+    };
+  }
+  return result.applied
+    ? { status: result.writeReceipt.state, id: result.proposalId }
+    : { status: "proposed", proposalId: result.proposalId };
 }
 
 /**

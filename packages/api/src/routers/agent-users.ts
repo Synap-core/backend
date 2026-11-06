@@ -5,6 +5,7 @@
  * Workspace owners/admins can create, list, update, and remove agent users.
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import {
   router,
@@ -65,6 +66,10 @@ import {
   agentKeyGrantPermissions,
   parsePermission,
 } from "@synap-core/types/grants";
+import {
+  AGENT_PUSH_DAILY_LIMIT_MAX,
+  normalizeAgentPushDailyLimit,
+} from "@synap-core/types/push";
 import { reapplyAgentKeyGrants } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import {
@@ -87,6 +92,7 @@ import {
   loadAgentAssignments,
   setAgentAssignment,
   setAgentPaused,
+  setAgentPushDailyLimit,
 } from "../services/agent-dispatch/agent-assignment.js";
 import { ASSIGNMENT_TARGETS } from "../services/agent-dispatch/route.js";
 import { createLogger } from "@synap-core/core";
@@ -390,6 +396,7 @@ export const agentUsersRouter = router({
    * Create an AI agent user and add it to a workspace
    */
   create: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         // Required for a workspace agent; omit for a pod-wide agent (no
@@ -683,9 +690,34 @@ export const agentUsersRouter = router({
           reach: dispatch.get(r.id)?.reach ?? ("pull" as const),
           binding: dispatch.get(r.id)?.binding ?? null,
           assignments: assignments.get(r.id) ?? [],
+          // The daily push limit the person set on this agent; null = none.
+          pushDailyLimit: normalizeAgentPushDailyLimit(
+            (r.agentMetadata as { pushDailyLimit?: unknown } | null)
+              ?.pushDailyLimit
+          ),
         };
       });
     }),
+
+  /**
+   * YOUR AGENTS AND COMPUTERS, with presence: the ONE read (computers plan v2,
+   * `readAgentsForHandoff`) MCP `synap_list_agents` already answers with, now
+   * on tRPC so the desktop and the phone read it instead of deriving presence
+   * from this router's `list` (plan c727854c W5). Each agent: its computer,
+   * reach, `live`, `nobodyRuns`, whether it can take the person's work; the
+   * person's computers, with how many listed agents run on each. The hand-off
+   * preview is from the calling agent when an agent key calls, else direct (a
+   * person staffing their own work is never gated). A failed read throws.
+   */
+  roster: protectedProcedure.query(async ({ ctx }) => {
+    // Imported at call time: agents-for-handoff reads this router's
+    // `queryAgentUsers`, so a static import would be a module cycle.
+    const { readAgentsForHandoff } =
+      await import("../services/agent-dispatch/agents-for-handoff.js");
+    return readAgentsForHandoff(ctx.userId, {
+      callerAgentUserId: ctx.agentUserId ?? null,
+    });
+  }),
 
   /**
    * How this agent's writes land, from the decision inputs — its own
@@ -792,6 +824,7 @@ export const agentUsersRouter = router({
    * Update an AI agent user
    */
   update: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -1014,6 +1047,7 @@ export const agentUsersRouter = router({
    * name. Per-space ask-first stays on `update({ askFirst })`.
    */
   setPosture: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         agentUserId: z.string().uuid(),
@@ -1350,6 +1384,40 @@ export const agentUsersRouter = router({
         callerId: ctx.userId,
         agentUserId: input.agentUserId,
         paused: input.paused,
+      });
+    }),
+
+  /**
+   * Set (or clear with `null`) how many pushes a day this agent's work may
+   * send the person (founder decision 9bc9f75c): no limit by default. Held
+   * back pushes still land in the bell and on Home. HUMAN-ONLY, owner or pod
+   * admin, like pausing.
+   */
+  setPushLimit: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: z.string().uuid(),
+        dailyLimit: z
+          .number()
+          .int()
+          .min(0)
+          .max(AGENT_PUSH_DAILY_LIMIT_MAX)
+          .nullable(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only a person can limit an agent's pushes — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite({ subjectType: "agent", action: "update" });
+      return setAgentPushDailyLimit({
+        callerId: ctx.userId,
+        agentUserId: input.agentUserId,
+        dailyLimit: input.dailyLimit,
       });
     }),
 

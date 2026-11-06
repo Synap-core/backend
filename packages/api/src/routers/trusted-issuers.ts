@@ -1,3 +1,6 @@
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { presenceInput } from "../utils/presence-input.js";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import {
   router,
   podAdminProcedure,
@@ -39,9 +42,18 @@ export const trustedIssuersRouter = router({
         expectedStatus: z
           .enum(["pending", "approved", "rejected", "revoked"])
           .default("pending"),
+        /** Proof of presence (W3): an issuer's reach on the pod is governance. */
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      await assertPresenceForRequest({
+        userId: ctx.userId,
+        kind: "trusted_issuer",
+        id: input.id,
+        proof: input.presence ?? null,
+        door: "trpc.trustedIssuers.approve",
+      });
       const svc = new TrustedIssuerService();
       const approved = await svc.approveFromStatus(
         input.id,
@@ -104,6 +116,7 @@ export const trustedIssuersRouter = router({
     }),
 
   adminRegister: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       z.object({

@@ -1,0 +1,98 @@
+/**
+ * The words of the proof-of-presence dialog, as catalogs
+ * (`@synap-core/types/i18n`): English is the source and the type. Client
+ * words: a request, never a proposal. DRAFT French, awaiting the founder's
+ * review.
+ */
+import {
+  ambientCatalogLocale,
+  createT,
+  type Catalog,
+} from "@synap-core/types/i18n";
+
+export const en = {
+  title: "Confirm it’s you",
+  "title.progress": "Confirm it’s you ({index} of {total})",
+  action: "To approve “{action}”, confirm with your passkey.",
+  "action.unnamed": "To approve this request, confirm with your passkey.",
+  act: "To {doing}, confirm with your passkey.",
+  why: "Some approvals need you in person, not only a signed-in browser: an app or an AI using your session can’t approve them for you. Your browser will ask for Touch ID, Windows Hello or your security key.",
+  "why.act":
+    "Some changes need you in person, not only a signed-in browser: an app or an AI using your session can’t make them for you. Your browser will ask for Touch ID, Windows Hello or your security key.",
+  confirm: "Confirm with your passkey",
+  notNow: "Not now",
+  stopHere: "Stop here",
+  tryAgain: "Try again",
+  checking: "Getting a confirmation from your pod…",
+  waiting: "Waiting for your passkey…",
+  "again.invalid":
+    "That passkey didn’t confirm it’s you. Use a passkey of this pod, and let your device ask for Touch ID, Windows Hello or its PIN.",
+  "again.expired": "That confirmation took too long. Confirm again.",
+  "again.used": "That confirmation was already used. Confirm again.",
+  cancelled:
+    "Nothing was confirmed: the prompt was closed, or this device has no passkey for this pod.",
+  readFailed:
+    "Couldn’t get a confirmation from your pod. Check your connection, then press Try again.",
+  ceremonyFailed:
+    "Your passkey didn’t respond. Try again, or use another passkey.",
+  "noPasskey.title": "Add a passkey to approve this here",
+  "noPasskey.title.act": "Add a passkey to do this here",
+  "noPasskey.body":
+    "You have no passkey on this pod yet. Add one under Security, then try again.",
+  "unsupported.body":
+    "This browser can’t use a passkey. Open pod admin in a browser that can.",
+  "relay.device": "Or approve it in Relay on {device}, with Face ID.",
+  "relay.any": "Or approve it in Relay on your phone, with Face ID.",
+  addPasskey: "Add a passkey",
+  declined: "Not approved: you didn’t confirm it’s you.",
+  "declined.act": "Nothing changed: you didn’t confirm it’s you.",
+  "doing.passkeyAdd": "add a passkey to your account",
+  "doing.modeOff": "turn off “Approvals need you in person”",
+};
+
+const fr: Catalog<typeof en> = {
+  title: "Confirmez que c’est vous",
+  "title.progress": "Confirmez que c’est vous ({index} sur {total})",
+  action: "Pour approuver « {action} », confirmez avec votre clé d’accès.",
+  "action.unnamed":
+    "Pour approuver cette demande, confirmez avec votre clé d’accès.",
+  act: "Pour {doing}, confirmez avec votre clé d’accès.",
+  why: "Certaines approbations demandent votre présence, pas seulement un navigateur connecté : une app ou une IA qui utilise votre session ne peut pas les approuver à votre place. Votre navigateur va demander Touch ID, Windows Hello ou votre clé de sécurité.",
+  "why.act":
+    "Certaines modifications demandent votre présence, pas seulement un navigateur connecté : une app ou une IA qui utilise votre session ne peut pas les faire à votre place. Votre navigateur va demander Touch ID, Windows Hello ou votre clé de sécurité.",
+  confirm: "Confirmer avec votre clé d’accès",
+  notNow: "Pas maintenant",
+  stopHere: "Arrêter ici",
+  tryAgain: "Réessayer",
+  checking: "Demande d’une confirmation à votre pod…",
+  waiting: "En attente de votre clé d’accès…",
+  "again.invalid":
+    "Cette clé d’accès n’a pas confirmé que c’est vous. Utilisez une clé d’accès de ce pod, et laissez votre appareil demander Touch ID, Windows Hello ou son code.",
+  "again.expired":
+    "Cette confirmation a pris trop de temps. Confirmez de nouveau.",
+  "again.used": "Cette confirmation a déjà servi. Confirmez de nouveau.",
+  cancelled:
+    "Rien n’a été confirmé : la fenêtre a été fermée, ou cet appareil n’a pas de clé d’accès pour ce pod.",
+  readFailed:
+    "Impossible d’obtenir une confirmation de votre pod. Vérifiez votre connexion, puis appuyez sur Réessayer.",
+  ceremonyFailed:
+    "Votre clé d’accès n’a pas répondu. Réessayez, ou utilisez une autre clé d’accès.",
+  "noPasskey.title": "Ajoutez une clé d’accès pour approuver ici",
+  "noPasskey.title.act": "Ajoutez une clé d’accès pour le faire ici",
+  "noPasskey.body":
+    "Vous n’avez pas encore de clé d’accès sur ce pod. Ajoutez-en une dans Sécurité, puis réessayez.",
+  "unsupported.body":
+    "Ce navigateur ne peut pas utiliser de clé d’accès. Ouvrez l’administration du pod dans un navigateur qui le peut.",
+  "relay.device": "Ou approuvez dans Relay sur {device}, avec Face ID.",
+  "relay.any": "Ou approuvez dans Relay sur votre téléphone, avec Face ID.",
+  addPasskey: "Ajouter une clé d’accès",
+  declined: "Non approuvée : vous n’avez pas confirmé que c’est vous.",
+  "declined.act": "Rien n’a changé : vous n’avez pas confirmé que c’est vous.",
+  "doing.passkeyAdd": "ajouter une clé d’accès à votre compte",
+  "doing.modeOff": "désactiver « Les approbations demandent votre présence »",
+};
+
+/** The presence dialog's translator, in the ambient catalog locale. */
+export function presenceT() {
+  return createT(ambientCatalogLocale(), { en, fr });
+}

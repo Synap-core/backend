@@ -46,6 +46,7 @@ import {
 } from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
+import { buildDefinitionSnapshot } from "../playbooks/run-playbook.js";
 import {
   matchSessionTemplate,
   type SessionPlaybookCandidates,
@@ -70,6 +71,12 @@ import {
   isOutputRefVisible,
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
+import {
+  checkSessionTargets,
+  normalizeSessionTargets,
+  writeSessionTargets,
+  type SessionTargetsWrite,
+} from "./session-targets.js";
 import {
   resolveSubjectRef,
   subjectRefKeys,
@@ -227,6 +234,14 @@ export interface CreateFocusSessionParams {
    * `subjectRef: { status: "unresolved" }`. Never with `subjectEntityId`.
    */
   subjectRef?: SubjectRef | null;
+  /**
+   * The things this session works on as a BATCH (`session-targets.ts`): each
+   * an entity id the caller can see (refused NOT_FOUND otherwise, like the
+   * subject), written as the SAME `session --targets--> entity` edge a
+   * per-batch worker writes, after the row exists. On the PROPOSED path they
+   * ride the proposal and are written at approval. Reported on `targets`.
+   */
+  targets?: string[];
   /**
    * Short optional one-line NAME, separate from `goal` (the outcome). Blank ⇒
    * null (untitled; surfaces show the goal's first line via
@@ -468,6 +483,8 @@ export type CreateFocusSessionResult =
       offers?: StartOffersRead;
       /** Present iff a `subjectRef` was given: what it resolved to. */
       subjectRef?: SubjectRefResolution;
+      /** Present iff `targets` were given: which were added, which already were. */
+      targets?: SessionTargetsWrite;
     }
   | {
       /**
@@ -513,6 +530,7 @@ export async function createFocusSession(
     trackId: requestedTrackId = null,
     subjectEntityId: explicitSubjectEntityId = null,
     subjectRef = null,
+    targets: rawTargets,
     title: rawTitle = null,
     goal,
     agentUserId,
@@ -634,6 +652,16 @@ export async function createFocusSession(
       code: "NOT_FOUND",
       message: `No entity ${subjectEntityId} you can access`,
     });
+  }
+
+  // THE SAME FLOOR for the TARGETS (`session-targets.ts`): every id an
+  // entity the caller can see, refused before anything is read or filed.
+  const targets = normalizeSessionTargets(rawTargets);
+  if (targets.length > 0) {
+    const refusal = await checkSessionTargets({ userId, targets });
+    if (refusal) {
+      throw new TRPCError({ code: refusal.code, message: refusal.message });
+    }
   }
 
   // Refused, never truncated: a clipped name is a claim the caller did not make.
@@ -805,6 +833,7 @@ export async function createFocusSession(
         workspaceId,
         title,
         goal,
+        excludeGoalTemplates: true,
       });
     } catch (err) {
       // Suggestions are a courtesy, never a gate. A failed lookup must not
@@ -971,6 +1000,8 @@ export async function createFocusSession(
       ...(suspendedIntent ? { suspendedIntent } : {}),
       // Same reason: written at approval through `addCreateTimeBlockers`.
       ...(blockedBySessionIds.length > 0 ? { blockedBySessionIds } : {}),
+      // Same reason: written at approval through `writeSessionTargets`.
+      ...(targets.length > 0 ? { targets } : {}),
       ...(criteria.length > 0 ? { criteria } : {}),
       // The track rides the proposal so the approved row is born inside it
       // too; `proposal.projectId` already carries the track's project.
@@ -1294,7 +1325,10 @@ export async function createFocusSession(
     // The playbook_runs ledger row (status "running") so the runs feed sees the
     // session. Mirrors run-playbook.ts's executeSingleRun insert (executor +
     // definition snapshot), minus the executor dispatch — starting a session is
-    // "I'm working on this playbook", not a full executor run.
+    // "I'm working on this playbook", not a full executor run. The snapshot is
+    // THE shared one (`buildDefinitionSnapshot`): a hand-written copy here
+    // froze no `subjectProfile` (so no lifecycle, no end moves), criteria or
+    // requiredIntents, and a later edit of the playbook then decided this run.
     if (playbook) {
       await tx.insert(playbookRuns).values({
         workspaceId,
@@ -1303,13 +1337,7 @@ export async function createFocusSession(
         executor: playbook.executor,
         status: "running",
         createdBy: agentUserId ?? userId,
-        definitionSnapshot: {
-          version: playbook.version,
-          goalTemplate: playbook.goalTemplate,
-          stages: playbook.stages,
-          params: playbook.params,
-          expectedOutputs: playbook.expectedOutputs,
-        },
+        definitionSnapshot: buildDefinitionSnapshot(playbook),
       });
     }
     return { session: session!, adopted, deduped: undefined };
@@ -1422,6 +1450,17 @@ export async function createFocusSession(
         })
       : undefined;
 
+  // The TARGETS, after the row exists, through THE writer a worker's batch
+  // uses: the start already passed the gate, as `spawned_from` above.
+  let targetsWrite: SessionTargetsWrite | undefined;
+  if (targets.length > 0) {
+    targetsWrite = await writeSessionTargets({
+      sessionId: sessionOut.id,
+      workspaceId: sessionOut.workspaceId ?? null,
+      entityIds: targets,
+    });
+  }
+
   // A slot can be born blocked; the same safety net as every other block door.
   const blockGuidelines = await guidanceForBlockedSlots({
     userId,
@@ -1437,6 +1476,7 @@ export async function createFocusSession(
   await notifySessionNeedsYou({
     sessionId: sessionOut.id,
     byAgent: !!agentUserId,
+    agentUserId,
     reason: { kind: "slots", before: [], after: sessionOut.expectedOutputs },
   });
 
@@ -1521,5 +1561,6 @@ export async function createFocusSession(
     ...(playbookCandidates ? { playbooks: playbookCandidates } : {}),
     ...(outcome.adopted ? { adopted: true as const } : {}),
     ...(subjectRefResolution ? { subjectRef: subjectRefResolution } : {}),
+    ...(targetsWrite ? { targets: targetsWrite } : {}),
   };
 }

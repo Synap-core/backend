@@ -12,6 +12,11 @@
  * verbatim) plus re-exports of everything an external importer needs.
  */
 
+import {
+  isPresenceCode,
+  presenceProofSchema,
+  type PresenceRefusalCode,
+} from "@synap-core/types/presence";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { readLatestApprovalRun } from "../services/proposals/approval-runs.js";
 import { reviewLaterProposalWhere } from "../services/proposals/proposal-fate.js";
@@ -396,15 +401,21 @@ function notSessionBookkeepingWhere() {
   )!;
 }
 
-/** `batchApprove`'s page-only refusal, read off the error it threw. */
+/**
+ * `batchApprove`'s typed refusals, read off the error it threw: the page-only
+ * one, and a proof of presence missing or refused (W3) so the client asks for
+ * a proof for that item and retries it.
+ */
 function pageOnlyFailureFields(error: unknown): {
-  reasonCode?: "REVIEW_ON_ITS_PAGE";
+  reasonCode?: "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
 } {
-  return error instanceof TRPCError &&
-    (error.cause as { reasonCode?: unknown } | undefined)?.reasonCode ===
-      PAGE_ONLY_REASON_CODE
-    ? { reasonCode: PAGE_ONLY_REASON_CODE }
-    : {};
+  if (!(error instanceof TRPCError)) return {};
+  const code = (error.cause as { reasonCode?: unknown } | undefined)
+    ?.reasonCode;
+  if (code === PAGE_ONLY_REASON_CODE) {
+    return { reasonCode: PAGE_ONLY_REASON_CODE };
+  }
+  return isPresenceCode(code) ? { reasonCode: code } : {};
 }
 
 /** Rows a `package` filter on `list` scans (the `groups` default scan). */
@@ -1626,6 +1637,12 @@ export const proposalsRouter = router({
         proposalId: z.string(),
         comment: z.string().optional(),
         /**
+         * Proof of presence (W3): the person's fresh signature over a
+         * challenge naming THIS proposal (`presence.challenge`). Required for
+         * a sensitive approval (FORBIDDEN `PRESENCE_REQUIRED` without it).
+         */
+        presence: presenceProofSchema.optional(),
+        /**
          * Slice 5 — approval bound to the reviewed version. The
          * `revisionHistory.length` the reviewer's client last saw. When present
          * and it no longer matches the stored proposal (a concurrent revise
@@ -1849,6 +1866,8 @@ export const proposalsRouter = router({
         input,
         ctx,
         background: true,
+        presence: input.presence ?? null,
+        door: "trpc.proposals.approve",
       });
       if (!input.allowToday || !proposal.agentUserId) return approved;
       const allowedToday = await allowAgentForRestOfUtcDay({
@@ -3709,6 +3728,14 @@ export const proposalsRouter = router({
          * item cannot name a verb per op from a batch.
          */
         resolutions: identityResolutionByRefInput.optional(),
+        /**
+         * Proof of presence (W3), PER PROPOSAL: `proposalId → proof`, one
+         * challenge each. A sensitive item without one fails alone
+         * (`PRESENCE_REQUIRED`); the others are still applied.
+         */
+        presenceByProposal: z
+          .record(z.string(), presenceProofSchema)
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -3746,7 +3773,8 @@ export const proposalsRouter = router({
          * this". `REVIEW_ON_ITS_PAGE` (`BAD_REQUEST`): only the proposal's own
          * page may approve it (`proposalPageOnlyReason`); it stays pending.
          */
-        reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE";
+        reasonCode?:
+          "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
         candidates?: Array<{ id: string; title: string | null; type: string }>;
         opRef?: string;
         identity?: ProposalExecutorResult["identity"];
@@ -3881,6 +3909,8 @@ export const proposalsRouter = router({
               ...(resolution ? { identityResolution: resolution } : {}),
             },
             ctx,
+            presence: input.presenceByProposal?.[proposalId] ?? null,
+            door: "trpc.proposals.batchApprove",
           });
           if (result.success) {
             results.push({

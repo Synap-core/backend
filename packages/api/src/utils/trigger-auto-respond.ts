@@ -27,6 +27,7 @@ import {
   messages,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import type { RunToolProfile } from "@synap/intelligence-client";
 import { resolveTurnPrincipal } from "../services/messaging/turn-principal.js";
 
 const logger = createLogger({ module: "trigger-auto-respond" });
@@ -56,6 +57,14 @@ export async function triggerAutoRespond(params: {
    * pass a client payload through unvalidated — see `anchored-comment-turn.ts`.
    */
   turnContext?: Record<string, unknown> | null;
+  /**
+   * Set ONLY by the doors that dispatch a playbook run's turn (the is-agent
+   * kickoff and the automatic continuation): the run's declared tools, from
+   * `resolveRunToolProfile`. The IS then sends the run core tools plus these
+   * verbs only (founder, 2026-11-05). A person chatting in the run room is
+   * not a run turn and gets the normal agent.
+   */
+  run?: RunToolProfile;
 }): Promise<boolean> {
   const channel = await db.query.channels.findFirst({
     where: eq(channels.id, params.channelId),
@@ -174,6 +183,7 @@ export async function triggerAutoRespond(params: {
         serviceId: resolvedService.serviceId,
         agentUserId: resolvedService.agentUserId,
         ...(params.turnContext ? { turnContext: params.turnContext } : {}),
+        ...(params.run ? { run: params.run } : {}),
       },
       {
         ...A2AI_TRIGGER_JOB_OPTIONS,

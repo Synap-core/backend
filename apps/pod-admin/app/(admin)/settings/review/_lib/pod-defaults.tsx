@@ -16,6 +16,10 @@ import { TRPCClientError } from "@trpc/client";
 import { trpc } from "../../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../../lib/auth-redirect";
 import { SectionCard } from "../../../components/section-card";
+import {
+  useSetOwnOrganiseDefault,
+  useSetReversibleDefault,
+} from "../../../../_lib/presence/use-sensitive-actions";
 import { useT } from "../../../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import {
@@ -58,7 +62,8 @@ export function PodDefaults() {
       color: "danger",
     });
   };
-  const setReversible = trpc.governanceRules.setReversibleDefault.useMutation({
+  // Both defaults carry the proof of presence (W3 slice 3): sensitive actions.
+  const setReversible = useSetReversibleDefault({
     onSuccess: (res) => {
       void utils.governanceRules.reversibleDefault.invalidate();
       // Every agent's sentence reads the pod default.
@@ -67,15 +72,13 @@ export function PodDefaults() {
     },
     onError: onFailed,
   });
-  const setOwnOrganise = trpc.governanceRules.setOwnOrganiseDefault.useMutation(
-    {
-      onSuccess: (res) => {
-        void utils.governanceRules.ownOrganiseDefault.invalidate();
-        onSaved(t("podDefaults.ownOrganise.label"))(res);
-      },
-      onError: onFailed,
-    }
-  );
+  const setOwnOrganise = useSetOwnOrganiseDefault({
+    onSuccess: (res) => {
+      void utils.governanceRules.ownOrganiseDefault.invalidate();
+      onSaved(t("podDefaults.ownOrganise.label"))(res);
+    },
+    onError: onFailed,
+  });
 
   const canManage = podDefaultsManageable(reversible, ownOrganise);
   return (

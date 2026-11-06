@@ -155,6 +155,74 @@ export function podUrlKey(url: string): string | null {
   return parsed.origin;
 }
 
+/**
+ * Re-key a record whose keys are pod URLs onto {@link podUrlKey} (the origin),
+ * so a session or credential stored under an older spelling (trailing slash,
+ * mixed-case host, default port, a path) is found again instead of signing the
+ * person out. Idempotent: a second run returns `changed: false`. Duplicates
+ * merge: the entry already under the canonical key wins, else `prefer(kept,
+ * other)` decides, folding in insertion order, else the first in insertion
+ * order. A key podUrlKey cannot parse is kept as is and reported in
+ * `unparseable`, never dropped. The input is never mutated; each canonical key
+ * takes the place of its group's first spelling.
+ */
+export function rekeyPodRecord<T>(
+  record: Readonly<Record<string, T>>,
+  prefer?: (kept: T, other: T) => T
+): { record: Record<string, T>; changed: boolean; unparseable: string[] } {
+  const out = new Map<string, T>();
+  const fromCanonical = new Set<string>();
+  const unparseable: string[] = [];
+  let changed = false;
+  for (const key of Object.keys(record)) {
+    const value = record[key] as T;
+    const canonical = podUrlKey(key);
+    if (canonical === null) {
+      unparseable.push(key);
+      out.set(key, value);
+      continue;
+    }
+    if (canonical !== key) changed = true;
+    if (!out.has(canonical)) {
+      out.set(canonical, value);
+    } else if (key === canonical) {
+      out.set(canonical, value);
+    } else if (!fromCanonical.has(canonical) && prefer) {
+      out.set(canonical, prefer(out.get(canonical) as T, value));
+    }
+    if (key === canonical) fromCanonical.add(canonical);
+  }
+  // fromEntries defines own properties: a `__proto__` key stays a key.
+  return { record: Object.fromEntries(out), changed, unparseable };
+}
+
+/**
+ * Find the value stored for a pod URL under ANY spelling of it. `key` is the
+ * canonical key ({@link podUrlKey}); `value` is the entry under `key` when
+ * there is one, else the first legacy spelling's in insertion order, else
+ * undefined; `staleKeys` lists every legacy spelling present, for the caller to
+ * rewrite (or run {@link rekeyPodRecord}). Null when `url` itself is not a pod
+ * URL: nothing can be looked up, which is not the same as "not stored".
+ */
+export function findPodKeyed<T>(
+  record: Readonly<Record<string, T>>,
+  url: string
+): { key: string; value: T | undefined; staleKeys: string[] } | null {
+  const key = podUrlKey(url);
+  if (key === null) return null;
+  const staleKeys = Object.keys(record).filter(
+    (k) => k !== key && podUrlKey(k) === key
+  );
+  const holder = Object.prototype.hasOwnProperty.call(record, key)
+    ? key
+    : staleKeys[0];
+  return {
+    key,
+    value: holder === undefined ? undefined : record[holder],
+    staleKeys,
+  };
+}
+
 /** The loopback hosts, as WHATWG `URL.hostname` spells them (brackets kept). */
 export const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   "localhost",

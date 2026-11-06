@@ -24,6 +24,10 @@
  *   - open: the command the pod renders from the agent's harness launch
  *     template (Claude Code, Codex), and none for a harness that has no
  *     template (Cursor, a dispatch or house agent, no type at all);
+ *   - template + wake: the template is the agent type's (built in, version
+ *     null; none for a type that names none); the wake state is THE rule
+ *     (`deriveAgentWake`) over this row's own facts, and with no computer able
+ *     to start agents yet, no row reads `can_wake`;
  *   - PARITY: for every row, `canTakeYourWork` is exactly what the real
  *     `route()` answers when a hand-off NAMES that agent for this person.
  */
@@ -105,6 +109,8 @@ const BOUND_BROKEN = randomUUID();
 const APP_AGENT = randomUUID();
 /** A never-seen agent with no machine and no key. */
 const NEVER = randomUUID();
+/** The owner's Cursor, not paused, key never used: a client nothing can start. */
+const IDLE_CURSOR = randomUUID();
 const TOOL = randomUUID();
 /** The owner's agent that would do the handing — already at its proposal limit. */
 const CAPPED_CALLER = randomUUID();
@@ -165,6 +171,7 @@ beforeAll(async () => {
   await agent(BOUND_BROKEN, OWNER, "Broken agent", "acme");
   await agent(APP_AGENT, OWNER, "Raycast", "raycast");
   await agent(NEVER, OWNER, "Fresh", null);
+  await agent(IDLE_CURSOR, OWNER, "Cursor (idle)", "cursor");
   await q(
     `update users set agent_paused_at = now(), agent_paused_by = $2 where id = $1`,
     [PAUSED, OWNER]
@@ -219,6 +226,9 @@ beforeAll(async () => {
   );
   await key(THEIRS, TEAMMATE, ago(30_000), "their-laptop");
   await key(THEIRS_ON_DEVBOX, TEAMMATE, ago(30_000), null);
+  // A client holds its own door key (never used, never served): without one,
+  // THE reach rule reads a typed agent as the pod's own (reach 'pod').
+  await key(IDLE_CURSOR, OWNER, null, null);
   await q(
     `insert into tools (id, workspace_id, created_by, name, kind, executor, config, status, approved, metadata, input_schema, capabilities)
      values ($1, null, $2, 'acme', 'external', 'external-agent', $3::jsonb, 'active', true, '{}'::jsonb, '{}'::jsonb, '[]'::jsonb)`,
@@ -483,6 +493,91 @@ describe("readAgentsForHandoff — what YOUR hand-off would do", () => {
       handOffReason: null,
     });
     expect(row(PAUSED)).toMatchObject({ handOff: "blocked" });
+  });
+});
+
+describe("readAgentsForHandoff — its template and whether it can be woken", () => {
+  it("the template is the agent type's, built in (no catalog version yet)", () => {
+    expect(row(ON_DEVBOX).template).toEqual({
+      slug: "claude-code",
+      label: "Claude Code",
+      version: null,
+    });
+    expect(row(ON_LABEL_DEVBOX).template).toEqual({
+      slug: "codex",
+      label: "Codex",
+      version: null,
+    });
+    // A type that names no template: none, never a guess.
+    for (const id of [HOUSE, BOUND, NEVER]) expect(row(id).template).toBeNull();
+  });
+
+  it("awake: the pod's own agent, a healthy connector, a pull agent a runner served in the window", () => {
+    expect(row(HOUSE).wake).toEqual({
+      state: "awake",
+      how: "built_in",
+      why: null,
+    });
+    expect(row(BOUND).wake).toEqual({
+      state: "awake",
+      how: "binding",
+      why: null,
+    });
+    expect(row(ON_DEVBOX).wake).toEqual({
+      state: "awake",
+      how: "runner",
+      why: null,
+    });
+  });
+
+  it("key use is not a runner: live but never served is not awake", () => {
+    expect(row(ON_LABEL_DEVBOX).live).toBe(true);
+    expect(row(ON_LABEL_DEVBOX).wake).toEqual({
+      state: "cant_wake",
+      how: "runner",
+      why: "no_waker",
+    });
+  });
+
+  it("cant_wake says the one reason the row's facts give", () => {
+    expect(row(PAUSED).wake).toEqual({
+      state: "cant_wake",
+      how: null,
+      why: "paused",
+    });
+    expect(row(BOUND_BROKEN).wake).toEqual({
+      state: "cant_wake",
+      how: "binding",
+      why: "binding_broken",
+    });
+    expect(row(NEVER).wake).toEqual({
+      state: "cant_wake",
+      how: null,
+      why: "no_template",
+    });
+    expect(row(IDLE_CURSOR).wake).toEqual({
+      state: "cant_wake",
+      how: null,
+      why: "no_template_wake",
+    });
+    // Claude Code with no machine and no key label: no computer.
+    expect(row(CAPPED_CALLER).wake).toEqual({
+      state: "cant_wake",
+      how: "runner",
+      why: "no_computer",
+    });
+    // Served two hours ago on "MacBook-Pro": nothing there can start it yet.
+    expect(row(ON_LABEL).wake).toEqual({
+      state: "cant_wake",
+      how: "runner",
+      why: "no_waker",
+    });
+  });
+
+  it("no computer can start agents yet, so no row reads can_wake", () => {
+    // Non-vacuity: the roster holds both other states.
+    const states = new Set(roster.agents.map((a) => a.wake.state));
+    expect(states).toEqual(new Set(["awake", "cant_wake"]));
   });
 });
 

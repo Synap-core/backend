@@ -121,7 +121,9 @@ import {
   SESSION_ARTIFACT_KINDS,
 } from "../../../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
+import { sessionTargetsSchema } from "../../../services/focus-sessions/session-targets-wire.js";
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
+import type { StageSubjectStatusOutcome } from "../../../services/focus-sessions/stage-subject-status.js";
 import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
@@ -411,6 +413,13 @@ const CreateBodySchema = z
      */
     blockedBySessionIds: z.array(z.string().uuid()).max(20).optional(),
     /**
+     * The things this session works on as a BATCH (`session-targets.ts`):
+     * entities the caller can see (404 otherwise, like the subject), written
+     * as the same `session --targets--> entity` edges a worker's batch writes.
+     * Reported on the response's `targets` (added | already).
+     */
+    targets: sessionTargetsSchema.optional(),
+    /**
      * Open a NEW session even when an open session of the same goal and scope
      * exists. Without it the response is that existing session, flagged
      * `deduped: true` (near-goal sessions ride `dedupCandidates`).
@@ -516,6 +525,9 @@ const UpdateBodySchema = z.object({
   // Re-point (or CLEAR, with an explicit `null`) the subject-spine anchor.
   // Same floor as the create door; `null` is the un-set.
   subjectEntityId: z.string().uuid().nullable().optional(),
+  // ADD things the session works on as a batch (`session-targets.ts`):
+  // add-only, idempotent, floored like the subject, only while in flight.
+  targets: sessionTargetsSchema.optional(),
   // Free-form metadata bag — SHALLOW-MERGED into the existing row metadata.
   metadata: z.record(z.string(), z.unknown()).optional(),
   // DEPRECATED alias — prefer `outcomes` (kind "fact"). WHOLESALE replace of
@@ -1990,6 +2002,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
         blockedBySessionIds: body.blockedBySessionIds ?? [],
+        targets: body.targets,
         forceCreate: body.forceCreate,
       });
 
@@ -2034,6 +2047,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Start offers (goals, near sessions, homes): suggestions, nothing applied.
         ...(result.offers ? { offers: result.offers } : {}),
         ...(result.adopted ? { adopted: true } : {}),
+        ...(result.targets ? { targets: result.targets } : {}),
       });
     } catch (err) {
       // An agent's start that declares no criterion: a refusal, not a fault.
@@ -2216,6 +2230,27 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           { error: `No channel ${patch.channelId} you can access` },
           404
         );
+      }
+
+      // Step 2b': the TARGETS, the ONE floor (`checkSessionTargets`) before the
+      // membrane: visible entities, a session in flight this PATCH does not end.
+      const sessionTargets =
+        await import("../../../services/focus-sessions/session-targets.js");
+      const targets = sessionTargets.normalizeSessionTargets(patch.targets);
+      patch.targets = targets.length > 0 ? targets : undefined;
+      if (targets.length > 0) {
+        const refusal = await sessionTargets.checkSessionTargets({
+          userId,
+          targets,
+          sessionStatus: existing.status,
+          closing: isTerminalSessionStatus(patch.status),
+        });
+        if (refusal) {
+          return c.json(
+            { error: refusal.message },
+            refusal.code === "NOT_FOUND" ? 404 : 400
+          );
+        }
       }
 
       // Step 2c: TRACK FILING, resolved before the membrane (a refusal is the
@@ -2444,6 +2479,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.subjectEntityId !== undefined
             ? { subjectEntityId: patch.subjectEntityId }
             : {}),
+          // Same reason: the executor writes them on approval.
+          ...(patch.targets ? { targets: patch.targets } : {}),
           ...(patch.criteria !== undefined ? { criteria: patch.criteria } : {}),
           // Carried so the PROPOSED path is not a silent no-op — the
           // `focus_session/update` executor re-applies the follow on approval.
@@ -2604,6 +2641,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         throw err;
       }
 
+      // The TARGETS, after the row write, through THE writer every door uses.
+      const targetsWrite =
+        updated && patch.targets
+          ? await sessionTargets.writeSessionTargets({
+              sessionId: id,
+              workspaceId: updated.workspaceId ?? null,
+              entityIds: patch.targets,
+            })
+          : undefined;
+
       const usesStamped =
         trackFiling && updated
           ? await trackFilingModule.stampTrackFilingUses({
@@ -2642,6 +2689,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
       // `agentUserId` is threaded so the gate proposal carries agent provenance,
       // exactly as the MCP door does.
+      let subjectMove: StageSubjectStatusOutcome | undefined;
       if (updated && patch.currentStage !== undefined) {
         const { advanceSessionStage } =
           await import("../../../services/focus-sessions/advance-stage.js");
@@ -2663,6 +2711,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Report the status the ROW now holds — see the MCP door for why a
         // caller told "active" past an open gate is the dangerous answer.
         if (advance.paused) updated = { ...updated, status: "paused" };
+        // What the advance did to the subject (the MCP door's `subjectMove`).
+        const { reportedSubjectMove } =
+          await import("../../../services/focus-sessions/stage-subject-status.js");
+        subjectMove = reportedSubjectMove(advance.subjectStatus);
       }
 
       // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
@@ -2725,6 +2777,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         await notifySessionNeedsYou({
           sessionId: id,
           byAgent: !!agentUserId,
+          agentUserId,
           reason: {
             kind: "slots",
             before: existing.expectedOutputs,
@@ -2777,6 +2830,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(filing ? { filing } : {}),
         ...(blockGuidelines ? { blockGuidelines } : {}),
         ...(nudges ? { nudges } : {}),
+        // What `targets` did: which were added, which already were.
+        ...(targetsWrite ? { targets: targetsWrite } : {}),
+        // What a stage advance did to the subject, when the stage asked for a
+        // move: moved, waiting on a person, skipped or failed, with why.
+        ...(subjectMove ? { subjectMove } : {}),
         // What the follow DID — which playbook, which stage, how much
         // structure merged. Without it the caller must infer an attach from a
         // `playbookId` that appeared, and can never see a release's note.
@@ -3027,6 +3085,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ? { closedNotDone: result.closedNotDone }
           : {}),
         ...(result.waiting ? { waiting: result.waiting } : {}),
+        // What the end moved (`subjectProfile.onEnd`), each with why.
+        ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
@@ -3764,6 +3824,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               400
             );
           case "ref_unreachable":
+          case "ask_refused":
             // Named, never defaulted: the `default` below is the SUCCESS arm,
             // so an unhandled refusal would answer 200 with no label at all.
             return c.json({ error: result.reason }, 400);

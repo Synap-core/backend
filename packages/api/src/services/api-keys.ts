@@ -137,6 +137,8 @@ export interface ApiKeyIdentity {
   instanceId?: string | null;
   /** Human-readable purpose of the credential. */
   description?: string | null;
+  /** The door that minted it (0400): the connector's key stays its key. */
+  origin?: string | null;
 }
 
 /**
@@ -323,6 +325,7 @@ export class ApiKeyService {
         ...(identity?.description !== undefined
           ? { description: identity.description }
           : {}),
+        ...(identity?.origin !== undefined ? { origin: identity.origin } : {}),
       })
       .returning({ id: apiKeys.id });
 
@@ -695,7 +698,10 @@ export class ApiKeyService {
             (existingKey.expiresAt.getTime() - Date.now()) /
               (24 * 60 * 60 * 1000)
           )
-        : undefined
+        : undefined,
+      undefined,
+      // Which door minted it (0400): the connector's key stays its key.
+      existingKey.origin != null ? { origin: existingKey.origin } : undefined
     );
 
     // 3. Update new key to link to old key

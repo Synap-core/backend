@@ -227,6 +227,40 @@ describe("landed, waiting, blocked", () => {
     });
   });
 
+  it("a repo that lands on another branch (synap-bridge: master) is judged against that branch", async () => {
+    const SB = "Synap-core/synap-bridge";
+    const bases: string[] = [];
+    const gh = {
+      ...fakeGh({
+        pulls: {
+          [`${SB}#1`]: {
+            state: "closed",
+            merged_at: "t",
+            base: { ref: "master" },
+          },
+          [`${SB}#2`]: {
+            state: "closed",
+            merged_at: "t",
+            base: { ref: "main" },
+          },
+        },
+        shas: { [`${SB}@cccc333`]: "c".repeat(40) },
+      }),
+      compare: async (_repo: string, base: string) => {
+        bases.push(base);
+        return { status: "behind", ahead_by: 0 };
+      },
+    };
+    const bridge = (n: string) =>
+      L.evaluateDependency(dep(`Depends-On: bridge${n}`), gh);
+    expect((await bridge("#1")).status).toBe("landed");
+    expect((await bridge("#2")).status).toBe("blocked");
+    expect((await bridge("@cccc333")).status).toBe("landed");
+    expect(bases).toEqual(["master"]);
+    // and a repo with no branch of its own keeps the layout's
+    expect(dep("Depends-On: backend#1").defaultBranch).toBeUndefined();
+  });
+
   it("a commit or branch that does not exist can never land", async () => {
     expect(
       (
@@ -411,6 +445,22 @@ describe("one layout, one resolver", () => {
       for (const dir of [def.self, ...def.siblings])
         expect(layout.repos[dir]).toBeTruthy();
     }
+  });
+
+  it("layout.json lists the devbox's gated repos, each at the branch it lands on", () => {
+    // the devbox gates these (gate.sh repos); its gate reads a repo's Depends-On: through this layout
+    expect(L.repoNamed("bridge", layout)).toMatchObject({
+      dir: "synap-bridge",
+      fullName: "Synap-core/synap-bridge",
+      defaultBranch: "master",
+    });
+    expect(L.repoNamed("content-studio", layout)).toMatchObject({
+      dir: "site-content-studio",
+      fullName: "Synap-core/site-content-studio",
+    });
+    for (const def of Object.values(layout.repos) as any[])
+      if ("defaultBranch" in def)
+        expect(def.defaultBranch).toMatch(/^[\w./-]+$/);
   });
 
   it("sibling-checkout.mjs derives its sibling list from layout.json", () => {

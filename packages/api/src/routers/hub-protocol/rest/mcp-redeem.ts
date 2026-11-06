@@ -4,15 +4,21 @@
  * The server-to-server half of the CP-MCP pod-accept gate
  * (MCP-OAUTH-AND-CONNECT-PLAN §2-3). The control plane (CP) holds a pod master
  * key and, after the user authorized it at pod-admin `/connect`, redeems the
- * one-time consent code minted there. The pod mints the `claude-web` agent key
- * AT REDEEM (never at Allow) so no plaintext key ever travels through a
+ * one-time consent code minted there. The pod mints the client's agent key AT
+ * REDEEM (never at Allow) so no plaintext key ever travels through a
  * browser-facing channel. On disconnect the CP calls the sibling /mcp/revoke
  * endpoint to kill that same key server-to-server.
+ *
+ * One agent per AI client (W5, services/synap-account-client.ts): the CP names
+ * the client in the redeem body (`client: { harness, name }`), and the pod
+ * mints THAT client's agent (`grok`, `chatgpt`…; claude.ai keeps `claude-web`;
+ * an unknown client gets `generic`). No client (a CP before W5) mints
+ * `claude-web`, as before. The answer carries the `agentType` minted.
  *
  * Auth for BOTH routes = a CP TRUSTED-ISSUER assertion (verifyCpAssertion
  * below: the approved Control Plane issuer only), NOT a hub API key: the CP-held pod credential (`intelligenceApiKey`)
  * is a random bootstrap secret, not a `synap_*` key, so it could never pass the
- * key-format middleware. Both routes are listed in `skipAuthPaths`
+ * key-format middleware. Both routes are listed in `HUB_AUTH_SKIP_PATHS` (`_middleware/auth-skip.ts`)
  * (hub-protocol-rest.ts) so that middleware doesn't run, and each verifies its
  * OWN purpose claim (`mcp_redeem` / `mcp_revoke`) so a redeem assertion can't
  * be replayed as a revoke and vice-versa.
@@ -39,7 +45,15 @@ import {
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
+import { SYNAP_ACCOUNT_SEAT } from "@synap-core/types/agents";
+
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
+import {
+  SYNAP_ACCOUNT_KEY_ORIGIN,
+  isSynapAccountKey,
+  resolveSynapAccountMint,
+  type SynapAccountClient,
+} from "../../../services/synap-account-client.js";
 import { mapCpScopesToPodScopes } from "../../oauth/config.js";
 import {
   controlPlaneIssuerScopes,
@@ -112,7 +126,7 @@ async function verifyCpAssertion(
 
 export function registerMcpRedeemRoutes(app: HubHono): void {
   app.post("/mcp/redeem", async (c) => {
-    // This route is in `skipAuthPaths`, so the key-format middleware does NOT
+    // This route is in `HUB_AUTH_SKIP_PATHS` (`_middleware/auth-skip.ts`), so the key-format middleware does NOT
     // run — see `verifyCpAssertion` above for the CP-trusted-issuer auth block.
     // The one-time `code` below is the SECOND required credential.
     const authFailure = await verifyCpAssertion(c, "mcp_redeem");
@@ -131,6 +145,12 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
     if (!code) {
       return c.json({ error: "code is required" }, 400);
     }
+    // The client the CP names (server to server, behind its assertion): the
+    // pod mints THAT client's agent. Absent from a CP before W5.
+    const client =
+      body.client && typeof body.client === "object"
+        ? (body.client as SynapAccountClient)
+        : null;
 
     const codeHash = createHash("sha256").update(code).digest("hex");
 
@@ -172,26 +192,34 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
     }
 
     const scopes = mapCpScopesToPodScopes(row.scopes);
+    // `row.agentType` is the consent path's marker (always "claude-web"); the
+    // agent minted follows the client the CP named.
+    const mint = resolveSynapAccountMint(client);
 
     try {
-      // Mint the claude-web agent key NOW via the ONE door. Agent USER is
-      // singleton per (createdByUserId, agentType); each human also gets a
-      // DISTINCT KEY via linkedUserId + instanceId.
+      // Mint the client's agent key NOW via the ONE door. Agent USER is
+      // singleton per (createdByUserId, agentType, no computer, the Synap
+      // account seat): never the agent `/setup/agent` makes; each human
+      // also gets a DISTINCT KEY via linkedUserId + instanceId (the CP's
+      // instanceId names the client too, so each client is its own key).
       // NOT idempotent — every redeem is a fresh consent and mints a fresh key.
       const provisioned = await provisionSurfaceAgentKey({
-        agentType: row.agentType, // "claude-web"
+        agentType: mint.agentType,
         createdByUserId: row.podUserId,
         linkedUserId: row.podUserId, // the key acts for THIS human
-        // claude.ai runs on no computer of this person's.
+        // A client behind the Synap account runs on no computer of this
+        // person's, and has its own identity axis (review bf96d410, lane B).
         hostUserId: null,
+        hostSeat: SYNAP_ACCOUNT_SEAT,
         instanceId,
+        // The one door that stamps it: how the connector's keys are told.
+        keyOrigin: SYNAP_ACCOUNT_KEY_ORIGIN,
         scopes,
         ensureRegistryRow: true,
-        agentLabel: "Claude (Web)",
-        keyName: "Claude Web Hub Key",
-        keyDescription:
-          "Hub Protocol auth token for claude-web MCP agent — created via CP-MCP pod-accept",
-        agentDescription: "Claude (claude.ai web) — external MCP agent",
+        agentLabel: mint.agentLabel,
+        keyName: mint.keyName,
+        keyDescription: mint.keyDescription,
+        agentDescription: mint.agentDescription,
         logger,
       });
 
@@ -201,7 +229,7 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
       // fail loudly rather than return a broken contract.
       if (provisioned.alreadyValid) {
         logger.error(
-          { agentUserId: provisioned.agentUserId, agentType: row.agentType },
+          { agentUserId: provisioned.agentUserId, agentType: mint.agentType },
           "mcp/redeem: unexpected alreadyValid — no fresh key to return"
         );
         return c.json(
@@ -218,7 +246,7 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
         logger.error(
           {
             agentUserId,
-            agentType: row.agentType,
+            agentType: mint.agentType,
             verificationError: registration.verificationError,
           },
           "mcp/redeem: key minted but verification failed"
@@ -237,9 +265,9 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
           agentUserId,
           keyId,
           podUserId: row.podUserId,
-          agentType: row.agentType,
+          agentType: mint.agentType,
         },
-        "mcp/redeem: claude-web agent key minted"
+        "mcp/redeem: Synap account agent key minted"
       );
 
       // ── CONTRACT (Wave B consumes this exact shape) ──────────────────────────
@@ -249,6 +277,8 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
         podUserId: row.podUserId,
         scopes,
         agentUserId,
+        // Which agent the client got (W5); a CP before W5 ignores it.
+        agentType: mint.agentType,
       });
     } catch (err) {
       logger.error(
@@ -289,7 +319,7 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
 
     const keyRow = await db.query.apiKeys.findFirst({
       where: eq(apiKeys.id, keyId),
-      columns: { id: true, userId: true, revokedAt: true },
+      columns: { id: true, userId: true, revokedAt: true, origin: true },
     });
     if (!keyRow) {
       // Unknown keyId — never leak existence, just report not-revoked.
@@ -300,24 +330,22 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
       return c.json({ revoked: false });
     }
 
-    // SECURITY FLOOR: only revoke a key that is plausibly an MCP-connect
-    // claude-web agent key — i.e. its owner is the pod-wide `claude-web` agent
-    // user minted by `provisionSurfaceAgentKey` in /mcp/redeem above (userType
-    // "agent", agentType "claude-web"). This stops a CP assertion (scoped only
-    // to `mcp_revoke`, not to a specific pod user) from being used to kill an
-    // arbitrary pod key by guessing/leaking a keyId — the floor this schema CAN
-    // express. It does NOT confine to the specific (podUserId, instanceId) pair
-    // the CP's grant row names, because `api_keys` carries no direct link back
-    // to a `pod_mcp_grants` row on the CP side to check against; agentType is
-    // the tightest check available from the pod's own schema.
+    // SECURITY FLOOR: only revoke a key /mcp/redeem above minted: an AGENT's
+    // key whose origin is the Synap account (0400; an instanceId is no
+    // evidence, `/setup/agent` takes any). This stops a CP assertion
+    // (scoped only to `mcp_revoke`, not to a specific pod user) from being
+    // used to kill an arbitrary pod key by guessing/leaking a keyId — the floor
+    // this schema CAN express. It does NOT confine to the specific
+    // (podUserId, instanceId) pair the CP's grant row names, because `api_keys`
+    // carries no direct link back to a `pod_mcp_grants` row on the CP side.
     const owner = await db.query.users.findFirst({
       where: eq(users.id, keyRow.userId),
-      columns: { userType: true, agentType: true },
+      columns: { userType: true },
     });
-    if (owner?.userType !== "agent" || owner.agentType !== "claude-web") {
+    if (owner?.userType !== "agent" || !isSynapAccountKey(keyRow)) {
       logger.warn(
         { keyId },
-        "mcp/revoke: keyId does not belong to a claude-web agent — refusing to revoke"
+        "mcp/revoke: keyId is not a Synap account connector key — refusing to revoke"
       );
       return c.json({ revoked: false });
     }
@@ -329,7 +357,7 @@ export function registerMcpRedeemRoutes(app: HubHono): void {
       // actor in this CP-triggered flow, mirroring the same convention
       // `provisionSurfaceAgentKey`'s revoke+mint step uses (revokedBy: agentUserId).
       await apiKeyRepo.revoke(keyId, keyRow.userId, "CP-MCP disconnect");
-      logger.info({ keyId }, "mcp/revoke: claude-web agent key revoked");
+      logger.info({ keyId }, "mcp/revoke: Synap account connector key revoked");
       return c.json({ revoked: true });
     } catch (err) {
       logger.error({ err, keyId }, "mcp/revoke: revoke failed");

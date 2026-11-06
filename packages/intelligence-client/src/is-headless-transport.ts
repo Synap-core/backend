@@ -35,6 +35,27 @@ import {
 import type { ISCallContext } from "./is-call-budget.js";
 
 /** Body fields for a headless `/api/chat/stream` turn (a2ai worker). */
+/**
+ * A PLAYBOOK RUN's tool profile, sent on the IS chat request as `run` (the
+ * kickoff and each automatic continuation). The IS gives the turn its run core
+ * tools plus only these verbs, no tool discovery, and a lean prompt (IS
+ * `agents/base/run-profile.ts`, which mirrors this shape). Resolved by the
+ * pod's `resolveRunToolProfile` (`@synap/api` services/playbooks/run-tool-profile.ts).
+ */
+export interface RunToolProfile {
+  playbookId: string;
+  playbookName?: string;
+  /** The declared intents (playbook `requiredIntents` + its space's `taskIntents`). */
+  intents: string[];
+  /** The concrete verb ids serving those intents, under the run's lens. */
+  verbs: string[];
+  /**
+   * `failed` = the declaration could not be read: `verbs` is empty because
+   * nothing was read, NOT because the run declares nothing.
+   */
+  capabilitiesRead: "ok" | "failed";
+}
+
 export interface HeadlessChatRequest {
   query: string;
   threadId: string;
@@ -61,6 +82,8 @@ export interface HeadlessChatRequest {
   customerEmail?: string;
   /** The pod's `agent_configs` row for this turn — see `IntelligenceHubRequest.agentOverrides`. */
   agentOverrides?: AgentTurnOverrides | null;
+  /** Set when the turn works a playbook run: see {@link RunToolProfile}. */
+  run?: RunToolProfile;
   /**
    * When true, collect `step` frames into the result (for metadata.aiSteps).
    * Default false — session-recap and other text-only callers stay unchanged.
@@ -96,6 +119,7 @@ export async function requestHeadlessChatText(
     focusSessionId: payload.focusSessionId,
     agentUserId: payload.agentUserId,
     ...(payload.turnContext ? { turnContext: payload.turnContext } : {}),
+    ...(payload.run ? { run: payload.run } : {}),
     ...(payload.agentOverrides !== undefined
       ? { agentOverrides: payload.agentOverrides }
       : {}),

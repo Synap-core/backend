@@ -195,6 +195,22 @@ export interface HubEntityUpdateReceipt {
   landed: string[];
   /** Fields filed for review instead of written. */
   proposed?: string[];
+  /**
+   * Present ONLY when the call sent property keys the kind does not model.
+   * They are stored verbatim but not modelled (not queryable), each with an
+   * optional `didYouMean`.
+   */
+  properties?: { unmodeled: HubUnmodeledProperty[] };
+}
+
+/**
+ * A property key the kind does not model (pod `UnmodeledProperty`,
+ * `@synap/database` property-validation-service).
+ */
+export interface HubUnmodeledProperty {
+  key: string;
+  /** Closest valid property slug, when one is close enough to be a likely typo. */
+  didYouMean?: string;
 }
 
 /**
@@ -1091,6 +1107,8 @@ export interface FocusSessionExpectedOutput {
    * `answer` without it = answered, still waiting for the agent.
    */
   answerPickedUpAt?: string;
+  /** The person set this ask aside until then ("Later"; pod-stamped). */
+  laterUntil?: string;
   /**
    * A relayed answer to a `commitment` ask, waiting for the person's tap
    * (pod-stamped; the slot stays owed while it is here).

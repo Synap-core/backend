@@ -470,6 +470,30 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(row.door).toEqual({ kind: "capability", id: "cap-1" });
     expect(row.state).toEqual({ owedFromYou: 1 });
   });
+  it("a proposal row carries the kind of object it acts on, so approvals tell themselves apart", () => {
+    const { recent } = needsYouRows([
+      sig({
+        id: "cluster:a",
+        kind: "proposal-cluster",
+        title: 'Create Tool "first_user_digest"',
+        category: "governance",
+        target: { kind: "proposal", id: "p-1" },
+        subjectKind: "tool",
+      }),
+      sig({
+        id: "cluster:b",
+        kind: "proposal-cluster",
+        title: "Update thing",
+        category: "governance",
+        target: { kind: "proposal", id: "p-2" },
+      }),
+    ]);
+    expect(lensRowOfNeedsYou(recent[0]!, "blocking").subjectKind).toBe("tool");
+    // An older pod (or a proposal that names no kind) says nothing: never invented.
+    expect("subjectKind" in lensRowOfNeedsYou(recent[1]!, "blocking")).toBe(
+      false
+    );
+  });
   it("an invite to another space is a decision: Accept on the row, its role the chip, no door before Accept", () => {
     const { recent } = needsYouRows([
       sig({

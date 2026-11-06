@@ -140,3 +140,20 @@ describe("where it holds, what it covers, where it came from", () => {
     expect(verdictLabel("propose")).toBe("Require proposal");
   });
 });
+
+describe("an action's run mode", () => {
+  it("reads an auto rule as runs on its own, a deny as never, and no rule as asks first", async () => {
+    const { actionRunModeOf, ACTION_RUN_MODES } = await import("./index.js");
+    const { resolveActionRunModeLabel, ACTION_RUN_MODE_LABELS } =
+      await import("../vocabulary/index.js");
+    expect(actionRunModeOf("auto")).toBe("auto");
+    expect(actionRunModeOf("deny")).toBe("never");
+    expect(actionRunModeOf("propose")).toBe("ask");
+    expect(actionRunModeOf(undefined)).toBe("ask");
+    expect(Object.keys(ACTION_RUN_MODE_LABELS).sort()).toEqual(
+      [...ACTION_RUN_MODES].sort()
+    );
+    expect(resolveActionRunModeLabel("auto")).toBe("Runs on its own");
+    expect(resolveActionRunModeLabel("ask")).toBe("Asks first");
+  });
+});

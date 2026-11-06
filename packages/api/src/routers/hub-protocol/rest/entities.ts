@@ -26,13 +26,14 @@ import {
   listableEntityWhere,
   getRequestGrant,
 } from "@synap/database";
-import {
-  GRANT_DOOR_UNSUPPORTED,
-  isUnboundedFullAccess,
-} from "../../../access/grant-door-fence.js";
+import { isFencedGrant } from "../../../access/grant-door-fence.js";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
+import {
+  ENTITIES_LEAN_NOTE,
+  projectLeanEntityList,
+} from "../../../services/entity-lean-list.js";
 import {
   compareListedEntities,
   lastInteractionWindowWhere,
@@ -194,6 +195,13 @@ async function buildUpdateImpact(params: {
 export const PARTIAL_HEADER = "X-Synap-Partial";
 /** Deepest `offset + limit` a scope=all merge asks of each lens. */
 const SCOPE_ALL_MAX_WINDOW = 5000;
+/**
+ * How many top matches a FENCED key's `q` search ranks before its grant drops
+ * what it does not read (the most `search.search` serves in one page). An
+ * in-grant match ranked below this window is not returned: the `q`
+ * description says so.
+ */
+export const GRANT_BOUNDED_SEARCH_WINDOW = 100;
 
 /**
  * `includeWorkspace=true` (APP-ACCESS plan §3 R3): the names of exactly these
@@ -315,14 +323,44 @@ export function registerEntitiesRoutes(app: HubHono): void {
             "Only entities carrying a live facet of this role (e.g. `client`)."
           ),
         limit: z.string().optional(),
+        projection: z
+          .enum(["full", "lean"])
+          .optional()
+          .describe(
+            "full (default) = the array of whole rows. lean = an object " +
+              "`{ projection: 'lean', entities, note }` whose rows carry id, " +
+              "title, kind, status (+ statusCategory/statusLabel) and the " +
+              "kind's selected properties, with `omitted` naming the keys " +
+              "left out and `truncated` the full length of a cut field."
+          ),
+        fields: z
+          .string()
+          .optional()
+          .describe(
+            "With projection=lean: comma-separated property keys or columns " +
+              "returned whole on every row (e.g. the keys a row listed in " +
+              "`omitted`)."
+          ),
       }),
     },
     responses: {
       ...trpcErrorResponses,
       200: {
-        description: "Array of entities",
+        description:
+          "Array of entities, or with projection=lean the lean list object",
         content: {
-          "application/json": { schema: z.array(RawEntityRecordSchema) },
+          "application/json": {
+            schema: z.union([
+              z.array(RawEntityRecordSchema),
+              z
+                .object({
+                  projection: z.literal("lean"),
+                  entities: z.array(RawEntityRecordSchema),
+                  note: z.string(),
+                })
+                .openapi("LeanEntityList"),
+            ]),
+          },
         },
       },
       401: {
@@ -401,6 +439,23 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // Honor this endpoint's documented contract: pod-wide returned regardless.
         includePodWide: true,
       });
+      if (query.projection === "lean") {
+        const fields = (query.fields ?? "")
+          .split(",")
+          .map((f) => f.trim())
+          .filter(Boolean);
+        return c.json(
+          {
+            projection: "lean" as const,
+            entities: await projectLeanEntityList(
+              result as unknown as Array<Record<string, unknown>>,
+              fields.length > 0 ? { fields } : {}
+            ),
+            note: ENTITIES_LEAN_NOTE,
+          },
+          200
+        );
+      }
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, userId }, "getEntities failed");
@@ -489,9 +544,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .string()
           .optional()
           .describe(
-            "Free-text search query. Refused (403 GRANT_DOOR_UNSUPPORTED) " +
-              "for a scoped key: search is not bounded by a grant. List " +
-              "without `q` instead."
+            "Free-text search query (relevance-ranked top-N). For a scoped " +
+              "key the hits are bounded by its grant: it reads the top 100 " +
+              "matches and returns only those its grant reads (at most " +
+              "`limit`), so an in-grant match ranked below them is not " +
+              "returned — narrow the query to reach it."
           ),
         profileSlug: z.string().optional(),
         workspaceId: uuidQueryParam.optional(),
@@ -851,23 +908,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
       lastInteractionBefore
     );
     // W1 fence: this door is listed as grant-safe (GRANT_SAFE_REST_READS)
-    // because every branch below reads through `entities.getEntities` → the
-    // `entities.list` floor (`accessScopeWhere`, which ANDs the key's grant).
-    // The `q` branch does NOT: it is Typesense (`search.search`), which no
-    // grant narrows — a project-limited key would search the whole person. So
-    // a key with ANY limit may list here, never search. Since S1 this is the
-    // same set `isFencedGrant` fences (a `*` pinned to one workspace or
-    // project counts as limited); kept explicit at the branch that leaks.
-    const grant = getRequestGrant();
-    if (q.length > 0 && grant && !isUnboundedFullAccess(grant)) {
-      return c.json(
-        {
-          error: `${GRANT_DOOR_UNSUPPORTED} (Full-text search \`q\` is not bounded by a grant; list without \`q\`.)`,
-          code: "GRANT_DOOR_UNSUPPORTED",
-        },
-        403
-      );
-    }
+    // because every branch below is bounded by the key's grant. The list
+    // branches read through `entities.getEntities` → the `entities.list` floor
+    // (`accessScopeWhere`, which ANDs the grant). The `q` branch ranks in
+    // Typesense, which knows the person, not the grant; `search.search` then
+    // re-reads its entity hits through that same floor and drops what the
+    // grant does not reach, with every count and facet
+    // (`withinGrantSearchHits`). A fenced key (`isFencedGrant`: any limit,
+    // a `*` pinned to a space or project included) asks for a wider window
+    // (`GRANT_BOUNDED_SEARCH_WINDOW`) so the bound still fills `limit`.
+    const searchFenced = isFencedGrant(getRequestGrant());
     // Same refusal as the date window: the `q` branch applies no lens, so a
     // "Not in a project" search would silently answer for every project.
     if (withoutProject && q.length > 0) {
@@ -1011,7 +1061,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
           query: q,
           workspaceId: workspaceIdParam || undefined, // undefined = cross-workspace search
           collections: ["entities"],
-          limit,
+          // A fenced key's hits are re-read through its grant (search.search):
+          // rank a wider window so the in-grant ones can still fill `limit`.
+          limit: searchFenced ? GRANT_BOUNDED_SEARCH_WINDOW : limit,
           page: 1,
         });
 
@@ -1028,7 +1080,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         }
 
         return c.json(
-          docs.map((d) => entityToWire(d)),
+          docs.slice(0, limit).map((d) => entityToWire(d)),
           200
         );
       }

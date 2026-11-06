@@ -65,6 +65,7 @@
 // `../ask/index.js`): this rule is in the graph of the `connections` leaf
 // that relay loads (guard: `relay-leaves.bare-free.test.ts`).
 import { askEndsWithSession } from "../ask/ends-with-session.js";
+import { isSetAside } from "./set-aside.js";
 import type { AskCardSlot } from "../ask/card.js";
 import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
 import { deliverableOwedBy } from "../units/deliverable.js";
@@ -185,6 +186,13 @@ export interface NeedsYouSlotFacts {
   kind?: unknown;
   blockedReason?: unknown;
   keptOwedAt?: unknown;
+  /**
+   * The person set this ask aside until then ("Later", `ask-later.ts` in the
+   * pod; founder decision 9bc9f75c): Review later until that instant, back on
+   * its own after it. Same act as a request's Later (`proposal_snoozes`), kept
+   * on the slot because an owed ask has exactly one person.
+   */
+  laterUntil?: unknown;
 }
 
 /** The session facts the rule reads, measured by the pod in one batched read. */
@@ -370,6 +378,9 @@ export function classifyOwedAsk(
   if (!isOwed(slot)) return null;
   if (!needsYouHasRealAsker(slot)) return "from_system";
   const at = now instanceof Date ? now.getTime() : now;
+  // The person's own Later wins until its time, like a request's
+  // (`classifyPendingProposal`): they chose to look at it then.
+  if (isSetAside(slot.laterUntil, at)) return "review_later";
   const live = needsYouSessionClass(session, at);
   const blocksPr = session.blocksOpenPr === true;
   if (live === "stopped") {

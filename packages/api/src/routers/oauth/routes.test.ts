@@ -33,6 +33,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  GRANT_SUBJECT_CATALOG,
+  assertPermissions,
+} from "@synap-core/types/grants";
 
 // ─── In-memory store standing in for Postgres ────────────────────────────────
 
@@ -45,6 +49,8 @@ interface CodeRow {
   codeChallenge: string;
   resource?: string | null;
   appId?: string | null;
+  authTime?: Date | null;
+  stepUp?: boolean;
   expiresAt: Date;
   consumedAt: Date | null;
 }
@@ -144,6 +150,8 @@ vi.mock("@synap/database", async () => {
                     codeChallenge: row.codeChallenge,
                     resource: row.resource ?? null,
                     appId: row.appId ?? null,
+                    authTime: row.authTime ?? null,
+                    stepUp: row.stepUp ?? false,
                   },
                 ]);
               },
@@ -304,6 +312,27 @@ vi.mock("./client-metadata.js", async () => {
   };
 });
 
+// The ONE device mint door (person-device-token.ts). It runs for real on
+// PGlite in services/person-device-token.pglite.test.ts; here spies, so this
+// file pins WHICH client /token sends to it, and that no other door mints.
+const deviceDoor = vi.hoisted(() => ({
+  signIn: vi.fn(),
+  refresh: vi.fn(),
+  stepUp: vi.fn(),
+}));
+vi.mock("../../services/person-device-token.js", () => ({
+  signInPersonDevice: (args: unknown) => deviceDoor.signIn(args),
+  refreshPersonDevice: (args: unknown) => deviceDoor.refresh(args),
+  stepUpPersonDevice: (args: unknown) => deviceDoor.stepUp(args),
+}));
+
+// The presence gate (W3 slice 2): its own suite is presence.pglite.test.ts.
+// Here a spy, so a test can read WHAT the consent asked it to prove.
+const presenceGate = vi.hoisted(() => vi.fn(async (_args: unknown) => {}));
+vi.mock("../../services/presence/gate.js", () => ({
+  assertPresenceForRequest: (args: unknown) => presenceGate(args),
+}));
+
 // One shared logger so a test can assert what the routes WARNED about.
 const log = vi.hoisted(() => ({
   info: vi.fn(),
@@ -320,6 +349,7 @@ import { oauthApp } from "./routes.js";
 import { computeS256Challenge } from "./protocol.js";
 import { decideOAuthAuthorization, getOAuthConsentContext } from "./consent.js";
 import { renderAuthorizeRefusalPage } from "./refusal-page.js";
+import { oauthConsentId } from "@synap-core/types/presence";
 
 const ISSUER = "https://pod.test.synap.live";
 const POD_ADMIN = "https://pod-admin.test.synap.live";
@@ -344,6 +374,8 @@ beforeEach(() => {
   store.cimd.clear();
   podAppPolicy.allowUnverified = true;
   log.warn.mockClear();
+  presenceGate.mockReset();
+  presenceGate.mockResolvedValue(undefined);
   revokeSpy.mockReset();
   claimWhere.length = 0;
   store.users.set(HUMAN_ID, { id: HUMAN_ID, userType: "human" });
@@ -358,6 +390,7 @@ beforeEach(() => {
   appConnect.isPodAppAgent.mockReset();
   appConnect.isPodAppAgent.mockResolvedValue(false);
   for (const spy of Object.values(refresh)) spy.mockReset();
+  for (const spy of Object.values(deviceDoor)) spy.mockReset();
   refresh.start.mockResolvedValue("RT-1");
   refresh.find.mockResolvedValue(null);
   provisionSpy.mockReset();
@@ -439,6 +472,24 @@ describe("discovery metadata", () => {
     expect(doc.token_endpoint).toBe(`${ISSUER}/token`);
     expect(doc.registration_endpoint).toBe(`${ISSUER}/register`);
     expect(doc.code_challenge_methods_supported).toEqual(["S256"]);
+  });
+
+  it("advertises the permissions a pod app may request, from the grant catalog", async () => {
+    const res = await oauthApp.request(
+      "/.well-known/oauth-authorization-server"
+    );
+    const doc = (await res.json()) as any;
+    expect(doc.synap_app_permissions).toEqual(
+      GRANT_SUBJECT_CATALOG.flatMap((s) =>
+        s.actions.map((a) => `${s.subject}.${a}`)
+      )
+    );
+    expect(doc.synap_app_permissions).toContain("entity.read");
+    // `scope` values stay the narrowed set the server accepts, no permission
+    // names: `mcp.*`, and `person` (a client that signs a person in).
+    expect(doc.scopes_supported).toEqual(["mcp.read", "mcp.write", "person"]);
+    // Every advertised permission is one the CIMD parser accepts.
+    expect(() => assertPermissions(doc.synap_app_permissions)).not.toThrow();
   });
 
   it("canonicalizes a PUBLIC_URL with a trailing slash", async () => {
@@ -712,6 +763,59 @@ describe("consent decision", () => {
     // The consenting human is bound to the code — this is what becomes
     // linkedUserId at /token.
     expect(row.userId).toBe(HUMAN_ID);
+  });
+});
+
+describe("consent decision — proof of presence (W3 slice 2)", () => {
+  const approveBody = (clientId: string) => ({
+    clientId,
+    redirectUri: CALLBACK,
+    responseType: "code",
+    scope: "mcp.read mcp.write",
+    codeChallenge: CHALLENGE,
+    codeChallengeMethod: "S256",
+    state: "st-9",
+    approve: true,
+  });
+
+  it("an AI client's Allow asks for a proof bound to THIS authorization, as the browser names it", async () => {
+    const { body: client } = await register();
+    await consentAndExtractCode(client.client_id, "st-9");
+    expect(presenceGate).toHaveBeenCalledTimes(1);
+    // The id the consent screen computes from the authorize URL it shows.
+    const id = await oauthConsentId({
+      clientId: client.client_id,
+      redirectUri: CALLBACK,
+      codeChallenge: CHALLENGE,
+      state: "st-9",
+    });
+    expect(presenceGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: HUMAN_ID,
+        kind: "oauth_consent",
+        id,
+        proof: null,
+        door: "oauth.consent",
+      })
+    );
+  });
+
+  it("a refused proof mints no code", async () => {
+    const { body: client } = await register();
+    presenceGate.mockRejectedValueOnce(new Error("PRESENCE_REQUIRED"));
+    await expect(
+      decideOAuthAuthorization(approveBody(client.client_id), HUMAN_ID)
+    ).rejects.toThrow(/PRESENCE_REQUIRED/);
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("Deny asks for no proof", async () => {
+    const { body: client } = await register();
+    await decideOAuthAuthorization(
+      { ...approveBody(client.client_id), approve: false },
+      HUMAN_ID
+    );
+    expect(presenceGate).not.toHaveBeenCalled();
   });
 });
 
@@ -2956,5 +3060,210 @@ describe("consent carries synap_requests[].reason as app.permissions[i].reason",
       HUMAN_ID
     );
     expect(context.app!.permissions.map((p) => p.reason)).toEqual([null, null]);
+  });
+});
+
+// ─── `person`: an app registered by its document signs a person in ──────────
+//
+// Founder decision 2026-11-05: no app id in pod code. A client whose metadata
+// document declares `person` takes the device sign-in (the one mint door,
+// person-device-token.ts), with its native redirects; every other client
+// keeps its own path. Rows chosen where the old and new rules DISAGREE: an
+// ephemeral loopback port (exact-match refuses it), a code redeemed at
+// /token (the old resolver read the row as an MCP client and minted an agent
+// key), and a refresh (the old resolver sent it to the pod-app family).
+
+describe("person — a document declaring it signs a person in on a device", () => {
+  const NATIVE_ID = "https://apps.example.com/oauth/clients/desktop.json";
+  const DECLARED = "http://127.0.0.1/oauth/callback";
+  const EPHEMERAL = "http://127.0.0.1:53999/oauth/callback";
+  const DEVICE_TOKENS = {
+    ok: true,
+    deviceId: "device-1",
+    accessToken: "synap_pd_ACCESS",
+    accessExpiresAt: new Date(Date.now() + 3600_000),
+    refreshToken: "RT-device",
+  };
+
+  function cacheNative(overrides: Record<string, unknown> = {}) {
+    const row = {
+      clientId: NATIVE_ID,
+      clientKind: "cimd",
+      clientName: "Example Desktop",
+      redirectUris: [DECLARED, "com.example.desktop:/oauth/callback"],
+      scopes: ["person"],
+      requestedPermissions: [],
+      createdAt: new Date(),
+      ...overrides,
+    };
+    store.cimd.set(NATIVE_ID, row);
+    // /token and refresh re-read the client from oauth_clients (the cache row).
+    store.clients.set(NATIVE_ID, row);
+  }
+
+  const authorizeNative = (redirectUri = EPHEMERAL) =>
+    oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: NATIVE_ID,
+        redirect_uri: redirectUri,
+        scope: "person",
+        state: "st-native",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+
+  async function nativeCode(approve = true) {
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: NATIVE_ID,
+        redirectUri: EPHEMERAL,
+        responseType: "code",
+        scope: "person",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        state: "st-native",
+        approve,
+      },
+      HUMAN_ID,
+      HUMAN_CTX
+    );
+    return new URL(redirectTo);
+  }
+
+  it("/authorize takes the declared loopback on ANY port, to the consent screen", async () => {
+    cacheNative();
+    const res = await authorizeNative();
+    expect(res.status).toBe(302);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.get("client_id")).toBe(NATIVE_ID);
+    expect(target.searchParams.get("redirect_uri")).toBe(EPHEMERAL);
+  });
+
+  it("its private-use scheme is taken exactly", async () => {
+    cacheNative();
+    const res = await authorizeNative("com.example.desktop:/oauth/callback");
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+
+  it("CONTROL — the same row WITHOUT `person` refuses the ephemeral port (shown, never redirected)", async () => {
+    cacheNative({ scopes: ["mcp.read"] });
+    const res = await authorizeNative();
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("the consent screen is the device sign-in, named by the document", async () => {
+    cacheNative();
+    const ctx = await getOAuthConsentContext(
+      {
+        clientId: NATIVE_ID,
+        redirectUri: EPHEMERAL,
+        responseType: "code",
+        scope: "person",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+      },
+      HUMAN_ID
+    );
+    expect(ctx).toMatchObject({
+      clientId: NATIVE_ID,
+      clientKind: "first_party",
+      clientName: "Example Desktop",
+      redirectHost: "127.0.0.1:53999",
+    });
+  });
+
+  it("/token sends the code to the device door, with this client — never an agent key", async () => {
+    cacheNative();
+    deviceDoor.signIn.mockResolvedValue(DEVICE_TOKENS);
+    const back = await nativeCode();
+    expect(back.searchParams.get("iss")).toBe(ISSUER);
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code: back.searchParams.get("code")!,
+      client_id: NATIVE_ID,
+      redirect_uri: EPHEMERAL,
+      code_verifier: VERIFIER,
+      synap_device_label: "Ada's laptop",
+    });
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({
+      access_token: "synap_pd_ACCESS",
+      token_type: "Bearer",
+      refresh_token: "RT-device",
+      synap_device_id: "device-1",
+    });
+    expect(deviceDoor.signIn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        personUserId: HUMAN_ID,
+        clientId: NATIVE_ID,
+        label: "Ada's laptop",
+      })
+    );
+    // Neither an MCP agent key nor a pod-app connection.
+    expect(provisionSpy).not.toHaveBeenCalled();
+    expect(appConnect.connect).not.toHaveBeenCalled();
+    expect(appConnect.mint).not.toHaveBeenCalled();
+  });
+
+  it("a wrong code_verifier gets nothing (PKCE holds for this client too)", async () => {
+    cacheNative();
+    const back = await nativeCode();
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code: back.searchParams.get("code")!,
+      client_id: NATIVE_ID,
+      redirect_uri: EPHEMERAL,
+      code_verifier: "y".repeat(64),
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(deviceDoor.signIn).not.toHaveBeenCalled();
+  });
+
+  it("a person who declines gets no code, and nothing can be minted", async () => {
+    cacheNative();
+    const back = await nativeCode(false);
+    expect(back.searchParams.get("error")).toBe("access_denied");
+    expect(back.searchParams.get("code")).toBeNull();
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("its refresh is the device's refresh, bound to this client", async () => {
+    cacheNative();
+    deviceDoor.refresh.mockResolvedValue(DEVICE_TOKENS);
+    const { res, body } = await token({
+      grant_type: "refresh_token",
+      refresh_token: "RT-device",
+      client_id: NATIVE_ID,
+    });
+    expect(res.status).toBe(200);
+    expect(body.synap_device_id).toBe("device-1");
+    expect(deviceDoor.refresh).toHaveBeenCalledWith({
+      refreshToken: "RT-device",
+      clientId: NATIVE_ID,
+    });
+    // Never the pod-app refresh family.
+    expect(refresh.redeem).not.toHaveBeenCalled();
+  });
+
+  it("CONTROL — a pod app's refresh never reaches the device door", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    refresh.redeem.mockRejectedValue(
+      Object.assign(new Error("Invalid refresh token"), {
+        code: "invalid_grant",
+      })
+    );
+    await token({
+      grant_type: "refresh_token",
+      refresh_token: "RT-app",
+      client_id: APP_ID,
+    });
+    expect(deviceDoor.refresh).not.toHaveBeenCalled();
   });
 });

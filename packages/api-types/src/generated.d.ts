@@ -621,6 +621,11 @@ export interface UnitStateView {
 }
 declare const AGENT_HARNESSES: readonly [
 	{
+		readonly cliTarget: "claude-code";
+		readonly doors: readonly [
+			"account",
+			"pod"
+		];
 		readonly label: "Claude Code";
 		readonly launch: {
 			readonly modelFlag: "--model";
@@ -634,21 +639,38 @@ declare const AGENT_HARNESSES: readonly [
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "claude-desktop";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Claude Desktop";
 		readonly slug: "claude-desktop";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "cursor";
+		readonly doors: readonly [
+			"account",
+			"pod"
+		];
 		readonly label: "Cursor";
 		readonly slug: "cursor";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "raycast";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Raycast";
 		readonly slug: "raycast";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "codex";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Codex";
 		readonly launch: {
 			readonly modelFlag: "--model";
@@ -658,56 +680,101 @@ declare const AGENT_HARNESSES: readonly [
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "openwebui";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Open WebUI";
 		readonly slug: "openwebui";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: null;
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Discord";
 		readonly slug: "discord";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: null;
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Proton";
 		readonly slug: "proton";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "generic";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Generic";
 		readonly slug: "generic";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "chatgpt";
+		readonly doors: readonly [
+			"account",
+			"pod"
+		];
 		readonly label: "ChatGPT";
 		readonly slug: "chatgpt";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "opencode";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "OpenCode";
 		readonly slug: "opencode";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "windsurf";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Windsurf";
 		readonly slug: "windsurf";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "goose";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Goose";
 		readonly slug: "goose";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "zed";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Zed";
 		readonly slug: "zed";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "vscode";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "VS Code";
 		readonly slug: "vscode";
 		readonly surface: true;
 	},
 	{
+		readonly cliTarget: "grok";
+		readonly doors: readonly [
+			"pod"
+		];
 		readonly label: "Grok";
 		readonly slug: "grok";
 		readonly surface: true;
@@ -728,6 +795,19 @@ export interface AgentConversationRef {
 	 * from a validated id, so it is safe to show and copy as-is.
 	 */
 	resumeCommand: string;
+}
+/** Harnesses a person can start with a command (the registry's `launch`). */
+export type AgentLaunchHarness = Extract<(typeof AGENT_HARNESSES)[number], {
+	launch: unknown;
+}>["slug"];
+export interface AgentLaunchRef {
+	harness: AgentLaunchHarness;
+	/**
+	 * The shell command that opens a new conversation, on the agent's computer.
+	 * Rendered by the pod from the registry's template and validated values
+	 * only, so it is safe to show and copy as-is.
+	 */
+	command: string;
 }
 declare const MODEL_PROVIDERS: readonly [
 	{
@@ -788,6 +868,114 @@ export interface SessionPostRef {
 	id: string;
 	/** For `slot`: the slot's declared label. */
 	label?: string;
+}
+declare const AGENT_WAKE_STATES: readonly [
+	"awake",
+	"can_wake",
+	"cant_wake"
+];
+export type AgentWakeState = (typeof AGENT_WAKE_STATES)[number];
+declare const AGENT_WAKE_HOWS: readonly [
+	"built_in",
+	"binding",
+	"runner"
+];
+export type AgentWakeHow = (typeof AGENT_WAKE_HOWS)[number];
+declare const AGENT_WAKE_REFUSALS: readonly [
+	"paused",
+	"binding_broken",
+	"no_template",
+	"no_template_wake",
+	"no_computer",
+	"no_waker",
+	"computer_offline",
+	"wakes_off"
+];
+export type AgentWakeRefusal = (typeof AGENT_WAKE_REFUSALS)[number];
+export interface AgentWake {
+	state: AgentWakeState;
+	/** What gets it working; `null` when nothing could (no template wake). */
+	how: AgentWakeHow | null;
+	/** Only when `cant_wake`. */
+	why: AgentWakeRefusal | null;
+}
+/**
+ * The agent template an agent is an instance of. `version` is the catalog
+ * version the pod installed it at; `null` = built in (not installed from the
+ * catalog).
+ */
+export interface AgentTemplateRef {
+	slug: string;
+	label: string;
+	version: string | null;
+}
+/** What a person can choose: Synap AI, or one of their agents. */
+export type RunChoice = {
+	executor: "is-agent";
+} | {
+	agentUserId: string;
+	executor: "external-agent";
+};
+declare const RUN_CHOICE_VIAS: readonly [
+	"named",
+	"stored",
+	"fallback",
+	"default"
+];
+export type RunChoiceVia = (typeof RUN_CHOICE_VIAS)[number];
+/**
+ * What the pod decided for one run, recorded on it (`playbook_runs.run_on`).
+ * `agentUserId` is the agent that took it; `null` = Synap AI, or, for a
+ * playbook that only runs on agents, the executor's own pick.
+ */
+export interface RunOn {
+	executor: "external-agent" | "hybrid" | "is-agent";
+	agentUserId: string | null;
+	via: RunChoiceVia;
+	/** Only `fallback`: the remembered agent, and why it could not take it. */
+	passedOver: {
+		agentUserId: string;
+		name: string | null;
+		why: AgentWakeRefusal | "not_awake" | "refused";
+	} | null;
+}
+/** One answer the person can pick, in the order the pod offers them. */
+export interface RunChoiceOption {
+	choice: RunChoice;
+	/** The agent's name; `null` for Synap AI (the vocabulary says its name). */
+	name: string | null;
+	/**
+	 * The words a surface shows for it, drawn by the pod through the vocabulary
+	 * door (`SYNAP_AI_LABEL`, the agent's name), so an app with no copy of the
+	 * vocabulary never writes its own.
+	 */
+	label: string;
+	/** Its wake mark; `null` for Synap AI (always awake, the pod runs it). */
+	wake: AgentWake | null;
+	/**
+	 * The line under it: an agent's mark ("Can't wake · Computer offline"), or
+	 * how Synap AI runs ("Runs in Synap").
+	 */
+	wakeLabel: string | null;
+	/** At most one: Synap AI when the playbook allows it, else none. */
+	recommended: boolean;
+}
+/** `playbooks.runChoice` / Hub `GET /playbooks/:id/run-choice`. */
+export interface PlaybookRunChoice {
+	playbookId: string;
+	/** The person's remembered choice; `null` = never chosen. */
+	stored: RunChoice | null;
+	/**
+	 * Ask before the run: nothing is stored AND the person has an agent that
+	 * could take it, so there is a real choice. A launch that asks passes its
+	 * answer with `remember: true`; headless runs never ask.
+	 */
+	ask: boolean;
+	/** Synap AI may run it (`executor` is `is-agent` or `hybrid`). */
+	synapAiAllowed: boolean;
+	options: RunChoiceOption[];
+	/** What the next run would do, by the same rule the run uses. */
+	next: RunOn;
 }
 export type AgentDirection = "external" | "house";
 /**
@@ -943,6 +1131,13 @@ export interface AgentMetadata {
 	 * here so a re-enrolment (device flow) mints the new key with the same scope.
 	 */
 	runsScripts?: boolean;
+	/**
+	 * How many pushes a day this agent's work may send its person (founder
+	 * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
+	 * only by `agentUsers.setPushLimit`; read by the push producer
+	 * (`push-decision.ts` rule 4b).
+	 */
+	pushDailyLimit?: number;
 }
 /**
  * Shared provenance vocabulary for the uniform `created_by_kind` column added
@@ -1019,6 +1214,13 @@ declare const GOAL_CONVERTIBLE_KINDS: readonly [
 	"okr"
 ];
 export type GoalConvertibleKind = (typeof GOAL_CONVERTIBLE_KINDS)[number];
+declare const NEEDS_YOU_PRIORITIES: readonly [
+	"P0",
+	"P1",
+	"P2",
+	"P3"
+];
+export type NeedsYouPriority = (typeof NEEDS_YOU_PRIORITIES)[number];
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
@@ -3860,6 +4062,15 @@ export type SkillKind = "builtin" | "code" | "declarative" | "instruction";
 export type ProviderVerbSpec = {
 	baseUrlOverride?: string;
 	body?: Record<string, unknown>;
+	/**
+	 * The name of ONE call parameter whose object value is passed through whole:
+	 * merged over `body` for a POST/PUT/PATCH, and form-encoded into the query
+	 * string (bracket nesting) for a GET/HEAD/DELETE. For a generic verb whose
+	 * fields are the provider's own (e.g. Stripe's `stripe_api_write`), where
+	 * `body`'s fixed keys cannot name them. A JSON-object string is accepted; any
+	 * other value is refused before the call.
+	 */
+	bodyFrom?: string;
 	expand?: {
 		/** Bounded parallelism for the detail fan-out (default 5). */
 		concurrency?: number;
@@ -3896,7 +4107,13 @@ export type ProviderVerbSpec = {
 		clampMax?: number;
 		clampMin?: number;
 		default?: unknown;
-		encode?: "uri";
+		/**
+		 * How the value enters `pathTemplate`. `"uri"`: one segment, fully
+		 * percent-encoded (an id). `"path"`: a relative path of several
+		 * segments, each encoded, an empty / "." / ".." segment refused (a
+		 * generic verb's resource path stays under the template's prefix).
+		 */
+		encode?: "path" | "uri";
 		required?: boolean;
 	}>;
 	/** Path with `{{param}}` interpolation, e.g. "/calendar/v3/calendars/{{calendarId}}/events". */
@@ -7988,18 +8205,6 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * and its sub-goals are listed as `children`.
  */
  | "serves";
-/**
- * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
- *
- * RUNTIME (not config, not entity DATA). A playbook_run is one execution of a
- * Playbook: created when `runPlaybook` dispatches a playbook to its executor
- * (`is-agent` | `external-agent` | `hybrid`). It links the config (`playbook_id`)
- * to the runtime (`session_id`) and records status/summary/error as the executor
- * reports back (capture-back via the Hub `POST /runs/:id/capture` route).
- *
- * Part of the Playbooks & Capability Substrate
- * (team/platform/playbooks-capability-substrate.mdx §4.3-4.4).
- */
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "hybrid" | "is-agent";
 /**
@@ -8351,6 +8556,15 @@ export interface LinkedMessageItem {
 	message: LinkedMessagePreview;
 }
 /**
+ * A property key the caller wrote that the profile does not model.
+ * Reported, never rejected — see `ValidationResult.unmodeled`.
+ */
+export interface UnmodeledProperty {
+	key: string;
+	/** Closest VALID property slug, when one is close enough to be a likely typo. */
+	didYouMean?: string;
+}
+/**
  * One field a profile MODELS, as a writer needs it before the write: the key,
  * its type and the constraints `validateConstraints` below enforces. Without
  * it an agent told "`price` is unmodeled" could only guess what IS modelled
@@ -8515,6 +8729,33 @@ export type ObjectRoomType = (typeof OBJECT_ROOM_CONTEXT_TYPES)[number];
  *   - `ended`     — it had grants and none is live: it may touch NOTHING.
  */
 export type KeyAccess = "ended" | "granted" | "ungranted";
+declare const COMPUTER_BELONGS_TO: readonly [
+	"person",
+	"agent",
+	"shared"
+];
+export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
+/**
+ * Where a run ran, DERIVED at read time from what already exists (a box run's
+ * lease, a session's runner row, an agent's computer, an agent's reach), never
+ * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
+ *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
+ *     an agent the pod runs);
+ *   - `computer`: a computer ran it — `computer` names it;
+ *   - `outside`: an agent outside the pod with no computer of record.
+ * `null` on the run = nothing records where (a box run still queued, a session
+ * nobody worked yet): unknown, never "the pod".
+ */
+export type RunWhereKind = "computer" | "outside" | "pod";
+export interface RunWhere {
+	kind: RunWhereKind;
+	/** Set when `kind` is `computer`. */
+	computer: {
+		belongsTo: ComputerBelongsTo | null;
+		id: string;
+		name: string;
+	} | null;
+}
 declare const CONNECTION_NOTIFY_LEVELS: readonly [
 	"everything",
 	"problems",
@@ -10443,6 +10684,12 @@ export interface AgentMatrix {
 		columnsOmitted: number;
 	};
 }
+declare const ACTION_RUN_MODES: readonly [
+	"auto",
+	"ask",
+	"never"
+];
+export type ActionRunMode = (typeof ACTION_RUN_MODES)[number];
 declare const PACKAGE_FIELD_STATES: readonly [
 	"updates",
 	"yours",
@@ -10542,6 +10789,79 @@ export interface PackageDataChange {
 	affected: number | null;
 	/** Never run by an update: an operator step. */
 	destructive: boolean;
+	/**
+	 * What changes, drawn as before → after (finding 4e4b2858). Absent when the
+	 * op has no from → to shape, or its dry run failed: `sentence` then says it.
+	 */
+	preview?: DataChangePreview;
+}
+/**
+ * A name the pod shows for a kind slug, a field key or a stored value: its
+ * label (the profile's display name, the property def's label, the option's
+ * label), else the raw token. `key` is always the raw token.
+ */
+export interface DataChangeLabel {
+	key: string;
+	label: string;
+}
+/** A kind's name, with its plural for counts ("31 posts"). */
+export interface DataChangeKindLabel extends DataChangeLabel {
+	plural: string;
+}
+/** A capped list of record titles (the pod sends at most 25), and how many more. */
+export interface DataChangeSamples {
+	titles: string[];
+	more: number;
+}
+/** One side of a change: the kind, what on it is selected, how many. */
+export interface DataChangeSide {
+	kind: DataChangeKindLabel;
+	/** The status the records sit at, or the field the change reads or writes. */
+	detail: {
+		as: "field" | "status";
+		label: DataChangeLabel;
+	} | null;
+	count: number;
+}
+/**
+ * Records the change looks at and leaves as they are, grouped by why.
+ * `fieldsSet`: they already hold a value under each of `fields` (a post
+ * already dated, in a series and a campaign stays a post).
+ */
+export interface DataChangeKeptGroup {
+	reason: "fieldsSet";
+	fields: DataChangeLabel[];
+	count: number;
+	samples: DataChangeSamples;
+}
+declare const DATA_CHANGE_PREVIEW_KINDS: readonly [
+	"rekind",
+	"renameField",
+	"renameKind",
+	"translateValues"
+];
+export type DataChangePreviewKind = (typeof DATA_CHANGE_PREVIEW_KINDS)[number];
+/**
+ * One data change as before → after. `from.count` records change (the
+ * engine's own dry-run count); `kept.count` more are looked at and left as
+ * they are, so `from.count + kept.count` is everything the change looked at.
+ */
+export interface DataChangePreview {
+	change: DataChangePreviewKind;
+	from: DataChangeSide;
+	to: DataChangeSide;
+	/** Titles of the records that change. */
+	samples: DataChangeSamples;
+	/** translateValues only: each old value, the new one, and how many hold it. */
+	values?: Array<{
+		count: number;
+		from: DataChangeLabel;
+		to: DataChangeLabel;
+	}>;
+	kept: {
+		count: number;
+		groups: DataChangeKeptGroup[];
+	} | null;
 }
 /** One compared field of one installed row. */
 export interface PackageUpdateField {
@@ -12139,13 +12459,14 @@ declare const AI_FAILURE_CODES: readonly [
 	"rate_limited",
 	"timeout",
 	"circuit_open",
+	"entitlement_unavailable",
 	"upstream_error",
 	"bad_request",
 	"invalid_response",
 	"unknown"
 ];
 export type AiFailureCode = (typeof AI_FAILURE_CODES)[number];
-export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
+export type AiFailureClass = "access_suspended" | "account_inactive" | "account_quota" | "auth" | "bad_request" | "budget" | "cancelled" | "circuit" | "content_filter" | "context_length" | "credits_empty" | "entitlement_unavailable" | "invalid_response" | "not_entitled" | "plan_quota" | "quota" | "rate_limit" | "timeout" | "unknown" | "upstream";
 /**
  * A COMMITTED PARTIAL turn — the client-shaped verdict.
  *
@@ -12582,11 +12903,13 @@ export interface KnownSourceHash {
  * An intent term is weighted by how RARE it is in THIS candidate pool, using
  * the pod's ONE IDF formula (`rarityWeight`, `utils/term-match.ts`). Measured
  * defect it fixes: the intent "design and build a feature … fix MCP discovery
- * gaps" ranked "CRM Hygiene" first on the words "agent" and "each" — "each"
- * sits in 7 of the 20 live candidates — and the flat 3-points-per-word sum tied it with
- * "AI Dev Session" (which alone says "build"), the tie then going to whichever
- * was edited last. A word most candidates share is weak evidence; a word only
- * one candidate has is strong evidence. The pool is whatever the caller
+ * gaps" ranked "CRM Hygiene" first on generic words shared by many candidates
+ * ("agent", "each": "each" sat in 7 of the 20 live candidates) — and the flat
+ * 3-points-per-word sum tied it with "AI Dev Session" (which alone says
+ * "build"), the tie then going to whichever candidate was edited last. The most generic of those words are now
+ * stopped outright (`GENERIC_WORK_WORDS`, this ranker only); rarity weighs the
+ * rest. A word most candidates share is weak evidence; a word only one
+ * candidate has is strong evidence. The pool is whatever the caller
  * passes, so pass it AFTER every gate (rows a caller cannot see must never
  * move the ranking — same rule as `rankByTerms`).
  *
@@ -12860,6 +13183,20 @@ export interface SubmitCaptureGraphResult {
 	 * can have failed. Omitted when nothing failed.
 	 */
 	relationsFailed?: MaterializeRelationFailure[];
+	/**
+	 * The agent is not a member of a space this graph lands in, so NOTHING was
+	 * written: the whole graph is kept on that space's workspace-JOIN request
+	 * (`proposalId` names the join) and replayed, all of it, as the agent once a
+	 * person approves the join (finding 590ca76a). `deferred: false` when the
+	 * join could not keep it (the agent retries after approval). Omitted
+	 * otherwise.
+	 */
+	joinGate?: {
+		deferred: boolean;
+		message: string;
+		proposalId: string;
+		ref?: string;
+	};
 	writeReceipt: {
 		/** applied path only: fresh-created vs linked-existing counts + ids. */
 		created?: number;
@@ -13023,6 +13360,16 @@ export interface UpdateEntitiesResult {
 		id: string;
 		proposalId?: string;
 		reason: string;
+	}>;
+	/**
+	 * Present ONLY when an applied item sent property keys its kind does not
+	 * model (finding c161fd43): stored verbatim, not queryable, each with an
+	 * optional `didYouMean`. The item is still in `applied`; these keys are
+	 * what it wrote OUTSIDE the kind's schema.
+	 */
+	unmodeledProperties?: Array<{
+		id: string;
+		unmodeled: UnmodeledProperty[];
 	}>;
 }
 export type PromotePropertyToBodyResult = {
@@ -13457,6 +13804,15 @@ export interface ExpectedOutput {
 	 */
 	answerPickedUpAt?: string;
 	/**
+	 * The person set this owed ask aside until then ("Later", founder decision
+	 * 9bc9f75c): Review later for them until that instant, back on its own
+	 * after it (`isSetAside`, `@synap-core/types/needs-you`). SERVER-STAMPED by
+	 * the Later door only (api `ask-later.ts`), never by a client or an agent.
+	 * ISO timestamp. Cleared by the door's Undo; an answer or a hand-back makes
+	 * the slot no longer owed, so a stale one is read by nobody.
+	 */
+	laterUntil?: string;
+	/**
 	 * A relayed answer to a `commitment` ask, waiting for the person's tap — see
 	 * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
 	 * slot stays owed (`owner: 'human'`) while it is here, and the person's
@@ -13606,6 +13962,9 @@ export type SlotAsk = ({
 	mode: "provide";
 	provide: SlotAskProvide;
 }) & {
+	answerBy?: string;
+	consequence?: string;
+	dedupeKey?: string;
 	/**
 	 * "What I looked at" (trust ladder rung 1, a PREPARED question): at most 8
 	 * objects the agent read before asking. Stored as `{kind, id}` — the agent's
@@ -13614,6 +13973,7 @@ export type SlotAsk = ({
 	 * the viewer's access floor; a ref the viewer cannot see is dropped there.
 	 */
 	lookedAt?: SlotAskLookedAt[];
+	reversible?: boolean;
 	/** How much is at stake: high and medium draw a mark, low draws nothing. */
 	risk?: "high" | "low" | "medium";
 	/**
@@ -13623,7 +13983,17 @@ export type SlotAsk = ({
 	 * waits for the person's tap.
 	 */
 	stakes?: SlotAskStakes;
+	/**
+	 * The TICKET fields (mirror of `ticketFields`, `@synap-core/types/ask`):
+	 * the asker's urgency HINT (it only lowers the pod-derived priority), the
+	 * instant the answer is needed by (ISO-8601 with offset), what the answer
+	 * does and whether that can be undone, and the asker's own dedupe handle
+	 * (same asker + same key = the same open ask, updated).
+	 */
+	urgency?: SlotAskUrgency;
 };
+/** Mirrors `ASK_URGENCIES` (@synap-core/types/ask). */
+export type SlotAskUrgency = "today" | "whenever";
 /** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
 export type SlotAskStakes = "commitment" | "routine";
 /** One object an ask cites as read. Mirrors `AskLookedAtRef` (@synap-core/types/ask). */
@@ -14075,6 +14445,16 @@ export type BranchTreeNode = {
 	channel: Channel;
 	children: BranchTreeNode[];
 };
+/** The object a conversation belongs to: an `/open/<type>/<id>` address. */
+export interface ChannelLinkedObject {
+	/** The open grammar's kind (`session`, `entity`, `document`, `channel`, …). */
+	type: string;
+	id: string;
+	/** Its name, when the reader may read it; null otherwise. */
+	title: string | null;
+	/** Which rule found it. */
+	via: "context" | "parent" | "session_room";
+}
 export interface SearchResult {
 	id: string;
 	collection: string;
@@ -14208,33 +14588,6 @@ export interface SessionActivityWire {
 	live: SessionActivityLive;
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
-}
-declare const COMPUTER_BELONGS_TO: readonly [
-	"person",
-	"agent",
-	"shared"
-];
-export type ComputerBelongsTo = (typeof COMPUTER_BELONGS_TO)[number];
-/**
- * Where a run ran, DERIVED at read time from what already exists (a box run's
- * lease, a session's runner row, an agent's computer, an agent's reach), never
- * stored beside `executor`. Where CODE runs stays `skills.execution_mode`.
- *   - `pod`: the pod itself ran it (automations, captures, chat, a sync skill,
- *     an agent the pod runs);
- *   - `computer`: a computer ran it — `computer` names it;
- *   - `outside`: an agent outside the pod with no computer of record.
- * `null` on the run = nothing records where (a box run still queued, a session
- * nobody worked yet): unknown, never "the pod".
- */
-export type RunWhereKind = "computer" | "outside" | "pod";
-export interface RunWhere {
-	kind: RunWhereKind;
-	/** Set when `kind` is `computer`. */
-	computer: {
-		belongsTo: ComputerBelongsTo | null;
-		id: string;
-		name: string;
-	} | null;
 }
 /**
  * Which ledger a run came from.
@@ -15351,6 +15704,13 @@ export interface ProposalExecutorResult {
 	joined?: boolean;
 	approvalRun?: ApprovalRunView;
 }
+declare const PRESENCE_REFUSAL_CODES: readonly [
+	"PRESENCE_REQUIRED",
+	"PRESENCE_INVALID",
+	"PRESENCE_EXPIRED",
+	"PRESENCE_USED"
+];
+export type PresenceRefusalCode = (typeof PRESENCE_REFUSAL_CODES)[number];
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
@@ -16971,6 +17331,11 @@ export interface OwedSlot {
 	 */
 	keptOwedAt?: string;
 	/**
+	 * The person set it aside until then (`ExpectedOutput.laterUntil`): the
+	 * rule reads it as Review later until that instant (`isSetAside`).
+	 */
+	laterUntil?: string;
+	/**
 	 * A param slot's param (`ExpectedOutput.paramName`): what it asks the
 	 * person to set. Its cause is already on `askCause`; the name travels so a
 	 * surface hands the whole row to the card adapter (`askCardSlotOf`).
@@ -17077,7 +17442,30 @@ export interface LooseEnds {
 	} | Unavailable;
 	/** Its open sessions ready to close now (see {@link ReadyToClose}). */
 	readyToClose: ReadyToClose;
+	/** The things its ended sessions left open (see {@link LeftBehindSection}). */
+	leftBehind: LeftBehindSection;
 }
+/**
+ * The things the calling agent's ENDED sessions left behind: the session's
+ * subject or a target, still in an open or active status, with no session on
+ * it now. Newest-ended first; `count` is the whole population.
+ */
+export type LeftBehindSection = {
+	count: number;
+	items: Array<{
+		category: "active" | "open";
+		close: string;
+		closedAt: string;
+		entityId: string;
+		profileSlug: string | null;
+		sessionId: string;
+		/** How the session ended: closed, cancelled or failed. */
+		sessionStatus: string;
+		sessionTitle: string;
+		status: string | null;
+		title: string | null;
+	}>;
+} | Unavailable;
 /**
  * The calling agent's open sessions whose next move is `ready_to_close` — at
  * once, never idle-gated.
@@ -20714,7 +21102,40 @@ export interface RailPin {
 	label: string | null;
 	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
 	source: "template" | "user";
+	/**
+	 * A document pin only: the document's own title, read with the pin (the
+	 * same read that drops a document the person can no longer open), so a
+	 * client draws the pin without a read per document. Never stored.
+	 */
+	title?: string;
 }
+export type YourApp = {
+	/** `space:<workspaceId>`. */
+	key: string;
+	kind: "space";
+	name: string;
+	workspaceId: string;
+} | {
+	/** The rail pin key (`kind:<slug>` or `view:<viewId>`). */
+	key: string;
+	kind: "surface";
+	name: string;
+	profileSlug: string;
+	viewId: string | null;
+} | {
+	documentId: string;
+	/** The rail pin key (`doc:<documentId>`). */
+	key: string;
+	kind: "document";
+	name: string;
+} | {
+	entityId: string;
+	/** `website:<entityId>`. */
+	key: string;
+	kind: "website";
+	name: string;
+	url: string;
+};
 export type PublishResult = {
 	proposalId: string;
 	status: "proposed";
@@ -21126,6 +21547,89 @@ declare const ASSIGNMENT_TARGETS: readonly [
 	"workspace"
 ];
 export type AssignmentTarget = (typeof ASSIGNMENT_TARGETS)[number];
+/**
+ * Why a NAMED agent cannot take the work:
+ *   wrong_reach  the pod cannot hand it this work that way (an external agent
+ *                named for an IS turn, a pull agent named for a dispatch run);
+ *   not_owned    not the person's agent (dispatch / pod) or does not act for
+ *                them (pull);
+ *   not_member   the pool is a room and the agent is not in it;
+ *   paused       a person paused it.
+ */
+export type RouteRefusal = "not_member" | "not_owned" | "paused" | "wrong_reach";
+export interface HandoffComputer {
+	/** The computer's own principal; `null` when it is only a key label. */
+	agentUserId: string | null;
+	name: string;
+	/**
+	 * Whose computer it is (`users.computer_belongs_to`, 0388): `person`,
+	 * `agent` or `shared`. `null` when the computer is only a key label (no
+	 * principal holds the fact).
+	 */
+	belongsTo: ComputerBelongsTo | null;
+}
+/** What a hand-off from the calling agent would do right now. */
+export type HandOffPreview = "asks_you" | "blocked" | "direct";
+export interface HandoffAgent {
+	agentUserId: string;
+	name: string | null;
+	agentType: string | null;
+	computer: HandoffComputer | null;
+	reach: AgentReach;
+	/** What `route()` admits when a hand-off NAMES this agent for you. */
+	canTakeYourWork: boolean;
+	/** Why not, in `route()`'s words; `null` when it can. */
+	whyNot: RouteRefusal | null;
+	/**
+	 * pull: it called the pod within `PULL_LIVE_WINDOW_MS`; dispatch: its
+	 * binding resolves without an error; pod: the pod runs it itself.
+	 */
+	live: boolean;
+	paused: boolean;
+	lastSeenAt: string | null;
+	/**
+	 * The newest call a process RUNNING this agent made (`X-Synap-Runner`,
+	 * 0385); `null` = no runner ever said so. `live` does not read it yet.
+	 */
+	servedAt: string | null;
+	/**
+	 * A pull agent on a computer that nothing runs now: `true` = a runner served
+	 * it, but not within `PULL_LIVE_WINDOW_MS`; `false` = served within it;
+	 * `null` = not measured (no runner ever stamped any of its keys) or not
+	 * applicable (a dispatch or pod agent, or a pull agent on no computer):
+	 * `false` is never said of an agent nobody measured. A presence fact, never
+	 * a route refusal.
+	 */
+	nobodyRuns: boolean | null;
+	/**
+	 * The command that opens this agent on its `computer`, rendered by the pod
+	 * from its harness's launch template (`resolveAgentLaunch`); `null` when
+	 * its harness has none. Never a command an agent wrote.
+	 */
+	open: AgentLaunchRef | null;
+	/**
+	 * The agent template it is an instance of (`resolveAgentTemplate`); `null`
+	 * when its type names none. `version: null` = built in, not from the catalog.
+	 */
+	template: AgentTemplateRef | null;
+	/**
+	 * Can the pod get it working now (`deriveAgentWake`, THE wake rule): awake,
+	 * can_wake (with `how`), or cant_wake with the one reason. Until computers
+	 * can start agents (plan v2 slice 4) no computer is a waker, so a pull
+	 * agent nothing runs reads `cant_wake: no_waker`, never `can_wake`.
+	 */
+	wake: AgentWake;
+	/** direct = lands on the roster now; asks_you = the person approves first. */
+	handOff: HandOffPreview;
+	/** Why it asks or is blocked (the resolver's or the route's words). */
+	handOffReason: string | null;
+}
+export interface HandoffRoster {
+	agents: HandoffAgent[];
+	computers: Array<HandoffComputer & {
+		agents: number;
+	}>;
+}
 export interface SetAgentJobResult {
 	agentUserId: string;
 	role: string | null;
@@ -21183,6 +21687,14 @@ export interface AdminMachineView extends MachineView {
 	/** null = the approver's row is gone (or was never recorded). */
 	owner: MachineOwnerView | null;
 }
+export type PresenceMode = "enforce" | "report";
+export interface PresenceModeState {
+	mode: PresenceMode;
+	/** Where the mode comes from: the operator env floor, the pod setting, or the default. */
+	source: "default" | "env" | "setting";
+	changedBy: string | null;
+	changedAt: string | null;
+}
 type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
 export interface NextRungProjection {
 	proposalId: string;
@@ -21239,6 +21751,23 @@ export type RuleGrantResult = {
 	outcome: "needs_admin";
 	proposalId: string;
 };
+export interface ActionModeRow {
+	/** The action's name (the verb id). */
+	action: string;
+	mode: ActionRunMode;
+	/** The rule that sets it; `null` when it asks first (no rule). */
+	ruleId: string | null;
+	/** False for an action no rule may run on its own (a public post). */
+	mayRunOnItsOwn: boolean;
+}
+export interface WriteActionModeResult {
+	action: string;
+	mode: ActionRunMode;
+	/** The rule now setting it; `null` for "asks first". */
+	ruleId: string | null;
+	/** False when it was already set that way (nothing written). */
+	changed: boolean;
+}
 /**
  * The unified gov-config settings payload — the ONE door for AI/cron/human to
  * propose a change to `governance_rules` / `governance_ceilings` /
@@ -21499,8 +22028,10 @@ declare const PUSH_CATEGORIES: readonly [
 export type PushCategory = (typeof PUSH_CATEGORIES)[number];
 /**
  * How hard a push interrupts.
- *   `interruptive` — sound, banner, breaks through Focus when time-sensitive.
+ *   `interruptive` — sound and banner.
  *   `passive`      — lands silently in the notification list.
+ * Whether it also breaks through Focus is the `interruptionLevel`
+ * ({@link pushInterruptionLevel}).
  */
 export type PushLevel = "interruptive" | "passive";
 /** The iOS `interruptionLevel` Expo forwards (Expo push message field). */
@@ -22652,6 +23183,45 @@ export type SessionLiveness = {
 	reason: string;
 	status: "unavailable";
 };
+/**
+ * `via: "status_door"` — the write went through `moveStatus` (a declared
+ * lifecycle, kind or role), so it emits the transition the follow reads.
+ * Absent — the legacy plain-property `entities.update` fallback.
+ */
+export type StageSubjectStatusOutcome = {
+	property: string;
+	status: "written";
+	value: string;
+	via?: "status_door";
+} | {
+	property: string;
+	proposalId: string;
+	status: "proposed";
+	value: string;
+	via?: "status_door";
+} | {
+	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
+	status: "skipped";
+} | {
+	reason: string;
+	status: "failed";
+};
+export type SessionEndStatus = "cancelled" | "closed" | "failed";
+/** One thing the end tried to move, and what became of it. */
+export interface SessionEndMove {
+	entityId: string;
+	/** The session's subject, or a target still open at the close. */
+	as: "subject" | "target";
+	outcome: StageSubjectStatusOutcome;
+}
+/** What the close's end moves did, as the close result reports it. */
+export interface SessionEndMovesRecord {
+	/** The terminal status the session ended in. */
+	status: SessionEndStatus;
+	/** The value `onEnd[status]` names. */
+	value: string;
+	moves: SessionEndMove[];
+}
 export interface CancelRecordItem {
 	kind: "chat_turn" | "job" | "proposal";
 	id: string;
@@ -22826,6 +23396,13 @@ export interface SessionTwinCandidate {
 	 * or exactly 1 for a same-goal session at ANOTHER track stage (M3).
 	 */
 	score: number;
+}
+/** What a write did with each id. */
+export interface SessionTargetsWrite {
+	/** Newly working on these (a new edge, or an input edge promoted). */
+	added: string[];
+	/** Already targets of this session: nothing written. */
+	already: string[];
 }
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
@@ -23730,6 +24307,7 @@ export interface StartFirstSessionResult {
 }
 declare const START_STEP_IDS: readonly [
 	"start:intent",
+	"start:defaults",
 	"start:views",
 	"start:path",
 	"start:setup",
@@ -24666,6 +25244,22 @@ export interface Signal {
 	 */
 	needsYouClass?: NeedsYouClass;
 	/**
+	 * THE priority P0-P3 (`needsYouPriority`, `@synap-core/types/needs-you`),
+	 * DERIVED by the pod from the rule's class and, on an `owed-slot`, its ask's
+	 * `answerBy` (due within the hour = P0) and `urgency` (`whenever` only
+	 * lowers it). An agent never nominates it. On an `owed-slot` and on a
+	 * classified `proposal-cluster`; absent elsewhere.
+	 */
+	priority?: NeedsYouPriority;
+	/**
+	 * `proposal-cluster`: the kind of object the proposal acts on (the cluster's
+	 * `targetType`: "tool", a profile slug, ...), so the Inbox row wears that
+	 * kind's own icon instead of the same decision mark on every row. Absent when
+	 * the proposal names no target kind. A token, never a label: surfaces resolve
+	 * its glyph and noun through the vocabulary.
+	 */
+	subjectKind?: string;
+	/**
 	 * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
 	 * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
 	 */
@@ -24905,6 +25499,8 @@ export interface OwedSlotSignalInput {
 	pendingRelay?: SlotPendingRelay;
 	/** Kept owed past its session, straight from `listOwedSlots`. */
 	keptOwedAt?: string;
+	/** The person's Later on it, straight from `listOwedSlots` (the class reads it). */
+	laterUntil?: string;
 	/** A param slot's param, straight from `listOwedSlots`. */
 	paramName?: string;
 	/** Who asked and their name, straight from `listOwedSlots`. */
@@ -25291,6 +25887,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			opRef?: string | undefined;
 			path?: string;
 			pendingProposalId?: string | undefined;
+			proposalId?: string | undefined;
 			reasonCode?: string;
 			stack?: string;
 		};
@@ -25320,6 +25917,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25400,6 +25998,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25519,6 +26118,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25584,6 +26184,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25599,6 +26200,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				name: string;
 				podWide?: boolean | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				role?: "admin" | "editor" | "viewer" | undefined;
 				template?: "assistant" | "custom" | "twin" | undefined;
 				workspaceId?: string | undefined;
@@ -25683,6 +26306,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				pausedAt: Date | null;
 				pendingKeys: number;
 				pendingProposalId: string | null;
+				pushDailyLimit: number | null;
 				reach: "dispatch" | "pod" | "pull";
 				revokedKeys: number;
 				role: string | null;
@@ -25710,6 +26334,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removedCount: number;
 				revokedKeyCount: number;
 			};
+		}>;
+		roster: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: HandoffRoster;
 		}>;
 		setAssignment: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -25768,11 +26397,44 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				agentUserId: string;
 				posture: "ask-first" | "create-with-undo" | null;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
 				posture: "ask-first" | "create-with-undo" | null;
 				status: "updated";
+			};
+		}>;
+		setPushLimit: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				agentUserId: string;
+				dailyLimit: number | null;
+			};
+			meta: object;
+			output: {
+				agentUserId: string;
+				pushDailyLimit: number | null;
 			};
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
@@ -25787,6 +26449,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilities?: string[] | undefined;
 				description?: string | undefined;
 				name?: string | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				role?: "admin" | "editor" | "viewer" | undefined;
 				workspaceId: string;
 				writesRequireProposal?: boolean | undefined;
@@ -25822,6 +26506,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -25978,6 +26663,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26091,6 +26777,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26238,6 +26925,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26259,6 +26947,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				keyName: string;
 				note?: string | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				scope?: string[] | undefined;
 				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 				workspaceId: string;
@@ -26334,6 +27044,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		beginMcpConnect: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentType: "claude-web";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				scopes?: string[] | undefined;
 			};
 			meta: object;
@@ -26353,6 +27085,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceIds?: string[] | undefined;
 				} | undefined;
 				integration: "cli" | "custom" | "openclaw" | "raycast";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				redirectUri?: string | undefined;
 				strategy?: "create_new" | "replace_existing" | undefined;
 				workspaceId?: string | undefined;
@@ -26386,6 +27140,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				hubId?: string | undefined;
 				keyName: string;
 				note?: string | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				scope?: string[] | undefined;
 				templateId?: string | undefined;
 				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
@@ -26423,6 +27199,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				name: string;
 				note?: string | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				scopes?: string[] | undefined;
 				templateId?: string | undefined;
 				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
@@ -26457,6 +27255,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				keyName: string;
 				note?: string | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				scope?: string[] | undefined;
 				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
 			};
@@ -26484,6 +27304,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				belongsTo?: "agent" | "person" | "shared" | null | undefined;
 				computerName?: string | null | undefined;
 				decision: "approve" | "deny";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 				reuseComputerId?: string | null | undefined;
 				userCode: string;
@@ -26509,6 +27351,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					templateId?: string | null | undefined;
 					uses: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[];
 				} | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 			};
 			meta: object;
@@ -26529,6 +27393,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
 				maxAge?: string | number | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
@@ -26744,6 +27630,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		rotate: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				keyId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
@@ -26774,6 +27682,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceIds?: string[] | undefined;
 				}[];
 				keyId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -26802,6 +27732,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setMachineDefaults: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				keyTtlDays: number;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -26834,6 +27786,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -26844,6 +27797,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		approveRequest: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				requestId: string;
 			};
 			meta: object;
@@ -27055,6 +28030,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -27292,6 +28268,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		issueKey: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				publicId: string;
 			};
 			meta: object;
@@ -27457,6 +28455,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		setRedirectUris: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				publicId: string;
 				redirectUris: string[];
 			};
@@ -27497,6 +28517,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setSignInPolicy: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				personMayDecideOwnAgentProposals: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				publicId: string;
 			};
 			meta: object;
@@ -27536,6 +28578,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setWriteMode: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				applyAutomatically: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				publicId: string;
 			};
 			meta: object;
@@ -27563,6 +28627,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -27707,6 +28772,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -27767,6 +28833,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -28307,6 +29374,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -28345,6 +29413,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -28451,6 +29520,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -28610,6 +29680,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -28914,6 +29985,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -29150,6 +30222,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setToolEnabled: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				enabled: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				skillId: string;
 			};
 			meta: object;
@@ -29217,6 +30311,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30575,6 +31670,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30650,6 +31746,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30825,6 +31922,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30885,6 +31983,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -30949,6 +32048,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -31352,6 +32452,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} & {
 					objectName: string | null;
 				})[] | undefined;
+				linkedObject: ChannelLinkedObject | null;
 			};
 		}>;
 		getChannelContext: import("@trpc/server").TRPCQueryProcedure<{
@@ -32496,6 +33597,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -32610,6 +33712,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -32629,7 +33732,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		set: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				kind: "account" | "agent" | "app" | "channel" | "model" | "tool" | "webhook";
+				kind: "account" | "agent" | "app" | "channel" | "machine" | "model" | "tool" | "webhook";
 				notify?: "everything" | "nothing" | "problems" | undefined;
 				pinned?: boolean | undefined;
 			};
@@ -32661,6 +33764,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -32920,6 +34024,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				connectionId: string;
 				enabled: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -33040,6 +34166,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33102,6 +34229,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33115,12 +34243,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				clientId: string;
+				clientName: string | null;
 				createdAt: Date;
 				current: boolean;
 				expiresAt: Date;
 				id: string;
 				label: string | null;
 				lastUsedAt: Date | null;
+				runsOn: "computer" | "phone" | null;
 			}[];
 		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
@@ -33154,6 +34284,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33324,6 +34455,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33411,6 +34543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -33770,6 +34903,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -34826,6 +35960,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewUrl?: undefined;
 				status: string;
 				statusMove?: MoveStatusResult | undefined;
+				unmodeled?: UnmodeledProperty[] | undefined;
 				written: {
 					documentId: string | null;
 					preview: string | null;
@@ -34975,6 +36110,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -35167,6 +36303,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -35292,6 +36429,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -35488,6 +36626,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				triggered: boolean;
 			};
 		}>;
+		askLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				expectedLabel: string;
+				sessionId: string;
+				until: unknown;
+			};
+			meta: object;
+			output: {
+				label: string;
+				laterUntil: Date;
+				sessionId: string;
+			};
+		}>;
 		attachAgent: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentId: string;
@@ -35551,6 +36702,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		blockOutput: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				ask?: {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -35562,8 +36716,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						recommended?: boolean | undefined;
 					} | undefined;
 					prompt?: string | undefined;
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 					yes?: {
 						description?: string | undefined;
 						label?: string | undefined;
@@ -35571,6 +36727,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 				} | {
 					allowOther?: boolean | undefined;
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -35595,9 +36754,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						recommended?: boolean | undefined;
 						value?: string | undefined;
 					}[];
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					form: {
 						fields: {
 							constraints?: {
@@ -35620,19 +36784,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "form";
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
 					}[] | undefined;
 					mode: "act";
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
 					steps?: string[] | undefined;
+					urgency?: "today" | "whenever" | undefined;
 					url?: string | undefined;
 				} | {
+					answerBy?: string | undefined;
+					consequence?: string | undefined;
+					dedupeKey?: string | undefined;
 					lookedAt?: {
 						id: string;
 						kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -35648,8 +36822,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: "secret";
 						name: string;
 					};
+					reversible?: boolean | undefined;
 					risk?: "high" | "low" | "medium" | undefined;
 					stakes?: "commitment" | "routine" | undefined;
+					urgency?: "today" | "whenever" | undefined;
 				} | null | undefined;
 				blockedReason: "capability" | "credential" | "decision" | "permission" | "physical" | "policy";
 				expectedLabel: string;
@@ -35798,6 +36974,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				warnings: string[];
 			};
 		}>;
+		clearAskLater: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				expectedLabel: string;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				cleared: boolean;
+			};
+		}>;
 		close: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
@@ -35812,6 +36998,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				criteria: unknown;
 				currentStage: string | null;
+				endMoves?: SessionEndMovesRecord | undefined;
 				expectedOutputs: unknown;
 				goal: string;
 				id: string;
@@ -36011,6 +37198,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					answerPickedUpAt?: string | undefined;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -36022,8 +37212,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -36031,6 +37223,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -36055,9 +37250,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -36080,19 +37280,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -36108,8 +37318,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					askCause?: {
 						at?: string | undefined;
@@ -36133,6 +37345,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
@@ -36219,6 +37432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentSessionId?: string | undefined;
 				projectId?: string | null | undefined;
 				subjectEntityId?: string | null | undefined;
+				targets?: string[] | undefined;
 				templateId?: string | undefined;
 				title?: string | null | undefined;
 				trackId?: string | null | undefined;
@@ -36283,6 +37497,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
 				subjectEntityId: string | null;
+				targets?: SessionTargetsWrite | undefined;
 				templateId: string | null;
 				title: string | null;
 				trackId: string | null;
@@ -36691,6 +37906,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -37144,6 +38360,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					answerPickedUpAt?: string | undefined;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37155,8 +38374,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -37164,6 +38385,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37188,9 +38412,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -37213,19 +38442,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37241,8 +38480,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					askCause?: {
 						at?: string | undefined;
@@ -37266,6 +38507,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
@@ -37385,6 +38627,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						icon?: string | undefined;
 						ask?: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37396,8 +38641,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 							} | undefined;
 							prompt?: string | undefined;
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -37405,6 +38652,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37429,9 +38679,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							form: {
 								fields: {
 									constraints?: {
@@ -37454,19 +38709,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -37482,8 +38747,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -37518,9 +38785,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					onFail?: {
 						toStage: string;
 					} | undefined;
+					tier?: "deep" | "quick" | "standard" | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
+				targets?: string[] | undefined;
 				title?: string | null | undefined;
 				trackId?: string | null | undefined;
 				trackStage?: string | null | undefined;
@@ -37593,6 +38862,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -37676,6 +38946,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -37700,6 +38971,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				configScopeKind?: string | undefined;
 				limitValue?: number | undefined;
 				posture?: "auto" | "propose" | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				principalKind?: "agent" | "any" | undefined;
 				scopeKind?: "pod" | "workspace" | undefined;
 				scopeRef?: string | null | undefined;
@@ -37736,6 +39029,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -37857,6 +39151,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -37865,6 +39160,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		actionModes: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				actions: string[];
+			};
+			meta: object;
+			output: {
+				modes: ActionModeRow[];
+			};
+		}>;
 		alwaysApproved: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
@@ -37877,6 +39181,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				agentUserId?: string | undefined;
 				expiresAt?: unknown;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				principalClass?: "machine" | undefined;
 				principalKind: "agent" | "any" | "class";
 				scopeKind: "pod" | "workspace";
@@ -38072,6 +39398,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					kind: "proposal";
 				};
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: FileNextRungResult;
@@ -38132,9 +39480,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			};
 		}>;
+		setActionMode: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				action: string;
+				mode: "ask" | "auto" | "never";
+				sourceProposalId?: string | undefined;
+			};
+			meta: object;
+			output: WriteActionModeResult;
+		}>;
 		setOwnOrganiseDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				enabled: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: ReversibleDefaultState;
@@ -38142,6 +39521,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setReversibleDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				enabled: boolean;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: ReversibleDefaultState;
@@ -38150,6 +39551,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				action: string;
 				agentUserId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				profileSlug: string | null;
 				workspaceId: string | null;
 			};
@@ -38178,6 +39601,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38333,6 +39757,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38601,6 +40026,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38814,6 +40240,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -38923,6 +40350,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -39011,6 +40439,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -39360,6 +40789,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -39686,6 +41116,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40121,6 +41552,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				apiKey: string;
 				displayName: string;
 				hubUrl: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -40293,6 +41746,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40303,6 +41757,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		approveMcp: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				serviceId: string;
 			};
 			meta: object;
@@ -40422,6 +41898,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				description?: string | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				name: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				pricing?: "custom" | "enterprise" | "free" | "premium" | undefined;
 				providerType?: "anthropic" | "custom" | "openai" | "self-hosted" | undefined;
 				serviceId: string;
@@ -40468,6 +41966,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				newApiKey: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -40513,6 +42033,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				metadata?: Record<string, unknown> | undefined;
 				name?: string | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				status?: "active" | "inactive" | "suspended" | undefined;
 				version?: string | undefined;
 				webhookUrl?: string | undefined;
@@ -40566,6 +42108,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40630,6 +42173,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40791,6 +42335,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -40997,6 +42542,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[];
 					workspaceId: string | null;
 				}[];
+				leftBehind: {
+					items: {
+						category: "active" | "open";
+						endedSession: {
+							closedAt: string;
+							id: string;
+							label: string;
+							status: "cancelled" | "closed" | "failed";
+						};
+						entityId: string;
+						profileSlug: string | null;
+						status: string | null;
+						title: string | null;
+						workspaceId: string | null;
+					}[];
+					total: number;
+				} | null;
 				unattached: {
 					actor?: string | undefined;
 					asksYou: boolean;
@@ -41061,6 +42623,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41108,6 +42671,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				belongsTo: "agent" | "person" | "shared";
 				machineId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -41126,6 +42711,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				keyTtlDays: number | null;
 				machineId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -41136,6 +42743,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				enabled: boolean;
 				machineId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -41170,6 +42799,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41289,6 +42919,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -41319,6 +42950,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					id: string;
 					keyFingerprint: string;
+					presence?: {
+						challengeId: string;
+						keyId: string;
+						kind: "device_key";
+						signature: string;
+					} | {
+						challengeId: string;
+						credential: {
+							authenticatorAttachment?: string | null | undefined;
+							clientExtensionResults?: Record<string, unknown> | undefined;
+							id: string;
+							rawId: string;
+							response: {
+								authenticatorData: string;
+								clientDataJSON: string;
+								signature: string;
+								userHandle?: string | null | undefined;
+							};
+							type: "public-key";
+						};
+						kind: "passkey";
+					} | undefined;
 				};
 				meta: object;
 				output: {
@@ -41401,6 +43054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41532,6 +43186,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -41621,6 +43297,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41776,6 +43453,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41856,6 +43534,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -41952,6 +43631,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					icon: string | null;
 					id: string;
 					priority: "high" | "low" | "normal" | "urgent";
+					pushAgentId: string | null;
 					pushedAt: Date | null;
 					readAt: Date | null;
 					snoozedUntil: Date | null;
@@ -42128,6 +43808,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -42243,6 +43924,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -42330,6 +44012,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -42910,7 +44593,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: string;
 					userId: string;
 				} | null;
-				next: "start:agent" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
+				next: "start:agent" | "start:defaults" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
 				starts: StartCard[] | undefined;
 				steps: StartStepState[];
 			};
@@ -42942,6 +44625,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -42994,6 +44678,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43038,6 +44723,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43115,6 +44801,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43152,6 +44839,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43188,6 +44876,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: unknown;
 				playbookId: string;
 				replayOf: string | null;
+				runOn: RunOn | null;
 				sessionId: string | null;
 				startedAt: Date;
 				status: PlaybookRunStatus;
@@ -43218,6 +44907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -43267,6 +44957,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -43350,6 +45041,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -43396,6 +45088,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -43450,6 +45143,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43461,8 +45157,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -43470,6 +45168,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43494,9 +45195,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -43519,19 +45225,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43547,8 +45263,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -43591,6 +45309,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						icon?: string | undefined;
 						ask?: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43602,8 +45323,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 							} | undefined;
 							prompt?: string | undefined;
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -43611,6 +45334,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43635,9 +45361,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							form: {
 								fields: {
 									constraints?: {
@@ -43660,19 +45391,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -43688,8 +45429,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -43724,6 +45467,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					onFail?: {
 						toStage: string;
 					} | undefined;
+					tier?: "deep" | "quick" | "standard" | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -43744,6 +45488,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					onEnd?: {
+						cancelled?: string | undefined;
+						closed?: string | undefined;
+						failed?: string | undefined;
+					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -43780,6 +45529,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -43904,6 +45654,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					opRef?: string | undefined;
 					path?: string;
 					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
 					reasonCode?: string;
 					stack?: string;
 				};
@@ -44165,6 +45916,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId: string;
 				projectId?: string | undefined;
 				reasoning?: string | undefined;
+				remember?: boolean | undefined;
+				runOn?: "synap_ai" | undefined;
 				source?: string | undefined;
 				subjectId?: string | undefined;
 				trackId?: string | undefined;
@@ -44266,6 +46019,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					input: unknown;
 					playbookId: string;
 					replayOf: string | null;
+					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
 					status: PlaybookRunStatus;
@@ -44307,6 +46061,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			};
 		}>;
+		runChoice: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				playbookId: string;
+			};
+			meta: object;
+			output: PlaybookRunChoice;
+		}>;
 		saveFlow: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | undefined;
@@ -44342,6 +46103,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: PlaybookScorecard;
+		}>;
+		setRunChoice: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				choice: {
+					executor: "is-agent";
+				} | {
+					agentUserId: string;
+					executor: "external-agent";
+				};
+				playbookId: string;
+			};
+			meta: object;
+			output: PlaybookRunChoice;
 		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -44379,6 +46153,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44390,8 +46167,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 						} | undefined;
 						prompt?: string | undefined;
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						yes?: {
 							description?: string | undefined;
 							label?: string | undefined;
@@ -44399,6 +46178,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					} | {
 						allowOther?: boolean | undefined;
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44423,9 +46205,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							recommended?: boolean | undefined;
 							value?: string | undefined;
 						}[];
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						form: {
 							fields: {
 								constraints?: {
@@ -44448,19 +46235,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "form";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
 						}[] | undefined;
 						mode: "act";
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
 						steps?: string[] | undefined;
+						urgency?: "today" | "whenever" | undefined;
 						url?: string | undefined;
 					} | {
+						answerBy?: string | undefined;
+						consequence?: string | undefined;
+						dedupeKey?: string | undefined;
 						lookedAt?: {
 							id: string;
 							kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44476,8 +46273,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "secret";
 							name: string;
 						};
+						reversible?: boolean | undefined;
 						risk?: "high" | "low" | "medium" | undefined;
 						stakes?: "commitment" | "routine" | undefined;
+						urgency?: "today" | "whenever" | undefined;
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
@@ -44512,6 +46311,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						label: string;
 						icon?: string | undefined;
 						ask?: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44523,8 +46325,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 							} | undefined;
 							prompt?: string | undefined;
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							yes?: {
 								description?: string | undefined;
 								label?: string | undefined;
@@ -44532,6 +46336,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | undefined;
 						} | {
 							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44556,9 +46363,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								recommended?: boolean | undefined;
 								value?: string | undefined;
 							}[];
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							form: {
 								fields: {
 									constraints?: {
@@ -44581,19 +46393,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "form";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
 							}[] | undefined;
 							mode: "act";
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
 							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
 							url?: string | undefined;
 						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
 							lookedAt?: {
 								id: string;
 								kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -44609,8 +46431,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								kind: "secret";
 								name: string;
 							};
+							reversible?: boolean | undefined;
 							risk?: "high" | "low" | "medium" | undefined;
 							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
 						} | null | undefined;
 						relationToSubject?: string | undefined;
 						optional?: boolean | undefined;
@@ -44645,6 +46469,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					onFail?: {
 						toStage: string;
 					} | undefined;
+					tier?: "deep" | "quick" | "standard" | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -44665,6 +46490,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
+					onEnd?: {
+						cancelled?: string | undefined;
+						closed?: string | undefined;
+						failed?: string | undefined;
+					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -44726,6 +46556,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -44826,6 +46657,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45151,6 +46983,261 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			};
 		}>;
+		yourApps: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				apps: YourApp[];
+			};
+		}>;
+	}>>;
+	presence: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		authorizePasskeyChange: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				presence: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				};
+			};
+			meta: object;
+			output: {
+				authorized: boolean;
+				expiresInSeconds: number;
+			};
+		}>;
+		challenge: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+			} | {
+				pendingKeyId: string;
+			} | {
+				request: {
+					id: string;
+					kind: "app_connection_request" | "device_enroll" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "skill" | "tool" | "trusted_issuer";
+				};
+			} | {
+				action: {
+					input: unknown;
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setKeyTtl" | "machines.setRunsScripts" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+				};
+			} | {
+				oauthConsent: {
+					clientId: string;
+					codeChallenge?: string | null | undefined;
+					redirectUri: string;
+					state?: string | null | undefined;
+				};
+			};
+			meta: object;
+			output: {
+				challengeId: string;
+				deviceKeys: {
+					id: string;
+					label: string;
+				}[];
+				expiresAt: string;
+				message: string;
+				nonce: string;
+				passkey: {
+					allowCredentials: {
+						id: string;
+						type: "public-key";
+					}[];
+					challenge: string;
+					rpId: string;
+					rpIds: string[];
+					userVerification: "required";
+				} | null;
+				proposalId: string;
+				subject: string;
+			};
+		}>;
+		devices: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			errorShape: {
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: {
+					candidates?: {
+						id: string;
+						title: string | null;
+						type: string;
+					}[] | undefined;
+					captureQuestionStatus?: string | undefined;
+					causeUrl?: string | undefined;
+					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
+					httpStatus: number;
+					opRef?: string | undefined;
+					path?: string;
+					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
+					reasonCode?: string;
+					stack?: string;
+				};
+				message: string;
+			};
+			meta: object;
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			enroll: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					challengeId: string;
+					label: string;
+					presence?: {
+						challengeId: string;
+						keyId: string;
+						kind: "device_key";
+						signature: string;
+					} | {
+						challengeId: string;
+						credential: {
+							authenticatorAttachment?: string | null | undefined;
+							clientExtensionResults?: Record<string, unknown> | undefined;
+							id: string;
+							rawId: string;
+							response: {
+								authenticatorData: string;
+								clientDataJSON: string;
+								signature: string;
+								userHandle?: string | null | undefined;
+							};
+							type: "public-key";
+						};
+						kind: "passkey";
+					} | undefined;
+					publicKey: string;
+					signature: string;
+				};
+				meta: object;
+				output: {
+					id: string;
+				};
+			}>;
+			enrollChallenge: import("@trpc/server").TRPCMutationProcedure<{
+				input: void;
+				meta: object;
+				output: {
+					challengeId: string;
+					expiresAt: string;
+					message: string;
+				};
+			}>;
+			list: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				meta: object;
+				output: {
+					createdAt: Date;
+					id: string;
+					label: string;
+					lastUsedAt: Date | null;
+				}[];
+			}>;
+			revoke: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				meta: object;
+				output: {
+					revoked: boolean;
+				};
+			}>;
+		}>>;
+		mode: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				changedAt: string | null;
+				changedBy: string | null;
+				missingLast30d: {
+					byKind: Array<{
+						count: number;
+						kind: string;
+					}>;
+					total: number;
+				};
+				mode: PresenceMode;
+				source: "default" | "env" | "setting";
+			};
+		}>;
+		setMode: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				mode: "enforce" | "report";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
+			};
+			meta: object;
+			output: PresenceModeState;
+		}>;
 	}>>;
 	proactive: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -45173,6 +47260,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45315,6 +47403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45404,6 +47493,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -45495,6 +47585,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -46410,6 +48501,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -46701,6 +48793,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -46874,6 +48967,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -46924,6 +49018,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					verb: "fill_empty" | "keep_existing" | "separate" | "use_capture";
 				}> | undefined;
 				identityResolutionForTwins?: "keep_existing" | "separate" | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				propertyDecisions?: Record<string, {
 					action: "keep";
 				} | {
@@ -46976,6 +49092,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				comment?: string | undefined;
 				expectedRevisions?: Record<string, number> | undefined;
+				presenceByProposal?: Record<string, {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				}> | undefined;
 				proposalIds: string[];
 				resolutions?: Record<string, {
 					existingEntityId?: string | undefined;
@@ -46996,7 +49134,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					identity?: ProposalExecutorResult["identity"];
 					opRef?: string;
 					proposalId: string;
-					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE";
+					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
 					refusals?: ProposalExecutorResult["refusals"];
 					relationsFailed?: ProposalExecutorResult["relationsFailed"];
 					success: boolean;
@@ -47729,6 +49867,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -47842,6 +49981,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48132,6 +50272,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48251,6 +50392,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48366,6 +50508,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48461,6 +50604,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48554,6 +50698,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		grantAIAccess: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				proposalId: string;
 				scope?: "once" | "permanent" | "session" | undefined;
 				secretId: string;
@@ -48638,6 +50804,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		reveal: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -48751,6 +50939,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -48789,6 +50978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -49136,6 +51326,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -49303,6 +51494,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -49590,6 +51782,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -49613,6 +51806,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata?: Record<string, unknown> | undefined;
 				name: string;
 				parameters?: Record<string, unknown> | undefined;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 				providerSpec?: Record<string, unknown> | undefined;
 				requiredToolIds?: string[] | undefined;
 				scope?: "pod" | "user" | "workspace" | undefined;
@@ -49887,6 +52102,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -50023,6 +52260,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50158,6 +52396,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50379,6 +52618,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50516,6 +52756,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50600,6 +52841,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50629,6 +52871,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50668,6 +52911,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -50827,6 +53071,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -51423,6 +53668,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -51753,6 +53999,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -51921,6 +54168,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				approved: boolean;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -51998,6 +54267,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52320,6 +54590,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52333,6 +54604,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				displayName: string;
 				issuerUrl: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -52356,6 +54649,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				expectedStatus?: "approved" | "pending" | "rejected" | "revoked" | undefined;
 				id: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | undefined;
 			};
 			meta: object;
 			output: {
@@ -52435,6 +54750,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52536,6 +54852,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -52635,6 +54952,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53180,6 +55498,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53300,6 +55619,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53526,6 +55846,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53561,6 +55882,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53688,6 +56010,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -53736,6 +56059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				opRef?: string | undefined;
 				path?: string;
 				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
 				reasonCode?: string;
 				stack?: string;
 			};
@@ -54322,6 +56646,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						expectedOutputs?: {
 							[x: string]: unknown;
 							ask?: {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54333,8 +56660,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									recommended?: boolean | undefined;
 								} | undefined;
 								prompt?: string | undefined;
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 								yes?: {
 									description?: string | undefined;
 									label?: string | undefined;
@@ -54342,6 +56671,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							} | {
 								allowOther?: boolean | undefined;
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54366,9 +56698,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									recommended?: boolean | undefined;
 									value?: string | undefined;
 								}[];
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								form: {
 									fields: {
 										constraints?: {
@@ -54391,19 +56728,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "form";
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
 								}[] | undefined;
 								mode: "act";
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
 								steps?: string[] | undefined;
+								urgency?: "today" | "whenever" | undefined;
 								url?: string | undefined;
 							} | {
+								answerBy?: string | undefined;
+								consequence?: string | undefined;
+								dedupeKey?: string | undefined;
 								lookedAt?: {
 									id: string;
 									kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54419,8 +56766,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									kind: "secret";
 									name: string;
 								};
+								reversible?: boolean | undefined;
 								risk?: "high" | "low" | "medium" | undefined;
 								stakes?: "commitment" | "routine" | undefined;
+								urgency?: "today" | "whenever" | undefined;
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
@@ -54464,6 +56813,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								label: string;
 								icon?: string | undefined;
 								ask?: {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54475,8 +56827,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										recommended?: boolean | undefined;
 									} | undefined;
 									prompt?: string | undefined;
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 									yes?: {
 										description?: string | undefined;
 										label?: string | undefined;
@@ -54484,6 +56838,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									} | undefined;
 								} | {
 									allowOther?: boolean | undefined;
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54508,9 +56865,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										recommended?: boolean | undefined;
 										value?: string | undefined;
 									}[];
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									form: {
 										fields: {
 											constraints?: {
@@ -54533,19 +56895,29 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "form";
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
 									}[] | undefined;
 									mode: "act";
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
 									steps?: string[] | undefined;
+									urgency?: "today" | "whenever" | undefined;
 									url?: string | undefined;
 								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
 									lookedAt?: {
 										id: string;
 										kind: "automation" | "document" | "entity" | "playbook" | "view";
@@ -54561,8 +56933,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 										kind: "secret";
 										name: string;
 									};
+									reversible?: boolean | undefined;
 									risk?: "high" | "low" | "medium" | undefined;
 									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
 								} | null | undefined;
 								relationToSubject?: string | undefined;
 								optional?: boolean | undefined;
@@ -54597,6 +56971,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							onFail?: {
 								toStage: string;
 							} | undefined;
+							tier?: "deep" | "quick" | "standard" | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;
 						subjectProfile?: {
@@ -54617,6 +56992,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
+							onEnd?: {
+								cancelled?: string | undefined;
+								closed?: string | undefined;
+								failed?: string | undefined;
+							} | undefined;
 						} | undefined;
 					}[] | undefined;
 					automations?: {

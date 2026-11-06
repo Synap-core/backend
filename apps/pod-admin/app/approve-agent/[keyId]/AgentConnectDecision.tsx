@@ -45,6 +45,8 @@ import {
   type AgentInComputerView,
 } from "./agent-in-computer";
 import { AgentInComputerBlock } from "./AgentInComputerBlock";
+import { usePresence } from "../../_lib/presence/presence-provider";
+import { approvePendingKey } from "../../_lib/presence/pending-key-approval";
 
 /** What the pending key would be allowed to do — read from the pod, never assumed. */
 type DetailsRead =
@@ -107,22 +109,21 @@ export function useAgentConnect(keyId: string, agentType: string) {
     };
   }, [podUrl, keyId, attempt]);
 
+  const { prove } = usePresence();
   const act = useCallback(
     async (action: "approve" | "reject") => {
       setStep({ kind: "working", action });
       try {
-        const res = await fetch(
-          `${podUrl}/api/hub/setup/agent/pending/${keyId}/${action}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            // Cross-subdomain (pod-admin.<root> → pod.<root>) — send the
-            // parent-domain Kratos cookie so resolveKratosSession() passes.
-            credentials: "include",
+        if (action === "approve") {
+          // With the proof of presence when the pod asks for one (W3).
+          await approvePendingKey({
+            podUrl,
+            keyId,
+            prove,
             // Approving disconnects ONLY what the person ticked.
             body:
-              action === "approve" && details.state === "ok"
-                ? JSON.stringify({
+              details.state === "ok"
+                ? {
                     ...approveBody(details.connections, chosen),
                     // A new agent's permission; an existing one's only
                     // when the person changed it (D6).
@@ -134,15 +135,26 @@ export function useAgentConnect(keyId: string, agentType: string) {
                           ),
                         }
                       : {}),
-                  })
+                  }
                 : undefined,
-          }
-        );
-        if (!res.ok) {
-          const detail = await res.json().catch(() => ({}));
-          throw new Error(
-            (detail as { error?: string }).error || `Error (${res.status})`
+          });
+        } else {
+          const res = await fetch(
+            `${podUrl}/api/hub/setup/agent/pending/${keyId}/reject`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              // Cross-subdomain (pod-admin.<root> → pod.<root>) — send the
+              // parent-domain Kratos cookie so resolveKratosSession() passes.
+              credentials: "include",
+            }
           );
+          if (!res.ok) {
+            const detail = await res.json().catch(() => ({}));
+            throw new Error(
+              (detail as { error?: string }).error || `Error (${res.status})`
+            );
+          }
         }
         setStep(
           action === "approve"
@@ -166,7 +178,7 @@ export function useAgentConnect(keyId: string, agentType: string) {
         });
       }
     },
-    [keyId, podUrl, details, chosen, agentType, writeMode]
+    [keyId, podUrl, details, chosen, agentType, writeMode, prove]
   );
 
   return {

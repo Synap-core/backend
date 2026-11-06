@@ -18,6 +18,8 @@ export { apiKeyService } from "./services/api-keys.js";
 export { ImportOrchestrator } from "./services/import-orchestrator.js";
 // The background approval job (handler slot of @synap/jobs proposal-approve).
 export { runApprovalJob } from "./services/proposals/approval-runs.js";
+// The store-first bulk import job (handler slot of @synap/jobs import-units).
+export { runImportUnitsJob } from "./services/import/import-units-job.js";
 // The Library light read: the job handler + hourly sweep the app registers in
 // the @synap/jobs slots at boot.
 export {
@@ -213,6 +215,14 @@ export {
 // Export utilities for webhook handling
 export { syncUserFromKratos } from "./utils/kratos-sync.js";
 
+// Proof of presence (W3 slice 3): Kratos' settings guard asks these before a
+// passkey change by a person who already holds a proof factor.
+export {
+  hasProofFactor,
+  notifyFactorChanged,
+} from "./services/presence/factors.js";
+export { redeemPasskeyChangeGrant } from "./services/presence/passkey-change.js";
+
 // Export vault resolver utilities (used by ssh-proxy and other server-side consumers)
 export {
   isVaultReference,
@@ -388,6 +398,10 @@ export {
   runMessagingWebhookEnsure,
   type RunMessagingWebhookEnsureResult,
 } from "./services/connectors/messaging-webhook-ensure.js";
+export {
+  runLinkedinReachSweep,
+  type LinkedinReachSweepResult,
+} from "./services/connectors/linkedin-reach-sync.js";
 // Entity media copy (D2): the reactor (registered at boot) enqueues; the runner
 // fills the jobs IoC slot and copies an entity's external images into the pod.
 export { runEntityMediaCopy } from "./services/media-copy/copy-entity-media.js";

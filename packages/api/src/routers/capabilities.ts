@@ -10,6 +10,7 @@
  *   - `serviceUsageStats` aggregates message counts by serviceId from messages JSONB
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
 import { z } from "zod";
 import { RendererRefSchema } from "../services/profiles/renderer-ref-schema.js";
 import { TRPCError } from "@trpc/server";
@@ -950,13 +951,22 @@ export const capabilitiesRouter = router({
    * without the (intentionally separate) skills-router gate.
    */
   setToolEnabled: protectedProcedure
-    .input(z.object({ skillId: z.string().uuid(), enabled: z.boolean() }))
+    .input(
+      z.object({
+        skillId: z.string().uuid(),
+        enabled: z.boolean(),
+        /** Proof of presence (W3): turning a verb ON is setup. */
+        presence: presenceProofSchema.optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       await setSkillApproved({
         userId: requireUserId(ctx.userId),
         skillId: input.skillId,
         approved: input.enabled,
         agentUserId: ctx.agentUserId,
+        presence: input.presence ?? null,
+        door: "trpc.capabilities.setToolEnabled",
       });
       return { success: true };
     }),

@@ -123,6 +123,16 @@ import {
   shouldDropPin,
 } from "../playbooks/pinned-subject.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import {
+  loadSessionProcess,
+  type SessionProcess,
+} from "@synap/jobs/utils/session-process.js";
+// Types only, statically: the end-move writer itself is loaded where it runs
+// (below). A static import put `move-status` → `permission-check` on this
+// module's graph and closed an import cycle through `permission-check`, so a
+// suite that mocks the permission gate got the REAL one inside `moveStatus`
+// (entities.app-role-write.pglite.test.ts, CI run 42040717470).
+import type { SessionEndMovesRecord } from "./session-end-moves.js";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
@@ -473,6 +483,12 @@ export type CompleteFocusSessionResult = {
    * pending proposal, a delegate). Absent when there were none.
    */
   waiting?: WaitingAtClose;
+  /**
+   * What the end moved (`subjectProfile.onEnd`, session-end-moves.ts): the
+   * subject and every target still open, each moved / proposed / skipped /
+   * failed with why. Absent when the process names nothing for this end.
+   */
+  endMoves?: SessionEndMovesRecord;
 };
 
 /**
@@ -712,6 +728,29 @@ export async function completeFocusSession(
     }
   }
 
+  // THE PROCESS, READ BEFORE THE RUN IS SETTLED: `loadSessionProcess` reads
+  // a LIVE run's frozen snapshot first, so after the settle below it would
+  // fall back to the live playbook — an edit made since the run started would
+  // decide what this end moves. Read once, here; applied after the commit.
+  // A failed read is said out loud (the end moves nothing it cannot read).
+  let endProcess: SessionProcess | null = null;
+  if (run || session.playbookId) {
+    try {
+      endProcess = await loadSessionProcess({
+        sessionId,
+        playbookId: session.playbookId ?? null,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, sessionId },
+        "session process not read at close — its end moves nothing"
+      );
+      warnings.push(
+        `What this session's process moves at its end could not be read (${err instanceof Error ? err.message : String(err)}); nothing was moved.`
+      );
+    }
+  }
+
   if (run) {
     // The run's terminal status FOLLOWS how the session closed. Stamping
     // `completed` on a failed/cancelled close hid the failure from the parent
@@ -892,9 +931,10 @@ export async function completeFocusSession(
   // `session_closed` — "unfinished" is a mark, never an absence (work model
   // L4). Every exit, after the commit; first verdict wins, so a target already
   // settled keeps its result. A failed stamp never rolls the close back.
+  let openTargets: string[] = [];
   if (updated) {
     try {
-      await stampOpenWorkerTargets({
+      openTargets = await stampOpenWorkerTargets({
         sessionId,
         result: "skipped",
         reason: WORKER_TARGET_REASONS.sessionClosed,
@@ -904,6 +944,58 @@ export async function completeFocusSession(
         { err, sessionId },
         "worker targets not stamped on close (the close stands)"
       );
+    }
+  }
+
+  // THE END MOVES (`subjectProfile.onEnd`, session-end-moves.ts): the subject
+  // and the targets the stamp above just found open move to the status the
+  // process names for this end, through the status door, as the session and
+  // its closer. After the commit, so a move that fails or proposes never
+  // undoes the close: each outcome is reported on the result, a failure as a
+  // warning too.
+  let endMoves: SessionEndMovesRecord | undefined;
+  if (updated && endProcess) {
+    try {
+      const { applySessionEndMoves, endMoveActor } =
+        await import("./session-end-moves.js");
+      endMoves = await applySessionEndMoves({
+        session: {
+          id: sessionId,
+          workspaceId: session.workspaceId ?? null,
+          subjectEntityId: session.subjectEntityId ?? null,
+        },
+        process: endProcess,
+        status: terminalStatus,
+        openTargets,
+        actor: endMoveActor({
+          userId: params.userId,
+          agentUserId: params.agentUserId,
+          closerKind: params.actor?.kind,
+        }),
+      });
+    } catch (err) {
+      logger.warn(
+        { err, sessionId },
+        "session end moves not applied (the close stands)"
+      );
+      warnings.push(
+        `The session closed, but what its process moves at its end was not applied (${err instanceof Error ? err.message : String(err)}).`
+      );
+    }
+    for (const m of endMoves?.moves ?? []) {
+      const what = m.as === "subject" ? "its subject" : "a target";
+      if (m.outcome.status === "failed") {
+        warnings.push(
+          `The session's end did not move ${what} (${m.entityId}) to "${endMoves!.value}": ${m.outcome.reason}`
+        );
+      } else if (
+        m.outcome.status === "skipped" &&
+        m.outcome.reason === "no_status_property"
+      ) {
+        warnings.push(
+          `The session's end did not move ${what} (${m.entityId}) to "${endMoves!.value}": its process names no statusProperty and its kind declares no lifecycle.`
+        );
+      }
     }
   }
 
@@ -1131,6 +1223,7 @@ export async function completeFocusSession(
     verdict,
     ...(closedNotDone ? { closedNotDone } : {}),
     ...(waitingAtClose ? { waiting: waitingAtClose } : {}),
+    ...(endMoves ? { endMoves } : {}),
   };
 }
 

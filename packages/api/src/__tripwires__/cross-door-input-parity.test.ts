@@ -173,9 +173,10 @@ const SERVICES: ServiceSpec[] = [
     fn: "updateFocusSession",
     paramFloor: 8,
     selfGuardParam: "sessionId",
-    // ONE door, and that is a fact about the code rather than a broken walk:
-    // `rg updateFocusSession src/routers` finds exactly one call site (the MCP
-    // handler). The tRPC `focusSessions.update` and the Hub REST PATCH import
+    // Two MCP doors, a fact about the code rather than a broken walk:
+    // `rg updateFocusSession src/routers` finds the `synap_update_session`
+    // handler and `synap_ask_person` (which says only `expectedOutputs`; its
+    // other fields are acknowledged below). The tRPC `focusSessions.update` and the Hub REST PATCH import
     // this module for its SCHEMAS and merge helpers and then write the row
     // inline, so there is no shared service for a cross-door comparison to
     // stand on. What this entry audits is therefore SERVICE→DOOR reachability,
@@ -740,7 +741,46 @@ interface Gap {
  * outside the derived matrix FAILS (the code moved and it now silences
  * nothing).
  */
+/**
+ * `synap_ask_person` (backend#803) calls `updateFocusSession` with ONE field it
+ * builds itself (`expectedOutputs`: the owed ask). Every other session field is
+ * withheld BY DESIGN at that door: it is the door an outside AI uses to put a
+ * question in front of the person, and editing the session it lands on is
+ * `synap_update_session`'s job — an ask must never retitle, move, re-stage or
+ * close the work it is filed on.
+ */
+const ASK_PERSON_WITHHELD = [
+  "goal",
+  "status",
+  "expectedStatus",
+  "hold",
+  "occurredAt",
+  "progress",
+  "currentStage",
+  "addOutput",
+  "completeOutput",
+  "retireOutput",
+  "addAgentId",
+  "subjectEntityId",
+  "targets",
+  "projectId",
+  "workspaceId",
+  "trackId",
+  "trackStage",
+  "criteria",
+  "followPlaybookId",
+  "params",
+  "followStageKey",
+] as const;
+
 const ACKNOWLEDGED_GAPS: Gap[] = [
+  ...ASK_PERSON_WITHHELD.map((param) => ({
+    service: "update-focus-session",
+    param,
+    door: "routers/mcp/handlers/ask-person.ts:synap_ask_person",
+    reason:
+      "Withheld by design: synap_ask_person only files ONE owed ask (expectedOutputs, built by the door); editing the session it lands on is synap_update_session's job, so an ask can never retitle, move, re-stage or close that work.",
+  })),
   // ── `suppressProposal`: the same reason at all three doors ────────────────
   // It is not a missing feature; it is a parameter no client may ever hold.
   {

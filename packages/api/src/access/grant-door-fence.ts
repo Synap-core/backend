@@ -113,6 +113,26 @@ const REFUSED = (reason: string): FencedReadDoor => ({
  */
 const PROPOSAL_GET = READS("proposal", "entity");
 
+/**
+ * Load an instruction skill: MCP `synap_load_skill` and its REST twins
+ * (`GET /agent-skills`, `/agent-skills/by-slug/:slug`, `/agent-skills/:id`,
+ * the CLI's `synap skill get|suggest`). Each reads only ACTIVE, APPROVED
+ * instruction skills on the person's floor (`visibleSkillsWhere`): system
+ * runbooks and the person's own. Skills have no read subject in the read hook,
+ * so any key that holds a live permission may load one; one declaration, so
+ * REST and MCP answer the same for every key (the CLI's own key was refused
+ * `synap skill get` while it could load the same skill over MCP).
+ */
+const LOAD_SKILL = READS();
+
+/**
+ * Recall the person's remembered facts (`knowledge_facts`, owner-pinned):
+ * `POST /memory/search` (by embedding) and its full-text twin `GET /memory`
+ * (`knowledgeRepository.searchFacts`), which the Raycast extension's recall
+ * calls. The same rows, so one declaration.
+ */
+const MEMORY_RECALL = READS("entity", "preference");
+
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
@@ -216,8 +236,9 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // `userId` is the caller's own id or `me` (rest/entities.ts).
   new RegExp(`^/users/(?:me|${ID})/entities/?$`),
   // The list door. Every branch reads through `entities.getEntities` (the
-  // seamed `entities.list` floor) EXCEPT full-text `q` (Typesense), which the
-  // route itself refuses for a fenced grant (rest/entities.ts). `filters` are
+  // seamed `entities.list` floor), and full-text `q` ranks in Typesense, then
+  // `search.search` re-reads its hits through that same floor for a fenced
+  // grant (`withinGrantSearchHits`, services/retrieval/). `filters` are
   // ANDed inside that floor (only narrow); `includeWorkspace` names only the
   // spaces of the rows returned (entities.filters-space-names.pglite.test.ts).
   /^\/entities\/?$/,
@@ -275,6 +296,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/keys\/templates\/?$/,
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
+  // The built-in skill packages' SKILL.md files, read from the image's
+  // `skills/` folder (`getSkillPackages`): no pod row at all. The CLI's
+  // skills installer reads them with the computer's key.
+  /^\/skills\/system\/?$/,
 ];
 
 /**
@@ -445,6 +470,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // they can see (`readAgentAssignment`), the read half of
   // PUT /agent-users/:id/assignment. Same subject, same PERSON door.
   [/^\/agent-users\/assignments\/?$/, PERSON("agent")],
+  // Who runs a playbook for the person (`playbooks.runChoice`, slice 5a): the
+  // playbook through `scopedDb` (its own grant ANDed, `playbook`), plus the
+  // person's remembered choice (their `assigned_to` row) and their agents
+  // with each one's wake mark — the roster GET /agent-users serves. Same
+  // subject, same PERSON door: an app that asks "who runs this" before a
+  // run asks for `agent.read`.
+  [route("/playbooks/:id/run-choice"), PERSON("agent")],
   // The person's spaces with their template health (`synap market update`,
   // `market installed`, `orient`): the spaces the person can open, each one's
   // live entity count and the pod-wide count (entities, through
@@ -546,6 +578,51 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/timeline\/?$/, READS("track", "session", "event", "proposal")],
   // One proposal: the same door as MCP `synap_get_proposal` (PROPOSAL_GET).
   [route("/proposals/:id"), PROPOSAL_GET],
+  // The capability catalog of one space (`synap connect <tool>`, `synap
+  // capability`; finding 3122ba42): `buildCapabilityCatalog` reads the
+  // capability containers (subject `tool`, as `/installed`), their
+  // `member_of` links, the member tools and skills, and the connection state
+  // of each card: which of the person's own (or pod-wide) vault credentials a
+  // container names exists, its name and service, and whether it needs
+  // reauth — never a secret's value; `buildAutomationCatalog` reads the
+  // space's automations. Every read is on the person's floor
+  // (`userVisibleWhere`), none through a grant clause, so a pinned key is
+  // refused.
+  [
+    /^\/capabilities\/catalog\/?$/,
+    READS("tool", "skill", "link", "automation"),
+  ],
+  // Runtime discovery (finding cce86e6b: Raycast's Search Synap, agents'
+  // session bootstrap): the kinds and roles with their property schemas
+  // (`profiles.listProfiles`), the relation types of the lens
+  // (`listEffectiveRelationTypes`) and each kind's usage, counted over its
+  // entities (`loadProfileFill`). The same rule as MCP `synap_list_profiles`,
+  // plus the relation vocabulary.
+  [/^\/discover\/?$/, READS("entity", "relation_def")],
+  // Full-text recall of remembered facts: the twin of POST /memory/search.
+  // GET only: every other /memory route is an owner-wide write
+  // (GRANT_OWNER_WIDE_REST_WRITES).
+  [/^\/memory\/?$/, MEMORY_RECALL],
+  // Load a skill over REST: the same door as MCP `synap_load_skill`.
+  [/^\/agent-skills\/?$/, LOAD_SKILL],
+  // A slug may hold `/`; the client encodes it (`%2F`), and the fence sees
+  // the path undecoded (`decodeURI` leaves `%2F`), so one segment.
+  [/^\/agent-skills\/by-slug\/[^/]+\/?$/, LOAD_SKILL],
+  [route("/agent-skills/:id"), LOAD_SKILL],
+  // The pod's stored cell sources (finding 7da9c21f): `GET /cells` reads the
+  // active frame / iframe `widget_definitions` of one space (person's
+  // membership checked) and pod-wide; `GET /widget-definitions` the built-in
+  // catalog plus the installed rows (`listRenderables`). Subject `widget`,
+  // read on no grant clause, so a pinned key is refused.
+  [/^\/cells\/?$/, READS("widget")],
+  [/^\/widget-definitions\/?$/, READS("widget")],
+  // Poll a bulk import (`rest/import-units.ts`): the pg-boss job the caller
+  // enqueued, its state and per-unit outcome (`entityId` | `proposalId` |
+  // `error`), never the payload; another person's job is the same 404 as a
+  // missing one. Admitted to the keys that can enqueue one, which
+  // POST /import/enqueue-units checks as `entity.<kind>.create`: a key that
+  // could not start an import has nothing to poll.
+  [route("/import/units-job/:id"), NARROWED("entity", [], "create")],
   // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
   // every 5xx on the pod, whoever met it. Pod owner or admin only, like
   // `/usage`; no grant can narrow it, so a scoped key is refused.
@@ -570,6 +647,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     /^\/channels\/[0-9a-fA-F-]{36}\/proposed-messages\/?$/,
     NARROWED("proposal", []),
   ],
+  // A space's conversations (`listSpaceConversations`, services/channels/
+  // space-conversations.ts, CRM Messages contract A): the people through
+  // `entityReadVisibleWhere` + `roleInWorkspaceLensWhere`, their channels
+  // through `channelVisibilityWhere`, their drafts through
+  // `proposalUserFloor`, each carrying the key's grant (a key without
+  // `proposal.read` sees no drafts). Admitted for `channel.read`; the route
+  // then requires it in the space asked about.
+  [/^\/channels\/conversations\/?$/, NARROWED("channel", [])],
 ];
 
 /**
@@ -610,7 +695,7 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // `readableFileEntity`) and that entity's owner-locked document, then calls
   // the transcription provider (rate class `ai_interactive`).
   [route("/files/:id/transcribe"), SEAMED],
-  [/^\/memory\/search\/?$/, READS("entity", "preference")],
+  [/^\/memory\/search\/?$/, MEMORY_RECALL],
   // A read (no `install`) and a governed install (TEMPLATE-LIFECYCLE B). The
   // standing names a space only when the person's floor AND the key's grant
   // reach it (`readTemplateStanding`); a holder it hides is answered as absent
@@ -660,6 +745,17 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // an app's outward run always files a proposal (the capability gate). So it
   // is admitted only for a key holding some `capability … run`.
   [/^\/capabilities\/execute\/?$/, NARROWED("capability", [], "run")],
+  // Measure one person's LinkedIn reach (`readLinkedinReach`, services/
+  // channels/linkedin-reach-read.ts, finding 491ba787). It writes, but only
+  // machine-written system facts no editor or agent writes (the reach fact,
+  // an empty `linkedinProviderId`, the `linkedin:<id>` identity signal), from
+  // one provider read: the daily sweep's writes, for one person, now. The
+  // person is read through `entityReadVisibleWhere` (the key's grant ANDed;
+  // a person it does not reach is a 404) and must be the caller's own; the
+  // read spends the owner's LinkedIn lookup budget. Admitted for a key
+  // holding `channel.read` (the person's messaging consent, as the
+  // conversations door that shows reach).
+  [route("/channels/linkedin-reach/:id"), NARROWED("channel", [])],
 ];
 
 /**
@@ -748,8 +844,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "track"
   ),
   // Skills have no read subject in the read hook (system + the person's own
-  // runbooks): any key that holds a live permission may load one.
-  synap_load_skill: READS(),
+  // runbooks): any key that holds a live permission may load one (LOAD_SKILL).
+  synap_load_skill: LOAD_SKILL,
   synap_diagnose: REFUSED("Pod internals across every subject."),
 };
 
@@ -799,6 +895,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
       "link"
     ),
     synap_relay_answer: WRITE,
+    synap_ask_person: WRITE,
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
     synap_promote_session_to_playbook: WRITE,
@@ -929,8 +1026,10 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    PERSON, usable in every space; `onBehalfOfUserId` binds it to another
  *    member.
  *  - `DELETE /messaging/accounts/:id` (disconnects the person's messaging
- *    account at the provider), `POST /messaging/accounts/sync` (rewrites the
- *    person's account mirror, registers provider webhooks). The send through
+ *    account at the provider; since 2026-11-04 it also passes the gate,
+ *    `messaging/delete_account`, so an unbounded agent key's call is a
+ *    proposal), `POST /messaging/accounts/sync` (rewrites the person's
+ *    account mirror, registers provider webhooks). The send through
  *    an account is NOT here: it checks `messaging.send` in the conversation's
  *    space (`sendExternalMessage`). Neither is `POST
  *    /messaging/accounts/:id/import-history` (founder, 2026-11-03): its

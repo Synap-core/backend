@@ -66,6 +66,7 @@ import {
   readJsonBody,
   requireUuidParam,
   isUuid,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 
 // ── Local OpenAPI schemas (not in user-WIP _codecs/misc.ts) ────────────────
@@ -408,6 +409,8 @@ export function registerVaultRoutes(app: HubHono): void {
   });
 
   app.post("/vault/redeem", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }

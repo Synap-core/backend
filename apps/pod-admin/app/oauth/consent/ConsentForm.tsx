@@ -32,16 +32,19 @@ import {
 import Link from "next/link";
 import {
   FIRST_PARTY_CLIENT_NAMES,
+  buildObjectActionTitle,
   resolveOAuthScopeLabel,
 } from "@synap-core/types/vocabulary";
 import { SIGNED_IN_APPS_COPY } from "@synap-core/types/sign-in";
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
+import { useDecideOAuthAuthorization } from "../../_lib/presence/use-request-doors";
 import {
   allowBlockedReason,
   allowNewAsks,
   alsoSeeLine,
   consentHeadline,
+  clientDomain,
   consentWidth,
   decideLine,
   decisionsHeading,
@@ -180,7 +183,19 @@ export function ConsentForm({
     refetchOnWindowFocus: false,
   });
 
-  const decide = trpc.apiKeys.decideOAuthAuthorization.useMutation();
+  // With the proof of presence: connecting an app or an AI client is setup
+  // (W3). "Sign in with Synap" (an `app` client: no AI, no key) is the one
+  // consent the pod does not gate.
+  const decide = useDecideOAuthAuthorization({
+    needsProof: !!context.data && context.data.clientKind !== "app",
+    label: context.data?.clientName
+      ? buildObjectActionTitle({
+          action: "connect",
+          objectKind: "app",
+          objectName: context.data.clientName,
+        })
+      : null,
+  });
 
   // `prompt=login` / `max_age` and the current sign-in is too old: sign in
   // again before anything is shown to decide on.
@@ -281,6 +296,9 @@ export function ConsentForm({
     context.data?.clientKind === "first_party"
       ? {
           name: context.data.clientName,
+          // An app registered by its metadata document is named by its
+          // domain too: its name is its own words, the domain is proven.
+          domain: clientDomain(context.data.clientId),
           onComputer: isLoopbackHost(context.data.redirectHost),
           redirectHost: context.data.redirectHost,
           // The app re-confirms a device it holds (a step-up). The server
@@ -734,6 +752,7 @@ export function PodCredentialNotice({
  */
 export function FirstPartyConsent({
   name,
+  domain,
   onComputer,
   redirectHost,
   reconfirm,
@@ -742,6 +761,8 @@ export function FirstPartyConsent({
   onDecide,
 }: {
   name: string;
+  /** The client_id's host for an app registered by its document, else null. */
+  domain?: string | null;
   onComputer: boolean;
   redirectHost: string;
   reconfirm: boolean;
@@ -764,6 +785,12 @@ export function FirstPartyConsent({
             ? `It asks before it changes a key, a connection or a secret. Only continue if you just asked ${name} to do that.`
             : `It can do what you can do in Synap. Only continue if you just opened ${name} and asked it to sign in.`}
         </p>
+        {domain ? (
+          <div className="flex flex-col gap-1 pt-0.5">
+            <span className="text-sm text-foreground/65">Published by</span>
+            <HostName host={domain} className="text-sm text-foreground/90" />
+          </div>
+        ) : null}
         <div className="flex flex-col gap-1 pt-0.5">
           <span className="text-sm text-foreground/65">Sends you back to</span>
           {onComputer ? (

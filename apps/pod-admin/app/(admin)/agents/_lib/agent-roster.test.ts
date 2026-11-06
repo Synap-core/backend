@@ -9,6 +9,7 @@ import {
   originLine,
   reachErrorSentence,
   standingLine,
+  viaSynapAccount,
   type AgentRosterRowLike,
 } from "./agent-roster";
 
@@ -185,6 +186,20 @@ describe("lines", () => {
     expect(originLine("martian")).toBeNull();
   });
 
+  it("a Synap account agent says so, whatever created_via the pod recorded (review bf96d410, lane B)", () => {
+    expect(originLine("cli", "synap:account")).toMatch(/Synap account/);
+    expect(originLine("cli", "antoine")).toMatch(/synap init/);
+    expect(viaSynapAccount(row({ hostSeat: "synap:account" }))).toBe(true);
+    expect(viaSynapAccount(row({ hostSeat: null }))).toBe(false);
+    const [view] = buildAgentRoster(
+      [row({ hostSeat: "synap:account" })],
+      [],
+      null,
+      () => "now"
+    );
+    expect(view!.sentence).toMatch(/Through your Synap account\.$/);
+  });
+
   it("agentsByCreator lists what removeByUserId would take", () => {
     const rows = [
       row({ id: "a", createdByUserId: "u1" }),
@@ -240,5 +255,34 @@ describe("reachErrorSentence", () => {
     expect(reachErrorSentence(null)).toBe(
       "The pod cannot reach it through its connector."
     );
+  });
+});
+
+describe("buildAgentRoster — a paused agent", () => {
+  it("reads Paused and says it takes no work", () => {
+    const v = only(
+      row({
+        activeKeys: 1,
+        lastSeenAt: "2026-10-11T12:00:00Z",
+        pausedAt: "2026-10-12T08:00:00Z",
+      })
+    );
+    expect(v.status).toEqual({ kind: "stale", label: "Paused" });
+    expect(v.sentence).toBe("Paused: it takes no work. Seen 1d ago.");
+  });
+
+  it("a waiting key still outranks the pause", () => {
+    const v = only(
+      row({ activeKeys: 1, pendingKeys: 1, pausedAt: "2026-10-12T08:00:00Z" })
+    );
+    expect(v.status.label).toBe("Needs approval");
+  });
+
+  it("null pausedAt is not paused", () => {
+    const v = only(
+      row({ activeKeys: 1, lastSeenAt: "2026-10-11T12:00:00Z", pausedAt: null })
+    );
+    expect(v.status.label).toBe("Active");
+    expect(v.sentence).not.toContain("Paused");
   });
 });

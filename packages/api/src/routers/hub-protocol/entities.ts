@@ -14,6 +14,7 @@ import {
   type DuplicateCheck,
 } from "@synap-core/types/proposals";
 import { z } from "zod";
+import type { UnmodeledProperty } from "@synap/database";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
@@ -710,6 +711,7 @@ export const entitiesRouter = router({
           documentId?: string | null;
         };
         statusMove?: { status: string };
+        unmodeled?: UnmodeledProperty[];
       };
       const written = applied.written;
       return {
@@ -734,6 +736,7 @@ export const entitiesRouter = router({
           writtenProperties: written?.properties as
             Record<string, unknown> | undefined,
           statusMoveProposed: applied.statusMove?.status === "proposed",
+          unmodeled: applied.unmodeled,
         }),
       };
     }),

@@ -27,6 +27,7 @@
  *   DELETE /tools/:id                         — delete a tool (proposal-gated)
  */
 
+import { presenceProofSchema } from "@synap-core/types/presence";
 import { z } from "@hono/zod-openapi";
 
 import { toolsRouter } from "../../tools.js";
@@ -101,6 +102,8 @@ const DeleteToolResponseSchema = z.object({
 
 const ApproveToolRequestSchema = z.object({
   approved: z.boolean().default(true),
+  /** Proof of presence (W3): turning a tool ON is setup. */
+  presence: presenceProofSchema.optional(),
 });
 
 const ApproveToolResponseSchema = z.object({
@@ -658,7 +661,11 @@ export function registerToolsRoutes(app: HubHono): void {
       );
       const caller = toolsRouter.createCaller(ctx as never);
       // Reuse the governed setApproved — owner/pod-admin gate runs inside.
-      await caller.setApproved({ id, approved });
+      await caller.setApproved({
+        id,
+        approved,
+        ...(parsed.data.presence ? { presence: parsed.data.presence } : {}),
+      });
 
       return c.json({ id, approved }, 200);
     } catch (err) {

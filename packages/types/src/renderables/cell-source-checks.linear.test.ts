@@ -56,6 +56,13 @@ const OPENINGS = [
   "new WebSocket(",
   "#abc ",
   "https://esm.sh/",
+  // The CSS and attribute loads (review A10): each opener the scan reads.
+  "url(",
+  'background:url("//',
+  ' srcset="',
+  ' data-src="',
+  '<a href="',
+  "<a ",
 ];
 
 describe("checkCellSource answers in time linear in the source", () => {

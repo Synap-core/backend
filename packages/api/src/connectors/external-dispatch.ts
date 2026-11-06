@@ -90,12 +90,14 @@ import {
   messagingSendGrantVerdict,
   successorChannel,
   planChannelSend,
+  reachHoldAtFiling,
   recordChannelSend,
   resolveSendAccount,
   type DraftedBy,
   type SendChannel,
 } from "./channel-send.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
+import { heldSend, type HeldSend } from "../services/channels/held-sends.js";
 
 const logger = createLogger({ module: "external-dispatch" });
 
@@ -253,6 +255,7 @@ const CONNECT_AFFORDANCE =
 export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { refuseWorkerSendPastCeiling } from "../services/playbooks/worker-send-ceiling.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
+import { encodeFormBody } from "./form-encode.js";
 import { isUuid } from "@synap-core/types/property-render";
 
 /**
@@ -830,6 +833,11 @@ export interface SendExternalMessageResult {
   externalMessageId?: string | null;
   /** A channel send: it started the chat. */
   first?: boolean;
+  /**
+   * Filed but HELD: the person is not reachable yet (not a LinkedIn
+   * connection). The proposal keeps the text; it is sendable once they connect.
+   */
+  held?: HeldSend;
 }
 
 /**
@@ -983,12 +991,31 @@ export async function sendExternalMessage(
   const appSend = !!getRequestGrant()?.clientId;
   const mustPropose = !!input.mustPropose || beyondGrant;
   if ((input.agentUserId || appSend || mustPropose) && !input.alreadyApproved) {
+    // The reach check at FILING (CRM Messages contract b4f8c2cd, B): a
+    // LinkedIn first message to someone who is not a connection is HELD, never
+    // refused: filed as a proposal with `data.held` and the next step named,
+    // so the draft is kept and shown, and becomes sendable once they connect
+    // (`services/channels/held-sends.ts`). Same rule as at dispatch
+    // (`readChannelReach`); a failed read files as before. An ungated send
+    // skips it: the dispatch check runs straight after.
+    let held: HeldSend | null = null;
+    if (sendChannel) {
+      const unreachable = await reachHoldAtFiling({
+        channel: sendChannel,
+        connector,
+        namedAccountId: input.accountId,
+      });
+      if (unreachable) held = heldSend(unreachable.error);
+    }
     const gateResult = await gateMessagingSend({
       ...input,
-      mustPropose,
+      // A held send is filed, never dispatched (it would fail): a `run` the
+      // gate would allow becomes a review, like every other mustPropose.
+      mustPropose: mustPropose || !!held,
       threadId,
       provider,
       sendChannel,
+      held,
     });
     if (gateResult.kind === "deny") {
       // Say why nothing was sent (this used to return a bare `success: false`),
@@ -1006,6 +1033,8 @@ export async function sendExternalMessage(
         success: false,
         proposed: true,
         proposalId: gateResult.proposalId,
+        // Held is a SUCCESS of filing, not a failure: no errorClass.
+        ...(held && sendChannel ? { held, channelId: sendChannel.id } : {}),
       };
     }
     if (gateResult.kind === "dry-run") {
@@ -1331,6 +1360,8 @@ async function gateMessagingSend(
     threadId: string | null;
     provider?: string;
     sendChannel: SendChannel | null;
+    /** Not reachable yet: filed with `data.held` (held-sends.ts). */
+    held?: HeldSend | null;
   }
 ): Promise<MessagingGateResult> {
   const provider = input.provider ?? "unipile";
@@ -1470,6 +1501,7 @@ async function gateMessagingSend(
           : {}),
         ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
         ...(input.subject ? { subject: input.subject } : {}),
+        ...(input.held ? { held: input.held } : {}),
         capabilityKind: "tool",
         capabilityId,
         workspaceId: proposalWorkspaceId,
@@ -2180,7 +2212,12 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     if (!encoded.ok) return encoded.result;
     fileBody = encoded.body;
     headers["Content-Type"] = fileBody.contentType;
-  } else if (body !== undefined) headers["Content-Type"] = "application/json";
+  }
+  const encodedBody =
+    fileBody || body === undefined
+      ? undefined
+      : encodeVaultBody(toolConfig, body);
+  if (encodedBody) headers["Content-Type"] = encodedBody.contentType;
 
   // Inject the secret per config — header or query. Never logged.
   if (auth.in === "query") {
@@ -2194,17 +2231,40 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     {
       method: method.toUpperCase(),
       headers,
-      body: fileBody
-        ? fileBody.body
-        : body !== undefined
-          ? JSON.stringify(body)
-          : undefined,
+      body: fileBody ? fileBody.body : encodedBody?.payload,
     },
     target.allowedPorts,
     fileBody
   );
   return sent.result;
 };
+
+/**
+ * The wire form of a vault:// tool's JSON-object body. JSON by default; a tool
+ * whose API takes form bodies declares `config.bodyEncoding: "form"` (Stripe v1:
+ * "accepts form-encoded request bodies"), and every body it sends is then
+ * `application/x-www-form-urlencoded` with bracket nesting (`form-encode.ts`).
+ * The encoding belongs to the TOOL (the API), not to a verb: a direct call and
+ * the replay of an approved proposal read the same tool row, so both send the
+ * same bytes. Any other value is JSON, as before.
+ */
+function encodeVaultBody(
+  toolConfig: Record<string, unknown>,
+  body: unknown
+): { contentType: string; payload: string } {
+  if (
+    toolConfig.bodyEncoding === "form" &&
+    body !== null &&
+    typeof body === "object" &&
+    !Array.isArray(body)
+  ) {
+    return {
+      contentType: "application/x-www-form-urlencoded",
+      payload: encodeFormBody(body as Record<string, unknown>),
+    };
+  }
+  return { contentType: "application/json", payload: JSON.stringify(body) };
+}
 
 /**
  * Encode a file body, turning its typed refusal (file gone, over a cap, a bad
@@ -2464,11 +2524,15 @@ async function sessionAuthCall(args: {
       fileBody = encoded.body;
       headers["Content-Type"] = fileBody.contentType;
     } else if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
       if (typeof body === "object" && body !== null && !Array.isArray(body)) {
         body = fillSessionSlots(body as Record<string, unknown>);
       }
     }
+    const encodedBody =
+      fileBody || body === undefined
+        ? undefined
+        : encodeVaultBody(toolConfig, body);
+    if (encodedBody) headers["Content-Type"] = encodedBody.contentType;
     headers[config.token.header] = `${config.token.prefix}${session.token}`;
 
     const sent = await sendVaultRequest(
@@ -2476,11 +2540,7 @@ async function sessionAuthCall(args: {
       {
         method: input.method.toUpperCase(),
         headers,
-        body: fileBody
-          ? fileBody.body
-          : body !== undefined
-            ? JSON.stringify(body)
-            : undefined,
+        body: fileBody ? fileBody.body : encodedBody?.payload,
       },
       target.allowedPorts,
       fileBody

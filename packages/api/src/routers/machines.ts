@@ -18,6 +18,7 @@
  * offers the same computer and replaces its key.
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import {
@@ -90,6 +91,7 @@ export const machinesRouter = router({
 
   /** The computer's own key lifetime; `null` = follow the pod default. */
   setKeyTtl: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         machineId: MachineIdShape,
@@ -123,6 +125,7 @@ export const machinesRouter = router({
    * do, so it rides the same gate as revoke.
    */
   setRunsScripts: credentialProcedure
+    .input(presenceInput)
     .input(z.object({ machineId: MachineIdShape, enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
@@ -169,6 +172,7 @@ export const machinesRouter = router({
    * `setRunsScripts`; leaving it takes back every seeded approval.
    */
   setBelongsTo: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         machineId: MachineIdShape,

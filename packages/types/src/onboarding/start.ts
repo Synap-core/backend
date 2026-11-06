@@ -13,6 +13,10 @@
 
 export const START_STEP_IDS = [
   "start:intent",
+  // The pod's notable defaults, shown once as switches the owner may change
+  // (founder, 5 Nov 2026, session b064a220). Right after the work question,
+  // so the first screen stays about the person's work (ui-composition §9).
+  "start:defaults",
   "start:views",
   "start:path",
   "start:setup",
@@ -27,6 +31,11 @@ export type StartStepId = (typeof START_STEP_IDS)[number];
 export interface StartValues {
   v: 1;
   intent?: { slug: string; source: "cloud" | "here"; at: string };
+  /**
+   * The owner went past the defaults step (Continue). The switches
+   * themselves are written by each setting's own door, never here.
+   */
+  defaults?: { at: string };
   view?: { profile: string; view: string; type: string; at: string };
   path?: { kind: "quick" | "cobuild"; at: string };
   setup?: { proposalId: string; at: string };
@@ -73,6 +82,7 @@ const isAfter = (a: string | null, b: string | null): boolean => {
 /** The §2.2 table. One rule per step; each reads facts, never a stored "done". */
 const DONE_RULES: Record<StartStepId, (f: StartFacts) => boolean> = {
   "start:intent": (f) => !!f.values?.intent,
+  "start:defaults": (f) => !!f.values?.defaults,
   "start:views": (f) =>
     !!f.values?.view || (f.startViewCount !== null && f.startViewCount < 2),
   "start:path": (f) => !!f.values?.path,

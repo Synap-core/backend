@@ -19,3 +19,4 @@ export * from "./merge.js";
 export * from "./readable.js";
 export * from "./inline-format.js";
 export * from "./columns.js";
+export * from "./object-ids.js";

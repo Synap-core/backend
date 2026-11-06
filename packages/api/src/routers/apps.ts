@@ -26,6 +26,7 @@
  * `adminSetPolicy` the pod admin's, never an agent's.
  */
 
+import { presenceInput } from "../utils/presence-input.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, AppRepository } from "@synap/database";
@@ -199,6 +200,7 @@ export const appsRouter = router({
    * response ONCE — it is stored nowhere and cannot be shown again.
    */
   issueKey: credentialProcedure
+    .input(presenceInput)
     .input(z.object({ publicId: PublicId }))
     .mutation(({ ctx, input }) =>
       // An agent principal is refused by the service from the request's
@@ -255,6 +257,7 @@ export const appsRouter = router({
    * may be delivered (exact match; `[]` = the app signs no one in). Owner only.
    */
   setRedirectUris: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         publicId: PublicId,
@@ -280,6 +283,7 @@ export const appsRouter = router({
    * connection starts). The owner's own act; an agent is refused.
    */
   setWriteMode: credentialProcedure
+    .input(presenceInput)
     .input(z.object({ publicId: PublicId, applyAutomatically: z.boolean() }))
     .mutation(({ ctx, input }) =>
       setAppWriteMode({
@@ -296,6 +300,7 @@ export const appsRouter = router({
    * agent's proposals from inside it (default true)? Owner only.
    */
   setSignInPolicy: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         publicId: PublicId,

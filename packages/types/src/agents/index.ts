@@ -1078,5 +1078,11 @@ export * from "./model-providers.js";
 export * from "./route-choice.js";
 // Agents inside a computer: seat + engine + role (0395).
 export * from "./seats.js";
+// The message metadata keys only the pod writes, and the one helper that drops them.
+export * from "./server-owned-message-meta.js";
 // One agent's typed message to another session (the coordination post).
 export * from "./session-post.js";
+// Can the pod get an agent working now (the roster's `wake`), and its template.
+export * from "./wake.js";
+// Who runs a playbook for a person: asked once, remembered (slice 5a).
+export * from "./run-choice.js";

@@ -16,6 +16,12 @@
 import { isHttpUrl } from "../navigation/index.js";
 import type { UnitTone } from "../units/state.js";
 import {
+  NEEDS_YOU_RISK_LABELS,
+  needsYouRisk,
+  type NeedsYouRiskMark,
+} from "../needs-you/risk.js";
+import { nounInSentence, resolveObjectNoun } from "../vocabulary/index.js";
+import {
   ASK_CHANGED_PREFIX,
   askAnswersInline,
   askOptionKey,
@@ -32,6 +38,8 @@ import {
   type ProvideConnectUnavailableReason,
   ASK_CONFIRM_KEYS,
   effectiveSlotAsk,
+  effectiveAskStakes,
+  confirmRecommendedKey,
   type AskCause,
   type AskCauseKind,
   type AskAnswerValue,
@@ -40,10 +48,13 @@ import type { RoomPostMeta } from "./room-post.js";
 import {
   FATE_COPY,
   FATE_TONE,
+  JOB_NOUN,
   REVIEW_LATER_AFTER_MS,
 } from "../proposals/fate.js";
 import { ageSpan, ageSpanSpoken, shortDate } from "../lens/age.js";
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
+import { isSetAside } from "../needs-you/set-aside.js";
+import { NEEDS_YOU_DUE_SOON_MS } from "../needs-you/priority.js";
 // The zod-free leaf (the needs-you rule reaches it without zod): re-exported
 // here so `./card.js` callers keep their import.
 import {
@@ -53,6 +64,14 @@ import {
 export { ASK_MODES_ENDING_WITH_SESSION, askEndsWithSession };
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
+
+/**
+ * The person's words for the engine's units, through the vocabulary door
+ * (founder G1, 2026-10-30): a session is a "job" (`JOB_NOUN`, defined once in
+ * `../proposals/fate.ts`), a stage a "step". The card face never says
+ * "session" (plan c727854c W1b): the engine word belongs on rung 3 only.
+ */
+const STEP = nounInSentence(resolveObjectNoun("stage"));
 
 /**
  * The card's words, ONCE for both surfaces. Product copy, not vocabulary: none
@@ -89,12 +108,19 @@ export const ASK_COPY = {
    * ({@link askRecommendationOutcome}). Nothing is drawn for `none`.
    */
   followedAiPick: "Followed AI pick",
-  /** The ask's risk mark ({@link askRiskView}); low draws nothing. */
-  riskHigh: "High risk",
-  riskMedium: "Medium risk",
+  /** The ask's risk marks ({@link needsYouRisk}, `../needs-you/risk.ts`). */
+  riskHigh: NEEDS_YOU_RISK_LABELS.high,
+  riskMedium: NEEDS_YOU_RISK_LABELS.medium,
   choseDifferently: "Chose differently from AI",
   /** The overrode mark's detail line, when the recommended option is known. */
   aiPicked: (label: string): string => `AI picked: ${label}`,
+  /**
+   * The ask's deadline mark (`answerBy`, {@link askCardView} `due`): a time
+   * past the hour, the span within it, or how late it is.
+   */
+  neededBy: (when: string): string => `Needed by ${when}`,
+  neededIn: (span: string): string => `Needed in ${span}`,
+  overdueBy: (span: string): string => `Overdue by ${span}`,
   /** A provide this host has not wired (`askRowRegion` → `none`). */
   provideTitle: "Not answerable here yet",
   provideBody: "Talk it through with the agent.",
@@ -137,7 +163,7 @@ export const ASK_COPY = {
     "New secrets are added in the Synap app, never typed here.",
   /** Provide, secret: what handing it over lets the asking agent do. */
   provideGrantNote: (agent: string, minutes: number): string =>
-    `${agent} will be able to read it for ${minutes} minutes, in this session only.`,
+    `${agent} will be able to read it for ${minutes} minutes, in this ${JOB_NOUN} only.`,
   /** Provide, secret: the pod could not tell which agent asked. */
   provideNoGrantNote:
     "No agent will be able to read it yet. The agent has to ask for access.",
@@ -202,7 +228,7 @@ export const ASK_COPY = {
   /** `note` is the agent's one-line reason, when it gave one. */
   withdrawn: (note: string | null | undefined): string =>
     note?.trim() ? `Withdrawn · ${note.trim()}` : "Withdrawn",
-  closedSessionEnded: "Closed · the session ended",
+  closedSessionEnded: `Closed · the ${JOB_NOUN} ended`,
   /**
    * A relayed answer's words on its receipt (a relay waiting for the tap, or
    * one recorded): the person's own QUOTE when the agent carried it, else the
@@ -230,7 +256,7 @@ export const ASK_COPY = {
    */
   askCause: (kind: AskCauseKind, at: string | null): string => {
     // A kind a newer pod sends: the ask still lives in a session.
-    const head = ASK_CAUSE_WORDS[kind] ?? "From the session";
+    const head = ASK_CAUSE_WORDS[kind] ?? `From the ${JOB_NOUN}`;
     return at ? `${head} · ${at}` : head;
   },
 } as const;
@@ -242,11 +268,11 @@ export const ASK_COPY = {
  */
 const ASK_CAUSE_UNBLOCKS: Record<AskCauseKind, string> = {
   decision: "The decision is recorded",
-  gate: "The session's next stage starts",
+  gate: `The ${JOB_NOUN}'s next ${STEP} starts`,
   run: "The run goes on",
   external_approval: "The external agent's run goes on",
   param: "The run starts with your answer",
-  criterion: "The session's check is graded",
+  criterion: `The ${JOB_NOUN}'s check is graded`,
 };
 
 /**
@@ -274,11 +300,11 @@ const ASK_CAUSE_WORDS: Record<AskCauseKind, string> = {
   // Only a decision an AGENT wrote asks (founder, 2026-10-26), so never "your
   // note". Its title is already the card's heading: the door names the kind.
   decision: "From a proposed decision",
-  gate: "From the session's gate",
+  gate: `Before the ${JOB_NOUN}'s next ${STEP}`,
   run: "From the run",
   external_approval: "From the external agent's run",
   param: "From the playbook's inputs",
-  criterion: "From the session's checks",
+  criterion: `From the ${JOB_NOUN}'s checks`,
 };
 
 // ─── Where the slot stands ──────────────────────────────────────────────────
@@ -454,20 +480,73 @@ export function followUpChips(option: {
 
 // ─── Risk ───────────────────────────────────────────────────────────────────
 
-/** The ask's risk mark, or `null` when it draws nothing (low or absent). */
-export function askRiskView(ask: { risk?: AskRisk } | null | undefined): {
-  level: "high" | "medium";
-  label: string;
-  tone: "danger" | "warning";
-} | null {
-  switch (ask?.risk) {
-    case "high":
-      return { level: "high", label: ASK_COPY.riskHigh, tone: "danger" };
-    case "medium":
-      return { level: "medium", label: ASK_COPY.riskMedium, tone: "warning" };
-    default:
-      return null;
+/**
+ * The ask's risk mark, or `null` when it draws nothing.
+ *
+ * @deprecated The ONE risk rule is {@link needsYouRisk} (`../needs-you/risk.ts`),
+ * for asks and requests alike; this is its ask arm, kept until the web
+ * `AskDecisionTree` reads it directly. Its tone is a `UnitTone` (`error`),
+ * no longer the off-scale `danger`.
+ */
+export function askRiskView(
+  ask: { risk?: AskRisk; reversible?: boolean } | null | undefined
+): NeedsYouRiskMark | null {
+  return needsYouRisk({ kind: "ask", ask });
+}
+
+/**
+ * The pod's stamp a swipe needs: was the answer FORCED to be a commitment
+ * (a gate, a pending relay, a human-only move, a spend: `podForcesCommitment`,
+ * `@synap/api` `session-answer.ts`)? Only the pod computes it, so the caller
+ * passes what the pod said, and REQUIRED: `null` / `undefined` (not stamped,
+ * an older pod) is never read as "not forced".
+ */
+export interface AskSwipeInput {
+  ask: Ask | null | undefined;
+  forced: boolean | null | undefined;
+}
+
+/**
+ * The answer a swipe on this ask GIVES, or `null` when it may not be swiped.
+ * The ask twin of `isSwipeSafe` (`../proposals/intent.ts`, requests), and like
+ * it FAILS CLOSED on every absence (founder, 2026-11-04: a swipe answers only
+ * routine, reversible, low-risk items):
+ *
+ *   - the swipe gives the agent's RECOMMENDED answer, never a guess: a
+ *     `confirm` with a recommended yes or no, or a `choose` with ONE
+ *     recommended option that opens no follow-up. No recommendation, no swipe,
+ *     so a client can never swipe "no" by accident. `act`, `provide` and
+ *     `form` never: each needs the person to do or type something;
+ *   - routine: the pod stamped it not forced (`forced === false`) and the ask
+ *     raises no commitment itself (`effectiveAskStakes`: declared, a secret);
+ *   - reversible: the asker said `reversible: true`; unsaid is not swipeable;
+ *   - no risk mark: not high, not medium, not irreversible ({@link needsYouRisk}).
+ */
+export function askSwipeAnswer(input: AskSwipeInput): AskAnswerValue | null {
+  const { ask, forced } = input;
+  if (!ask || forced !== false) return null;
+  let answer: AskAnswerValue;
+  if (ask.mode === "confirm") {
+    const key = confirmRecommendedKey(ask);
+    if (key === null) return null;
+    answer = { type: "confirm", confirmed: key === ASK_CONFIRM_KEYS.yes };
+  } else if (ask.mode === "choose") {
+    const recommended = ask.options.filter((o) => o.recommended);
+    if (recommended.length !== 1 || recommended[0]!.followUp) return null;
+    answer = { type: "chip", chip: recommended[0]! };
+  } else {
+    return null;
   }
+  if (effectiveAskStakes({ ask, forced: false }) !== "routine") return null;
+  // Read structurally: `reversible` is the ticket field (L3), absent before it.
+  const facts = ask as { risk?: unknown; reversible?: unknown };
+  if (facts.reversible !== true) return null;
+  return needsYouRisk({ kind: "ask", ask: facts }) === null ? answer : null;
+}
+
+/** Can this ask be swiped at all? {@link askSwipeAnswer} gives an answer. */
+export function askIsSwipeSafe(input: AskSwipeInput): boolean {
+  return askSwipeAnswer(input) !== null;
 }
 
 /** The OFFERED option a chip stands for, or `null` when it is not one. */
@@ -654,6 +733,8 @@ export interface AskCardSlot {
   pendingRelay?: AskCardPendingRelay | null;
   /** The closing agent kept it owed past its session: it no longer ends with it. */
   keptOwedAt?: string | null;
+  /** The person set it aside until then ("Later", `../needs-you/set-aside.ts`). */
+  laterUntil?: string | null;
   /** The asking agent's user id (`ExpectedOutput.askedBy`). */
   askedBy?: string | null;
   /**
@@ -716,9 +797,10 @@ export function askFate(
  * and its list fold read (api `needs-you-union.ts`), so they cannot disagree.
  */
 export function isAskReviewLater(
-  slot: Pick<AskCardSlot, "owedSince" | "pendingRelay">,
+  slot: Pick<AskCardSlot, "owedSince" | "pendingRelay" | "laterUntil">,
   now: Date | number = Date.now()
 ): boolean {
+  if (isSetAside(slot.laterUntil, now)) return true;
   return askFate({ label: "", ...slot }, now).kind === "review_later";
 }
 
@@ -815,10 +897,81 @@ export interface AskCardView {
    * `spoken` is the same in full words, for a screen reader.
    */
   ageFate: { label: string; spoken: string; tone: UnitTone; fate: AskFate };
+  /**
+   * When the answer is needed (`ask.answerBy`), as ONE mark: "Needed by
+   * 17:00", "Needed in 40m" within the hour (the window that makes it P0 and
+   * lets its push break through Focus, `NEEDS_YOU_DUE_SOON_MS`), "Overdue by
+   * 12m" past it. `soon` is true inside that window or past it. `null` when the
+   * ask names no readable time.
+   */
+  due: AskCardDue | null;
+  /** What the answer will DO (`ask.consequence`), one line; `null` when the agent said nothing. */
+  consequence: string | null;
   /** The answer buttons (confirm, choose); empty for every other mode. */
   answers: AskCardAnswer[];
   /** The collapsed note affordance. */
   note: { label: string };
+}
+
+export interface AskCardDue {
+  label: string;
+  /** The same in full words, for a screen reader. */
+  spoken: string;
+  tone: UnitTone;
+  /** Within the hour or past it: the ask is the person's top priority. */
+  soon: boolean;
+  /** `answerBy`, as given. */
+  at: string;
+}
+
+/**
+ * The deadline mark of an ask (`answerBy`), or null when it names no readable
+ * instant. Past the hour, the time of day (with the date when it is not
+ * today, in the device's zone); within it, the span; past it, how late.
+ */
+export function askCardDue(
+  answerBy: unknown,
+  now: Date | number = Date.now()
+): AskCardDue | null {
+  if (typeof answerBy !== "string") return null;
+  const at = Date.parse(answerBy);
+  if (!Number.isFinite(at)) return null;
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  const left = at - nowMs;
+  if (left <= 0) {
+    return {
+      label: ASK_COPY.overdueBy(ageSpan(-left)),
+      spoken: ASK_COPY.overdueBy(ageSpanSpoken(-left)),
+      tone: "error",
+      soon: true,
+      at: answerBy,
+    };
+  }
+  if (left <= NEEDS_YOU_DUE_SOON_MS) {
+    return {
+      label: ASK_COPY.neededIn(ageSpan(left)),
+      spoken: ASK_COPY.neededIn(ageSpanSpoken(left)),
+      tone: "warning",
+      soon: true,
+      at: answerBy,
+    };
+  }
+  const when = new Date(at);
+  const time = when.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const today = when.toDateString() === new Date(nowMs).toDateString();
+  const words = ASK_COPY.neededBy(
+    today ? time : `${shortDate(answerBy)}, ${time}`
+  );
+  return {
+    label: words,
+    spoken: words,
+    tone: "textSecondary",
+    soon: false,
+    at: answerBy,
+  };
 }
 
 export interface AskCardViewOptions {
@@ -899,6 +1052,8 @@ export function askCardView(
     context,
     asker,
     ageFate,
+    due: askCardDue(ask?.answerBy, now),
+    consequence: ask?.consequence?.trim() || null,
     answers: askCardAnswers(ask),
     note: { label: ASK_COPY.addNote },
   };

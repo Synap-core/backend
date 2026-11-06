@@ -234,6 +234,13 @@ beforeAll(async () => {
       [randomUUID(), agent, operator]
     );
   }
+  // AGENT is awake: a runner on its computer served it a moment ago. Since
+  // slice 5a a run that names nobody goes to the assigned agent only when it
+  // is awake, else to Synap AI (`playbooks.run-choice.pglite.test.ts`).
+  await q(
+    `update api_keys set instance_label = 'devbox', last_used_at = now(), worker_served_at = now() where user_id = $1`,
+    [AGENT]
+  );
   await q(`insert into workspaces (id, name) values ($1, 'CRM')`, [WS]);
   await q(
     `insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner')`,

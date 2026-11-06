@@ -25,6 +25,7 @@ import {
   loadPlaybookContextSkill,
   renderPlaybookMethod,
 } from "../playbook-method.js";
+import { resolveRunToolProfile } from "../run-tool-profile.js";
 
 /**
  * The stage section moved to the ONE method renderer (`playbook-method.ts`),
@@ -132,6 +133,20 @@ export class IsAgentExecutor implements Executor {
       };
     }
 
+    // The run's declared tools (founder, 2026-11-05): the IS gives this turn
+    // the run core tools plus only the capabilities the playbook grants (its
+    // `grants`, the active stage's) and those serving what it and its space
+    // declare. Never throws: a failed read comes back `capabilitiesRead:
+    // "failed"`, and the IS tells the agent so.
+    const run = ctx.playbookId
+      ? await resolveRunToolProfile({
+          playbookId: ctx.playbookId,
+          workspaceId: ctx.workspaceId,
+          userId: ctx.userId,
+          sessionId: ctx.sessionId,
+        })
+      : undefined;
+
     // CANONICAL IS kickoff — the SAME pg-boss A2AI_TRIGGER path the threads REST
     // route uses (resolveIntelligenceService + getBoss().send), NOT a side-channel
     // websocket broadcast (which would never enqueue the IS → the run would hang
@@ -151,6 +166,7 @@ export class IsAgentExecutor implements Executor {
       // playbook_run (`POST /focus-sessions/:id/complete-run`); this id is the
       // only thing on the wire that names it.
       focusSessionId: ctx.sessionId,
+      run,
     });
     if (!triggered) {
       return {

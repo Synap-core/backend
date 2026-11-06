@@ -26,7 +26,11 @@ import { readableDescription } from "../../../../lib/marketplace";
 import { useReplaceParams } from "../../../../lib/use-replace-params";
 import { useT } from "../../../../lib/i18n/locale-provider";
 import { kindIcon } from "../../../_lib/object/kind-icon";
-import { FilterChips } from "../../components/filter-chips";
+import {
+  FilterChip,
+  FilterRow,
+  type FilterOption,
+} from "../../components/filter-chip";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -130,34 +134,23 @@ export function ToolsList() {
   const capsKnown = compositions.isSuccess;
   const skillsKnown = !skills.isError && skills.skills !== null;
   const skillCount = (n: number) => (skills.capped ? `${n}+` : n);
-  const chips: Array<{
-    key: ToolFilter;
-    label: string;
-    count?: number | string;
-  }> = [
+  const allCount =
+    settled && capsKnown && skillsKnown ? skillCount(counts.all) : null;
+  const typeOptions: FilterOption<Exclude<ToolFilter, "all">>[] = [
     {
-      key: "all",
-      label: t("type.all"),
-      count:
-        settled && capsKnown && skillsKnown
-          ? skillCount(counts.all)
-          : undefined,
-    },
-    {
-      key: "capabilities",
+      id: "capabilities",
       label: t("type.capabilities"),
-      count: settled && capsKnown ? counts.capabilities : undefined,
+      count: settled && capsKnown ? counts.capabilities : null,
     },
     {
-      key: "instructions",
+      id: "instructions",
       label: t("type.instructions"),
-      count:
-        settled && skillsKnown ? skillCount(counts.instructions) : undefined,
+      count: settled && skillsKnown ? skillCount(counts.instructions) : null,
     },
     {
-      key: "code",
+      id: "code",
       label: t("type.code"),
-      count: settled && skillsKnown ? skillCount(counts.code) : undefined,
+      count: settled && skillsKnown ? skillCount(counts.code) : null,
     },
   ];
 
@@ -190,28 +183,31 @@ export function ToolsList() {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <Input
-          aria-label={t("search.aria")}
-          placeholder={t("search.placeholder")}
-          value={search}
-          onValueChange={setSearch}
-          size="sm"
-          radius="md"
-          variant="bordered"
-          startContent={<Search size={14} className="text-foreground/40" />}
-          className="max-w-md flex-1"
-        />
-        <ViewSwitch view={view} onChange={chooseView} />
-      </div>
-
-      <FilterChips
-        param="type"
-        defaultKey="all"
-        active={filter}
-        chips={chips}
-        ariaLabel={t("type.aria")}
+      <FilterRow
         className="mb-1"
+        search={
+          <Input
+            aria-label={t("search.aria")}
+            placeholder={t("search.placeholder")}
+            value={search}
+            onValueChange={setSearch}
+            size="sm"
+            radius="md"
+            variant="bordered"
+            startContent={<Search size={14} className="text-foreground/40" />}
+          />
+        }
+        filters={
+          <FilterChip
+            label={t("type.aria")}
+            allLabel={t("type.all")}
+            param="type"
+            value={filter === "all" ? null : filter}
+            allCount={allCount}
+            options={typeOptions}
+          />
+        }
+        tabs={<ViewSwitch view={view} onChange={chooseView} />}
       />
 
       {compositions.isError && (

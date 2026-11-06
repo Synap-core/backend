@@ -17,27 +17,20 @@
  *     `apps`), relay-app (`src`, `app`) and browser (`electron`), comments
  *     stripped;
  *   - a DEFINITION of a hunted name (`function X`, `const|let|var|class X`)
- *     outside this package is red, unless it is a copy that predates the home
- *     and waits for its adoption lane ({@link PENDING_ADOPTION});
- *   - a pending copy that is still there must AGREE with the home wherever it
- *     can be read without running it (the words, the route map, the limits),
- *     so the copies cannot drift while they wait.
- *
- * HOW IT BECOMES STRICT (lanes 2 and 4). App repos land on their main with
- * no backend PR, and backend CI reads them at main, so this guard cannot fail
- * on a copy that is GONE (it would turn backend main red the moment an app
- * lane lands). A copy removed by its lane leaves a stale row, which is only
- * reported. Each adoption lane, once its commit is on its main, deletes its
- * rows here in one backend PR; a repo with no row left is fully strict: any
- * definition of a hunted name in it is red.
+ *     outside this package is red. Every repo is strict since 4 Nov 2026:
+ *     synap-app adopted the home at ac8bdfed (lane 2), relay-app at 29cc3a13
+ *     (lane 4); browser never had a copy. A new copy imports the rule from
+ *     `@synap-core/types/lens` instead;
+ *   - the phone's catalog (`relay-app/src/features/work-cells/copy.ts`) once
+ *     mirrored the empty words under its own keys; it holds none of them now,
+ *     and a mirror coming back is red (it would drift from the home).
  *
  * WHAT IT DOES NOT SEE (stated): a copy under ANOTHER name (only the hunted
  * and former names are matched); a copy that re-implements the rule inline in
- * a component; the function copies' BEHAVIOUR (they are matched by name, and
- * only the readable tables are compared). relay-app and browser are scanned
- * only where their checkout sits beside this one: backend CI lays out
- * synap-app alone, so there the phone half is skipped with the reason printed
- * (the devbox and a developer root have all three). A missing synap-app in CI
+ * a component; a copy's BEHAVIOUR (matched by name only). relay-app and
+ * browser are scanned only where their checkout sits beside this one: backend
+ * CI lays out synap-app alone, so there the phone half is skipped with the
+ * reason printed (the devbox and a developer root have all three). A missing synap-app in CI
  * is a failure, never a skip.
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -113,24 +106,7 @@ const DEFINITION = new RegExp(
   "gm"
 );
 
-// ── The copies that predate the home (each removed by its adoption lane) ────
-
 type Repo = "synap-app" | "relay-app" | "browser";
-
-/**
- * The copies that still wait for their adoption lane. None since 4 Nov 2026:
- * synap-app adopted at ac8bdfed (lane 2) and relay-app at 29cc3a13 (lane 4);
- * browser never had one. Every repo is now fully strict. Only shrinks: never
- * add a row (a new copy imports the rule from `@synap-core/types/lens`).
- */
-const PENDING_ADOPTION: Record<
-  Repo,
-  ReadonlyArray<{ file: string; name: string; lane: string }>
-> = {
-  "synap-app": [],
-  "relay-app": [],
-  browser: [],
-};
 
 const ROOTS: Record<Repo, string[]> = {
   "synap-app": ["packages", "apps"],
@@ -215,68 +191,6 @@ const CHECKOUTS: Array<{ repo: Repo; root: string | null; required: boolean }> =
 /** The budget of one repo's scan: generous, it is a filesystem read, not a hang. */
 const SCAN_TIMEOUT_MS = 60_000;
 
-// ── The tables a pending copy can be compared on ────────────────────────────
-
-/** `export const NAME = { key: 'words', … }` → { key: words } (one pair per line). */
-function tableOf(source: string, name: string): Record<string, string> | null {
-  const m = source.match(
-    new RegExp(String.raw`(?:const|let|var)\s+${name}\s*=\s*\{([\s\S]*?)\n\}`)
-  );
-  if (!m) return null;
-  const out: Record<string, string> = {};
-  for (const [, key, , words] of m[1]!.matchAll(
-    /^\s*(\w+):\s*(['"])(.*)\2,?\s*$/gm
-  )) {
-    out[key!] = words!;
-  }
-  return out;
-}
-
-/** `const NAME = { a: 'x', b: 'y' }` on one line → { a: x, b: y }. */
-function inlineMapOf(
-  source: string,
-  name: string
-): Record<string, string> | null {
-  const m = source.match(
-    new RegExp(String.raw`(?:const|let|var)\s+${name}\s*=\s*\{([^}]*)\}`)
-  );
-  if (!m) return null;
-  const out: Record<string, string> = {};
-  for (const [, key, , value] of m[1]!.matchAll(
-    /(\w+)\s*:\s*(['"])([^'"]*)\2/g
-  )) {
-    out[key!] = value!;
-  }
-  return out;
-}
-
-/** `const NAME = 12;` → 12. */
-function numberOf(source: string, name: string): number | null {
-  const m = source.match(
-    new RegExp(String.raw`(?:const|let|var)\s+${name}\s*=\s*(-?\d+)\s*;`)
-  );
-  return m ? Number(m[1]) : null;
-}
-
-/** The `'key': 'words'` pairs of a catalog object opened by `opener` (relay's `copy.ts`). */
-function catalogOf(
-  source: string,
-  opener: RegExp
-): Record<string, string> | null {
-  const start = source.search(opener);
-  if (start === -1) return null;
-  const end = source.indexOf("\n}", start);
-  const body = source.slice(start, end === -1 ? undefined : end);
-  const out: Record<string, string> = {};
-  // Groups: 1 the key's quote, 2 the key, 3 the words' quote, 4 the words.
-  for (const [, , key, , words] of body.matchAll(
-    /(['"])([\w.]+)\1\s*:\s*(['"])(.*?)\3\s*,?\s*$/gm
-  )) {
-    out[key!] = words!;
-  }
-  return out;
-}
-
 // ── The guard ───────────────────────────────────────────────────────────────
 
 describe("work block rules: one home in @synap-core/types/lens", () => {
@@ -313,7 +227,7 @@ describe("work block rules: one home in @synap-core/types/lens", () => {
   });
 
   for (const { repo, root, required } of CHECKOUTS) {
-    const label = `${repo}: no definition of a block rule outside the home but its pending copies`;
+    const label = `${repo}: no definition of a block rule outside the home`;
     if (!root) {
       if (required) {
         it(label, () => {
@@ -334,129 +248,35 @@ describe("work block rules: one home in @synap-core/types/lens", () => {
     it(label, { timeout: SCAN_TIMEOUT_MS }, () => {
       const { files, defs } = scan(root, repo);
       expect(files, `${repo}: the scan read no tree`).toBeGreaterThan(100);
-      const pending = new Set(
-        PENDING_ADOPTION[repo].map((p) => `${p.file}#${p.name}`)
-      );
-      const unexpected = defs
-        .filter((d) => !pending.has(`${d.file}#${d.name}`))
-        .map((d) => `${d.file}:${d.line} defines ${d.name}`);
       expect(
-        unexpected,
+        defs.map((d) => `${d.file}:${d.line} defines ${d.name}`),
         "a block rule is defined outside @synap-core/types/lens: import it from there"
       ).toEqual([]);
-
-      const found = new Set(defs.map((d) => `${d.file}#${d.name}`));
-      const stale = PENDING_ADOPTION[repo].filter(
-        (p) => !found.has(`${p.file}#${p.name}`)
-      );
-      if (stale.length) {
-        console.warn(
-          `[block-rules-one-home] ${repo}: adopted, delete these PENDING_ADOPTION rows: ` +
-            stale.map((p) => `${p.file}#${p.name} (lane ${p.lane})`).join(", ")
-        );
-      }
     });
 
-    it(`${repo}: a pending copy that is still there agrees with the home`, () => {
-      const read = (file: string): string | null => {
+    if (repo === "relay-app") {
+      it("relay-app: the phone's catalog mirrors none of the empty words", () => {
+        let src: string;
         try {
-          return readFileSync(join(root, file), "utf8");
+          src = readFileSync(
+            join(root, "src/features/work-cells/copy.ts"),
+            "utf8"
+          );
         } catch {
-          return null;
+          return; // the catalog file is gone: nothing can mirror the words
         }
-      };
-      let compared = 0;
-      for (const { file, name } of PENDING_ADOPTION[repo]) {
-        const src = read(file);
-        if (!src) continue;
-        if (name === "LENS_EMPTY_TITLES" || name === "LENS_EMPTY_WHY") {
-          const table = tableOf(src, name);
-          if (!table) continue;
-          const words =
-            name === "LENS_EMPTY_TITLES"
-              ? lens.lensEmptyTitle
-              : lens.lensEmptyWhy;
-          const home = Object.fromEntries(
-            Object.keys(lens.LENS_EMPTY_TITLE_KEY).map((cls) => [
-              cls,
-              words(cls as keyof typeof lens.LENS_EMPTY_TITLE_KEY, "en"),
-            ])
-          );
-          expect(table, `${file} ${name}`).toEqual(home);
-          compared++;
-        } else if (name === "STATUS_OF_ROUTE_KIND" || name === "ROUTE_KIND") {
-          const map = inlineMapOf(src, name);
-          if (!map) continue;
-          expect(map, `${file} ${name}`).toEqual(lens.STATUS_OF_ROUTE_KIND);
-          compared++;
-        } else if (
-          name === "LENS_CELL_LIMIT_MIN" ||
-          name === "LENS_CELL_LIMIT_MAX"
-        ) {
-          const n = numberOf(src, name);
-          if (n === null) continue;
-          expect(n, `${file} ${name}`).toBe(
-            name === "LENS_CELL_LIMIT_MIN"
-              ? lens.LENS_SECTION_LIMIT_MIN
-              : lens.LENS_SECTION_LIMIT_MAX
-          );
-          compared++;
-        }
-      }
-      // The phone's catalog mirrored the empty words under its own keys (en + fr).
-      if (repo === "relay-app") {
-        const src = read("src/features/work-cells/copy.ts");
-        const catalogs = src
-          ? {
-              en: catalogOf(src, /const en = \{/),
-              fr: catalogOf(src, /const fr\b[^=]*= \{/),
-            }
-          : null;
-        const classes = Object.keys(lens.LENS_EMPTY_TITLE_KEY) as Array<
-          keyof typeof lens.LENS_EMPTY_TITLE_KEY
-        >;
-        for (const locale of ["en", "fr"] as const) {
-          const cat = catalogs?.[locale];
-          if (!cat) continue;
-          let mirrored = 0;
-          for (const cls of classes) {
-            const title = cat[`relay.workCell.empty.${cls}`];
-            const why = cat[`relay.workCell.why.${cls}`];
-            if (title !== undefined) {
-              expect(title, `relay ${locale} empty.${cls}`).toBe(
-                lens.lensEmptyTitle(cls, locale)
-              );
-              mirrored++;
-            }
-            if (why !== undefined) {
-              expect(why, `relay ${locale} why.${cls}`).toBe(
-                lens.lensEmptyWhy(cls, locale)
-              );
-              mirrored++;
-            }
-          }
-          // All of the mirror, or none of it once adopted (no mirrored key left
-          // in the file): never a parse that sees half, or nothing, of a mirror.
-          const keysLeft = (src ?? "").includes("relay.workCell.empty.");
-          expect(
-            keysLeft ? [classes.length * 2] : [0],
-            `relay ${locale}: the catalog parse saw ${mirrored} of the mirrored words`
-          ).toContain(mirrored);
-          compared += mirrored;
-        }
-      }
-      // Non-vacuity while copies wait: a repo with a pending table compares it.
-      const tables = PENDING_ADOPTION[repo].filter((p) =>
-        /^(LENS_EMPTY_TITLES|LENS_EMPTY_WHY|STATUS_OF_ROUTE_KIND|ROUTE_KIND|LENS_CELL_LIMIT_MIN|LENS_CELL_LIMIT_MAX)$/.test(
-          p.name
-        )
-      );
-      const stillThere = tables.filter((p) => {
-        const s = read(p.file);
-        return s !== null && definitionsIn(s).some((d) => d.name === p.name);
+        const mirrored = (
+          Object.keys(lens.LENS_EMPTY_TITLE_KEY) as string[]
+        ).flatMap((cls) =>
+          [`relay.workCell.empty.${cls}`, `relay.workCell.why.${cls}`].filter(
+            (key) => src.includes(key)
+          )
+        );
+        expect(
+          mirrored,
+          "relay's catalog mirrors the lens empty words: read them from @synap-core/types/lens (lensEmptyTitle / lensEmptyWhy)"
+        ).toEqual([]);
       });
-      if (stillThere.length)
-        expect(compared).toBeGreaterThanOrEqual(stillThere.length);
-    });
+    }
   }
 });

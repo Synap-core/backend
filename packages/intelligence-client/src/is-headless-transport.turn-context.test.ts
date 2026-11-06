@@ -48,6 +48,21 @@ describe("requestHeadlessChatText turnContext", () => {
   });
 });
 
+describe("requestHeadlessChatText run", () => {
+  // A playbook run's declared tools reach the IS ONLY through this body: the
+  // IS then sends the run core tools plus these verbs (lean run tools).
+  it("forwards a run's tool profile verbatim, and omits it outside a run", async () => {
+    const run = {
+      playbookId: "pb-1",
+      intents: ["publish_post"],
+      verbs: ["postiz_schedule_post"],
+      capabilitiesRead: "ok",
+    };
+    expect((await capturedBody({ run })).run).toEqual(run);
+    expect(await capturedBody({})).not.toHaveProperty("run");
+  });
+});
+
 describe("requestHeadlessChatText agentOverrides", () => {
   // The a2ai worker's per-agent config (model, prompt, tools) reaches the IS
   // ONLY through this body; null (no row) and absent (unknown) stay distinct.

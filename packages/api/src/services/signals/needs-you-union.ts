@@ -62,6 +62,9 @@ import {
   type NeedsYouConvertibleGoal,
   type NeedsYouConvertibleGoals,
   type NeedsYouInvite,
+  needsYouPriority,
+  type NeedsYouPriority,
+  isSetAside,
 } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
@@ -401,6 +404,22 @@ export interface Signal {
    */
   needsYouClass?: NeedsYouClass;
   /**
+   * THE priority P0-P3 (`needsYouPriority`, `@synap-core/types/needs-you`),
+   * DERIVED by the pod from the rule's class and, on an `owed-slot`, its ask's
+   * `answerBy` (due within the hour = P0) and `urgency` (`whenever` only
+   * lowers it). An agent never nominates it. On an `owed-slot` and on a
+   * classified `proposal-cluster`; absent elsewhere.
+   */
+  priority?: NeedsYouPriority;
+  /**
+   * `proposal-cluster`: the kind of object the proposal acts on (the cluster's
+   * `targetType`: "tool", a profile slug, ...), so the Inbox row wears that
+   * kind's own icon instead of the same decision mark on every row. Absent when
+   * the proposal names no target kind. A token, never a label: surfaces resolve
+   * its glyph and noun through the vocabulary.
+   */
+  subjectKind?: string;
+  /**
    * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
    * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
    */
@@ -572,6 +591,8 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "reviewLater",
   "blocksOpenPr",
   "needsYouClass",
+  "priority",
+  "subjectKind",
   "unblocks",
   "source",
   "by",
@@ -902,7 +923,18 @@ export function signalFromCluster(
       ? "older"
       : ageBucketOf(cluster.latestAt, now),
     ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
-    ...(cluster.needsYouClass ? { needsYouClass: cluster.needsYouClass } : {}),
+    ...(cluster.targetType?.trim()
+      ? { subjectKind: cluster.targetType.trim() }
+      : {}),
+    ...(cluster.needsYouClass
+      ? {
+          needsYouClass: cluster.needsYouClass,
+          priority: needsYouPriority(
+            { needsYouClass: cluster.needsYouClass },
+            now
+          ),
+        }
+      : {}),
     repeatCount: 1,
   };
 }
@@ -1058,6 +1090,8 @@ export interface OwedSlotSignalInput {
   pendingRelay?: SlotPendingRelay;
   /** Kept owed past its session, straight from `listOwedSlots`. */
   keptOwedAt?: string;
+  /** The person's Later on it, straight from `listOwedSlots` (the class reads it). */
+  laterUntil?: string;
   /** A param slot's param, straight from `listOwedSlots`. */
   paramName?: string;
   /** Who asked and their name, straight from `listOwedSlots`. */
@@ -1168,6 +1202,9 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
+  // Read by the slot's class only (`owedSlotClassOf`): a set-aside ask
+  // reaches the signal as its Review later fold, never as a second field.
+  "laterUntil",
   "sessionStatus",
   "workspaceId",
   "icon",
@@ -1259,6 +1296,9 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   // A draft has no PR yet: its asks block nothing (`blocksOpenPr` is read only
   // on started sessions' owed slots).
   "blocksOpenPr",
+  // The person's Later is read by a started session's slot class only
+  // (`owedSlotClassOf`): a draft's ask reaches no class to fold it.
+  "laterUntil",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
@@ -1334,17 +1374,20 @@ export function signalsFromDraftAsks(
 /**
  * THE class of one owed slot — the one derivation the list and the count
  * read. The rule's class when the read stamped it (`listNeedsYouOwed`
- * classifies); else the older reading: Review later past 7 days
+ * classifies); else the older reading: Review later while the person set it
+ * aside (`isSetAside`) or past 7 days
  * (`isAskReviewLater`), the headline otherwise.
  */
 export function owedSlotClassOf(
   row: Pick<
     OwedSlotSignalInput,
-    "needsYouClass" | "owedSince" | "blocksOpenPr"
+    "needsYouClass" | "owedSince" | "blocksOpenPr" | "laterUntil"
   >,
   now: Date = new Date()
 ): NeedsYouSlotClass {
   if (row.needsYouClass) return row.needsYouClass;
+  // The person's own Later wins until its time, as in the rule.
+  if (isSetAside(row.laterUntil, now)) return "review_later";
   // An ask that blocks an open PR is never aged out, classified or not.
   if (row.blocksOpenPr) return "needs_you";
   return isAskReviewLater(row, now) ? "review_later" : "needs_you";
@@ -1371,6 +1414,7 @@ export function signalFromOwedSlot(
   now: Date = new Date()
 ): Signal {
   const occurredAt = owedInstant(row.owedSince);
+  const slotClass = owedSlotClassOf(row, now);
   return {
     id: `slot:${row.sessionId}:${normalizeExpectedLabel(row.label) ?? ""}`,
     kind: "owed-slot",
@@ -1425,7 +1469,17 @@ export function signalFromOwedSlot(
     // keeps its session key: a session is never split, so the slot folds with
     // its session's freshest row (`needsYouRows`).
     ageBucket: ageBucketOf(occurredAt, now),
-    ...outOfHeadline(owedSlotClassOf(row, now), !!row.needsYouClass),
+    ...outOfHeadline(slotClass, !!row.needsYouClass),
+    // The one derivation (`needsYouPriority`): the class this row lands in,
+    // plus the two facts its ask carries.
+    priority: needsYouPriority(
+      {
+        needsYouClass: slotClass,
+        urgency: row.ask?.urgency,
+        answerBy: row.ask?.answerBy,
+      },
+      now
+    ),
     ...(row.blocksOpenPr ? { blocksOpenPr: true as const } : {}),
     repeatCount: 1,
   };

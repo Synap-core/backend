@@ -191,6 +191,10 @@ export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
   "channel.bind": "Connects the pod to an outside service.",
   "channel.unbind": "Disconnects the pod from an outside service.",
   "channel.create_external": "Connects the pod to an outside service.",
+  "channel.delete_external":
+    "A delete: unlinking a conversation deletes it and its mirrored messages. An AI asks through the gate; the key grant never widens to it.",
+  "messaging.delete_account":
+    "A delete: disconnects the person's account at the provider. An AI asks through the gate; the key grant never widens to it.",
   "workspace.create": "Space administration.",
   "workspace.update": "Space administration.",
   "workspace.adopt": "Space administration.",

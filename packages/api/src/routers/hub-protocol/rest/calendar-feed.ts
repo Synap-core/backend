@@ -38,6 +38,7 @@ import {
   logger,
   type HubHono,
   type HubVariables,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import type { Context } from "hono";
 
@@ -444,6 +445,8 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
    * POST /calendar/feed — AUTH. Mint if none; plaintext URL once.
    */
   app.post("/calendar/feed", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -476,6 +479,8 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
    * POST /calendar/feed/rotate — AUTH. Revoke old hash, mint new plaintext once.
    */
   app.post("/calendar/feed/rotate", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }

@@ -6,6 +6,8 @@ import {
   EXTERNAL_REL,
   objectKindForMarker,
   objectPage,
+  objectRefOf,
+  objectRefRead,
   prepareContent,
   UNPARSED_PREVIEW_CHARS,
 } from "./markdown-model";
@@ -244,5 +246,57 @@ describe("entityEmbedRead — what an embedded record may say", () => {
         },
       })
     ).toEqual({ state: "ready", title: "Plan" });
+  });
+});
+
+describe("object references", () => {
+  const ID = "11111111-1111-4111-8111-111111111111";
+
+  it("a marker link names its kind; a bare id's names none; commands are not references", () => {
+    expect(objectRefOf(`entity://${ID}`)).toEqual({
+      markerKind: "entity",
+      id: ID,
+    });
+    expect(objectRefOf(`object://${ID}`)).toEqual({ markerKind: null, id: ID });
+    expect(objectRefOf(`run://cap-1`)).toBeNull();
+    expect(objectRefOf(`open://side/entity/${ID}`)).toBeNull();
+    expect(objectRefOf("https://example.com")).toBeNull();
+    expect(objectRefOf("http://localhost")).toBeNull();
+    expect(objectRefOf("mailto://someone")).toBeNull();
+    expect(objectRefOf(undefined)).toBeNull();
+  });
+
+  it("the lookup: loading, named, nobody's, and broken are four different facts", () => {
+    const base = { isLoading: false, error: null };
+    expect(
+      objectRefRead({ ...base, isLoading: true, data: undefined })
+    ).toEqual({
+      state: "loading",
+    });
+    expect(
+      objectRefRead({
+        ...base,
+        data: { type: "document", displayName: " Plan ", openable: true },
+      })
+    ).toEqual({
+      state: "ready",
+      type: "document",
+      name: "Plan",
+      openable: true,
+    });
+    expect(objectRefRead({ ...base, data: { type: "unknown" } })).toEqual({
+      state: "unknown",
+    });
+    const retry = () => {};
+    expect(
+      objectRefRead({
+        ...base,
+        error: new Error("500"),
+        data: undefined,
+        retry,
+      })
+    ).toEqual({ state: "failed", retry });
+    // An answer with no type is not "nothing here": it is a broken answer.
+    expect(objectRefRead({ ...base, data: {} })).toEqual({ state: "failed" });
   });
 });

@@ -2,7 +2,7 @@
  * Messaging sync workers — the person's channel stays complete (channels
  * design §3, §7).
  *
- * TWO queues:
+ * THREE queues:
  *   • `messaging-history-import` (on-demand) — a connected account's past
  *     conversations with people already in the pod land in their channels,
  *     silently. Enqueued when an account connects, by the owner's
@@ -13,6 +13,10 @@
  *     and when an account connects) — registers the pod's webhook with the
  *     provider and records whether it is complete. SWALLOWS on failure (a
  *     cron must not retry-storm).
+ *   • `linkedin-reach-sweep` (cron: daily) — each LinkedIn request the
+ *     person sent and that still waits marks its person `pending`; one
+ *     pending for more than 21 days is `ignored` (CRM wave 2, S4a). SWALLOWS
+ *     on failure, like the webhook check.
  *
  * Both delegate to api-side runners through IoC slots, because @synap/jobs
  * cannot statically import @synap/api (circular dep). apps/api fills the
@@ -28,6 +32,9 @@ export const MESSAGING_HISTORY_IMPORT_QUEUE = "messaging-history-import";
 export const MESSAGING_WEBHOOK_ENSURE_QUEUE = "messaging-webhook-ensure";
 /** Hourly, off the top of the hour. */
 export const MESSAGING_WEBHOOK_ENSURE_CRON = "17 * * * *";
+export const LINKEDIN_REACH_SWEEP_QUEUE = "linkedin-reach-sweep";
+/** Daily, early morning UTC, off the hour. */
+export const LINKEDIN_REACH_SWEEP_CRON = "43 5 * * *";
 
 /** Job payload of MESSAGING_HISTORY_IMPORT_QUEUE. */
 export interface MessagingHistoryImportJobData {
@@ -47,9 +54,11 @@ type HistoryImportRunner = (
   input: MessagingHistoryImportJobData
 ) => Promise<unknown>;
 type WebhookEnsureRunner = () => Promise<unknown>;
+type LinkedinReachSweepRunner = () => Promise<unknown>;
 
 let historyImportRunner: HistoryImportRunner | null = null;
 let webhookEnsureRunner: WebhookEnsureRunner | null = null;
+let linkedinReachSweepRunner: LinkedinReachSweepRunner | null = null;
 
 export function registerMessagingHistoryImportRunner(
   fn: HistoryImportRunner
@@ -61,6 +70,12 @@ export function registerMessagingWebhookEnsureRunner(
   fn: WebhookEnsureRunner
 ): void {
   webhookEnsureRunner = fn;
+}
+
+export function registerLinkedinReachSweepRunner(
+  fn: LinkedinReachSweepRunner
+): void {
+  linkedinReachSweepRunner = fn;
 }
 
 export async function handleMessagingHistoryImport(
@@ -93,5 +108,20 @@ export async function handleMessagingWebhookEnsure(
     await webhookEnsureRunner();
   } catch (err) {
     logger.error({ err }, "messaging-webhook-ensure failed (non-fatal)");
+  }
+}
+
+export async function handleLinkedinReachSweep(
+  _job: PgBoss.Job
+): Promise<void> {
+  if (!linkedinReachSweepRunner) {
+    logger.warn("linkedin-reach-sweep runner not registered — skipping");
+    return;
+  }
+  try {
+    const result = await linkedinReachSweepRunner();
+    logger.info({ result }, "linkedin-reach-sweep run finished");
+  } catch (err) {
+    logger.error({ err }, "linkedin-reach-sweep failed (non-fatal)");
   }
 }

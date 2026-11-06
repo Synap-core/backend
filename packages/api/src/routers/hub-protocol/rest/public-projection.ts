@@ -283,7 +283,7 @@ export function registerPublicProjectionRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /public/projection — UNAUTHENTICATED. Listed in `skipAuthPaths`.
+   * GET /public/projection — UNAUTHENTICATED. Listed in `HUB_AUTH_SKIP_PATHS` (`_middleware/auth-skip.ts`).
    */
   app.get("/public/projection", async (c) => {
     const workspaceId = c.req.query("workspace");

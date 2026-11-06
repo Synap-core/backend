@@ -44,6 +44,7 @@ import {
   httpStatusForTrpcError,
   requireUuidParam,
   type HubHono,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 
 const CreateWebhookSchema = z.object({
@@ -143,6 +144,8 @@ export function registerWebhooksRoutes(app: HubHono) {
   });
 
   app.post("/webhooks", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }

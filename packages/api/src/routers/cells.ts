@@ -133,8 +133,8 @@ export const cellsRouter = router({
 
       // Route through the SHARED package-cell mapper (→ the one write door
       // `defineCell`) instead of a third hand-rolled insert. That raw insert
-      // skipped everything the door owns: `validateDeps` (deps are spliced into
-      // esm.sh import-map URLs inside the sandboxed frame — the door's docblock
+      // skipped everything the door owns: `validateDeps` (the hosts that still
+      // resolve deps splice them into esm.sh import-map URLs — the door's docblock
       // already named "marketplace install" as a caller that must not bypass
       // it), the `widget_definition.changed` realtime emit (so an install only
       // reached the browser on its 60s poll), `viewRendererViewTypes`, and — the

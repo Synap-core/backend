@@ -626,6 +626,15 @@ export interface ExpectedOutput {
    */
   answerPickedUpAt?: string;
   /**
+   * The person set this owed ask aside until then ("Later", founder decision
+   * 9bc9f75c): Review later for them until that instant, back on its own
+   * after it (`isSetAside`, `@synap-core/types/needs-you`). SERVER-STAMPED by
+   * the Later door only (api `ask-later.ts`), never by a client or an agent.
+   * ISO timestamp. Cleared by the door's Undo; an answer or a hand-back makes
+   * the slot no longer owed, so a stale one is read by nobody.
+   */
+  laterUntil?: string;
+  /**
    * A relayed answer to a `commitment` ask, waiting for the person's tap — see
    * {@link SlotPendingRelay}. SERVER-STAMPED by the relay door only; the
    * slot stays owed (`owner: 'human'`) while it is here, and the person's
@@ -790,7 +799,22 @@ export type SlotAsk = (
   lookedAt?: SlotAskLookedAt[];
   /** How much is at stake: high and medium draw a mark, low draws nothing. */
   risk?: "high" | "medium" | "low";
+  /**
+   * The TICKET fields (mirror of `ticketFields`, `@synap-core/types/ask`):
+   * the asker's urgency HINT (it only lowers the pod-derived priority), the
+   * instant the answer is needed by (ISO-8601 with offset), what the answer
+   * does and whether that can be undone, and the asker's own dedupe handle
+   * (same asker + same key = the same open ask, updated).
+   */
+  urgency?: SlotAskUrgency;
+  answerBy?: string;
+  consequence?: string;
+  reversible?: boolean;
+  dedupeKey?: string;
 };
+
+/** Mirrors `ASK_URGENCIES` (@synap-core/types/ask). */
+export type SlotAskUrgency = "today" | "whenever";
 
 /** Mirrors `ASK_STAKES` (@synap-core/types/ask). */
 export type SlotAskStakes = "routine" | "commitment";
@@ -1014,6 +1038,15 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
+ * How much model a stage's work needs — ADVISORY. `deep` = architecture or
+ * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
+ * a smaller model can do. An executor MAY map it to a model; nothing reads it
+ * yet, and absent means "no preference" (the executor's own default).
+ */
+export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
+export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
+
+/**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
  * (progress-only). The active stage's `key` is stored on
@@ -1103,6 +1136,12 @@ export interface PlaybookStage {
    * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
    */
   onFail?: PlaybookStageOnFail;
+  /**
+   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
+   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
+   * a model later. Never a control: a stage with or without it runs the same.
+   */
+  tier?: PlaybookStageTier;
 }
 
 /**
@@ -1175,16 +1214,35 @@ export type AwaitedGateProposalType =
 export const DEFAULT_STAGE_GATE_PROPOSAL_TYPE: StageGateProposalType =
   "playbook.stage_gate";
 
+/** The terminal statuses a session ends in — the keys of {@link PlaybookOnEnd}. */
+export const PLAYBOOK_ON_END_STATUSES = [
+  "closed",
+  "cancelled",
+  "failed",
+] as const;
+export type PlaybookOnEndStatus = (typeof PLAYBOOK_ON_END_STATUSES)[number];
+
+/**
+ * `subjectProfile.onEnd` — the status the process moves what it worked on (its
+ * subject and every target still open) to when the session ENDS in that
+ * terminal status. Each value is an option of the subject's lifecycle; a
+ * terminal status with no entry moves nothing. Applied by the one close door
+ * (`complete-session.ts`, @synap/api) through the status door, as the session.
+ */
+export type PlaybookOnEnd = Partial<Record<PlaybookOnEndStatus, string>>;
+
 /**
  * The subject-LIFECYCLE half of a stored `subjectProfile` — tolerant (stored
  * jsonb is data). `statusProperty` names the subject kind's property holding
- * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose.
+ * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose;
+ * `onEnd` the value each session end moves the subject to (junk dropped).
  * The api's `readPlaybookProcess` adds the zod-parsed `activators` on top.
  */
 export function readSubjectLifecycle(subjectProfile: unknown): {
   profileSlug: string | null;
   statusProperty: string | null;
   humanOnlyStatuses: string[];
+  onEnd: PlaybookOnEnd;
 } {
   const sp =
     subjectProfile && typeof subjectProfile === "object"
@@ -1192,12 +1250,21 @@ export function readSubjectLifecycle(subjectProfile: unknown): {
       : {};
   const str = (v: unknown) =>
     typeof v === "string" && v.trim() ? v.trim() : null;
+  const onEnd: PlaybookOnEnd = {};
+  if (sp.onEnd && typeof sp.onEnd === "object" && !Array.isArray(sp.onEnd)) {
+    const raw = sp.onEnd as Record<string, unknown>;
+    for (const status of PLAYBOOK_ON_END_STATUSES) {
+      const value = str(raw[status]);
+      if (value) onEnd[status] = value;
+    }
+  }
   return {
     profileSlug: str(sp.profileSlug),
     statusProperty: str(sp.statusProperty),
     humanOnlyStatuses: Array.isArray(sp.humanOnlyStatuses)
       ? sp.humanOnlyStatuses.flatMap((v) => (str(v) ? [str(v)!] : []))
       : [],
+    onEnd,
   };
 }
 
@@ -2033,6 +2100,15 @@ export interface ProviderVerbSpec {
   /** Static custom request headers (e.g. Cal.com's `cal-api-version`). Auth wins. */
   headers?: Record<string, string>;
   /**
+   * The name of ONE call parameter whose object value is passed through whole:
+   * merged over `body` for a POST/PUT/PATCH, and form-encoded into the query
+   * string (bracket nesting) for a GET/HEAD/DELETE. For a generic verb whose
+   * fields are the provider's own (e.g. Stripe's `stripe_api_write`), where
+   * `body`'s fixed keys cannot name them. A JSON-object string is accepted; any
+   * other value is refused before the call.
+   */
+  bodyFrom?: string;
+  /**
    * Transport for the provider call. Absent ⇒ `"rest"` (byte-identical to the
    * prior behavior). `"graphql"` POSTs a `{ query, variables }` body to
    * `pathTemplate` (usually `""` or `"/graphql"`) — see `graphql`.
@@ -2065,7 +2141,13 @@ export interface ProviderVerbSpec {
       default?: unknown;
       clampMin?: number;
       clampMax?: number;
-      encode?: "uri";
+      /**
+       * How the value enters `pathTemplate`. `"uri"`: one segment, fully
+       * percent-encoded (an id). `"path"`: a relative path of several
+       * segments, each encoded, an empty / "." / ".." segment refused (a
+       * generic verb's resource path stays under the template's prefix).
+       */
+      encode?: "uri" | "path";
     }
   >;
   responseShape?: {

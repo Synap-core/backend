@@ -27,6 +27,9 @@ import {
   resolveConnectionCardConnection,
   resolveConnectionCardState,
   resolveKeyEndConsequence,
+  resolveMachineConnection,
+  resolveMachineConnectionState,
+  machineConnectionLine,
   resolveModelConnectionState,
   resolveToolConnectionState,
   resolveWebhookConnectionState,
@@ -600,7 +603,89 @@ const ROWS: Row[] = [
         NOW
       ),
   },
+  // ── machine (a computer) ──
+  {
+    kind: "machine",
+    state: "revoked",
+    rulesOut: "a revoked key on a computer seen yesterday reads connected",
+    resolve: () =>
+      resolveMachineConnectionState(
+        { key: { state: "revoked" }, lastSeenAt: daysAgo(1) },
+        NOW
+      ),
+  },
+  {
+    kind: "machine",
+    state: "needs_signin",
+    rulesOut: "an expired key reads quiet or ready by its last use",
+    resolve: () =>
+      resolveMachineConnectionState(
+        { key: { state: "expired" }, lastSeenAt: daysAgo(1) },
+        NOW
+      ),
+  },
+  {
+    kind: "machine",
+    state: "setting_up",
+    rulesOut:
+      "a live key never seen reads quiet (an unknown time is never quiet)",
+    resolve: () =>
+      resolveMachineConnectionState(
+        { key: { state: "active" }, lastSeenAt: null },
+        NOW
+      ),
+  },
+  {
+    kind: "machine",
+    state: "ready",
+    rulesOut: "an expiring key the computer renews itself puts it in Needs you",
+    resolve: () =>
+      resolveMachineConnectionState(
+        { key: { state: "expiring" }, lastSeenAt: daysAgo(2) },
+        NOW
+      ),
+  },
+  {
+    kind: "machine",
+    state: "quiet",
+    rulesOut: "a live key alone means seen recently",
+    resolve: () =>
+      resolveMachineConnectionState(
+        {
+          key: { state: "active" },
+          lastSeenAt: daysAgo(CONNECTION_QUIET_AFTER_DAYS + 1),
+        },
+        NOW
+      ),
+  },
 ];
+
+describe("a computer as a connection row (the machine resolver)", () => {
+  it("a computer holding no key reads revoked, never setting up", () => {
+    expect(resolveMachineConnectionState({ key: null }, NOW)).toBe("revoked");
+  });
+
+  it("its lapsed key says 'Key expired' and offers Reconnect; its end verb is Revoke", () => {
+    const v = resolveMachineConnection(
+      { key: { state: "expired" }, lastSeenAt: daysAgo(1) },
+      { now: NOW }
+    );
+    expect(v.kind).toBe("machine");
+    expect(v.label).toBe("Key expired");
+    expect(v.primaryAction).toBe("reconnect");
+    expect(v.actions[v.actions.length - 1]).toBe("revoke");
+  });
+
+  it("its facts line is the computer rule's words: the OS, then seen", () => {
+    const rel = () => "3 min ago";
+    expect(
+      machineConnectionLine({ platform: "darwin", lastSeenAt: daysAgo(0) }, rel)
+    ).toBe("macOS · Seen 3 min ago");
+    expect(
+      machineConnectionLine({ platform: null, lastSeenAt: null }, rel)
+    ).toBe("Not seen yet");
+  });
+});
 
 describe("kind × state fixture table", () => {
   for (const row of ROWS) {

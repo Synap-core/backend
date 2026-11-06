@@ -8,12 +8,12 @@
  * carries a one-time code.
  */
 
+import { courierStatus, kratosIdentityHasPodHeldCredential } from "@synap/auth";
 import {
-  authMiddleware,
-  courierStatus,
-  kratosIdentityHasPodHeldCredential,
-} from "@synap/auth";
-import { isPodAdmin, refuseGuestSession } from "@synap/api";
+  appSessionMiddleware,
+  isPodAdmin,
+  refuseGuestSession,
+} from "@synap/api";
 import {
   AccountRecoveryCodeRepository,
   EventRepository,
@@ -229,7 +229,8 @@ export const accountRecoveryDeps: AccountRecoveryDeps = {
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   logger,
   // Session doors serve pod participants; a guest has no account to recover here.
-  authenticate: [authMiddleware, refuseGuestSession],
+  // A Kratos session, or a Synap app's device token (the person, as on /trpc).
+  authenticate: [appSessionMiddleware(), refuseGuestSession],
   findAccountByEmail: (email) =>
     accountWhere(
       drizzleSql`lower(${users.email}) = ${email} and ${users.userType} = 'human'`

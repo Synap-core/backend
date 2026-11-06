@@ -53,6 +53,17 @@ const h = vi.hoisted(() => {
   return state;
 });
 
+// The proof-of-presence mode (W3 slice 3) is a pod setting read from
+// pod_settings, a table this file's database does not have: follow the env,
+// as before the setting existed.
+vi.mock("../presence/mode.js", () => ({
+  readPresenceMode: async () => ({
+    mode: process.env.SYNAP_PRESENCE_PROOF === "enforce" ? "enforce" : "report",
+    source: "default",
+    changedBy: null,
+    changedAt: null,
+  }),
+}));
 vi.mock("../../../../database/dist/client-pg.js", () => h.clientPgModule());
 vi.mock("../../../../database/src/client-pg.js", () => h.clientPgModule());
 vi.mock("@synap/database", async (importOriginal) => {

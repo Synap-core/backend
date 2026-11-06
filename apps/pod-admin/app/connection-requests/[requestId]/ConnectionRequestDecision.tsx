@@ -16,6 +16,8 @@
 import { useId, useState } from "react";
 import { Accordion, AccordionItem, Alert, Checkbox, Chip } from "@heroui/react";
 import { ArrowRight, ShieldAlert, ShieldCheck } from "lucide-react";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { useApproveConnectionRequest } from "../../_lib/presence/use-request-doors";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
@@ -34,6 +36,14 @@ export function useConnectionRequest(
     { enabled: Boolean(requestId), retry: false }
   );
   const [reason, setReason] = useState("");
+  // What the passkey dialog names: "Connect <app>" (vocabulary door).
+  const approveLabel = request.data?.displayName
+    ? buildObjectActionTitle({
+        action: "connect",
+        objectKind: "app",
+        objectName: request.data.displayName,
+      })
+    : null;
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function refresh() {
@@ -44,7 +54,8 @@ export function useConnectionRequest(
     ]);
   }
 
-  const approve = trpc.applicationConnections.approveRequest.useMutation({
+  // With the proof of presence: connecting an application is setup (W3).
+  const approve = useApproveConnectionRequest(approveLabel, {
     onSuccess: async (data) => {
       setActionError(null);
       await refresh();

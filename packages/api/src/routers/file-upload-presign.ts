@@ -110,18 +110,17 @@ export interface PresignedUploadTicket {
 }
 
 /**
- * Step 1. The caller has already authenticated `userId` and write-checked
- * `workspaceId`.
+ * The declared file of a presigned request: a name, an allowed mime, a size
+ * under that mime's cap (C4). The ONE check both request doors run, so the
+ * single upload and the import batch can never accept different files.
  */
-export async function requestPresignedUpload(params: {
-  userId: string;
-  workspaceId: string;
+function checkDeclaredUpload(file: {
   filename: string;
   mimeType: string;
   size: number;
-}): Promise<PresignedUploadTicket | PresignRefusal> {
-  const { userId, workspaceId, mimeType, size } = params;
-  if (!params.filename) {
+}): { ok: true; maxBytes: number } | PresignRefusal {
+  const { mimeType, size } = file;
+  if (!file.filename) {
     return refuse(400, "FILENAME_REQUIRED", "filename is required");
   }
   if (!isAllowedMimeType(mimeType)) {
@@ -142,6 +141,24 @@ export async function requestPresignedUpload(params: {
       `File too large. Maximum size for ${mimeType} is ${maxBytes / 1024 / 1024}MB`
     );
   }
+  return { ok: true, maxBytes };
+}
+
+/**
+ * Step 1. The caller has already authenticated `userId` and write-checked
+ * `workspaceId`.
+ */
+export async function requestPresignedUpload(params: {
+  userId: string;
+  workspaceId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+}): Promise<PresignedUploadTicket | PresignRefusal> {
+  const { userId, workspaceId, mimeType, size } = params;
+  const declared = checkDeclaredUpload(params);
+  if (!declared.ok) return declared;
+  const { maxBytes } = declared;
 
   const key = `files/${workspaceId}/uploads/${userId}/${randomUUID()}/${safeFileName(params.filename)}`;
   try {
@@ -169,7 +186,95 @@ export async function requestPresignedUpload(params: {
   }
 }
 
-function isNotFound(err: unknown): boolean {
+// ─── Import unit uploads (batch) ────────────────────────────────────────────
+//
+// The bulk import's file lane (`POST /import/unit-uploads`): ONE request mints
+// the PUT URLs of many files, so an import of N recordings costs N / batch hub
+// requests instead of N multipart bodies through the API. The bytes go
+// straight to storage; the background import job (`POST /import/enqueue-units`)
+// then adopts each object as the unit's source file through
+// `stageImportUnitUpload` (services/import/store-unit.ts).
+//
+// No workspace in the key: an import unit is usually a pod-wide kind (a note),
+// and its source file's document follows the entity's placement exactly as the
+// buffered `/import/store-unit` door's does. The key names the uploading user,
+// and the job refuses a key that does not name the job's own user.
+
+/** Files one `POST /import/unit-uploads` call may mint. */
+export const IMPORT_UNIT_UPLOADS_MAX = 100;
+
+const IMPORT_KEY_RE = new RegExp(`^imports/([^/]+)/(${UUID})/([^/]+)$`);
+
+/** Parse an import-unit upload token. `null` = not one. */
+export function parseImportUnitUploadKey(
+  key: string
+): { userId: string; filename: string } | null {
+  const m = IMPORT_KEY_RE.exec(key);
+  if (!m) return null;
+  return { userId: m[1]!, filename: m[3]! };
+}
+
+/** One minted upload of a batch (no `ok`: the batch answers as a whole). */
+export type ImportUnitUploadTicket = Omit<PresignedUploadTicket, "ok">;
+
+/**
+ * Mint the PUT URLs of a batch of import files. All-or-nothing: one refused
+ * file refuses the batch and names its index, so a client never uploads half a
+ * batch it believes whole. The caller has already authenticated `userId`.
+ */
+export async function requestImportUnitUploads(params: {
+  userId: string;
+  files: ReadonlyArray<{ filename: string; mimeType: string; size: number }>;
+}): Promise<{ ok: true; uploads: ImportUnitUploadTicket[] } | PresignRefusal> {
+  const { userId, files } = params;
+  if (files.length === 0 || files.length > IMPORT_UNIT_UPLOADS_MAX) {
+    return refuse(
+      400,
+      "BATCH_SIZE",
+      `files must hold 1..${IMPORT_UNIT_UPLOADS_MAX} entries`
+    );
+  }
+  const checked: number[] = [];
+  for (const [index, file] of files.entries()) {
+    const declared = checkDeclaredUpload(file);
+    if (!declared.ok) {
+      return { ...declared, error: `files[${index}]: ${declared.error}` };
+    }
+    checked.push(declared.maxBytes);
+  }
+  const expiresAt = new Date(
+    Date.now() + PRESIGNED_UPLOAD_TTL_SECONDS * 1000
+  ).toISOString();
+  try {
+    const uploads = await Promise.all(
+      files.map(async (file, index) => {
+        const key = `imports/${userId}/${randomUUID()}/${safeFileName(file.filename)}`;
+        const uploadUrl = await storage.getSignedUploadUrl(key, {
+          contentType: file.mimeType,
+          contentLength: file.size,
+          expiresIn: PRESIGNED_UPLOAD_TTL_SECONDS,
+        });
+        return {
+          uploadUrl,
+          method: "PUT" as const,
+          headers: { "Content-Type": file.mimeType },
+          uploadToken: key,
+          expiresAt,
+          maxBytes: checked[index]!,
+        };
+      })
+    );
+    return { ok: true, uploads };
+  } catch (err) {
+    if (err instanceof StorageUploadUnavailableError) {
+      return refuse(501, err.code, err.message);
+    }
+    throw err;
+  }
+}
+
+/** A storage HEAD/GET that found no object (S3 `NotFound` or a 404). */
+export function isNotFound(err: unknown): boolean {
   const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
   return e?.name === "NotFound" || e?.$metadata?.httpStatusCode === 404;
 }

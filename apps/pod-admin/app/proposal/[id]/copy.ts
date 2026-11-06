@@ -182,7 +182,7 @@ export const alwaysEn = {
   "always.menu": "Approve and keep allowing this",
   "always.capability.label": "Always let your AIs use “{name}”",
   "always.capability.covers":
-    "Your AIs use this tool without asking you, even when it sends outside your company. Other tools still ask.",
+    "Your AIs run this action without asking you, in every space, even when it sends outside your company. Other actions still ask. Take it back on its tool’s page.",
   "always.action.label": "{change}, always",
   "always.action.covers":
     "Your AIs make this change without asking you. Sending, publishing and deleting still ask.",
@@ -221,7 +221,7 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
   "always.menu": "Approuver et continuer à l’autoriser",
   "always.capability.label": "Toujours laisser vos IA utiliser « {name} »",
   "always.capability.covers":
-    "Vos IA utilisent cet outil sans vous demander, même pour envoyer hors de votre entreprise. Les autres outils vous sont toujours demandés.",
+    "Vos IA lancent cette action sans vous demander, dans tous les espaces, même pour envoyer hors de votre entreprise. Les autres actions vous sont toujours demandées. Vous pouvez le retirer sur la page de son outil.",
   "always.action.label": "{change}, toujours",
   "always.action.covers":
     "Vos IA font ce changement sans vous demander. Envoyer, publier et supprimer vous sont toujours demandés.",

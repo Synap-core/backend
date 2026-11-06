@@ -72,6 +72,20 @@ describe("door tool-name builder (pinned, runs everywhere)", () => {
     });
   });
 
+  it("pairs the quoted-key JSON shape the CP generator writes", () => {
+    const pairs = parseCpCuratedPairs(`
+    {
+      "name": "ask",
+      "podToolName": "synap_ask",
+      "description": "x"
+    },
+    { "name": "define_kind", "podToolName": "synap_define_kind" },`);
+    expect(Object.fromEntries(pairs)).toEqual({
+      synap_ask: "ask",
+      synap_define_kind: "define_kind",
+    });
+  });
+
   it("refuses a CP source whose podToolName entries it cannot pair", () => {
     expect(() =>
       parseCpCuratedPairs(

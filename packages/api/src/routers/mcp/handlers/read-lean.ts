@@ -17,21 +17,21 @@
  * naming what was cut and how to get it back.
  */
 
-/** Profile description cap in the digest. Live p90 = 110 chars, max = 151. */
-export const PROFILE_DESCRIPTION_CAP = 120;
+import { ENTITY_STRING_CAP } from "../../../services/entity-lean-list.js";
+import {
+  activatorKey,
+  readPlaybookProcess,
+} from "../../../schemas/playbook-process.js";
 
-/**
- * Long string cap in a lean entity row. 120 chars is enough to recognise a
- * note. Measured: at 200 the 50-note budget fixture came to 41,710 chars (over
- * budget), because the ~14 live UUID/timestamp columns per row are fixed cost.
- */
-export const ENTITY_STRING_CAP = 120;
-
+/** A long string cut to `cap` chars, its full length said after it. */
 function capString(value: string, cap: number): string {
   return value.length > cap
     ? `${value.slice(0, cap)}…[truncated: ${value.length} chars total]`
     : value;
 }
+
+/** Profile description cap in the digest. Live p90 = 110 chars, max = 151. */
+export const PROFILE_DESCRIPTION_CAP = 120;
 
 /**
  * One profile as the default digest carries it: what an agent needs to CHOOSE
@@ -110,44 +110,6 @@ export const PROFILES_DIGEST_NOTE =
   "detail:'full' for complete profile rows and full relation-type rows (displayName, " +
   "description, isDirectional, inverseLabel). Exposure edges are not listed: file an " +
   "entity into a project with synap_file_into_project.";
-
-/** Top-level entity columns a lean row never carries (always `{}` / internal). */
-const ENTITY_WITHHELD_COLUMNS: ReadonlySet<string> = new Set(["systemData"]);
-
-/**
- * One entity row as the default `synap_get_entities` carries it. Null
- * top-level columns and `systemData` are dropped; long top-level strings and
- * long top-level string PROPERTY values are truncated with an explicit marker.
- * Every property KEY is kept (including null-valued ones) — a value may be
- * cut, a key is never removed. Nested objects/arrays inside properties are
- * passed through untouched.
- */
-export function toLeanEntity(
-  row: Record<string, unknown>
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(row)) {
-    if (value === null || value === undefined) continue;
-    if (ENTITY_WITHHELD_COLUMNS.has(key)) continue;
-    if (key === "properties" && typeof value === "object") {
-      const props: Record<string, unknown> = {};
-      for (const [pk, pv] of Object.entries(value as Record<string, unknown>)) {
-        props[pk] =
-          typeof pv === "string" ? capString(pv, ENTITY_STRING_CAP) : pv;
-      }
-      out.properties = props;
-      continue;
-    }
-    out[key] =
-      typeof value === "string" ? capString(value, ENTITY_STRING_CAP) : value;
-  }
-  return out;
-}
-
-export const ENTITIES_LEAN_NOTE =
-  "Lean rows: null columns and systemData omitted; string values longer than " +
-  `${ENTITY_STRING_CAP} chars end in '…[truncated: N chars total]' (every property key is kept). ` +
-  "synap_get_entity { entityId } returns one full row; detail:'full' here returns every row unprojected.";
 
 /** Picks `keys` that are present and non-null — a digest never invents a field. */
 function pick(
@@ -228,3 +190,61 @@ export function toViewDigest(
 export const VIEWS_DIGEST_NOTE =
   "Digest: each view omits config (layout/blocks), query, snapshot and bookkeeping columns. " +
   "Pass detail:'full' for complete rows.";
+
+/**
+ * One playbook as the default `synap_list_playbooks` carries it (founder's
+ * rule: an AI-facing list returns the id, name, status and the kind's key
+ * fields; the full object comes from a get). Measured on the founder's pod
+ * (build 62da6fd2, 2026-11-05): 7 Content OS playbooks = 67,855 chars, 26
+ * fields each (stages, criteria, expected outputs, goal template, channel
+ * spec, scorecard…). An agent lists playbooks to pick one and launch it: it
+ * needs the id, what it is, whether it runs, who runs it by default and which
+ * params a run must answer. The whole definition comes back with
+ * `playbookId` (one, in full) or `detail: "full"`.
+ */
+const PLAYBOOK_DIGEST_KEYS = [
+  "id",
+  "name",
+  "status",
+  "executor",
+  "workspaceId",
+  "version",
+] as const;
+
+export function toPlaybookDigest(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const out = pick(row, PLAYBOOK_DIGEST_KEYS);
+  if (typeof row.description === "string" && row.description) {
+    out.description = capString(row.description, ENTITY_STRING_CAP);
+  }
+  // A run must answer its required params: names only, the required ones said.
+  const params = Array.isArray(row.params)
+    ? (row.params as Array<Record<string, unknown>>).filter(
+        (p) => p && typeof p === "object" && typeof p.name === "string"
+      )
+    : [];
+  if (params.length > 0) {
+    out.params = params.map((p) => p.name as string);
+    const required = params
+      .filter((p) => p.required === true)
+      .map((p) => p.name as string);
+    if (required.length > 0) out.requiredParams = required;
+  }
+  // The activators a worker can be switched on with (`synap_enable_worker`
+  // names one by key), never their full rules.
+  const activators = readPlaybookProcess(row.subjectProfile).activators;
+  if (activators.length > 0) {
+    out.activators = activators.map((a) => ({
+      key: activatorKey(a),
+      on: a.on,
+    }));
+  }
+  if (row.scorecard !== undefined) out.scorecard = row.scorecard;
+  return out;
+}
+
+export const PLAYBOOKS_DIGEST_NOTE =
+  "Digest: each playbook omits its goal template, stages, criteria, expected outputs, input strategy, " +
+  `channel spec, schedule and bookkeeping columns; description is capped at ${ENTITY_STRING_CAP} chars. ` +
+  "Pass playbookId for one playbook in full, or detail:'full' (with a small limit) for complete rows.";

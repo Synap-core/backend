@@ -52,6 +52,7 @@ import {
 } from "@synap-core/types/focus-sessions";
 import {
   closedRunRefusal,
+  isCancelledRunReopen,
   isTerminalSessionStatus,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
@@ -79,7 +80,10 @@ import {
   SESSION_ARTIFACT_KINDS,
 } from "../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../services/focus-sessions/assert-output-ref-visible.js";
+import { sessionTargetsSchema } from "../services/focus-sessions/session-targets-wire.js";
+import type { SessionTargetsWrite } from "../services/focus-sessions/session-targets.js";
 import type { FollowOutcome } from "../services/focus-sessions/follow-playbook.js";
+import type { StageSubjectStatusOutcome } from "../services/focus-sessions/stage-subject-status.js";
 import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
 import {
   blockExpectedOutput,
@@ -162,6 +166,10 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import {
+  clearAskLater,
+  setAskLater,
+} from "../services/focus-sessions/ask-later.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
 import { canUserSeeChannel } from "../utils/channel-visibility.js";
 import {
@@ -242,6 +250,7 @@ function slotOwnershipResult(
         message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.alreadyDone}`,
       });
     case "ref_unreachable":
+    case "ask_refused":
       // Block only. The `default` below returns SUCCESS, so a refusal with no
       // case here would report `ok: true` while the pointer was dropped.
       throw new TRPCError({ code: "BAD_REQUEST", message: result.reason });
@@ -1989,6 +1998,11 @@ export const focusSessionsRouter = router({
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
         /**
+         * The things this session works on as a BATCH (`session-targets.ts`):
+         * floored and written by `createFocusSession`, reported on `targets`.
+         */
+        targets: sessionTargetsSchema.optional(),
+        /**
          * Open a NEW session even when an open session of the same goal and
          * scope exists. Without it the door returns that session, marked
          * `deduped: true`.
@@ -2020,6 +2034,7 @@ export const focusSessionsRouter = router({
         agentIds: input.agentIds,
         parentSessionId: input.parentSessionId ?? null,
         blockedBySessionIds: input.blockedBySessionIds ?? [],
+        targets: input.targets,
         forceCreate: input.forceCreate,
       });
       if (result.status === "proposed") {
@@ -2053,6 +2068,7 @@ export const focusSessionsRouter = router({
         ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
         ...(result.playbooks ? { playbooks: result.playbooks } : {}),
         ...(result.adopted ? { adopted: result.adopted } : {}),
+        ...(result.targets ? { targets: result.targets } : {}),
       };
     }),
 
@@ -2121,6 +2137,12 @@ export const focusSessionsRouter = router({
          * is about. Omitted leaves the anchor alone; `null` is the un-set.
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
+        /**
+         * ADD things this session works on as a batch (`session-targets.ts`):
+         * add-only, idempotent, floored like the subject and refused on a
+         * session that is not in flight (or that this call ends).
+         */
+        targets: sessionTargetsSchema.optional(),
         /**
          * FILE the session into a project (Home's "Unfiled" → File), or
          * UNFILE it with an explicit `null`. Floored through
@@ -2238,15 +2260,42 @@ export const focusSessionsRouter = router({
         });
       }
 
-      const { id: _id, expectedStatus, ...patch } = input;
+      const { id: _id, expectedStatus, targets: rawTargets, ...patch } = input;
+
+      // TARGETS: the ONE floor (`checkSessionTargets`) on the loaded row —
+      // visible entities, a session in flight that this call does not end.
+      const {
+        checkSessionTargets,
+        normalizeSessionTargets,
+        writeSessionTargets,
+      } = await import("../services/focus-sessions/session-targets.js");
+      const targets = normalizeSessionTargets(rawTargets);
+      if (targets.length > 0) {
+        const refusal = await checkSessionTargets({
+          userId: ctx.userId,
+          targets,
+          sessionStatus: existing.status,
+          closing: isTerminalSessionStatus(patch.status),
+        });
+        if (refusal) {
+          throw new TRPCError({ code: refusal.code, message: refusal.message });
+        }
+      }
 
       // A stale move: the caller decided on a status the session left.
       if (expectedStatus && expectedStatus !== existing.status) {
         throw lifecycleConflictError(expectedStatus, existing.status);
       }
 
-      // R8 — a closed run stays closed: never moved back to an open status.
-      const reopening = closedRunRefusal(existing.status, patch.status);
+      // R8 — a closed run stays closed: never moved back to an open status,
+      // except a PERSON reopening a cancelled run (decision 3da00cda). An
+      // agent key reads as its person, so `agentUserId` is what tells them
+      // apart (as `acceptFromTriage`).
+      const reopening = closedRunRefusal(
+        existing.status,
+        patch.status,
+        ctx.agentUserId ? "agent" : "person"
+      );
       if (reopening) {
         throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
       }
@@ -2315,6 +2364,40 @@ export const focusSessionsRouter = router({
       // structure with no per-stage server state, so there is nothing a
       // wholesale write can destroy.
       if (patch.stages !== undefined) set.stages = patch.stages;
+
+      // The person's reopen of a cancelled run funnels through the ONE reopen
+      // door (status + closedAt + the slots and run the cancel ended + the
+      // room line), the mirror of the close door below. The rest of the patch
+      // is then an ordinary field write on the reopened row.
+      if (isCancelledRunReopen(existing.status, patch.status)) {
+        const { reopenCancelledSession } =
+          await import("../services/focus-sessions/reopen-session.js");
+        const reopened = await reopenCancelledSession({
+          sessionId: input.id,
+          userId: ctx.userId,
+        }).catch((err: unknown) => {
+          // Left `cancelled` meanwhile: the door's own (raw) conflict.
+          const stale = err as {
+            code?: unknown;
+            expectedFrom?: string | null;
+            actual?: string | null;
+          };
+          if (stale?.code === "LIFECYCLE_STALE") {
+            throw lifecycleConflictError(
+              stale.expectedFrom ?? null,
+              stale.actual ?? null
+            );
+          }
+          throw err;
+        });
+        if (!reopened) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.id} not found`,
+          });
+        }
+        delete set.status;
+      }
 
       // Any terminal status via update funnels through completeFocusSession —
       // the ONE close door (pack + run close + ephemeral expiry + close event).
@@ -2398,6 +2481,16 @@ export const focusSessionsRouter = router({
         throw err;
       });
 
+      // The TARGETS, after the row write, through THE writer every door uses.
+      const targetsWrite =
+        updated && targets.length > 0
+          ? await writeSessionTargets({
+              sessionId: updated.id,
+              workspaceId: updated.workspaceId ?? null,
+              entityIds: targets,
+            })
+          : undefined;
+
       // The spine record of this edit — the signal "touched by a person
       // since" reads (`isOwnFreshWork`, FB1020 B3). Without it a person
       // re-filing, renaming or re-scoping the session in the app left no
@@ -2410,9 +2503,12 @@ export const focusSessionsRouter = router({
           userId: ctx.userId,
           agentUserId: ctx.agentUserId ?? null,
           workspaceId: updated.workspaceId ?? null,
-          fields: Object.keys(patch).filter(
-            (k) => (patch as Record<string, unknown>)[k] !== undefined
-          ),
+          fields: [
+            ...Object.keys(patch).filter(
+              (k) => (patch as Record<string, unknown>)[k] !== undefined
+            ),
+            ...(targets.length > 0 ? ["targets"] : []),
+          ],
         });
       }
 
@@ -2434,6 +2530,7 @@ export const focusSessionsRouter = router({
       //
       // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
       let stageGated = false;
+      let subjectMove: StageSubjectStatusOutcome | undefined;
       if (patch.currentStage !== undefined) {
         const { advanceSessionStage } =
           await import("../services/focus-sessions/advance-stage.js");
@@ -2452,6 +2549,10 @@ export const focusSessionsRouter = router({
           stageWrite: "caller",
         });
         stageGated = advance.paused;
+        // What the advance did to the subject (the MCP door's `subjectMove`).
+        const { reportedSubjectMove } =
+          await import("../services/focus-sessions/stage-subject-status.js");
+        subjectMove = reportedSubjectMove(advance.subjectStatus);
       }
 
       // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
@@ -2498,8 +2599,18 @@ export const focusSessionsRouter = router({
       // `follow` rides the row so the surface can confirm WHAT happened —
       // which playbook, which stage, how much structure merged — rather than
       // inferring it from a `playbookId` that appeared.
-      return (follow ? { ...row, follow } : row) as FocusSession & {
+      return {
+        ...row,
+        ...(follow ? { follow } : {}),
+        // What `targets` did: which were added, which already were.
+        ...(targetsWrite ? { targets: targetsWrite } : {}),
+        // What a stage advance did to the subject, when the stage asked for a
+        // move: moved, waiting on a person, skipped or failed, with why.
+        ...(subjectMove ? { subjectMove } : {}),
+      } as FocusSession & {
         follow?: FollowOutcome;
+        targets?: SessionTargetsWrite;
+        subjectMove?: StageSubjectStatusOutcome;
       };
     }),
 
@@ -2539,6 +2650,8 @@ export const focusSessionsRouter = router({
           ...(result.session as FocusSession),
           warnings: result.warnings,
           ...(result.verdict ? { verdict: result.verdict } : {}),
+          // What the end moved (`subjectProfile.onEnd`), each with why.
+          ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         };
       } catch (err) {
         const e = err as { code?: string; message?: string };
@@ -3077,6 +3190,63 @@ export const focusSessionsRouter = router({
         askFingerprint: input.askFingerprint,
       });
       return slotOwnershipResult(result, input);
+    }),
+
+  /**
+   * LATER — the person sets one owed ask aside until `until` (founder
+   * decision 9bc9f75c): Review later for them until then, back on its own
+   * after it. The same act and limits as a request's Later
+   * (`proposals.later`); the ask stays owed and the agent still waits.
+   * `expectedLabel` is the slot's key or label, as `answerOutput` takes it.
+   * The session's OWNER only, and never an agent key: an agent that could
+   * set an ask aside would move its own ask in the person's list.
+   */
+  askLater: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().trim().min(1),
+        until: z.coerce.date(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can put an ask off — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
+      return setAskLater({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+        until: input.until,
+      });
+    }),
+
+  /** Take back the person's Later on an owed ask (the receipt's Undo). */
+  clearAskLater: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().trim().min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person can take back a Later — an agent key cannot.",
+        });
+      }
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
+      return clearAskLater({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        expectedLabel: input.expectedLabel,
+      });
     }),
 
   /**

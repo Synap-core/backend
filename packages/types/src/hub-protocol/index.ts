@@ -216,6 +216,11 @@ export interface IsFailureEnvelope {
     | "llm_budget_exceeded"
     | "timeout"
     | "circuit_open"
+    /**
+     * IS (503, retryable): the account's entitlement could not be read from
+     * the Control Plane, and the pod has no raw cap and no key of its own.
+     */
+    | "entitlement_unavailable"
     | "provider_error"
     | "cancelled"
     | "unknown"

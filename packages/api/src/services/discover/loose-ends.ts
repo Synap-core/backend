@@ -21,6 +21,12 @@
  * whose PRs merged today stops looking open. The PERSON's side of the same
  * rule is the needs-you `review` population (`listSessionsAwaitingReview`).
  *
+ * Plus a sixth, NOT idle-gated either (plan b38e5e64 §5.5): the things its
+ * ENDED sessions left behind — a subject or target still open or active
+ * after the session ended, with no work on it now (`readLeftBehind`, the
+ * same read as Moving now's `leftBehind`, narrowed to the agent's own ended
+ * sessions).
+ *
  * Each section reads on its own; one that cannot be read is
  * `{ status: "unavailable" }`, never an empty list or a zero.
  */
@@ -146,7 +152,33 @@ export interface LooseEnds {
     | Unavailable;
   /** Its open sessions ready to close now (see {@link ReadyToClose}). */
   readyToClose: ReadyToClose;
+  /** The things its ended sessions left open (see {@link LeftBehindSection}). */
+  leftBehind: LeftBehindSection;
 }
+
+/**
+ * The things the calling agent's ENDED sessions left behind: the session's
+ * subject or a target, still in an open or active status, with no session on
+ * it now. Newest-ended first; `count` is the whole population.
+ */
+export type LeftBehindSection =
+  | {
+      count: number;
+      items: Array<{
+        entityId: string;
+        title: string | null;
+        profileSlug: string | null;
+        status: string | null;
+        category: "open" | "active";
+        sessionId: string;
+        sessionTitle: string;
+        /** How the session ended: closed, cancelled or failed. */
+        sessionStatus: string;
+        closedAt: string;
+        close: string;
+      }>;
+    }
+  | Unavailable;
 
 /**
  * The calling agent's open sessions whose next move is `ready_to_close` — at
@@ -490,6 +522,55 @@ export async function readSessionsReadyToClose(p: {
   }
 }
 
+/** The call that settles a thing left behind: move it, or work it again. */
+function leftBehindCloseCall(t: {
+  entityId: string;
+  status: string | null;
+}): string {
+  return (
+    `If its work is finished or dropped, move it: synap_update_entity {"entityId":"${t.entityId}", the lifecycle property set to the option it reached, "expectedStatus":"${t.status ?? ""}"}. ` +
+    `If work remains, start a session on it: synap_start_session with "subjectEntityId":"${t.entityId}".`
+  );
+}
+
+/**
+ * The things the agent's own ended sessions left open or active
+ * (`readLeftBehind`, narrowed to its sessions). Never throws.
+ */
+async function readLeftBehindSection(
+  userId: string,
+  agentUserId: string
+): Promise<LeftBehindSection> {
+  try {
+    // Lazy: keeps the lifecycle read graph out of every importer of orient.
+    const { readLeftBehind } = await import("../lifecycle/left-behind.js");
+    const read = await readLeftBehind(
+      { userId, roster: false },
+      {
+        limit: LOOSE_ENDS_ITEMS,
+        sessionWhere: ownAgentSessionsWhere(userId, agentUserId),
+      }
+    );
+    return {
+      count: read.total,
+      items: read.items.map((t) => ({
+        entityId: t.entityId,
+        title: t.title,
+        profileSlug: t.profileSlug,
+        status: t.status,
+        category: t.category,
+        sessionId: t.endedSession.id,
+        sessionTitle: t.endedSession.label,
+        sessionStatus: t.endedSession.status,
+        closedAt: t.endedSession.closedAt,
+        close: leftBehindCloseCall(t),
+      })),
+    };
+  } catch (err) {
+    return unavailable("leftBehind", err);
+  }
+}
+
 /** The calling agent's loose ends. Never throws: each section reports itself. */
 export async function readLooseEnds(p: {
   userId: string;
@@ -497,17 +578,24 @@ export async function readLooseEnds(p: {
   now?: Date;
 }): Promise<LooseEnds> {
   const now = p.now ?? new Date();
-  const [sessions, asks, proposalsSection, automationsSection, readyToClose] =
-    await Promise.all([
-      readIdleSessions(p.userId, p.agentUserId, now),
-      readLeftoverAsks(p.userId, p.agentUserId),
-      readOldProposals(p.agentUserId, now),
-      readNeverFiredAutomations(p.agentUserId, now),
-      readSessionsReadyToClose({
-        userId: p.userId,
-        agentUserId: p.agentUserId,
-      }),
-    ]);
+  const [
+    sessions,
+    asks,
+    proposalsSection,
+    automationsSection,
+    readyToClose,
+    leftBehind,
+  ] = await Promise.all([
+    readIdleSessions(p.userId, p.agentUserId, now),
+    readLeftoverAsks(p.userId, p.agentUserId),
+    readOldProposals(p.agentUserId, now),
+    readNeverFiredAutomations(p.agentUserId, now),
+    readSessionsReadyToClose({
+      userId: p.userId,
+      agentUserId: p.agentUserId,
+    }),
+    readLeftBehindSection(p.userId, p.agentUserId),
+  ]);
   return {
     lens: "yours",
     idleDays: LOOSE_END_IDLE_DAYS,
@@ -516,5 +604,6 @@ export async function readLooseEnds(p: {
     proposals: proposalsSection,
     automations: automationsSection,
     readyToClose,
+    leftBehind,
   };
 }

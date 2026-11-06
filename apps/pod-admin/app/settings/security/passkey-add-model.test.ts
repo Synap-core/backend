@@ -1,0 +1,40 @@
+/**
+ * "Add a passkey" with a factor already held (W3 slice 3, founder decision 2):
+ * Kratos' guard refuses the new passkey without a grant, so pod admin
+ * confirms with an existing passkey first; it cannot with a Relay key alone;
+ * a failed read of the device keys is never "none".
+ */
+import { describe, expect, it } from "vitest";
+import { passkeyAddStep } from "./passkey-add-model";
+
+describe("passkeyAddStep", () => {
+  it("no factor: the first passkey is added straight away", () => {
+    expect(passkeyAddStep({ passkeys: 0, deviceKeys: 0, granted: false })).toBe(
+      "add"
+    );
+  });
+
+  it("a passkey: confirm with it first, then create", () => {
+    expect(passkeyAddStep({ passkeys: 1, deviceKeys: 0, granted: false })).toBe(
+      "authorize"
+    );
+    expect(passkeyAddStep({ passkeys: 1, deviceKeys: 2, granted: false })).toBe(
+      "authorize"
+    );
+    expect(
+      passkeyAddStep({ passkeys: 2, deviceKeys: null, granted: true })
+    ).toBe("create");
+  });
+
+  it("only a Relay key: pod admin cannot get the grant", () => {
+    expect(passkeyAddStep({ passkeys: 0, deviceKeys: 1, granted: false })).toBe(
+      "relayOnly"
+    );
+  });
+
+  it("an unread device list with no passkey is a failed read, not an open door", () => {
+    expect(
+      passkeyAddStep({ passkeys: 0, deviceKeys: null, granted: false })
+    ).toBe("devicesFailed");
+  });
+});

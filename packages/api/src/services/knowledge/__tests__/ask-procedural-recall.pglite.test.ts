@@ -10,6 +10,9 @@
  * "document", ...) and carried it over the two-term floor. Pinned:
  *  - the near-verbatim question finds its runbook first;
  *  - a question no runbook answers returns NO runbook, not the long notes.
+ *  - a short content word matches whole words only: "how do I set up the
+ *    backup?" finds the backup runbook and not a note that merely says
+ *    "settings" and "update" (`set:*` + `up:*` carried it over the floor).
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { SQL } from "drizzle-orm";
@@ -90,10 +93,18 @@ const LONG_NOTES = [
   "Inside it, the domain is implicit; it documents its inputs and it does it in time. ",
 ];
 
+const BACKUP_RUNBOOK =
+  "To set up the nightly backup, open the pod settings and turn backups on.";
+// Shares no word with the question, only the prefixes `set` and `up`.
+const SETTINGS_NOTE =
+  "Update the settings, upload the export, then update the settings again. ";
+
 beforeAll(async () => {
   await h.client!.exec(ddlFor(schema.knowledgeKeys as unknown as PgTable));
   const rows: Array<[string, string]> = [
     ["design:flows-feedback-loop", RUNBOOK],
+    ["ops:backup-runbook", BACKUP_RUNBOOK],
+    ["notes:settings", SETTINGS_NOTE.repeat(20)],
     ...LONG_NOTES.map((n, i): [string, string] => [
       `codestate:long-note-${i}`,
       n.repeat(40),
@@ -129,6 +140,12 @@ describe("ask — procedural recall of a runbook by its own question", () => {
       "I am changing a Synap desktop page, how do I check its user flows?"
     );
     expect(keys[0]).toBe("design:flows-feedback-loop");
+  });
+
+  it("short words match whole words: 'set up the backup' finds the runbook, not a settings note", async () => {
+    expect(await procedural("How do I set up the backup?")).toEqual([
+      "ops:backup-runbook",
+    ]);
   });
 
   it("a question no runbook answers returns no runbook", async () => {

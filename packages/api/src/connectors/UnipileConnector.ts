@@ -10,6 +10,9 @@ import type {
   StartedChat,
   MessagingProfile,
   NetworkDistance,
+  ProfileConnection,
+  RelationRequest,
+  SentInvitationPage,
   ChatDetails,
   WebhookHealth,
   WebhookEvent,
@@ -114,9 +117,23 @@ const UnipileChatStartedSchema = z.object({
   message_id: UnipileSentIdSchema.optional(),
 });
 
+// A connection request as a profile carries it. v2: `specifics.relation_request`
+// `{ type: sent|received, id, created_at }` beside `specifics.
+// relation_request_status` (PENDING | IGNORED | WITHDRAWN). v1 put an
+// `invitation` `{ type, status }` at the top or under `specifics.linkedin`.
+// Every field optional: an answer without one is "not said", never a guess.
+const UnipileRelationRequestSchema = z
+  .object({
+    type: z.string().nullish(),
+    status: z.string().nullish(),
+    created_at: z.string().nullish(),
+    date: z.string().nullish(),
+  })
+  .partial();
+
 // GET /v2/{account}/users/{user} → UserProfile. LinkedIn's network distance
 // sits in `specifics` (v2); older shapes put it at the top or under
-// `specifics.linkedin`, so all three are read.
+// `specifics.linkedin`, so all three are read. So is the connection request.
 const UnipileUserProfileSchema = z.object({
   id: z.string(),
   public_identifier: z.string().nullish(),
@@ -124,16 +141,44 @@ const UnipileUserProfileSchema = z.object({
   first_name: z.string().nullish(),
   last_name: z.string().nullish(),
   network_distance: z.string().nullish(),
+  invitation: UnipileRelationRequestSchema.nullish(),
   specifics: z
     .object({
       network_distance: z.string().nullish(),
+      relation_request: UnipileRelationRequestSchema.nullish(),
+      relation_request_status: z.string().nullish(),
       linkedin: z
-        .object({ network_distance: z.string().nullish() })
+        .object({
+          network_distance: z.string().nullish(),
+          invitation: UnipileRelationRequestSchema.nullish(),
+        })
         .partial()
         .nullish(),
     })
     .partial()
     .nullish(),
+});
+
+// The `user` of a relation request or a relation (Unipile v2 `User`).
+const UnipileRelationUserSchema = z.object({
+  id: z.string().min(1),
+  public_identifier: z.string().nullish(),
+  display_name: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+});
+
+// GET /v2/{account}/users/me/relation-requests?type=sent → { data, next_cursor? }.
+const UnipileRelationRequestsResponseSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.string(),
+      type: z.string().nullish(),
+      created_at: z.string().nullish(),
+      user: UnipileRelationUserSchema.nullish(),
+    })
+  ),
+  next_cursor: z.string().nullish(),
 });
 
 // `message.receipt.read` / `message.receipt.delivery` payload.
@@ -185,6 +230,8 @@ export const UNIPILE_WEBHOOK_EVENTS = [
   "account.reconnect",
   "account.status.disconnected",
   "account.remove",
+  // A connection request was accepted (User events; on LinkedIn up to 6 h late).
+  "relation.new",
 ] as const;
 
 /** LinkedIn chats live in inboxes; CLASSIC_PRIMARY is LinkedIn Classic's. */
@@ -266,6 +313,73 @@ function toNetworkDistance(
     default:
       return null;
   }
+}
+
+/** A request's raw status → RelationRequest status; unknown → null. */
+function toRelationStatus(
+  raw: string | null | undefined
+): RelationRequest["status"] {
+  switch ((raw ?? "").toUpperCase()) {
+    case "PENDING":
+      return "pending";
+    case "IGNORED":
+      return "ignored";
+    case "WITHDRAWN":
+      return "withdrawn";
+    default:
+      return null;
+  }
+}
+
+/** A request's raw type → its direction; unknown → null. */
+function toRelationDirection(
+  raw: string | null | undefined
+): RelationRequest["direction"] {
+  const t = (raw ?? "").toLowerCase();
+  return t === "sent" ? "sent" : t === "received" ? "received" : null;
+}
+
+/**
+ * The connection request a profile carries, wherever its shape puts it.
+ * `null` = the profile names none.
+ */
+function relationRequestOf(
+  p: z.infer<typeof UnipileUserProfileSchema>
+): RelationRequest | null {
+  const v2 = p.specifics?.relation_request ?? null;
+  const v2Status = p.specifics?.relation_request_status ?? null;
+  if (v2 || v2Status) {
+    return {
+      direction: toRelationDirection(v2?.type),
+      status: toRelationStatus(v2Status ?? v2?.status),
+      sentAt: v2?.created_at ?? v2?.date ?? null,
+    };
+  }
+  const v1 = p.invitation ?? p.specifics?.linkedin?.invitation ?? null;
+  if (!v1) return null;
+  return {
+    direction: toRelationDirection(v1.type),
+    status: toRelationStatus(v1.status),
+    sentAt: v1.created_at ?? v1.date ?? null,
+  };
+}
+
+/**
+ * Connected / pending / not connected, from the distance and the request.
+ * A 1st-degree connection is connected; otherwise a request the owner SENT
+ * (or of unknown direction) that is pending is pending; any other known
+ * distance is not connected. No distance and no pending request = `null`
+ * (the provider did not say).
+ */
+export function profileConnection(
+  networkDistance: NetworkDistance | null,
+  request: RelationRequest | null
+): ProfileConnection | null {
+  if (networkDistance === "FIRST_DEGREE") return "connected";
+  if (request?.status === "pending" && request.direction !== "received") {
+    return "pending";
+  }
+  return networkDistance ? "not_connected" : null;
 }
 
 /** A v2 Message → the connector's Message (one mapping for reads and webhooks). */
@@ -622,15 +736,66 @@ export class UnipileConnector implements MessagingConnector {
       p.display_name ||
       [p.first_name, p.last_name].filter(Boolean).join(" ") ||
       identifier;
+    const networkDistance = toNetworkDistance(
+      p.specifics?.network_distance ??
+        p.specifics?.linkedin?.network_distance ??
+        p.network_distance
+    );
+    const relationRequest = relationRequestOf(p);
     return {
       providerId: p.id,
       publicIdentifier: p.public_identifier ?? null,
       name,
-      networkDistance: toNetworkDistance(
-        p.specifics?.network_distance ??
-          p.specifics?.linkedin?.network_distance ??
-          p.network_distance
-      ),
+      networkDistance,
+      connection: profileConnection(networkDistance, relationRequest),
+      relationRequest,
+    };
+  }
+
+  /**
+   * The connection requests the account owner sent and that still wait:
+   * GET /{account}/users/me/relation-requests?type=sent (v2 requires the
+   * type), cursor-paged like the catalog's `linkedin_list_invitations`. A
+   * request with no user id is skipped (nobody to match). Any failure throws.
+   */
+  async listSentInvitations(
+    externalAccountId: string,
+    cursor?: string
+  ): Promise<SentInvitationPage> {
+    const query = new URLSearchParams({ type: "sent", limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const res = await this.call(
+      "GET",
+      `/${encodeURIComponent(externalAccountId)}/users/me/relation-requests?${query.toString()}`
+    );
+    if (!res.ok) throw await failure(res, "listSentInvitations");
+    const parsed = UnipileRelationRequestsResponseSchema.safeParse(
+      await res.json()
+    );
+    if (!parsed.success)
+      throw new Error("Unipile listSentInvitations: unexpected response shape");
+    const invitations = parsed.data.data.flatMap((r) => {
+      if (!r.user?.id) return [];
+      if (r.type && r.type.toLowerCase() !== "sent") return [];
+      const u = r.user;
+      return [
+        {
+          id: r.id,
+          providerId: u.id,
+          publicIdentifier: u.public_identifier ?? null,
+          name:
+            u.display_name ||
+            [u.first_name, u.last_name].filter(Boolean).join(" ") ||
+            null,
+          sentAt: r.created_at ?? null,
+        },
+      ];
+    });
+    return {
+      invitations,
+      ...(parsed.data.next_cursor
+        ? { nextCursor: parsed.data.next_cursor }
+        : {}),
     };
   }
 
@@ -909,6 +1074,39 @@ export class UnipileConnector implements MessagingConnector {
         };
       case "account.remove":
         return { type: "account.disconnected", accountExternalId, provider };
+      case "relation.new": {
+        // Payload is a User Relation object (v2 "Event types" > User events:
+        // `{ id, object: 'UserRelation', created_at, user: User }`, the shape
+        // of "List Relations of a User"). Read defensively: no live delivery
+        // has been captured yet, so v1's flat `user_provider_id` /
+        // `user_public_identifier` / `user_full_name` are read too. No person
+        // id = not an event the pod can act on.
+        const user = UnipileRelationUserSchema.partial().safeParse(
+          payload.user ?? {}
+        );
+        const u: Partial<z.infer<typeof UnipileRelationUserSchema>> =
+          user.success ? user.data : {};
+        const flat = (k: string) =>
+          typeof payload[k] === "string" && (payload[k] as string).trim()
+            ? (payload[k] as string).trim()
+            : null;
+        const providerId = (u.id ?? "").trim() || flat("user_provider_id");
+        if (!providerId || !accountExternalId) return null;
+        const name =
+          u.display_name ||
+          [u.first_name, u.last_name].filter(Boolean).join(" ") ||
+          flat("user_full_name");
+        return {
+          type: "relation.created",
+          accountExternalId,
+          provider,
+          providerId,
+          publicIdentifier:
+            u.public_identifier ?? flat("user_public_identifier"),
+          name: name || null,
+          at: flat("created_at") ?? new Date().toISOString(),
+        };
+      }
       default:
         return null;
     }

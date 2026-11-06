@@ -947,9 +947,144 @@ describe("a person's channel doors", () => {
       restDoorAllowed("GET", `/channels/${E}/proposed-messages`, DOC_ONLY)
     ).toBe(false);
   });
+  it("GET /channels/conversations: admitted with channel.read, refused without", () => {
+    expect(
+      restDoorAllowed("GET", "/channels/conversations", PINNED_CHANNEL)
+    ).toBe(true);
+    expect(restDoorAllowed("GET", "/channels/conversations", DOC_ONLY)).toBe(
+      false
+    );
+    expect(
+      restDoorAllowed("GET", "/channels/conversations", PINNED_PROPOSAL)
+    ).toBe(false);
+  });
+  // A POST the fence does not declare a read passes on to its write gates, so
+  // the refusals below are what prove the declaration matches the served
+  // path (`route()` expands `:id` only; a `:personId` entry matched nothing).
+  it("POST /channels/linkedin-reach/:personId: a declared read, admitted with channel.read, refused without", () => {
+    const path = `/channels/linkedin-reach/${E}`;
+    expect(restDoorAllowed("POST", path, PINNED_CHANNEL)).toBe(true);
+    expect(restDoorAllowed("POST", path, DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("POST", path, PINNED_PROPOSAL)).toBe(false);
+  });
   it("only a uuid id is admitted", () => {
     expect(
       restDoorAllowed("GET", "/entities/not-a-uuid/channels", PINNED_CHANNEL)
     ).toBe(false);
+  });
+});
+
+describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b, 7da9c21f)", () => {
+  // The key a computer or the CLI gets: one scope, no pin, AI read & propose.
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  const PINNED = key({
+    permissions: aiDefaultCapabilities(),
+    workspaceIds: ["w1"],
+  });
+  const DENY_ALL = key({ permissions: [] });
+  /** Aggregate doors: open to an unpinned key reading every subject. */
+  const AGGREGATE: ReadonlyArray<readonly [string, readonly string[]]> = [
+    [
+      "/capabilities/catalog",
+      ["tool.read", "skill.read", "link.read", "automation.read"],
+    ],
+    ["/discover", ["entity.read", "relation_def.read"]],
+    ["/memory", ["entity.read", "preference.read"]],
+    ["/cells", ["widget.read"]],
+    ["/widget-definitions", ["widget.read"]],
+  ];
+  it.each(AGGREGATE)("GET %s is open to the computer's key", (path) => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", `${path}/`, COMPUTER)).toBe(true);
+  });
+  it.each(AGGREGATE)(
+    "GET %s needs exactly the subjects it reads, unnarrowed",
+    (path, subjects) => {
+      expect(restDoorAllowed("GET", path, key({ permissions: subjects }))).toBe(
+        true
+      );
+      // Each subject is load-bearing: drop one and the door closes.
+      for (const missing of subjects)
+        expect(
+          restDoorAllowed(
+            "GET",
+            path,
+            key({ permissions: subjects.filter((s) => s !== missing) })
+          ),
+          `${path} without ${missing}`
+        ).toBe(false);
+      // Never a blanket allow: no route narrows these lists to a pin.
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(false);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({ permissions: subjects, workspaceIds: ["w1"] })
+        )
+      ).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+  it("GET /memory reads what POST /memory/search reads: one declaration", () => {
+    for (const k of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY])
+      expect(restDoorAllowed("GET", "/memory", k)).toBe(
+        restDoorAllowed("POST", "/memory/search", k)
+      );
+    // The other /memory routes stay owner-wide writes.
+    expect(hubRouteClass("GET", "/memory")).toBe("read");
+    expect(hubRouteClass("POST", "/memory")).toBe("owner-wide");
+    expect(hubRouteClass("DELETE", `/memory/${U}`)).toBe("owner-wide");
+  });
+  const SKILL_DOORS = [
+    "/agent-skills",
+    "/agent-skills/by-slug/rules%2Fstart-here",
+    "/agent-skills/by-slug/catalog",
+    `/agent-skills/${U}`,
+  ];
+  it.each(SKILL_DOORS)(
+    "GET %s loads a skill as MCP synap_load_skill does",
+    (path) => {
+      for (const k of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY])
+        expect(restDoorAllowed("GET", path, k), String(k)).toBe(
+          mcpToolAllowed("synap_load_skill", true, k)
+        );
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(true);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+  it("the skill doors open no code skill and no deeper path", () => {
+    for (const path of [
+      "/agent-skills/executable",
+      `/agent-skills/executable/${U}`,
+      "/agent-skills/by-slug/rules/start-here",
+      "/agent-skills/not-a-uuid",
+    ])
+      expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
+  });
+  it("GET /import/units-job/:id: polled by a key that can start an import", () => {
+    const path = `/import/units-job/${U}`;
+    // The enqueue door checks `entity.<kind>.create`; a pinned key holds it in
+    // its space, and the route reads only the submitter's own job.
+    expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", path, PINNED)).toBe(true);
+    expect(
+      restDoorAllowed("GET", path, key({ permissions: ["entity.note.create"] }))
+    ).toBe(true);
+    // Read-only or deny-all keys could not have enqueued one.
+    expect(
+      restDoorAllowed("GET", path, key({ permissions: ["entity.read"] }))
+    ).toBe(false);
+    expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    expect(
+      restDoorAllowed("GET", "/import/units-job/not-a-uuid", COMPUTER)
+    ).toBe(false);
+  });
+  it("GET /skills/system serves the image's static SKILL.md files to any key", () => {
+    expect(restDoorAllowed("GET", "/skills/system", DENY_ALL)).toBe(true);
+    expect(restDoorAllowed("GET", "/skills/system", PINNED)).toBe(true);
+    // The pod's skill list is another door, still unclassified.
+    expect(restDoorAllowed("GET", "/skills", COMPUTER)).toBe(false);
   });
 });

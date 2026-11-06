@@ -85,6 +85,7 @@ import {
 // DERIVED from it (below), never hand-copied.
 import {
   ASK_LIMITS,
+  ASK_URGENCIES,
   AskSchema,
   RELAY_SURFACE_MAX_CHARS,
 } from "@synap-core/types/ask";
@@ -95,6 +96,7 @@ import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
+  playbookOnEndSchema,
   playbookSubjectProfileSchema,
 } from "../../../schemas/playbook-process.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -406,6 +408,10 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     expectedOutputs: buildOutputSlotsJsonSchema(
       "What this stage must produce: each { kind, label, relationToSubject? }."
     ),
+    tier: deriveJsonSchema(
+      playbookStageSchema.shape.tier.unwrap(),
+      "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+    ),
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
@@ -414,6 +420,10 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
     "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
+  ),
+  onEnd: deriveJsonSchema(
+    playbookOnEndSchema,
+    "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
@@ -434,7 +444,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -722,7 +732,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "THE recall door, for what you cannot already name. Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. " +
+          "THE recall door, for what you cannot already name (it asks the POD; to ask the PERSON, use synap_ask_person). Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. " +
           "COST: an answer (detail full or brief, the default) runs a model and spends this key's AI budget, far smaller than its read budget; detail:'sources' runs no model and is a plain read. " +
           "READ DIRECTLY WHEN YOU CAN: you have the id → synap_get_entity / synap_get_document / synap_get_session; you know the kind → synap_get_entities; you want what links to it → synap_get_graph; your open work → synap_orient. Never ask for something one of those returns. " +
           "Ask when you do not know where the data is, before a non-trivial task or a question about the user's life, work, projects or preferences (the pod is their source of truth, prefer it over your assumptions), and before creating anything, to check what already exists (detail:'sources' is enough for that). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.",
@@ -770,7 +780,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default; use synap_get_entity or detail:'full' for full values.",
+          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default (id, title, kind, status and the kind's selected properties; `omitted` names what each row left out — pass those keys in `fields` or read one object with synap_get_entity); detail:'full' returns unprojected rows.",
         inputSchema: {
           type: "object",
           properties: {
@@ -778,7 +788,13 @@ export const tools = {
               type: "string",
               enum: ["lean", "full"],
               description:
-                "lean (default) = null columns and systemData omitted, string values over 120 chars truncated with '…[truncated: N chars total]' (every property key kept). full = unprojected rows.",
+                "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows.",
+            },
+            fields: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Lean only: extra property keys (or columns, e.g. createdAt) to return WHOLE on every row, never truncated — e.g. the keys a previous reply listed in `omitted`.",
             },
             profileSlug: {
               type: "string",
@@ -1546,7 +1562,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
+          "Create a standalone document. THREE modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. (3) a page — `type: \"html\"` with `content` a whole HTML page: pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN, no remote font or image; live pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1559,7 +1575,13 @@ export const tools = {
             content: {
               type: "string",
               description:
-                "Authored document body (markdown or plain text). Mutually exclusive with `url`.",
+                'Authored document body (markdown or plain text; with `type: "html"`, the whole page). Mutually exclusive with `url`.',
+            },
+            type: {
+              type: "string",
+              enum: ["markdown", "html"],
+              description:
+                'What `content` is. "markdown" (default) is a document. "html" is a page pod admin runs at `/open/<id>` in an isolated frame: inline only (the policy blocks the network: no CDN, no remote font or image), at most 2 MB, reading pod data through the read-only bridge. The receipt\'s `warnings` say what will not run.',
             },
             url: {
               type: "string",
@@ -2397,6 +2419,13 @@ export const tools = {
               description:
                 "Optional UUID of this session's PARENT — this session is a child: a detour (something blocked the parent's work and this clears it) or a planned sub-session of a larger piece of work. Records `session --spawned_from--> session`; the parent stays OPEN and lists its children (closing a child never closes the parent, and the parent never auto-closes). Must be a session you own; if it cannot be linked, the result's `parentLink` says why. The child does NOT inherit the parent's governance settings.",
             },
+            targets: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 100,
+              description:
+                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already).",
+            },
             blockedBySessionIds: {
               type: "array",
               items: { type: "string", format: "uuid" },
@@ -2540,7 +2569,7 @@ export const tools = {
             currentStage: {
               type: "string",
               description:
-                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door. Changing it emits a stage-transition event automations can react to.",
+                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to.",
             },
             subjectEntityId: {
               type: ["string", "null"],
@@ -2731,6 +2760,13 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "Only with followPlaybookId: which stage this work is ALREADY in, by the stage `key` (optional). OMIT IT unless you know — the session then sits in no stage, which is honest; it is never guessed and never set to the first stage. A key the playbook does not declare is refused, with the valid keys listed.",
+            },
+            targets: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 100,
+              description:
+                "ADD entity UUIDs this session works on as a batch (as start's `targets`; add-only, idempotent: a target ends with a result, never removed). Each must be an entity you can see; the session must be active, paused or forming. Reported on `targets` (added | already).",
             },
             addBlockedBySessionIds: {
               type: "array",
@@ -3087,6 +3123,111 @@ export const tools = {
             },
           },
           required: ["sessionId", "disposition"],
+        },
+      },
+      {
+        name: "synap_ask_person",
+        annotations: {
+          title: "Ask the person",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Put ONE thing in front of the PERSON: a question only they can answer, a choice, a form, something to do or to hand over. It lands in their Needs you, where they answer it. (synap_ask asks the POD, not the person.) Works with or without a session: it files on the session this conversation works in (or `sessionId`), else on your one standing \"Asks from <you>\" session — you never need a goal or criteria. It is the same owed ask `synap_update_session` writes with owner 'human' + `ask`, so inside a session either door is fine. " +
+          "Send `question` (one line) and `ask` (confirm / choose with ONE recommended / form / act / provide). Add `why`, `unblocks`, `consequence` (what the answer DOES) and `reversible` when you know them. " +
+          "PRIORITY is the pod's, not yours: it derives P0-P3 to RANK what the person sees (P0 = due within the hour by `answerBy`; P1 = waiting on them; P2 = an agent still working, or `urgency` 'whenever'; P3 = stale or from the system). `urgency` is a hint that can only LOWER it. An ask due within the hour also breaks through the person's Focus, once a day per agent (your next due-soon ask that day is a normal push, counted against the person's daily push budget); any other ask is a normal push. An answerBy already in the past is refused. " +
+          "`dedupeKey`: asking again with the same key UPDATES your open ask instead of adding a second card. " +
+          "Then `synap_wait_for_answer` with the returned sessionId; if they answer you in this chat instead, `synap_relay_answer` with their words.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            question: {
+              type: "string",
+              maxLength: ASK_LIMITS.questionMaxChars,
+              description:
+                "ONE line: what you need from the person ('Publish the launch post today?'). The card's heading.",
+            },
+            ask: {
+              ...ASK_JSON_SCHEMA,
+              description:
+                "HOW the person answers: confirm (yes/no; mark the one you recommend), choose (1-8 options, at most ONE recommended, each with a one-line consequence), form (a small flat form; never a secret), act (a task in the world, with steps and a url; they answer 'I did this'), provide (connection | file | secret, through the vault — never typed in chat). Prefer confirm/choose for a decision. May carry `risk`, `stakes` ('commitment' for deploy, spend, publish, delete: their own tap is then required) and `lookedAt`.",
+            },
+            why: {
+              type: "string",
+              maxLength: 500,
+              description:
+                "ONE line: why it needs the person (what is missing), never a repeat of the question.",
+            },
+            unblocks: {
+              type: "string",
+              maxLength: ASK_LIMITS.unblocksMaxChars,
+              description:
+                "ONE line: what moves once they answer ('the EU launch deploy').",
+            },
+            blockedReason: {
+              type: "string",
+              enum: [...BLOCKED_REASONS],
+              description:
+                "What kind of thing unblocks you. Default from the ask: decision (confirm/choose/form), physical (act, a file), credential (a secret or a connection).",
+            },
+            ref: {
+              description:
+                'Where to go for it: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} in the pod, or {"url":"https://..."}. Refused if you cannot see the object.',
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    kind: { type: "string", enum: [...OUTPUT_REF_KINDS] },
+                    id: { type: "string" },
+                  },
+                  required: ["kind", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: { url: { type: "string", format: "uri" } },
+                  required: ["url"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+            urgency: {
+              type: "string",
+              enum: [...ASK_URGENCIES],
+              description:
+                "A hint: today (default) | whenever. It can only LOWER the priority the pod derives: 'whenever' ranks the ask lower.",
+            },
+            answerBy: {
+              type: "string",
+              maxLength: ASK_LIMITS.instantMaxChars,
+              description:
+                "When you need the answer: ISO-8601 with its offset ('2026-11-05T17:00:00Z'). Due within the hour, it is their top priority.",
+            },
+            consequence: {
+              type: "string",
+              maxLength: ASK_LIMITS.consequenceMaxChars,
+              description:
+                "ONE line: what the answer will DO ('Publishes the post to LinkedIn').",
+            },
+            reversible: {
+              type: "boolean",
+              description:
+                "Whether what the answer does can be undone. Omit when you do not know.",
+            },
+            dedupeKey: {
+              type: "string",
+              maxLength: ASK_LIMITS.dedupeKeyMaxChars,
+              description:
+                "Your own handle for this ask: the same key again UPDATES your open ask (wherever it was filed) instead of adding a second one.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "Optional: a session of yours, still open, to file it on. Omit it: the ask lands where this conversation's writes are grouped, else on your standing asks session.",
+            },
+          },
+          required: ["question", "ask"],
         },
       },
       {
@@ -3479,7 +3620,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full (goal template, stages, criteria, expected outputs…), or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3496,6 +3637,17 @@ export const tools = {
             limit: {
               type: "number",
               description: "Page size (1–100, default 50).",
+            },
+            playbookId: {
+              type: "string",
+              description:
+                "Read ONE playbook in full (its whole definition), instead of listing.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              description:
+                "lean (default) = the digest per playbook; full = complete rows (large: pair it with a small limit).",
             },
           },
           required: [],
@@ -3590,6 +3742,7 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
+            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             scope: {
               type: "string",
@@ -3647,6 +3800,7 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
+            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             status: {
               type: "string",
@@ -6743,7 +6897,7 @@ export const tools = {
             import("../../../services/capability-briefs/resolve-skill-door.js"),
             import("../../../services/capability-briefs/door-tool-render.js"),
           ]);
-        const door = await resolveSkillDoor(agentUserId);
+        const door = await resolveSkillDoor(agentUserId, toolAccess?.keyId);
         const body = renderSkillForDoor(content, door);
         // A skill whose teaching uses a group unlocks it (after the body
         // resolved — the teaching is what the caller asked for).

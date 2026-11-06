@@ -51,6 +51,7 @@ import {
 import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
+import type { ActionRunMode } from "../governance-rules/index.js";
 import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
@@ -1998,6 +1999,8 @@ export const CONNECTION_KIND_STATE_LABELS: Readonly<
   >
 > = {
   app: { needs_signin: "Key expired" },
+  // A computer's sign-in IS its key: reconnecting it on the computer renews it.
+  machine: { needs_signin: "Key expired" },
 };
 
 /** The chip word of a connection state, for this kind. Unknown states humanize. */
@@ -3556,6 +3559,27 @@ export const MATRIX_MARK_LABELS: Readonly<Record<MatrixMark, string>> = {
   mixed: "Mixed",
 };
 
+/**
+ * How one tool action runs (`@synap-core/types/governance-rules`
+ * `ActionRunMode`): the words of the choice on a tool's page and of "Approve
+ * always". Keyed by the mode, so a new mode is a BUILD error until it is named.
+ */
+export const ACTION_RUN_MODE_LABELS: Readonly<Record<ActionRunMode, string>> = {
+  auto: "Runs on its own",
+  ask: "Asks first",
+  never: "Never",
+};
+
+/** An action run mode's words; an unknown mode humanizes rather than leaks. */
+export function resolveActionRunModeLabel(
+  mode: ActionRunMode | (string & {})
+): string {
+  return (
+    (ACTION_RUN_MODE_LABELS as Readonly<Record<string, string>>)[mode] ??
+    humanizeToken(mode)
+  );
+}
+
 /** A matrix mark's words; an unknown mark humanizes rather than leaks. */
 export function resolveMatrixMarkLabel(
   mark: MatrixMark | (string & {})
@@ -3702,6 +3726,102 @@ export function resolveAgentReachLabel(
   return (
     (AGENT_REACH_LABELS as Readonly<Record<string, string>>)[reach] ??
     humanizeToken(reach)
+  );
+}
+
+/**
+ * Can the pod get an agent working now, as a mark's words (the roster's
+ * `wake.state`, `agentUsers.roster`). Keyed by `AgentWakeState`;
+ * `agents/wake.ts` holds the compile-time floor that a new state cannot ship
+ * without its words.
+ */
+export const AGENT_WAKE_STATE_LABELS = {
+  awake: "Awake",
+  can_wake: "Can wake",
+  cant_wake: "Can't wake",
+} as const;
+
+/** A wake state's words; an unknown state humanizes rather than leaks. */
+export function resolveAgentWakeStateLabel(
+  state: string | null | undefined
+): string {
+  if (!state) return "";
+  return (
+    (AGENT_WAKE_STATE_LABELS as Readonly<Record<string, string>>)[state] ??
+    humanizeToken(state)
+  );
+}
+
+/**
+ * What gets (or would get) an agent working (`wake.how`): the pod itself, its
+ * connector's start, or the runner on its computer.
+ */
+export const AGENT_WAKE_HOW_LABELS = {
+  built_in: "Runs in Synap",
+  binding: "Started by its connector",
+  runner: "Started on its computer",
+} as const;
+
+/** A wake path's words; an unknown one humanizes rather than leaks. */
+export function resolveAgentWakeHowLabel(
+  how: string | null | undefined
+): string {
+  if (!how) return "";
+  return (
+    (AGENT_WAKE_HOW_LABELS as Readonly<Record<string, string>>)[how] ??
+    humanizeToken(how)
+  );
+}
+
+/** Why an agent can't be woken (`wake.why`), a few words each. */
+export const AGENT_WAKE_REFUSAL_LABELS = {
+  paused: "Paused",
+  binding_broken: "Connector broken",
+  no_template: "No agent template",
+  no_template_wake: "Starts only by hand",
+  no_computer: "No computer",
+  no_waker: "Nothing can start it yet",
+  computer_offline: "Computer offline",
+  wakes_off: "Waking is off",
+} as const;
+
+/** A wake refusal's words; an unknown one humanizes rather than leaks. */
+export function resolveAgentWakeRefusalLabel(
+  why: string | null | undefined
+): string {
+  if (!why) return "";
+  return (
+    (AGENT_WAKE_REFUSAL_LABELS as Readonly<Record<string, string>>)[why] ??
+    humanizeToken(why)
+  );
+}
+
+/**
+ * The pod's own AI, as a person picks it from "who runs this" (a run choice of
+ * `is-agent`, `@synap-core/types/agents` run-choice). ONE name everywhere a
+ * surface offers it beside the person's agents.
+ */
+export const SYNAP_AI_LABEL = "Synap AI";
+
+/**
+ * How a run's runner was decided (`RunOn.via`): a mark beside who ran it.
+ * `agents/run-choice.ts` holds the floor that a new via ships with its words.
+ */
+export const RUN_CHOICE_VIA_LABELS = {
+  named: "Chosen for this run",
+  stored: "Your choice",
+  fallback: "Your agent couldn't take it",
+  default: "The process's default",
+} as const;
+
+/** A run-choice via's words; an unknown one humanizes rather than leaks. */
+export function resolveRunChoiceViaLabel(
+  via: string | null | undefined
+): string {
+  if (!via) return "";
+  return (
+    (RUN_CHOICE_VIA_LABELS as Readonly<Record<string, string>>)[via] ??
+    humanizeToken(via)
   );
 }
 

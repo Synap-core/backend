@@ -31,6 +31,7 @@ import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
+import { sessionWriteEcho } from "./session-write-echo.js";
 import {
   waitForConversationChanges,
   waitForSessionAnswers,
@@ -73,6 +74,7 @@ import {
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { SESSION_TARGETS_MAX } from "../../../services/focus-sessions/session-targets-wire.js";
 
 /** One line, not a transcript — mirrors the tool schema's `maxLength`. */
 const SUSPENDED_INTENT_MAX = 400;
@@ -281,6 +283,25 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
     { code: "BAD_REQUEST" }
   );
 }
+
+/**
+ * `targets` on start / update: entity UUIDs (at most `SESSION_TARGETS_MAX`).
+ * Absent or empty ⇒ undefined; anything else malformed ⇒ "invalid", refused
+ * in words (the tool schema is advisory to the client).
+ */
+function readTargetsArg(raw: unknown): string[] | undefined | "invalid" {
+  if (raw === undefined || raw === null) return undefined;
+  if (
+    !Array.isArray(raw) ||
+    raw.length > SESSION_TARGETS_MAX ||
+    !raw.every((id) => typeof id === "string" && isUuid(id))
+  ) {
+    return "invalid";
+  }
+  return raw.length > 0 ? (raw as string[]) : undefined;
+}
+
+const TARGETS_ARG_ERROR = `targets must be an array of at most ${SESSION_TARGETS_MAX} entity UUIDs — the things this session works on as a batch.`;
 
 /**
  * The playbook a session starts from, off the MCP wire: a playbook UUID, or
@@ -541,6 +562,12 @@ export const sessionHandlers: McpHandlerMap = {
           "blockedBySessionIds must be an array of at most 20 session UUIDs — sessions you own that this one waits on.",
       });
     }
+    // The batch it works on: entity handles, refused here in words. The
+    // visibility floor is the service's (`createFocusSession`).
+    const targetsArg = readTargetsArg(args.targets);
+    if (targetsArg === "invalid") {
+      return ok({ error: TARGETS_ARG_ERROR });
+    }
     const suspendedIntentArg = args.suspendedIntent;
     if (
       suspendedIntentArg !== undefined &&
@@ -666,6 +693,7 @@ export const sessionHandlers: McpHandlerMap = {
         blockedBySessionIds: Array.isArray(blockedByArg)
           ? (blockedByArg as string[])
           : [],
+        ...(targetsArg ? { targets: targetsArg } : {}),
         forceCreate: args.forceCreate === true,
       });
     } catch (err) {
@@ -737,6 +765,11 @@ export const sessionHandlers: McpHandlerMap = {
     // where to read it, instead of the agent concluding nothing exists.
     return ok({
       ...result,
+      // The echo, never the whole row (`session-write-echo.ts`): the id, the
+      // room and the outcome / criterion keys the agent continues with.
+      ...(result.status === "created"
+        ? { session: sessionWriteEcho(result.session, { withKeys: true }) }
+        : {}),
       ...(method ? { method } : {}),
       ...(subjectCandidates.length > 0
         ? {
@@ -852,7 +885,8 @@ export const sessionHandlers: McpHandlerMap = {
       // terminalStatus reachable, a literal here would report every cancel and
       // every failure as a successful close.
       status: result.session.status,
-      session: result.session,
+      // The echo, never the whole closed row (`session-write-echo.ts`).
+      session: sessionWriteEcho(result.session),
       pendingProposals: result.pendingProposals,
       counts: result.counts,
       warnings: result.warnings,
@@ -866,6 +900,10 @@ export const sessionHandlers: McpHandlerMap = {
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
       ...(result.cancel ? { cancel: result.cancel } : {}),
+      // What the end moved (`subjectProfile.onEnd`): each thing moved,
+      // proposed, skipped or failed with why — absent when the process names
+      // nothing for this end.
+      ...(result.endMoves ? { endMoves: result.endMoves } : {}),
       ...(nudges ? { nudges } : {}),
       ...(leftOwed ? { leftOwed } : {}),
       note:
@@ -1620,6 +1658,10 @@ export const sessionHandlers: McpHandlerMap = {
         error: `expectedStatus must be one of ${SESSION_STATUSES.join(" | ")}.`,
       });
     }
+    const updateTargets = readTargetsArg(args.targets);
+    if (updateTargets === "invalid") {
+      return reply({ error: TARGETS_ARG_ERROR });
+    }
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -1664,6 +1706,8 @@ export const sessionHandlers: McpHandlerMap = {
         : typeof args.subjectEntityId === "string"
           ? { subjectEntityId: args.subjectEntityId }
           : {}),
+      // Validated above (entity UUIDs); the floors are the service's.
+      ...(updateTargets ? { targets: updateTargets } : {}),
       // NARROWED like the subject: `null` unfiles, a string files, anything
       // else leaves it. The floor and the always-propose rule for an agent live
       // in `updateFocusSession`.
@@ -1779,8 +1823,11 @@ export const sessionHandlers: McpHandlerMap = {
         return reply({
           ...(await applyBlockerEdits()),
           status: "updated",
-          session: result.session,
+          // The echo, never the whole row (`session-write-echo.ts`): what
+          // changed reads off it, what is still owed rides `nudges`.
+          session: sessionWriteEcho(result.session),
           ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
+          ...(result.targets ? { targets: result.targets } : {}),
           ...(result.completeOutput
             ? { completeOutput: result.completeOutput }
             : {}),
@@ -1816,6 +1863,10 @@ export const sessionHandlers: McpHandlerMap = {
           // Which track/step it landed in, and — when the step names another
           // domain — that the session was filed where it is, not moved.
           ...(result.trackFiling ? { trackFiling: result.trackFiling } : {}),
+          // Same reason as `completeOutput`: an advance whose stage names a
+          // subject status that did NOT move the subject (skipped, failed, or
+          // waiting on a person) changes nothing the session row shows.
+          ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
           ...(result.warnings ? { warnings: result.warnings } : {}),

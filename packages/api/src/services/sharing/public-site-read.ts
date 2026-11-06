@@ -42,6 +42,7 @@
 
 import { createHash } from "node:crypto";
 import { db, and, asc, desc, eq } from "@synap/database";
+import { PROPERTY_KEY_SOURCE } from "@synap/database/property-key";
 import { entities, projects, resourceShares } from "@synap/database/schema";
 import { count, sql, type SQL } from "drizzle-orm";
 import { hashToken } from "../../utils/share-token.js";
@@ -278,7 +279,8 @@ export interface CollectionQuery {
 }
 
 const DIGITS = /^\d{1,9}$/;
-const SORT_TERM = /^(-?)([A-Za-z][A-Za-z0-9_]{0,63})$/;
+/** `-` prefix = descending; the key is THE property key (it never starts with `-`). */
+const SORT_TERM = new RegExp(`^(-?)(${PROPERTY_KEY_SOURCE})$`);
 
 /**
  * Parse a collection page's query against the collection's config — pure.

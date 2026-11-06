@@ -10,16 +10,113 @@ import {
   queueOwnerHistoryImport,
 } from "../../../services/connectors/owner-history-import.js";
 import {
+  deleteLinkedExternalChannel,
+  disconnectOwnMessagingAccount,
+  findVisibleLinkedExternalChannel,
+} from "../../../services/connectors/owner-messaging-writes.js";
+import {
   registerProposalExecutor,
   attachFailureMeta,
   type ProposalExecutorArgs,
 } from "../execution-registry.js";
 import { reportApproved, dispatchExternalOnce } from "./shared.js";
+import { keepRowAsRecorded } from "../failure-classification.js";
+import {
+  heldSend,
+  holdPendingSend,
+} from "../../../services/channels/held-sends.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-messaging" });
 
-/** Register the messaging approve executors (send, history import). */
+/** Register the messaging approve executors (send, history import, disconnect, unlink). */
 export function registerMessagingExecutors(): void {
+  // ── messaging/delete_account ───────────────────────────────────────────────
+  // An agent asked to disconnect an account (`DELETE /messaging/accounts/:id`).
+  // Approving disconnects it through the same door as the person's own call,
+  // as the approver, who must own the account (the row's target, set at
+  // filing). Re-approving does nothing.
+  registerProposalExecutor({
+    key: "messaging/delete_account",
+    async execute({ proposal, payload, userId, input, deps }) {
+      if (await alreadyApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const account = await findOwnMessagingAccount(userId, proposal.targetId);
+      if (!account) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Couldn't apply — this messaging account is not yours, or it is already gone. Nothing was disconnected.",
+          }),
+          { errorClass: "conflict" }
+        );
+      }
+      const connector = await getMessagingConnector();
+      if (!connector) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Couldn't apply — no messaging service is set up on this pod. Nothing was disconnected.",
+          }),
+          { errorClass: "conflict" }
+        );
+      }
+      await disconnectOwnMessagingAccount(connector, account);
+      await markApproved(input.proposalId, payload, userId, {
+        disconnectedAt: new Date().toISOString(),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── channel/delete_external ────────────────────────────────────────────────
+  // An agent asked to unlink an external conversation (`DELETE
+  // /messaging/channels/:id`). Approving deletes it as the approver, who must
+  // still see the channel (the row's target, set at filing). A channel already
+  // gone is a conflict, never a silent success.
+  registerProposalExecutor({
+    key: "channel/delete_external",
+    async execute({ proposal, payload, userId, input, deps }) {
+      if (await alreadyApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const channel = await findVisibleLinkedExternalChannel(
+        userId,
+        proposal.targetId
+      );
+      if (!channel || !(await deleteLinkedExternalChannel(channel.id))) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Couldn't apply — this conversation is not one you can see, or it was already unlinked. Nothing was deleted.",
+          }),
+          { errorClass: "conflict" }
+        );
+      }
+      await markApproved(input.proposalId, payload, userId, {
+        deletedAt: new Date().toISOString(),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
   // ── messaging/import_history ───────────────────────────────────────────────
   // An agent asked for an account's history import (`POST
   // /messaging/accounts/:id/import-history`). Approving queues it through the
@@ -264,51 +361,73 @@ async function executeChannelSend(args: {
   }
 
   let sent: Awaited<ReturnType<typeof sendExternalMessage>> | null = null;
-  await dispatchExternalOnce(input.proposalId, async () => {
-    const result = await sendExternalMessage({
-      channelId: args.channelId,
-      threadId: null,
-      accountId: typeof data.accountId === "string" ? data.accountId : "",
-      body,
-      userId,
-      workspaceId: proposal.workspaceId ?? null,
-      alreadyApproved: true,
-      sessionId: proposal.sessionId ?? null,
-      proposalId: input.proposalId,
-      subject: typeof data.subject === "string" ? data.subject : null,
-      draftedBy:
-        data.draftedBy && typeof data.draftedBy === "object"
-          ? (data.draftedBy as {
-              agentUserId: string | null;
-              appClientId: string | null;
-            })
-          : null,
-    });
-    if (!result.success) {
-      logger.warn(
-        {
-          proposalId: input.proposalId,
-          channelId: args.channelId,
+  // Not a connection yet (the reach is read live at every approval): the
+  // send is HELD, kept PENDING with its text, never APPROVAL_FAILED (CRM
+  // Messages contract b4f8c2cd, B). It becomes sendable once they connect.
+  let heldReason: string | null = null;
+  try {
+    await dispatchExternalOnce(input.proposalId, async () => {
+      const result = await sendExternalMessage({
+        channelId: args.channelId,
+        threadId: null,
+        accountId: typeof data.accountId === "string" ? data.accountId : "",
+        body,
+        userId,
+        workspaceId: proposal.workspaceId ?? null,
+        alreadyApproved: true,
+        sessionId: proposal.sessionId ?? null,
+        proposalId: input.proposalId,
+        subject: typeof data.subject === "string" ? data.subject : null,
+        draftedBy:
+          data.draftedBy && typeof data.draftedBy === "object"
+            ? (data.draftedBy as {
+                agentUserId: string | null;
+                appClientId: string | null;
+              })
+            : null,
+      });
+      if (!result.success) {
+        logger.warn(
+          {
+            proposalId: input.proposalId,
+            channelId: args.channelId,
+            errorClass: result.errorClass,
+          },
+          "messaging.external.send: not sent on the channel"
+        );
+        if (result.errorClass === "not_connected") {
+          heldReason = result.error ?? "Not a connection yet.";
+        }
+        return {
+          delivered: false,
+          reason: result.error,
           errorClass: result.errorClass,
-        },
-        "messaging.external.send: not sent on the channel"
-      );
-      return {
-        delivered: false,
-        reason: result.error,
-        errorClass: result.errorClass,
-        providerRef: result.providerRef,
-      };
-    }
-    sent = result;
-    return { delivered: true };
-  });
+          providerRef: result.providerRef,
+        };
+      }
+      sent = result;
+      return { delivered: true };
+    });
+  } catch (err) {
+    // Assigned in the closure above; TS cannot see it.
+    const hold = heldReason as string | null;
+    if (hold === null) throw err;
+    await holdPendingSend(input.proposalId, heldSend(hold));
+    throw keepRowAsRecorded(
+      err instanceof Error ? err : new Error(String(err))
+    );
+  }
   const done = sent as Awaited<ReturnType<typeof sendExternalMessage>> | null;
 
   // The message may have landed in the channel that already held the chat:
   // the proposal then points there.
+  // Sent: whatever held it is history.
+  const { held: _wasHeld, ...sentPayload } = payload as unknown as Record<
+    string,
+    unknown
+  >;
   const materializedPayload = {
-    ...payload,
+    ...sentPayload,
     ...(done?.channelId ? { channelId: done.channelId } : {}),
     ...(done?.chatId ? { threadId: done.chatId } : {}),
     sentResult: {
@@ -344,4 +463,32 @@ async function executeChannelSend(args: {
     userId
   );
   return { success: true };
+}
+
+/** Has this proposal already been applied (a second approval does nothing)? */
+async function alreadyApproved(proposalId: string): Promise<boolean> {
+  const [current] = await db
+    .select({ status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, proposalId));
+  return current?.status === ProposalStatus.APPROVED;
+}
+
+/** Flip the proposal to approved, recording what was applied. */
+async function markApproved(
+  proposalId: string,
+  payload: ProposalExecutorArgs["payload"],
+  userId: string,
+  applied: Record<string, unknown>
+): Promise<void> {
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
+      data: { ...payload, applied } as unknown as typeof payload,
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    where: eq(proposals.id, proposalId),
+  });
 }

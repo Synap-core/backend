@@ -76,13 +76,12 @@ import {
 import {
   resolveGrantedCapabilities,
   getLinksFor,
-  createLinks,
 } from "../links/links-service.js";
+import { writeSessionTargets } from "../focus-sessions/session-targets.js";
 import { workerIrreversibleSendCeiling } from "./worker-send-ceiling.js";
 import {
   WORKER_BATCH_LIMIT,
   WORKER_SKIP_REASONS,
-  WORKER_TARGET_ROLE,
   type WorkerSkipReason,
 } from "@synap-core/types/workers";
 import { resolveExecutor } from "./executors/registry.js";
@@ -91,6 +90,8 @@ import {
   route,
   routeRefusalLine,
 } from "../agent-dispatch/route.js";
+import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
+import type { RunOn } from "@synap-core/types/agents";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { readPlaybookProcess } from "../../schemas/playbook-process.js";
@@ -205,6 +206,14 @@ export interface RunPlaybookInput {
    * `gateAgentHandOff` — refused here rather than laundered. Absent ⇒ unchanged.
    */
   handToAgentId?: string | null;
+  /**
+   * RUN CHOICE for THIS run: `"synap_ai"` = Synap AI runs it (the playbook's
+   * built-in executor), whatever the person remembered. Never with
+   * `handToAgentId`; refused on a playbook that only runs on agents
+   * (`executor: "external-agent"`). Absent ⇒ the person's remembered choice,
+   * else the playbook's executor ({@link resolveRunChoice}).
+   */
+  runOn?: "synap_ai";
   /**
    * The agent that STARTED this run directly (no proposal). The run is still
    * the PERSON's (`userId`): the agent rides first on the roster and the
@@ -869,6 +878,170 @@ async function resolveAssignedRunHandOff(
   };
 }
 
+/** What {@link resolveRunChoice} decided: who takes the run, and why. */
+export interface ResolvedRunChoice {
+  /** The agent it is handed to; `null` = the playbook's own executor. */
+  handOff: RunHandOff | null;
+  /** Recorded on the run (`playbook_runs.run_on`). */
+  runOn: RunOn;
+}
+
+/**
+ * THE rule for who runs a playbook for a person (slice 5a, plan v2 66d229dc;
+ * founder Q1: ask once, then remember). First match wins:
+ *   1. named     this run's choice: `runOn: "synap_ai"`, or `handToAgentId`
+ *                (an agent named for this run never falls through: refused
+ *                by name, as {@link resolveRunHandOff} says);
+ *   2. stored    the person's remembered choice for the playbook (the
+ *                assignment edge, `readStoredRunChoice`): Synap AI, or an
+ *                agent that is AWAKE now (`deriveAgentWake`, the roster's
+ *                `wake`) and that the route admits;
+ *   3. fallback  a remembered agent that cannot take it now: Synap AI runs it,
+ *                when the playbook allows it (`executor` is not
+ *                `external-agent`), and the run says which agent was passed
+ *                over and why;
+ *   4. default   nothing chosen (or a choice the playbook cannot use): the
+ *                playbook's own executor, exactly as before.
+ * A playbook that only runs on agents (`external-agent`) never falls to Synap
+ * AI: its remembered agent takes it awake or not, as an assignment did.
+ * Read-only: the run door and the "who runs it" read (`playbooks.runChoice`)
+ * ask it with the same inputs, so the preview is what the run does.
+ */
+export async function resolveRunChoice(
+  input: Pick<
+    RunPlaybookInput,
+    "handToAgentId" | "agentUserId" | "userId" | "runOn"
+  > & {
+    playbook: Pick<Playbook, "id" | "executor">;
+  }
+): Promise<ResolvedRunChoice> {
+  const executor = input.playbook.executor;
+  const synapAiAllowed = executor !== "external-agent";
+  const named = input.handToAgentId?.trim() || null;
+  if (input.runOn === "synap_ai") {
+    if (named) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "Choose Synap AI or an agent for this run, not both (runOn and handToAgentId).",
+      });
+    }
+    if (!synapAiAllowed) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "This process runs only on an agent, so Synap AI cannot run it: choose one of your agents.",
+      });
+    }
+    return {
+      handOff: null,
+      runOn: {
+        executor: "is-agent",
+        agentUserId: null,
+        via: "named",
+        passedOver: null,
+      },
+    };
+  }
+  if (named) {
+    const handOff = await resolveRunHandOff({
+      userId: input.userId,
+      agentUserId: input.agentUserId,
+      handToAgentId: named,
+    });
+    return {
+      handOff,
+      runOn: {
+        executor: "external-agent",
+        agentUserId: named,
+        via: "named",
+        passedOver: null,
+      },
+    };
+  }
+
+  const fallbackDefault: ResolvedRunChoice = {
+    handOff: null,
+    runOn: { executor, agentUserId: null, via: "default", passedOver: null },
+  };
+  const stored = await readStoredRunChoice({
+    ownerId: input.userId,
+    playbookId: input.playbook.id,
+  });
+  if (stored?.executor === "is-agent") {
+    // A remembered Synap AI on a playbook that only runs on agents is a
+    // choice it cannot use: its own executor picks, as with none.
+    return synapAiAllowed
+      ? {
+          handOff: null,
+          runOn: {
+            executor: "is-agent",
+            agentUserId: null,
+            via: "stored",
+            passedOver: null,
+          },
+        }
+      : fallbackDefault;
+  }
+
+  // The remembered agent is read through THE route's assigned rung, as a run
+  // that named nobody always was (`resolveAssignedRunHandOff`): it floors the
+  // agent on the person, whoever wrote the edge. `stored` names it when the
+  // route refuses it (paused, no longer theirs), so the run can say so.
+  const handOff = await resolveAssignedRunHandOff(
+    input.userId,
+    input.playbook.id
+  );
+  const agentUserId =
+    handOff?.agentUserId ??
+    (stored?.executor === "external-agent" ? stored.agentUserId : null);
+  if (!agentUserId) return fallbackDefault;
+  if (!synapAiAllowed) {
+    return handOff
+      ? {
+          handOff,
+          runOn: {
+            executor: "external-agent",
+            agentUserId: handOff.agentUserId,
+            via: "stored",
+            passedOver: null,
+          },
+        }
+      : fallbackDefault;
+  }
+  // Presence: only an agent that is awake NOW takes it; anything else would
+  // leave the run waiting for an agent nothing runs (slice 1's wake rule).
+  const { readAgentsForHandoff } =
+    await import("../agent-dispatch/agents-for-handoff.js");
+  const row = (await readAgentsForHandoff(input.userId)).agents.find(
+    (a) => a.agentUserId === agentUserId
+  );
+  if (handOff && row?.wake.state === "awake") {
+    return {
+      handOff,
+      runOn: {
+        executor: "external-agent",
+        agentUserId: handOff.agentUserId,
+        via: "stored",
+        passedOver: null,
+      },
+    };
+  }
+  return {
+    handOff: null,
+    runOn: {
+      executor,
+      agentUserId: null,
+      via: "fallback",
+      passedOver: {
+        agentUserId,
+        name: row?.name ?? handOff?.name ?? null,
+        why: !handOff ? "refused" : (row?.wake.why ?? "not_awake"),
+      },
+    },
+  };
+}
+
 /**
  * Where a run is FILED. A track wins and names its own project (a mismatching
  * `projectId` is refused by `resolveTrackFiling`); a bare project must be one
@@ -1001,11 +1174,15 @@ export async function runPlaybook(
   // handle refuses cleanly instead of leaving a half-filed run.
   const filing = await resolveRunFiling(input);
 
-  // HAND-OFF — who does this run, resolved ONCE for every fan-out item, before
-  // anything exists (an unknown / paused / foreign agent refuses the run).
-  const handOff = await resolveRunHandOff({
-    ...input,
-    playbookId: playbook.id,
+  // RUN CHOICE — who does this run, resolved ONCE for every fan-out item,
+  // before anything exists (an unknown / paused / foreign agent named for it
+  // refuses the run; a remembered agent that is not awake falls to Synap AI).
+  const { handOff, runOn } = await resolveRunChoice({
+    userId: input.userId,
+    agentUserId: input.agentUserId,
+    handToAgentId: input.handToAgentId,
+    runOn: input.runOn,
+    playbook,
   });
 
   // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
@@ -1033,7 +1210,14 @@ export async function runPlaybook(
     if (skipped) return { run: null, session: null, skipped };
     if (input.worker.size === "per_moment") {
       return withHandedTo(
-        await runWorkerBatch(playbook, input, input.worker, filing, handOff),
+        await runWorkerBatch(
+          playbook,
+          input,
+          input.worker,
+          filing,
+          handOff,
+          runOn
+        ),
         handOff
       );
     }
@@ -1083,7 +1267,8 @@ export async function runPlaybook(
     runItems[0] ?? {},
     filing,
     undefined,
-    handOff
+    handOff,
+    runOn
   );
 
   // Fan-out: additional items each get their own session/channel/run. Failures
@@ -1096,7 +1281,8 @@ export async function runPlaybook(
         runItems[i],
         filing,
         undefined,
-        handOff
+        handOff,
+        runOn
       );
     } catch (err) {
       logger.error(
@@ -1148,7 +1334,8 @@ async function executeSingleRun(
   params: Record<string, unknown>,
   filing: RunFiling,
   batch?: WorkerBatch,
-  handOff?: RunHandOff | null
+  handOff?: RunHandOff | null,
+  runOn?: RunOn | null
 ): Promise<RunPlaybookResult> {
   const db = await getDb();
   // The owning principal is ALWAYS the person. An agent-started run used to be
@@ -1298,19 +1485,14 @@ async function executeSingleRun(
   });
 
   // The batch's TARGETS, born with the session (before any agent can act on
-  // them): one `session --targets--> entity` edge per thing, no result yet.
+  // them): one `session --targets--> entity` edge per thing, no result yet,
+  // through THE writer every door that declares targets uses.
   if (session && batch && batch.targetIds.length > 0) {
-    await createLinks(
-      batch.targetIds.map((entityId) => ({
-        workspaceId: input.workspaceId,
-        fromType: "session" as const,
-        fromId: session.id,
-        toType: "entity" as const,
-        toId: entityId,
-        linkType: "targets" as const,
-        metadata: { role: WORKER_TARGET_ROLE },
-      }))
-    );
+    await writeSessionTargets({
+      sessionId: session.id,
+      workspaceId: input.workspaceId,
+      entityIds: batch.targetIds,
+    });
   }
 
   // A run born owing the person something (a playbook step declared
@@ -1323,6 +1505,7 @@ async function executeSingleRun(
     await notifySessionNeedsYou({
       sessionId: session.id,
       byAgent: !!input.agentUserId || input.onMissingRequired === "owe",
+      agentUserId: input.agentUserId,
       recipientUserId: input.userId,
       reason: { kind: "slots", before: [], after: session.expectedOutputs },
     });
@@ -1443,6 +1626,8 @@ async function executeSingleRun(
       // The hand-off rides with the hold: accepting the draft must start the
       // run the agent asked for, never fall back to the playbook's executor.
       ...(handOff ? { handToAgentId: handOff.agentUserId } : {}),
+      // A run asked for Synap AI stays on Synap AI when it is accepted.
+      ...(input.runOn ? { runOn: input.runOn } : {}),
       heldAt: new Date().toISOString(),
     };
     const [heldSession] = await db
@@ -1468,6 +1653,7 @@ async function executeSingleRun(
     subjectId: input.subjectId ?? null,
     agentType: input.agentType ?? null,
     handOff: handOff ?? null,
+    runOn: runOn ?? null,
   });
 
   // Re-load the session so the returned row reflects the wired channelId.
@@ -1490,6 +1676,8 @@ interface HeldRun {
   agentType: string | null;
   /** The agent the run was handed to (`RunPlaybookInput.handToAgentId`). */
   handToAgentId?: string;
+  /** Synap AI was asked for this run (`RunPlaybookInput.runOn`). */
+  runOn?: "synap_ai";
   heldAt: string;
 }
 
@@ -1509,6 +1697,7 @@ function readHeldRun(metadata: unknown): HeldRun | null {
     ...(typeof h.handToAgentId === "string" && h.handToAgentId !== ""
       ? { handToAgentId: h.handToAgentId }
       : {}),
+    ...(h.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
     heldAt: typeof h.heldAt === "string" ? h.heldAt : "",
   };
 }
@@ -1532,6 +1721,8 @@ async function dispatchRunOnSession(p: {
   agentType: string | null;
   /** The agent this run is HANDED to (`RunPlaybookInput.handToAgentId`), re-resolved for a held run. */
   handOff?: RunHandOff | null;
+  /** Who runs it and why ({@link resolveRunChoice}), recorded on the run. */
+  runOn?: RunOn | null;
 }): Promise<PlaybookRun> {
   const db = await getDb();
   const { playbook, actorId, params } = p;
@@ -1553,6 +1744,7 @@ async function dispatchRunOnSession(p: {
       playbookId: playbook.id,
       sessionId: session.id,
       executor: executorRef,
+      ...(p.runOn ? { runOn: p.runOn } : {}),
       status: "running",
       input: params,
       createdBy: actorId,
@@ -1702,9 +1894,12 @@ export async function startHeldRun(
   // A held hand-off is resolved AGAIN, for the person who accepts (the agent
   // may have been paused since): a refusal throws here, before the claim, so
   // the hold stays rather than starting the playbook's own executor instead.
-  const handOff = await resolveRunHandOff({
+  // The person's remembered choice applies too: it is their run now.
+  const { handOff, runOn } = await resolveRunChoice({
     userId: session.userId,
     handToAgentId: held.handToAgentId ?? null,
+    runOn: held.runOn,
+    playbook,
   });
   const [claimed] = await db
     .update(focusSessions)
@@ -1729,6 +1924,7 @@ export async function startHeldRun(
     subjectId: session.subjectEntityId ?? null,
     agentType: held.agentType,
     handOff,
+    runOn,
   });
   return { status: "started", run };
 }
@@ -1840,7 +2036,8 @@ async function runWorkerBatch(
   input: RunPlaybookInput,
   worker: RunWorker,
   filing: RunFiling,
-  handOff: RunHandOff | null
+  handOff: RunHandOff | null,
+  runOn: RunOn
 ): Promise<RunPlaybookResult> {
   const inFlight = worker.automationId
     ? await listWorkerTargetsInFlight(worker.automationId)
@@ -1894,7 +2091,8 @@ async function runWorkerBatch(
       targetIds: targets.map((t) => t.id),
       proposeWrites: worker.writes === "propose",
     },
-    handOff
+    handOff,
+    runOn
   );
 }
 

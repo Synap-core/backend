@@ -254,6 +254,8 @@ export function registerSkillExecutors(): void {
             skillId: materializedSkill.id,
             approved: true,
             agentUserId: ctx?.agentUserId ?? null,
+            // skill/create is sensitive: applyProposalApproval checked the proof.
+            presenceChecked: "applyProposalApproval",
           });
           materializedSkill.approved = true;
         } catch (err) {

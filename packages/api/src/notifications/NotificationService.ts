@@ -49,14 +49,21 @@ import {
   type PushQuickAnswer,
 } from "@synap-core/types/push";
 import {
+  agentPushLimitApplies,
+  dueSoonBudgetApplies,
+  dueSoonPushesToday,
+  agentPushesCountedToday,
   decidePush,
   derivePushFacts,
   pushCapApplies,
   pushesCountedToday,
+  readAgentPushDailyLimit,
   pushAboutMutedSession,
   withSessionMute,
   readPodPushSettings,
   recordPush,
+  withinAgentPushLimit,
+  withinDueSoonBudget,
   withinPushCap,
 } from "./push-decision.js";
 import type {
@@ -144,6 +151,12 @@ export interface CreateNotificationInput {
   // Override registry defaults (optional)
   groupKey?: string;
   expiresAt?: Date;
+  /**
+   * The row's level when the PRODUCER derived one (a needs-you ask's P-level,
+   * `NEEDS_YOU_PRIORITY_NOTIFICATION_LEVEL`); else the registry's. Stored on
+   * `notifications.priority` and sent to the bell; no push decision reads it.
+   */
+  priority?: NotificationPriority;
 
   /**
    * Where a TAP on this notification should land, as `{kind, id}` — the same
@@ -701,7 +714,7 @@ export const NotificationService = {
         userId: input.userId,
         type: input.type,
         category: def.category as NotificationCategory,
-        priority: def.priority as NotificationPriority,
+        priority: input.priority ?? (def.priority as NotificationPriority),
         title,
         body,
         icon: def.icon ?? undefined,
@@ -817,7 +830,7 @@ export const NotificationService = {
         id: row.id,
         type: input.type,
         category: def.category,
-        priority: def.priority,
+        priority: input.priority ?? def.priority,
         title,
         body,
         icon: def.icon ?? undefined,
@@ -858,6 +871,7 @@ export const NotificationService = {
       // row is already persisted and the bell already told, so a failed read
       // here costs the interruption (logged), never the notification.
       let pushCategory: PushPayloadExtras["pushCategory"] | null = null;
+      let pushDueSoon = false;
       if (channels.has("os")) {
         try {
           const facts = await (input.push?.facts ?? derivePushFacts(input));
@@ -906,6 +920,33 @@ export const NotificationService = {
           // only when it applies, so an exempt or forced push never waits on
           // it. A failed count skips the push, except a blocking ask (as for
           // unreadable settings above).
+          // The due-soon budget (rule 3b), BEFORE the cap: `answerBy` is the
+          // asking agent's field, so each agent breaks Focus at most
+          // PUSH_DUE_SOON_DAILY_PER_AGENT time(s) a day; past it the push is
+          // a normal one the cap below may hold back. A failed count keeps
+          // the push but drops its break-through (logged): never louder on
+          // an unread budget.
+          if (dueSoonBudgetApplies(decision)) {
+            try {
+              decision = withinDueSoonBudget(
+                decision,
+                await dueSoonPushesToday(
+                  input.userId,
+                  facts.agentUserId ?? null,
+                  await recipientTimezone(input.userId)
+                )
+              );
+            } catch (err) {
+              decision = withinDueSoonBudget(
+                decision,
+                Number.POSITIVE_INFINITY
+              );
+              logger.warn(
+                { err, type: input.type, notificationId: row.id },
+                "Due-soon budget unreadable — pushed as a normal push"
+              );
+            }
+          }
           if (pushCapApplies(decision)) {
             try {
               decision = withinPushCap(
@@ -923,6 +964,32 @@ export const NotificationService = {
               );
             }
           }
+          // The agent's OWN limit (rule 4b), when the person set one in that
+          // agent's settings — none by default (decision 9bc9f75c). A failed
+          // read skips the push, except a blocking ask (as above).
+          const agentUserId = facts.agentUserId;
+          if (decision.push && agentUserId) {
+            try {
+              const limit = await readAgentPushDailyLimit(agentUserId);
+              if (agentPushLimitApplies(decision, agentUserId, limit)) {
+                decision = withinAgentPushLimit(
+                  decision,
+                  limit,
+                  await agentPushesCountedToday(
+                    input.userId,
+                    agentUserId,
+                    await recipientTimezone(input.userId)
+                  )
+                );
+              }
+            } catch (err) {
+              if (decision.category !== "blocking-ask") throw err;
+              logger.warn(
+                { err, type: input.type, notificationId: row.id },
+                "Agent push limit unreadable — blocking ask pushed without it"
+              );
+            }
+          }
           if (!decision.push) {
             channels.delete("os");
             logger.debug(
@@ -931,9 +998,10 @@ export const NotificationService = {
             );
           } else {
             pushCategory = decision.category;
+            pushDueSoon = decision.dueSoon === true;
             // What the budget counts: recorded before the send, so a push is
             // never out without its record.
-            await recordPush(row.id);
+            await recordPush(row.id, agentUserId);
           }
         } catch (err) {
           channels.delete("os");
@@ -959,6 +1027,7 @@ export const NotificationService = {
             ? pushEnvelope(pushCategory, {
                 threadId: input.push?.threadId,
                 quickAnswer,
+                dueSoon: pushDueSoon,
               })
             : {}),
           data: {

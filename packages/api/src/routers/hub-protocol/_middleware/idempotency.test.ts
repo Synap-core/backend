@@ -59,6 +59,47 @@ describe("idempotencyMiddleware", () => {
     expect(res.headers.get("X-Idempotent-Replay")).toBeNull();
   });
 
+  it("partitions a device token's answers by device: another device of the same person never gets them", async () => {
+    const app = new Hono<{
+      Variables: { userId: string; personDeviceId?: string };
+    }>();
+    app.use("*", async (c, next) => {
+      c.set("userId", "user-1");
+      const device = c.req.header("x-test-device");
+      if (device) c.set("personDeviceId", device);
+      await next();
+    });
+    app.use("*", idempotencyMiddleware());
+    let invocations = 0;
+    app.post("/keys/mint", async (c) => {
+      invocations += 1;
+      return c.json({ key: `minted-${invocations}` });
+    });
+    const send = (device?: string) =>
+      app.request("/keys/mint", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "device-key-12345678",
+          ...(device ? { "x-test-device": device } : {}),
+        },
+        body: JSON.stringify({ name: "k" }),
+      });
+
+    const first = await send("device-a");
+    const sameDevice = await send("device-a");
+    const otherDevice = await send("device-b");
+    const noDevice = await send();
+
+    expect(sameDevice.headers.get("X-Idempotent-Replay")).toBe("true");
+    expect(otherDevice.headers.get("X-Idempotent-Replay")).toBeNull();
+    expect(noDevice.headers.get("X-Idempotent-Replay")).toBeNull();
+    expect(invocations).toBe(3);
+    expect(((await first.json()) as { key: string }).key).not.toBe(
+      ((await otherDevice.json()) as { key: string }).key
+    );
+  });
+
   it("bypasses caching for skipPaths (replay re-invokes handler)", async () => {
     const app = buildApp({ skipPaths: ["/setup/agent"] });
     let invocations = 0;

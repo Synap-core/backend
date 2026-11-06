@@ -16,10 +16,39 @@ import {
   assertPinnableSurface,
   RailGoalPinsFullError,
   RailPinsFullError,
+  railPinsFullMessage,
   readRailPins,
   writeRailPins,
   type RailPinsOp,
 } from "../services/preferences/rail-pins.js";
+import { yourApps } from "../services/preferences/your-apps.js";
+import type { Context } from "../context.js";
+import { workspacesRouter } from "./workspaces.js";
+import { entitiesRouter } from "./entities.js";
+
+/** Rows per page of the websites arm (`entities.list`'s own maximum). */
+const SAVED_LINKS_PAGE = 1000;
+
+/**
+ * EVERY saved link the person can read (pod-wide bookmarks with their child
+ * kinds, the Tools page's own read), page by page until the door says there
+ * is no more: a tool past a window is never silently left out.
+ */
+async function readAllSavedLinks(ctx: Context) {
+  const entities = entitiesRouter.createCaller(ctx);
+  const rows = [];
+  for (let offset = 0; ; offset += SAVED_LINKS_PAGE) {
+    const page = await entities.list({
+      profileSlug: "bookmark",
+      includeDescendants: true,
+      workspaceId: null,
+      limit: SAVED_LINKS_PAGE,
+      offset,
+    });
+    rows.push(...page.items);
+    if (!page.pagination.hasMore) return rows;
+  }
+}
 
 /**
  * One write door for the rail pins; a full rail — or a week already holding
@@ -33,10 +62,15 @@ async function railPinsWrite(
   try {
     return { pins: pinsFor(await writeRailPins(userId, op), include) };
   } catch (err) {
-    if (
-      err instanceof RailPinsFullError ||
-      err instanceof RailGoalPinsFullError
-    ) {
+    if (err instanceof RailPinsFullError) {
+      // The cap counts every pin; say how many this client does not show.
+      const hidden = err.pins.length - pinsFor([...err.pins], include).length;
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: railPinsFullMessage(hidden),
+      });
+    }
+    if (err instanceof RailGoalPinsFullError) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: err.message,
@@ -84,13 +118,33 @@ export const preferencesRouter = router({
    *
    * GOAL pins come back only when asked — `{ includeGoals: true }` — and
    * DOCUMENT pins likewise — `{ includeDocuments: true }` ({@link pinsFor});
-   * the write doors below take the same flags.
+   * the write doors below take the same flags. A document pin carries its
+   * document's `title`, read with the pin (one batched read, never stored).
    */
   railPins: protectedProcedure
     .input(z.object({ includeGoals, includeDocuments }).optional())
     .query(async ({ ctx, input }) => ({
       pins: pinsFor(await readRailPins(ctx.userId), input),
     })),
+
+  /**
+   * YOUR APPS: what the person opens and uses, in one list (founder D-B,
+   * plan c727854c W5; rule `services/preferences/your-apps.ts`): their
+   * pinned surfaces and documents (this router's own pins, goals left out),
+   * the spaces they can open and the websites they keep as tools. Each arm is
+   * read through the door that owns it, under the caller's own context, so
+   * its floor is that door's: `readRailPins`, `workspaces.list`,
+   * `entities.list` (pod-wide bookmarks, the Tools page's own read). A failed
+   * arm fails the read: a partial list would read as "these are all".
+   */
+  yourApps: protectedProcedure.query(async ({ ctx }) => {
+    const [pins, spaces, links] = await Promise.all([
+      readRailPins(ctx.userId),
+      workspacesRouter.createCaller(ctx).list(),
+      readAllSavedLinks(ctx),
+    ]);
+    return { apps: yourApps({ pins, spaces, links }) };
+  }),
 
   /**
    * Pin a surface: a kind/role (`profileSlug`), a saved pipeline view of it

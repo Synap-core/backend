@@ -14,7 +14,12 @@ import type { SlotAsk } from "@synap/playbooks";
 import { toolError } from "../tool-errors.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
-import { toViewDigest, VIEWS_DIGEST_NOTE } from "./read-lean.js";
+import {
+  PLAYBOOKS_DIGEST_NOTE,
+  toPlaybookDigest,
+  toViewDigest,
+  VIEWS_DIGEST_NOTE,
+} from "./read-lean.js";
 import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
@@ -51,6 +56,7 @@ import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
   createPlaybookDoor,
+  getPlaybookDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
   updatePlaybookDoor,
@@ -296,6 +302,24 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // ONE playbook, in full: the get door (`playbooks.get`, the same one Hub
+    // GET /playbooks/:id reaches), on the same user floor as the list.
+    const playbookId =
+      typeof args.playbookId === "string" && args.playbookId.trim()
+        ? args.playbookId.trim()
+        : null;
+    if (playbookId) {
+      const one = await getPlaybookDoor(playbookDoorIdentity(ctx), playbookId);
+      if (one.kind !== "result") {
+        return ok({
+          error:
+            "error" in one
+              ? one.error
+              : `Playbook ${playbookId} not found among your visible playbooks.`,
+        });
+      }
+      return ok(one.result);
+    }
     // User-floor catalog (member workspaces + pod-wide) through the shared list
     // door. Narrow only on an explicit/confined workspaceId — not advisory
     // focus (focus is a write default; catalog stays full user floor).
@@ -314,12 +338,19 @@ export const buildHandlers: McpHandlerMap = {
       playbookIds: result.playbooks.map((p) => p.id),
       userId: ctx.userId,
     });
+    const rows = result.playbooks.map((p) => {
+      const compact = compactScorecard(scorecards[p.id]!);
+      return compact ? { ...p, scorecard: compact } : p;
+    });
+    // DEFAULT = the digest (founder's rule: a list returns what picks one; the
+    // full object comes from a get). detail:'full' keeps the complete rows.
+    if (args.detail === "full") return ok({ ...result, playbooks: rows });
     return ok({
       ...result,
-      playbooks: result.playbooks.map((p) => {
-        const compact = compactScorecard(scorecards[p.id]!);
-        return compact ? { ...p, scorecard: compact } : p;
-      }),
+      playbooks: rows.map((p) =>
+        toPlaybookDigest(p as unknown as Record<string, unknown>)
+      ),
+      note: PLAYBOOKS_DIGEST_NOTE,
     });
   },
   synap_match_playbooks: async (
@@ -453,6 +484,9 @@ export const buildHandlers: McpHandlerMap = {
         if (args.statusProperty !== undefined) {
           subjectProfile.statusProperty = args.statusProperty;
         }
+        // What a session end moves the subject to: validated with the ONE
+        // schema and the definition check's option test by `playbooks.create`.
+        if (args.onEnd !== undefined) subjectProfile.onEnd = args.onEnd;
         return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
       })(),
       // `project` = a METHOD a project runs as a track. Any other value is
@@ -522,10 +556,12 @@ export const buildHandlers: McpHandlerMap = {
       args.subjectProfileSlug.trim()
         ? args.subjectProfileSlug.trim()
         : undefined;
-    if (args.statusProperty !== undefined && !slug) {
+    if (
+      (args.statusProperty !== undefined || args.onEnd !== undefined) &&
+      !slug
+    ) {
       return ok({
-        error:
-          "statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.",
+        error: `${args.statusProperty !== undefined ? "statusProperty" : "onEnd"} needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
       });
     }
     const patch: Record<string, unknown> = {};
@@ -550,6 +586,7 @@ export const buildHandlers: McpHandlerMap = {
         ...(args.statusProperty !== undefined
           ? { statusProperty: args.statusProperty }
           : {}),
+        ...(args.onEnd !== undefined ? { onEnd: args.onEnd } : {}),
       };
     }
     const reasoning = readReasoning(args);

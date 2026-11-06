@@ -56,18 +56,49 @@ export function isTerminalSessionStatus(
  * MCP/Hub service `updateFocusSession`, Hub REST `PATCH /focus-sessions/:id`
  * and the `focus_session/update` approval replay. `null` = allowed.
  *
+ * THE ONE EXCEPTION (founder, 2026-11-04, decision 3da00cda, finding
+ * 8748feab): a PERSON may reopen a run that ended `cancelled`, back to
+ * `active` — a cancel made by mistake is undone, not routed around. An agent
+ * never may, and is refused with that reason (never proposed). `closed` and
+ * `failed` keep their history for everyone. `actor` is who asks: a door that
+ * cannot tell (the approval replay, which runs what an agent filed) passes
+ * nothing and is refused like an agent. The reopen itself runs through ONE
+ * door, `reopenCancelledSession` (api `services/focus-sessions`), never a bare
+ * status write: see {@link isCancelledRunReopen}.
+ *
  * Narrow on purpose: a terminal → terminal relabel (closed → cancelled) is not
  * a reopening and is not refused here.
  */
 export function closedRunRefusal(
   from: string | null | undefined,
-  to: string | null | undefined
+  to: string | null | undefined,
+  actor?: "person" | "agent" | null
 ): string | null {
   if (to == null || from === to) return null;
   if (!isTerminalSessionStatus(from) || isTerminalSessionStatus(to)) {
     return null;
   }
+  if (from === "cancelled") {
+    if (actor === "person") {
+      return to === "active"
+        ? null
+        : "A cancelled run reopens as active only: set its status to active.";
+    }
+    return "This run is cancelled — a closed run stays closed for an agent: only a person can reopen a cancelled run, from the session in Synap. Start a new run to keep working.";
+  }
   return `This run is ${from} — a closed run stays closed. Start a new run to keep working.`;
+}
+
+/**
+ * Is this move the person's reopen of a cancelled run (the one exception
+ * {@link closedRunRefusal} lets through)? A door that sees `true` hands the
+ * move to `reopenCancelledSession` instead of writing the status itself.
+ */
+export function isCancelledRunReopen(
+  from: string | null | undefined,
+  to: string | null | undefined
+): boolean {
+  return from === "cancelled" && to === "active";
 }
 
 /**

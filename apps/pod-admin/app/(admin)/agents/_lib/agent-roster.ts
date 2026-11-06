@@ -11,12 +11,14 @@
 import {
   agentDirectionOf,
   agentMarkText,
+  isSynapAccountSeat,
   resolveAgentMark,
   type AgentDirection,
   type AgentMark,
   type AgentMarkRowLike,
   type AgentReachRowLike,
 } from "@synap-core/types/agents";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { computerHref, navHref } from "../../../../lib/console-nav";
 import type { StatusKind } from "../../components/status-pill";
 import { AGENT_MARK_STATUS } from "../../components/status-tone";
@@ -42,6 +44,8 @@ export interface AgentRosterRowLike
   /** 0395: the OS user it runs as on that computer, and its job. */
   hostSeat?: string | null;
   agentRole?: string | null;
+  /** When its owner or a pod admin paused it (`agentUsers.setPaused`); null = not paused. */
+  pausedAt?: string | Date | null;
 }
 
 /** The slice of a `diagnose.agents` standing this page reads. */
@@ -80,6 +84,25 @@ const PILL_LABEL: Record<AgentMark["kind"], string> = {
   noKey: "No key",
   unmeasured: "Unknown",
 };
+
+/**
+ * It reaches the pod through the person's Synap account (mcp.synap.live): its
+ * own identity, the Synap account seat (0400). Disconnecting it here revokes
+ * the key that connector holds; this page is where that is done (founder
+ * decision 3 of 4 Nov 2026).
+ */
+export function viaSynapAccount(row: AgentRosterRowLike): boolean {
+  return isSynapAccountSeat(row.hostSeat);
+}
+
+/** What a pause does, in one line: the fact a person needs before pausing. */
+export const AGENT_PAUSE_NOTE =
+  "A paused agent takes no work and is refused when named. Its keys keep working.";
+
+/** Paused by its owner or a pod admin: it takes no work until resumed. */
+export function isAgentPaused(row: Pick<AgentRosterRowLike, "pausedAt">) {
+  return row.pausedAt != null;
+}
 
 export function agentNeedsReview(row: AgentRosterRowLike): boolean {
   return (row.pendingKeys ?? 0) > 0 || !!row.pendingProposalId;
@@ -177,19 +200,26 @@ export function buildAgentRoster<R extends AgentRosterRowLike>(
   const views = rows.map((row): AgentRowView<R> => {
     const mark = resolveAgentMark(row, now);
     const needsReview = agentNeedsReview(row);
+    const paused = isAgentPaused(row);
+    // A waiting key still outranks a pause: it is the row's one action.
     const status =
       needsReview && mark.kind !== "approve"
         ? { kind: "stale" as const, label: PILL_LABEL.approve }
-        : {
-            kind:
-              mark.kind === "stale" ? "stale" : AGENT_MARK_STATUS[mark.tone],
-            label: PILL_LABEL[mark.kind],
-          };
+        : paused
+          ? { kind: "stale" as const, label: resolveStatusLabel("paused") }
+          : {
+              kind:
+                mark.kind === "stale" ? "stale" : AGENT_MARK_STATUS[mark.tone],
+              label: PILL_LABEL[mark.kind],
+            };
+    const base = viaSynapAccount(row)
+      ? `${agentStatusSentence(row, mark, relative)} Through your Synap account.`
+      : agentStatusSentence(row, mark, relative);
     return {
       row,
       mark,
       status,
-      sentence: agentStatusSentence(row, mark, relative),
+      sentence: paused ? `Paused: it takes no work. ${base}` : base,
       direction: agentDirectionOf(row),
       needsReview,
       ownedByViewer:
@@ -229,8 +259,17 @@ const ORIGIN_LINE: Record<string, string> = {
   "intelligence-service": "An Intelligence persona the pod runs",
 };
 
-/** Where the agent came from, in words; `null` when the pod did not record it. */
-export function originLine(origin: string | null | undefined): string | null {
+/**
+ * Where the agent came from, in words; `null` when the pod did not record it.
+ * The Synap account seat wins over `created_via`: that door stamps none of
+ * its own, so such an agent would read as made in a terminal.
+ */
+export function originLine(
+  origin: string | null | undefined,
+  hostSeat?: string | null
+): string | null {
+  if (isSynapAccountSeat(hostSeat))
+    return "Connected through your Synap account (mcp.synap.live)";
   if (!origin) return null;
   return ORIGIN_LINE[origin] ?? null;
 }

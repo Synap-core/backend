@@ -44,12 +44,14 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { openLink } from "../../utils/deep-links.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
+  ASK_ANSWER_BY_PAST_MESSAGE,
   ASK_LIMITS,
   ASK_LOOKED_AT_KINDS,
   AnswerProvenanceSchema,
   AskAnswerValueSchema,
   AskCauseSchema,
   AskSchema,
+  isAskAnswerByPast,
   AskSnapshotSchema,
   PendingRelayedAnswerSchema,
   askFingerprint,
@@ -59,6 +61,7 @@ import {
   type AskAnswerValue,
   type AskCause,
   type AskSnapshot,
+  type AskUrgency,
   type PendingRelayedAnswer,
 } from "@synap-core/types/ask";
 import type {
@@ -69,6 +72,7 @@ import type {
   SlotAskCause,
   SlotAskLookedAtKind,
   SlotAskSnapshot,
+  SlotAskUrgency,
   SlotPendingRelay,
 } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
@@ -108,6 +112,12 @@ import {
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
 import {
+  checkSessionTargets,
+  normalizeSessionTargets,
+  writeSessionTargets,
+  type SessionTargetsWrite,
+} from "./session-targets.js";
+import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
   type BlockGuidance,
@@ -128,6 +138,9 @@ import {
   withDefaultUnblocks,
 } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
+// Type only: the writer behind it (move-status, the permission gate) is
+// imported lazily where the advance reports it.
+import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   closedRunRefusal,
   normalizeSessionTitle,
@@ -222,6 +235,14 @@ export interface UpdateFocusSessionParams {
    * the same `isOutputRefVisible` predicate an output's ref goes through.
    */
   subjectEntityId?: string | null;
+  /**
+   * ADD things this session works on as a batch (`session-targets.ts`): entity
+   * ids the caller can see, while the session is in flight. ADD-ONLY and
+   * idempotent (a target's end is its result, never an unlink); the same
+   * `session --targets--> entity` edge a worker's batch writes. Carried on the
+   * proposal when the update is proposed, written at approval.
+   */
+  targets?: string[];
   /**
    * FILE the session into a project, or UNFILE it with an explicit `null`.
    * Omitted leaves it alone. The target is floored through
@@ -382,6 +403,16 @@ export type UpdateFocusSessionResult =
        * when it carried none. A PROPOSED filing carries them on its proposal.
        */
       subSessionsFiled?: string[];
+      /** What `targets` did: which were added, which already were. */
+      targets?: SessionTargetsWrite;
+      /**
+       * What a `currentStage` advance did to the session's subject, present
+       * whenever the entered stage declares a `subjectStatus`: written,
+       * proposed, failed, or skipped with why (`reportedSubjectMove`). The
+       * stage stands either way; a move that did not happen must reach the
+       * caller, who otherwise reads the advance as having moved the thing.
+       */
+      subjectMove?: StageSubjectStatusOutcome;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -547,6 +578,9 @@ export const expectedOutputWireSchema = z.object({
   // The agent's pick-up receipt — stamped by `answer-pickup.ts` only. On the
   // wire for the same round-trip reason as `answer`.
   answerPickedUpAt: z.string().optional(),
+  // The person's "Later" on an owed ask — stamped by `ask-later.ts` only. On
+  // the wire for the same round-trip reason as `answerPickedUpAt`.
+  laterUntil: z.string().optional(),
   // A commitment's relayed answer awaiting the person's tap — stamped by the
   // relay door only. On the wire for the same round-trip reason as `answer`.
   pendingRelay: PendingRelayedAnswerSchema.optional(),
@@ -595,6 +629,9 @@ const _pendingRelayParity: _Mutual<SlotPendingRelay, PendingRelayedAnswer> =
   true;
 const _askCauseParity: _Mutual<SlotAskCause, AskCause> = true;
 void _askCauseParity;
+// The ask's urgency hint, mirrored by hand in `@synap/playbooks`.
+const _urgencyParity: _Mutual<SlotAskUrgency, AskUrgency> = true;
+void _urgencyParity;
 void _provenanceParity;
 void _pendingRelayParity;
 void _askParity;
@@ -736,6 +773,10 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // The agent's "Picked up" receipt (`answer-pickup.ts`). An agent that could
   // author it would tell the person it read an answer it never read.
   "answerPickedUpAt",
+  // The person's "Later" on an owed ask (`ask-later.ts`). An agent that could
+  // author it would push its own ask out of the person's headline, or pull a
+  // set-aside one back into it.
+  "laterUntil",
   // Prior answers (`answer-history.ts`). An agent that could author it would
   // rewrite what the person said before.
   "answerHistory",
@@ -975,6 +1016,40 @@ export function personsSlotsHandedAway(
       );
     })
     .map((item) => item.label);
+}
+
+/**
+ * The labels of incoming slots whose ask names an `answerBy` already past
+ * ({@link isAskAnswerByPast}) — refused at write, by every door that declares
+ * a slot. Round-tripping the stored ask's own `answerBy` unchanged is fine:
+ * only a value the caller is WRITING now is judged. Pure.
+ */
+export function pastAnswerByLabels(
+  current: OutputItem[],
+  incoming: readonly (OutputItem | undefined)[],
+  now: Date | number = Date.now()
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item): item is OutputItem => {
+      const answerBy = (item?.ask as { answerBy?: unknown } | null | undefined)
+        ?.answerBy;
+      if (!isAskAnswerByPast(answerBy, now)) return false;
+      const stored = (
+        twinOf(item)?.ask as { answerBy?: unknown } | null | undefined
+      )?.answerBy;
+      return stored !== answerBy;
+    })
+    .map((item) => item.label);
+}
+
+/** The refusal of {@link pastAnswerByLabels}. */
+export function pastAnswerByError(labels: string[]): string {
+  const named = labels
+    .slice(0, 5)
+    .map((l) => `"${l}"`)
+    .join(", ");
+  return `Refused: ${named}: ${ASK_ANSWER_BY_PAST_MESSAGE} Nothing was changed.`;
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
@@ -1978,6 +2053,25 @@ export async function updateFocusSession(
     }
   }
 
+  // A DEADLINE ALREADY PAST, refused to the caller who wrote it (review
+  // 5 Nov 2026): "overdue" is P0, whose push breaks through Focus, so a past
+  // `answerBy` would be a way around the person's push budget.
+  {
+    const declared = [
+      ...(params.expectedOutputs ?? []),
+      ...(params.addOutput ? [params.addOutput] : []),
+    ];
+    if (declared.length > 0) {
+      const stored: OutputItem[] = Array.isArray(existing.expectedOutputs)
+        ? (existing.expectedOutputs as OutputItem[])
+        : [];
+      const past = pastAnswerByLabels(stored, declared as OutputItem[]);
+      if (past.length > 0) {
+        return { status: "denied", reason: pastAnswerByError(past) };
+      }
+    }
+  }
+
   // WHAT IT UNBLOCKS (decision E, needs-truth §5): an AGENT that hands the
   // person a slot says what moves on the answer. Read on the slots this patch
   // would newly pose (`slotsMissingUnblocks`, the provenance stamp's own
@@ -2062,6 +2156,21 @@ export async function updateFocusSession(
         status: "denied",
         reason: `Cannot reference an object you cannot see, on: subject ${params.subjectEntityId}`,
       };
+    }
+  }
+
+  // THE SAME FLOOR for the TARGETS (`session-targets.ts`): entities the caller
+  // can see, on a session still in flight. An empty list asks for nothing.
+  if (params.targets !== undefined) {
+    const targets = normalizeSessionTargets(params.targets);
+    params = { ...params, targets: targets.length > 0 ? targets : undefined };
+    if (targets.length > 0) {
+      const refusal = await checkSessionTargets({
+        userId,
+        targets,
+        sessionStatus: existing.status,
+      });
+      if (refusal) return { status: "denied", reason: refusal.message };
     }
   }
 
@@ -2417,6 +2526,8 @@ export async function updateFocusSession(
           ...(params.subjectEntityId !== undefined
             ? { subjectEntityId: params.subjectEntityId }
             : {}),
+          // Same reason: the executor writes them on approval.
+          ...(params.targets ? { targets: params.targets } : {}),
           ...(criteriaChange ? { criteria: params.criteria } : {}),
           // A PERSON's filing (an agent's took its own door above, or was
           // granted there) — the fields and their display-only names.
@@ -2644,6 +2755,17 @@ export async function updateFocusSession(
     });
   }
 
+  // The TARGETS, after the row write, through THE writer a worker's batch
+  // uses (in the session's space as this write left it).
+  let targetsWrite: SessionTargetsWrite | undefined;
+  if (params.targets) {
+    targetsWrite = await writeSessionTargets({
+      sessionId,
+      workspaceId: updated.workspaceId ?? null,
+      entityIds: params.targets,
+    });
+  }
+
   // A relay this write made stale (the ask changed, or the slot left the
   // person) leaves its room question too, so nobody confirms it there.
   if (mutatesOutputs && existing.channelId) {
@@ -2694,6 +2816,7 @@ export async function updateFocusSession(
   // `stageWrite: "caller"` because the stage rode along in the multi-field UPDATE
   // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
+  let subjectMove: StageSubjectStatusOutcome | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -2715,6 +2838,10 @@ export async function updateFocusSession(
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
     if (advance.paused) gatedStatus = "paused";
+    // What the advance did to the subject, whenever the entered stage asked
+    // for a move: a move that did not happen is never silent.
+    const { reportedSubjectMove } = await import("./stage-subject-status.js");
+    subjectMove = reportedSubjectMove(advance.subjectStatus);
   }
 
   // ── FOLLOW / RELEASE A PLAYBOOK ─────────────────────────────────────────────
@@ -2821,6 +2948,7 @@ export async function updateFocusSession(
   await notifySessionNeedsYou({
     sessionId,
     byAgent: !!agentUserId,
+    agentUserId,
     reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
 
@@ -2840,6 +2968,8 @@ export async function updateFocusSession(
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
+    ...(targetsWrite ? { targets: targetsWrite } : {}),
+    ...(subjectMove ? { subjectMove } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),

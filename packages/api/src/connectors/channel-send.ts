@@ -67,6 +67,10 @@ import {
   linkedinSlug,
   readableRecipient,
 } from "../services/capabilities/intent-recipient.js";
+import {
+  linkedinReachFromProfile,
+  recordLinkedinReach,
+} from "../services/connectors/linkedin-reach.js";
 
 const logger = createLogger({ module: "channel-send" });
 
@@ -382,34 +386,30 @@ export type ChannelSendPlan =
   | ChannelSendRefusal;
 
 /**
- * Decide how a message goes out on this channel, BEFORE anything is sent. A
- * channel with a chat id continues it. A pending one starts the chat with its
- * person: the attendee is the channel's participant id, else the person's
- * `<provider>ProviderId`, else looked up by their public identifier; anyone
- * who is not a 1st-degree connection is refused (`not_connected`). The
- * provider calls themselves are made by the send door (`sendExternalMessage`,
- * the audited chokepoint); the profile lookup here is a read.
+ * Who a pending channel's first message goes to, and whether the provider
+ * will take it: THE reach rule, read by the send at filing
+ * (`reachHoldAtFiling`) and at dispatch (`planChannelSend`), so the
+ * two can never disagree. The attendee is the channel's participant id, else
+ * the person's `<provider>ProviderId`, else looked up by their public
+ * identifier. On LinkedIn anyone who is not a 1st-degree connection is
+ * refused (`not_connected`), with the next step named; a request still
+ * waiting says so. A LinkedIn answer is recorded on the person
+ * (`linkedinConnection`, `linkedinInvitedAt`).
+ *
+ * The profile lookup is a READ. A failed read THROWS: the caller decides
+ * (dispatch: a definite not-sent; filing: filed as before, the dispatch check
+ * still holds). It is never read as "not connected".
  */
-export async function planChannelSend(args: {
+export async function readChannelReach(args: {
   channel: SendChannel;
   connector: MessagingConnector;
   accountId: string;
-}): Promise<ChannelSendPlan> {
+  now?: Date;
+}): Promise<{ ok: true; attendee: string } | ChannelSendRefusal> {
   const { channel, connector, accountId } = args;
-  if (channel.externalId) {
-    return { ok: true, kind: "continue", chatId: channel.externalId };
-  }
   const provider = channel.externalSource ?? "unipile";
   const meta = channelMeta(channel);
   const personId = channelPersonId(channel);
-  if (!connector.startChat) {
-    return {
-      ok: false,
-      error: `${humanizeToken(provider)} cannot start a conversation from the pod.`,
-      errorClass: "validation",
-      providerRef: provider,
-    };
-  }
   const person = personId
     ? await db.query.entities.findFirst({
         where: and(eq(entities.id, personId), isNull(entities.deletedAt)),
@@ -441,18 +441,34 @@ export async function planChannelSend(args: {
         providerRef: provider,
       };
     }
+    const isLinkedin = provider.toLowerCase() === "linkedin";
+    if (isLinkedin && personId) {
+      const fact = linkedinReachFromProfile(profile);
+      if (fact) {
+        // Best effort: the verdict below stands whether or not it is stored.
+        await recordLinkedinReach(personId, fact, args.now).catch((err) =>
+          logger.warn(
+            { err, personId },
+            "channel send: the LinkedIn reach could not be recorded on the person"
+          )
+        );
+      }
+    }
     // LinkedIn messages only 1st-degree connections: refused BEFORE a send.
     // On LinkedIn an unknown distance is not a connection either (the send
     // would fail after the person approved it); elsewhere only a known
     // non-connection is refused.
-    const mustBeConnected = provider.toLowerCase() === "linkedin";
     if (
       profile.networkDistance !== "FIRST_DEGREE" &&
-      (mustBeConnected || profile.networkDistance)
+      (isLinkedin || profile.networkDistance)
     ) {
+      const where = humanizeToken(provider);
       return {
         ok: false,
-        error: `${name} is not one of your ${humanizeToken(provider)} connections yet, so a message cannot be sent. Ask to connect first.`,
+        error:
+          profile.connection === "pending"
+            ? `${name} has not accepted your ${where} connection request yet, so a message cannot be sent. Send it once they accept.`
+            : `${name} is not one of your ${where} connections yet, so a message cannot be sent. Ask to connect first.`,
         errorClass: "not_connected",
         providerRef: provider,
       };
@@ -467,7 +483,86 @@ export async function planChannelSend(args: {
       providerRef: provider,
     };
   }
-  return { ok: true, kind: "start", attendee };
+  return { ok: true, attendee };
+}
+
+/**
+ * Decide how a message goes out on this channel, BEFORE anything is sent. A
+ * channel with a chat id continues it. A pending one starts the chat with its
+ * person, through the reach rule (`readChannelReach`): anyone who is not a
+ * 1st-degree connection is refused (`not_connected`). The provider calls
+ * themselves are made by the send door (`sendExternalMessage`, the audited
+ * chokepoint); the profile lookup here is a read.
+ */
+export async function planChannelSend(args: {
+  channel: SendChannel;
+  connector: MessagingConnector;
+  accountId: string;
+}): Promise<ChannelSendPlan> {
+  const { channel, connector } = args;
+  if (channel.externalId) {
+    return { ok: true, kind: "continue", chatId: channel.externalId };
+  }
+  const provider = channel.externalSource ?? "unipile";
+  if (!connector.startChat) {
+    return {
+      ok: false,
+      error: `${humanizeToken(provider)} cannot start a conversation from the pod.`,
+      errorClass: "validation",
+      providerRef: provider,
+    };
+  }
+  const reach = await readChannelReach(args);
+  if (!reach.ok) return reach;
+  return { ok: true, kind: "start", attendee: reach.attendee };
+}
+
+/**
+ * The reach check when a send is FILED for review (not on an approved one):
+ * a LinkedIn message that would start a chat with someone who is not a
+ * 1st-degree connection is HELD (CRM Messages contract b4f8c2cd, B; it was
+ * refused at filing since backend#786): the caller files it with
+ * `data.held` and the next step named (connect first), so the draft is kept
+ * and shown, never lost, and becomes sendable once they connect
+ * (`services/channels/held-sends.ts`). Same rule as at dispatch
+ * (`readChannelReach`).
+ *
+ * Only `not_connected` holds here. Everything else files as before, and the
+ * dispatch check still holds: a channel with a chat (it continues), another
+ * provider, no account to read with, and a read that FAILED (LinkedIn or
+ * Unipile down): an unread reach is not "not connected".
+ */
+export async function reachHoldAtFiling(args: {
+  channel: SendChannel;
+  connector: MessagingConnector;
+  namedAccountId: string | null | undefined;
+  now?: Date;
+}): Promise<ChannelSendRefusal | null> {
+  const { channel, connector } = args;
+  if (channel.externalId) return null;
+  if ((channel.externalSource ?? "").toLowerCase() !== "linkedin") return null;
+  if (!connector.startChat || !connector.getProfile) return null;
+  try {
+    let accountId = "";
+    if (connector.requiresAccount()) {
+      const resolved = await resolveSendAccount(channel, args.namedAccountId);
+      if (!resolved) return null;
+      accountId = resolved;
+    }
+    const reach = await readChannelReach({
+      channel,
+      connector,
+      accountId,
+      now: args.now,
+    });
+    return !reach.ok && reach.errorClass === "not_connected" ? reach : null;
+  } catch (err) {
+    logger.warn(
+      { err, channelId: channel.id },
+      "send filing: LinkedIn could not be read; filed without the reach check (the dispatch check still holds)"
+    );
+    return null;
+  }
 }
 
 export interface RecordedChannelSend {

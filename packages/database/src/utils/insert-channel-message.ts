@@ -28,6 +28,7 @@ import {
   type MirrorChannelRef,
 } from "./mirror-to-external.js";
 import { emitMessageEvent } from "./emit-message-event.js";
+import { withoutServerOwnedMessageMeta } from "@synap-core/types/agents";
 
 export interface InsertChannelMessageParams {
   channelId: string;
@@ -36,6 +37,12 @@ export interface InsertChannelMessageParams {
   userId?: string;
   role?: MessageRole;
   authorType?: MessageAuthorType;
+  /**
+   * Free metadata. The server-owned keys (`roomPost`, `sessionPost`,
+   * `routeChoice`) are DROPPED: callers pass metadata from outside (the
+   * `feed.post` verb, an automation's message config), and those stamps are
+   * written only by `postChannelMessage`.
+   */
   metadata?: Record<string, unknown>;
   /** Message category (e.g. SYSTEM_NOTIFICATION for feed / system posts). */
   messageCategory?: MessageCategory;
@@ -111,10 +118,10 @@ export async function insertChannelMessage(
     userId = "system",
     role = MessageRole.ASSISTANT,
     authorType = MessageAuthorType.BOT,
-    metadata,
     messageCategory,
     channel,
   } = params;
+  const metadata = withoutServerOwnedMessageMeta(params.metadata);
 
   const database = await getDb();
   // Canonical tamper-hash: computeMessageHash(id, content, previousHash="") —

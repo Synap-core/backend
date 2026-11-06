@@ -33,11 +33,18 @@
  * this check stops the class from growing, it does not prove each baselined
  * handler reaches a gate.
  *
+ * GET ROUTES ARE CLASSIFIED (4 Nov 2026): every served GET route is a safe
+ * read, a declared read door (`GRANT_REST_GET_READS`, REFUSED included) or
+ * owner-wide, or sits in the shrink-only baseline of routes nobody has
+ * classified yet (`grant-door-read-baseline.ts`). The fence refuses an
+ * unclassified GET to a scoped key (closed by default), so this is not a leak
+ * check: it stops a read door from shipping unusable to every scoped key
+ * because nobody classified it (findings 3122ba42, cce86e6b, 7da9c21f).
+ *
  * NOT COVERED (stated): whether a declared subject list is COMPLETE for its
  * door is a review question, not something this scan can see; a door that
- * reads one more subject than it declares is bounded too loosely. Hub REST
- * GET routes are not derived (the fence keeps its allow-list, fail closed);
- * their DECLARED subjects (`GRANT_REST_GET_READS`, `GRANT_REST_POST_READS`)
+ * reads one more subject than it declares is bounded too loosely. The
+ * DECLARED subjects (`GRANT_REST_GET_READS`, `GRANT_REST_POST_READS`)
  * are checked against the read hook below. A gate named in a handler or a
  * helper is not proven to run on every branch, and that an MCP WRITE tool
  * reaches a gate is not checked.
@@ -59,6 +66,10 @@ import {
   UNCLASSIFIED_WRITE_ROUTES,
   UNCLASSIFIED_WRITE_ROUTES_CAP,
 } from "./grant-door-write-baseline.js";
+import {
+  UNCLASSIFIED_READ_ROUTES,
+  UNCLASSIFIED_READ_ROUTES_CAP,
+} from "./grant-door-read-baseline.js";
 import { GRANT_READ_SPECS } from "../access/grant-read.js";
 import { hubProtocolRestApp } from "../routers/hub-protocol-rest.js";
 
@@ -404,6 +415,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../connectors/external-dispatch.js"),
     why: "messaging.send checked by grantWriteDenial in the conversation's space",
   },
+  "POST /channels/:channelId/send": {
+    via: "sendExternalMessage",
+    load: () => import("../connectors/external-dispatch.js"),
+    why: "the person's send: filed through the send door (grant verdict, gate), then the approve door",
+  },
   "POST /proposals": {
     via: "fencedProposalVerdict",
     load: () => import("../access/fenced-proposal.js"),
@@ -537,5 +553,78 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     ).toBe("unclassified");
     // A declared read is a read, whatever its source.
     expect(nonGetRouteClass(write("", "/packages/preflight"))).toBe("read");
+  });
+});
+
+/** Is a served GET route classified by the fence (any bound, REFUSED too)? */
+export function getRouteClassified(path: string): boolean {
+  const p = concrete(path);
+  return (
+    GRANT_SAFE_REST_READS.some((r) => r.test(p)) ||
+    GRANT_REST_GET_READS.some(([r]) => r.test(p)) ||
+    GRANT_OWNER_WIDE_REST_DOORS.some((r) => r.test(p))
+  );
+}
+
+describe("Hub REST GET routes are classified (derived from the served routes)", () => {
+  const gets = servedRoutes().filter((r) => r.method === "GET");
+  const keyOf = (r: ServedRoute) => `${r.method} ${r.path}`;
+  const unclassified = gets
+    .filter((r) => !getRouteClassified(r.path))
+    .map(keyOf)
+    .sort();
+
+  it("sees the served GET routes, classified and not (non-vacuity)", () => {
+    expect(gets.length).toBeGreaterThan(150);
+    const keys = gets.map(keyOf);
+    // The doors whose missing classification cost a finding are served and
+    // now classified (3122ba42, cce86e6b, 7da9c21f, and the skill doors).
+    for (const k of [
+      "GET /capabilities/catalog",
+      "GET /discover",
+      "GET /memory",
+      "GET /agent-skills/by-slug/:slug",
+      "GET /cells",
+    ]) {
+      expect(keys, k).toContain(k);
+      expect(unclassified, k).not.toContain(k);
+    }
+    expect(gets.length - unclassified.length).toBeGreaterThanOrEqual(50);
+  });
+
+  it("a new GET route is classified: a safe read, a declared read door, or owner-wide", () => {
+    const baseline = new Set(UNCLASSIFIED_READ_ROUTES);
+    expect(
+      unclassified.filter((k) => !baseline.has(k)),
+      "Classify the route in access/grant-door-fence.ts: GRANT_SAFE_REST_READS " +
+        "when it reads only through a seam, else GRANT_REST_GET_READS with the " +
+        "subjects it reads (READS), the narrowing its route does (NARROWED), the " +
+        "person's own rows (PERSON), or REFUSED with the reason. Never add it to " +
+        "the baseline."
+    ).toEqual([]);
+  });
+
+  it("the read baseline only shrinks: no classified, gone or duplicate row, under its cap", () => {
+    const now = new Set(unclassified);
+    expect(
+      UNCLASSIFIED_READ_ROUTES.filter((k) => !now.has(k)),
+      "Classified or no longer served: remove it from grant-door-read-baseline.ts " +
+        "and lower UNCLASSIFIED_READ_ROUTES_CAP."
+    ).toEqual([]);
+    expect(new Set(UNCLASSIFIED_READ_ROUTES).size).toBe(
+      UNCLASSIFIED_READ_ROUTES.length
+    );
+    expect(UNCLASSIFIED_READ_ROUTES.length).toBeLessThanOrEqual(
+      UNCLASSIFIED_READ_ROUTES_CAP
+    );
+  });
+
+  it("self-check: the classifier tells a classified GET from an unclassified one", () => {
+    expect(getRouteClassified("/entities/:id")).toBe(true); // safe read
+    expect(getRouteClassified("/workspaces")).toBe(true); // declared READS
+    expect(getRouteClassified("/errors/:requestId")).toBe(true); // REFUSED
+    expect(getRouteClassified("/calendar/feed")).toBe(true); // owner-wide
+    expect(getRouteClassified("/zz-not-a-route")).toBe(false);
+    expect(getRouteClassified("/agent-skills/executable")).toBe(false);
   });
 });

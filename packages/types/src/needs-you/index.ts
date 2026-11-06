@@ -693,6 +693,9 @@ export function convertibleGoalsTitle(card: NeedsYouConvertibleGoals): string {
   return `${what}${from} can become ${nounInSentence(resolveObjectNounPlural("track"))}`;
 }
 
+/** THE risk mark of a needs-you item, asks and requests alike — see `./risk.ts`. */
+export * from "./risk.js";
+
 /** The Inbox's four filters and its triage order — see `./buckets.ts`. */
 export {
   NEEDS_YOU_BUCKETS,
@@ -740,3 +743,5 @@ export {
 
 /** THE needs-you rule and its folds (decision E) — see `./rule.ts`. */
 export * from "./rule.js";
+export * from "./set-aside.js";
+export * from "./priority.js";

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   URL_IDENTITY_KINDS,
+  PUBLISHED_URL_IDENTITY_KINDS,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
   canonicalizeUrl,
   extractIdentitySignals,
@@ -266,9 +267,71 @@ describe("URL_IDENTITY_KINDS ↔ ensure-system-profiles bookmark family", () => 
     expect(children).toEqual(
       expect.arrayContaining(["website", "article", "signal_item"])
     );
+    // Every child is classified: a page kind (url) or an observation kind
+    // (url + publishedAt), never both.
     expect(new Set(["bookmark", ...children])).toEqual(
-      new Set(URL_IDENTITY_KINDS)
+      new Set([...URL_IDENTITY_KINDS, ...PUBLISHED_URL_IDENTITY_KINDS])
     );
+    for (const kind of PUBLISHED_URL_IDENTITY_KINDS) {
+      expect(URL_IDENTITY_KINDS.has(kind)).toBe(false);
+    }
+  });
+});
+
+describe("signal_item identity is url + publishedAt (CP ticket 7f7f9264)", () => {
+  const release = (url: string, publishedAt: string) =>
+    extractIdentitySignals(
+      { url, publishedAt, title: "x" },
+      { kind: "signal_item" }
+    );
+  const key = (url: string, publishedAt: string) =>
+    release(url, publishedAt).map((s) =>
+      normalizeIdentitySignal(s.type, s.value)
+    );
+
+  it("emits one url_at atom and no bare url atom", () => {
+    expect(
+      release("https://obsidian.md/changelog/", "2026-11-01T10:00:00Z")
+    ).toEqual([
+      {
+        type: "url_at",
+        value: "https://obsidian.md/changelog/ 2026-11-01T10:00:00Z",
+      },
+    ]);
+  });
+
+  it("two releases on one changelog URL are two identities", () => {
+    expect(
+      key("https://obsidian.md/changelog/#v1.14", "2026-11-01T10:00:00Z")
+    ).not.toEqual(
+      key("https://obsidian.md/changelog/#v1.13", "2026-10-01T10:00:00Z")
+    );
+  });
+
+  it("the same item seen again is one identity (canonical url, same instant)", () => {
+    expect(
+      key(
+        "https://www.raycast.com/changelog?utm_source=x",
+        "2026-11-01T11:00:00+01:00"
+      )
+    ).toEqual(
+      key("https://raycast.com/changelog/", "2026-11-01T10:00:00.000Z")
+    );
+  });
+
+  it("no publishedAt ⇒ no strong atom (never the address alone)", () => {
+    expect(
+      extractIdentitySignals(
+        { url: "https://raycast.com/changelog" },
+        { kind: "signal_item" }
+      )
+    ).toEqual([]);
+  });
+
+  it("an unparseable publishedAt is kept as text, trimmed", () => {
+    expect(
+      normalizeIdentitySignal("url_at", "https://x.com/a/  sometime soon ")
+    ).toBe("https://x.com/a sometime soon");
   });
 });
 

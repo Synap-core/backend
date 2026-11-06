@@ -206,6 +206,9 @@ import {
   projectMembers,
   podMembers,
   users,
+  profiles,
+  profileProperties,
+  propertyDefs,
   type db as DatabaseHandle,
 } from "@synap/database";
 import type { Context } from "../../../context.js";
@@ -255,6 +258,9 @@ async function freshDb() {
     projectMembers,
     podMembers,
     users,
+    profiles,
+    profileProperties,
+    propertyDefs,
   ]) {
     await client.exec(ddlFor(table as unknown as PgTable));
   }
@@ -262,7 +268,15 @@ async function freshDb() {
     `insert into users (id, email) values ('${USER}', '${USER}@example.test')`
   );
   const database = drizzle(client, {
-    schema: { entities, proposals, workspaces, workspaceMembers },
+    schema: {
+      entities,
+      proposals,
+      workspaces,
+      workspaceMembers,
+      profiles,
+      profileProperties,
+      propertyDefs,
+    },
   }) as unknown as Database;
   holder.db = database;
   holder.client = client;
@@ -550,6 +564,69 @@ describe("updateEntities — one record needing review is not a pack (F1)", () =
     expect(result.proposed).toBeNull();
     expect(await titleOf(client, id)).toBe("Done");
     expect(await rows(client, "pending")).toHaveLength(0);
+  });
+});
+
+describe("updateEntities — an invented key is reported per item (c161fd43)", () => {
+  it("an applied item that sent a key its kind does not model names it, with didYouMean", async () => {
+    const { client, database } = await freshDb();
+    const profileId = randomUUID();
+    const defId = randomUUID();
+    await client.query(
+      `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active)
+       values ($1, 'ticket', 'Ticket', 'kind', 'system', 'pod', true)`,
+      [profileId]
+    );
+    await client.query(
+      `insert into property_defs (id, slug, value_type, profile_id)
+       values ($1, 'priority', 'string', $2)`,
+      [defId, profileId]
+    );
+    await client.query(
+      `insert into profile_properties (profile_id, property_def_id, required, display_order, is_lifecycle)
+       values ($1, $2, false, 0, false)`,
+      [profileId, defId]
+    );
+    const modeled = randomUUID();
+    await client.query(
+      `insert into entities (id, user_id, profile_id, type, title, properties)
+       values ($1, $2, $3, 'ticket', 'T', $4::jsonb)`,
+      [modeled, USER, profileId, JSON.stringify({ legacyKey: "old" })]
+    );
+    holder.verdicts.set(modeled, "execute");
+    const plain = await insertEntity(client, "Plain");
+
+    const result = await updateEntities({
+      ctx: ctx(database),
+      agentUserId: AGENT,
+      items: [
+        {
+          id: modeled,
+          patch: { properties: { priority: "high", priorty: "low" } },
+        },
+        { id: plain, patch: { title: "Plain 2" } },
+      ],
+    });
+
+    expect(result.applied).toEqual([modeled, plain]);
+    // Only THIS call's invented key — not `legacyKey`, invented earlier.
+    expect(result.unmodeledProperties).toEqual([
+      { id: modeled, unmodeled: [{ key: "priorty", didYouMean: "priority" }] },
+    ]);
+  });
+
+  it("a batch of modelled writes carries no unmodeledProperties", async () => {
+    const { client, database } = await freshDb();
+    const id = await insertEntity(client, "A");
+
+    const result = await updateEntities({
+      ctx: ctx(database),
+      agentUserId: AGENT,
+      items: [{ id, patch: { title: "B" } }],
+    });
+
+    expect(result.applied).toEqual([id]);
+    expect("unmodeledProperties" in result).toBe(false);
   });
 });
 

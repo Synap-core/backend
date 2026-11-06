@@ -20,6 +20,7 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+import type { RunOn } from "@synap-core/types/agents";
 
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
@@ -163,6 +164,12 @@ export const playbookRuns = pgTable(
      * external-agent executor started a task through an agent binding.
      */
     externalAgent: jsonb("external_agent").$type<PlaybookRunExternalAgent>(),
+    /**
+     * Who ran it and why (0403): Synap AI or an agent, chosen for this run,
+     * the person's remembered choice, a fallback to Synap AI, or the
+     * playbook's default (`resolveRunChoice`). NULL on runs before 0403.
+     */
+    runOn: jsonb("run_on").$type<RunOn>(),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

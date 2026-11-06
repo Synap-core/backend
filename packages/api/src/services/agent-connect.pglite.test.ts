@@ -228,6 +228,12 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
+  // setting enforces, services/presence/mode.ts), so its sensitive approvals
+  // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
+  await h.client!.exec(
+    `insert into pod_settings (settings) values ('{"presence":{"mode":"report","changedBy":"test","changedAt":"2026-11-05T00:00:00.000Z"}}'::jsonb)`
+  );
   for (const [id, email] of [
     [OWNER, "owner@x"],
     [OTHER, "other@x"],
@@ -395,6 +401,63 @@ describe("agent/connect — approving an AI is a proposal", () => {
     expect(await approvePendingAgentKey({ keyId, approverId: OWNER })).toBe(
       "already_active"
     );
+  });
+
+  it("W3: with enforce on, the pod-admin door refuses without a proof of presence (key stays pending), and approves with one", async () => {
+    const { issuePresenceChallenge } = await import("./presence/proof.js");
+    const crypto = await import("node:crypto");
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    process.env.PUBLIC_URL = "https://pod.example.test";
+    try {
+      const { keyId, proposalId } = await pendingConnection();
+      const refused = await approvePendingAgentKey({
+        keyId,
+        approverId: OWNER,
+      }).catch((err: { cause?: { reasonCode?: string } }) => err.cause);
+      expect(refused).toMatchObject({ reasonCode: "PRESENCE_REQUIRED" });
+      expect(await keyRow(keyId)).toMatchObject({ is_active: false });
+      expect(await proposalStatus(proposalId)).toBe("pending");
+
+      const device = crypto.generateKeyPairSync("ec", {
+        namedCurve: "prime256v1",
+      });
+      const deviceKeyId = randomUUID();
+      await q(
+        `insert into presence_device_keys (id, user_id, label, public_key) values ($1, $2, 'iPhone', $3)`,
+        [
+          deviceKeyId,
+          OWNER,
+          (
+            device.publicKey.export({ format: "der", type: "spki" }) as Buffer
+          ).toString("base64url"),
+        ]
+      );
+      const c = await issuePresenceChallenge({
+        userId: OWNER,
+        subject: proposalId,
+      });
+      const signature = crypto
+        .sign("sha256", Buffer.from(c.message, "utf8"), {
+          key: device.privateKey,
+          dsaEncoding: "der",
+        })
+        .toString("base64url");
+      expect(
+        await approvePendingAgentKey({
+          keyId,
+          approverId: OWNER,
+          presence: {
+            kind: "device_key",
+            challengeId: c.challengeId,
+            keyId: deviceKeyId,
+            signature,
+          },
+        })
+      ).toBe("approved");
+      expect(await keyRow(keyId)).toMatchObject({ is_active: true });
+    } finally {
+      delete process.env.SYNAP_PRESENCE_PROOF;
+    }
   });
 
   it("rejecting on the pod-admin door revokes the key and rejects the proposal", async () => {

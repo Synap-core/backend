@@ -30,7 +30,11 @@ import {
   drizzleSql,
   users,
 } from "@synap/database";
-import { personDeviceTokens, personDevices } from "@synap/database/schema";
+import {
+  oauthClients,
+  personDeviceTokens,
+  personDevices,
+} from "@synap/database/schema";
 import {
   DEVICE_ENDED_NO_ACCESS,
   PERSON_DEVICE_TOKEN_PREFIX,
@@ -42,14 +46,16 @@ import { kratosAdmin } from "@synap/auth";
 
 import {
   isFirstPartyClientId,
-  type FirstPartyClientId,
+  personDeviceClient,
 } from "../routers/oauth/config.js";
+import { isClientMetadataUrl } from "../routers/oauth/client-id-url.js";
+import { findClient } from "../routers/oauth/store.js";
 import {
   findRefreshToken,
   refreshDeviceToken,
   startRefreshFamily,
 } from "../routers/oauth/refresh.js";
-import { OAuthError } from "../routers/oauth/protocol.js";
+import { OAuthError, nativeRedirectRule } from "../routers/oauth/protocol.js";
 
 /** An access token lives 1 h: short enough that a stolen one expires soon. */
 export const PERSON_DEVICE_ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -152,7 +158,19 @@ async function mintAccessToken(
 }
 
 /**
- * A first-party client's authorization code, redeemed: a NEW device for the
+ * May this client sign a person in on a device? A built-in Synap app
+ * (`FIRST_PARTY_CLIENTS`), or a client whose metadata document declares the
+ * `person` scope (`personDeviceClient`, read from its cached row). Asked
+ * again here, at the one mint door, whatever the caller resolved.
+ */
+async function signsInPersonDevice(clientId: string): Promise<boolean> {
+  if (isFirstPartyClientId(clientId)) return true;
+  if (!isClientMetadataUrl(clientId)) return false;
+  return personDeviceClient(await findClient(clientId)) !== null;
+}
+
+/**
+ * A device sign-in client's authorization code, redeemed: a NEW device for the
  * person, its first access token and the first refresh token of its family.
  * `label` / `userAgent` are what the app says about itself — shown to the
  * person as text, never trusted.
@@ -169,7 +187,7 @@ export async function signInPersonDevice(args: {
    */
   authTime?: Date | null;
 }): Promise<SignInPersonDeviceResult> {
-  if (!isFirstPartyClientId(args.clientId)) {
+  if (!(await signsInPersonDevice(args.clientId))) {
     return { ok: false, reason: "not_first_party" };
   }
   if (!(await isHuman(args.personUserId))) {
@@ -183,7 +201,7 @@ export async function signInPersonDevice(args: {
     .insert(personDevices)
     .values({
       userId: args.personUserId,
-      clientId: args.clientId satisfies FirstPartyClientId,
+      clientId: args.clientId,
       label: clip(args.label, LABEL_MAX),
       userAgent: clip(args.userAgent, USER_AGENT_MAX),
       expiresAt: capAt,
@@ -338,8 +356,22 @@ export async function stepUpPersonDevice(args: {
 /** One signed-in device, as the person's devices list shows it. */
 export interface PersonDeviceSummary {
   id: string;
-  /** The first-party client (`resolveFirstPartyClientName` names it). */
+  /**
+   * The client it signed in with: a built-in Synap app's id
+   * (`resolveFirstPartyClientName` names it), or a metadata document's URL.
+   */
   clientId: string;
+  /**
+   * A metadata-document client's own `client_name` (untrusted text, shown as
+   * text); null for a built-in Synap app, named by the vocabulary.
+   */
+  clientName: string | null;
+  /**
+   * Where the app runs, from where its codes go: a loopback redirect is a
+   * computer, anything else a phone. Null for a built-in Synap app (the
+   * vocabulary knows it) or a client the pod no longer has a copy of.
+   */
+  runsOn: "computer" | "phone" | null;
   label: string | null;
   createdAt: Date;
   lastUsedAt: Date | null;
@@ -350,7 +382,7 @@ export interface PersonDeviceSummary {
 export async function listPersonDevices(
   userId: string
 ): Promise<PersonDeviceSummary[]> {
-  return db
+  const rows = await db
     .select({
       id: personDevices.id,
       clientId: personDevices.clientId,
@@ -358,8 +390,12 @@ export async function listPersonDevices(
       createdAt: personDevices.createdAt,
       lastUsedAt: personDevices.lastUsedAt,
       expiresAt: personDevices.expiresAt,
+      // A metadata-document client's cached row (never a built-in app's).
+      clientName: oauthClients.clientName,
+      redirectUris: oauthClients.redirectUris,
     })
     .from(personDevices)
+    .leftJoin(oauthClients, eq(oauthClients.clientId, personDevices.clientId))
     .where(
       and(
         eq(personDevices.userId, userId),
@@ -368,6 +404,20 @@ export async function listPersonDevices(
       )
     )
     .orderBy(desc(personDevices.createdAt));
+  return rows.map(({ redirectUris, ...row }) => ({
+    ...row,
+    clientName: isFirstPartyClientId(row.clientId)
+      ? null
+      : (row.clientName ?? null),
+    runsOn:
+      isFirstPartyClientId(row.clientId) || !redirectUris
+        ? null
+        : redirectUris.some(
+              (uri) => nativeRedirectRule(uri)?.kind === "loopback"
+            )
+          ? "computer"
+          : "phone",
+  }));
 }
 
 /**

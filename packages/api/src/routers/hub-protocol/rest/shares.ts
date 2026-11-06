@@ -68,6 +68,7 @@ import {
   logger,
   type HubHono,
   type HubVariables,
+  refuseStaleDeviceSession,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
@@ -241,6 +242,8 @@ export function registerSharesRoutes(app: HubHono): void {
   });
 
   app.post("/shares/sites", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -268,6 +271,8 @@ export function registerSharesRoutes(app: HubHono): void {
   });
 
   app.post("/shares/sites/:id/publish", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -371,6 +376,8 @@ export function registerSharesRoutes(app: HubHono): void {
   });
 
   app.post("/shares/sites/:id/charts/publish", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -524,6 +531,8 @@ export function registerSharesRoutes(app: HubHono): void {
   });
 
   app.post("/shares/publish", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
@@ -586,6 +595,8 @@ export function registerSharesRoutes(app: HubHono): void {
   });
 
   app.post("/shares", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }

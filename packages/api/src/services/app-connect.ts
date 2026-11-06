@@ -1390,6 +1390,12 @@ export async function connectOAuthApp(args: {
   approved: readonly AppApprovedRequest[];
   /** The caller's request context — the approve door's agent floor reads it. */
   ctx: Context;
+  /**
+   * The consent door already checked the person's proof of presence for THIS
+   * authorization (W3 slice 2, `oauth.consent`): the `app/connect` it files
+   * and approves in the same call has no proposal a client could name first.
+   */
+  presenceChecked?: "oauth.consent";
 }): Promise<{ appId: string; publicId: string; proposalId: string }> {
   assertOwnerCredential("connect an app", {
     agentUserId: args.ctx.agentUserId,
@@ -1501,6 +1507,7 @@ export async function connectOAuthApp(args: {
     userId: args.ownerUserId,
     input: { proposalId: proposal.id },
     ctx: args.ctx,
+    presenceChecked: args.presenceChecked,
   });
   if (!result.success) {
     throw new TRPCError({

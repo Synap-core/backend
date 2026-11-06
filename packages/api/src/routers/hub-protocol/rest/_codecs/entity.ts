@@ -511,10 +511,29 @@ export const UpdateEntityResponseSchema = z
         entityId: z.string(),
         landed: z.array(z.string()),
         proposed: z.array(z.string()).optional(),
+        properties: z
+          .object({
+            unmodeled: z
+              .array(
+                z.object({
+                  key: z.string(),
+                  didYouMean: z
+                    .string()
+                    .optional()
+                    .describe(
+                      "Closest valid property slug, when the key looks like a typo."
+                    ),
+                })
+              )
+              .describe(
+                "Property keys this call sent that the kind does NOT model. Stored verbatim (the write succeeded) but not queryable, and never listed in `landed`."
+              ),
+          })
+          .optional(),
       })
       .optional()
       .describe(
-        "Applied answer only: the fields written (`landed`) and those filed for review instead (`proposed`, the status move)."
+        "Applied answer only: the modelled fields written (`landed`), those filed for review instead (`proposed`, the status move), and the keys the kind does not model (`properties.unmodeled`)."
       ),
   })
   .openapi("UpdateEntityResponse");

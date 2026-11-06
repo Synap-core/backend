@@ -56,6 +56,7 @@ import {
   resolveStatusMoveTarget,
   classifyStatusMove,
   type StatusMoveTarget,
+  type UnmodeledProperty,
 } from "@synap/database";
 import {
   countAgentWritesTodayUtc,
@@ -160,6 +161,29 @@ export interface UpdateEntitiesResult {
     proposalId?: string;
     deferred?: true;
   }>;
+  /**
+   * Present ONLY when an applied item sent property keys its kind does not
+   * model (finding c161fd43): stored verbatim, not queryable, each with an
+   * optional `didYouMean`. The item is still in `applied`; these keys are
+   * what it wrote OUTSIDE the kind's schema.
+   */
+  unmodeledProperties?: Array<{ id: string; unmodeled: UnmodeledProperty[] }>;
+}
+
+/**
+ * Record an applied item's unmodeled keys (`entities.update` already narrowed
+ * them to the keys its patch sent) on the batch receipt.
+ */
+function noteUnmodeled(
+  result: UpdateEntitiesResult,
+  id: string,
+  written: { status?: unknown; unmodeled?: UnmodeledProperty[] }
+): void {
+  if (!written.unmodeled?.length) return;
+  (result.unmodeledProperties ??= []).push({
+    id,
+    unmodeled: written.unmodeled,
+  });
 }
 
 const NOT_WRITABLE = "Not found or not writable by you";
@@ -280,6 +304,7 @@ export async function updateEntities(
         });
       } else {
         result.applied.push(item.id);
+        noteUnmodeled(result, item.id, written);
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -640,6 +665,7 @@ async function fileAlone(params: {
     proposalId?: string;
     proposalType?: string;
     reviewUrl?: string;
+    unmodeled?: UnmodeledProperty[];
   }>;
   result: UpdateEntitiesResult;
 }): Promise<void> {
@@ -649,6 +675,7 @@ async function fileAlone(params: {
     if (written.status !== "proposed" || !written.proposalId) {
       // The door's own decision allowed it (e.g. a rule naming the action).
       result.applied.push(item.id);
+      noteUnmodeled(result, item.id, written);
       return;
     }
     const kept = (written as { deferred?: true }).deferred;

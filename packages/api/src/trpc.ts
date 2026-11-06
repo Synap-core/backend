@@ -12,6 +12,11 @@
 import { TRPCError } from "@trpc/server";
 import { t } from "./init-trpc.js";
 import { assertFreshAuthentication } from "./utils/device-session.js";
+import {
+  presenceProofSchema,
+  sensitiveActionReason,
+  type PresenceProof,
+} from "@synap-core/types/presence";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
 import { db, eq, and } from "@synap/database";
@@ -21,7 +26,9 @@ import { isPodAdmin } from "./utils/workspace-role.js";
 import "@synap/database"; // Fix TS2742: inferred type portability
 import {
   isSynapLikeError,
+  isCodedRefusal,
   isDbDomainError,
+  mapCodedRefusalToTRPC,
   mapDbErrorToTRPC,
   mapSetupRequiredToTRPC,
   statusCodeToTRPCCode,
@@ -57,7 +64,9 @@ const logger = createLogger({ module: "trpc" });
  *   2. TRPCError        → pass through unchanged
  *   3. SynapError-like  → map statusCode → tRPC code
  *   4. DB domain errors → map to NOT_FOUND / BAD_REQUEST / CONFLICT
- *   5. Unknown          → INTERNAL_SERVER_ERROR
+ *   5. Coded refusal    → a plain Error whose `code` is a tRPC code key keeps
+ *                         that code and its message (`isCodedRefusal`)
+ *   6. Unknown          → INTERNAL_SERVER_ERROR
  *
  * Exported so the error-shape seam can be exercised end-to-end without a db or
  * a full server (see `__tests__/setup-required-trpc.test.ts`).
@@ -94,6 +103,10 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
         });
       }
       if (isDbDomainError(cause)) throw mapDbErrorToTRPC(cause);
+      // A service's coded refusal (`Object.assign(new Error(msg), { code:
+      // "BAD_REQUEST" })`), shared with the Hub REST and MCP doors that read
+      // `err.code` themselves: keep its code and its sentence here too.
+      if (isCodedRefusal(cause)) throw mapCodedRefusalToTRPC(cause);
     }
 
     return result;
@@ -119,6 +132,10 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
     // @synap/database domain exceptions (ProfileNotFoundError, etc.)
     if (isDbDomainError(error)) {
       throw mapDbErrorToTRPC(error);
+    }
+
+    if (isCodedRefusal(error)) {
+      throw mapCodedRefusalToTRPC(error);
     }
 
     // Truly unexpected — the errorFormatter (`init-trpc.ts`) logs it and, in
@@ -181,8 +198,48 @@ export const protectedProcedure = publicProcedure
  * widens or approves a credential uses it, through `credentialProcedure` or
  * `.use(requireFreshAuthentication)` — derived and enforced by tripwire
  * `credential-doors-refuse-device-session`.
+ *
+ * A SENSITIVE ACTION (`SENSITIVE_ACTIONS`, keyed by this procedure's path; W3
+ * slice 3, founder decision 1) also needs a proof of presence bound to THIS
+ * call (`assertPresenceForAction`: the path and a digest of the raw input).
+ * A valid proof is a stronger step-up than a recent sign-in, so it satisfies
+ * the step-up too. One mechanism: a door becomes sensitive by being listed;
+ * the tripwire `presence-gate-every-door` classifies every credential door.
  */
 export const requireFreshAuthentication = t.middleware(async (opts) => {
+  if (sensitiveActionReason(opts.path)) {
+    const userId = opts.ctx.userId;
+    if (!userId) {
+      throw new TRPCError({
+        code: "UNAUTHORIZED",
+        message: "Authentication required",
+      });
+    }
+    const raw = await opts.getRawInput();
+    const sent = (raw as { presence?: unknown } | null | undefined)?.presence;
+    let proof: PresenceProof | null = null;
+    if (sent !== undefined && sent !== null) {
+      const parsed = presenceProofSchema.safeParse(sent);
+      if (!parsed.success) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "`presence` is not a proof of presence.",
+        });
+      }
+      proof = parsed.data;
+    }
+    // Loaded only for a sensitive path: every router imports this module,
+    // and the gate's graph (proof checks, Kratos) is theirs only when needed.
+    const { assertPresenceForAction } =
+      await import("./services/presence/gate.js");
+    const verdict = await assertPresenceForAction({
+      userId,
+      path: opts.path,
+      input: raw,
+      proof,
+    });
+    if (verdict) return opts.next();
+  }
   assertFreshAuthentication(opts.ctx);
   // `next()` with no ctx: the procedure keeps the context its builder narrowed
   // (`userId: string` after protectedProcedure).

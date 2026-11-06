@@ -154,6 +154,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "pushed_at",
     addedBy: "0375_notifications_pushed_at.sql",
   },
+  // notifications — the agent a push was about (0402). An agent's own push
+  // limit counts it; missing, that count throws and the push is skipped for
+  // an agent with a limit (the row is still written and the bell shows it).
+  {
+    table: "notifications",
+    column: "push_agent_id",
+    addedBy: "0402_notifications_push_agent.sql",
+  },
   // The status watcher's episode claims (0376). Absent, every watcher tick
   // fails at its claim and no signal is raised.
   {
@@ -562,6 +570,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "api_keys",
     column: "worker_served_version",
     addedBy: "0385_api_keys_worker_served.sql",
+  },
+  // The door that minted the key (0400): /mcp/redeem's 'synap-account' is
+  // how the connector's keys are told apart (isSynapAccountKey).
+  {
+    table: "api_keys",
+    column: "origin",
+    addedBy: "0400_synap_account_key_origin.sql",
   },
 
   // api_key_external_users — sub-token mappings (0018)
@@ -1350,6 +1365,25 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "device_auth_requests",
     column: "poll_interval_seconds",
     addedBy: "0321_device_auth_requests.sql",
+  },
+  // Proof of presence (0398): every sensitive approval reads and consumes a
+  // challenge; absence means each one would 42P01.
+  {
+    table: "presence_challenges",
+    column: "consumed_at",
+    addedBy: "0398_presence.sql",
+  },
+  {
+    table: "presence_device_keys",
+    column: "public_key",
+    addedBy: "0398_presence.sql",
+  },
+  // A passkey change redeems its proof once (0401); absence means Kratos'
+  // settings guard would 42703 on every passkey change.
+  {
+    table: "presence_challenges",
+    column: "redeemed_at",
+    addedBy: "0401_presence_redeemed.sql",
   },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
@@ -2257,6 +2291,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbook_runs",
     column: "external_agent",
     addedBy: "0315_playbook_runs_external_agent.sql",
+  },
+  {
+    table: "playbook_runs",
+    column: "run_on",
+    addedBy: "0403_playbook_runs_run_on.sql",
   },
   {
     table: "automation_runs",

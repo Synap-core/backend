@@ -74,6 +74,12 @@ export interface MatchSessionTemplateInput {
   goal: string;
   /** Max candidates returned. Default {@link CANDIDATES_MAX}; a caller's own cap (`synap_find` `limit`) wins. */
   limit?: number;
+  /**
+   * A SESSION is being started or nudged: a project-scope playbook (a "Goal
+   * template", run as a track with `synap_start_track`) cannot bind to it, so
+   * it is not offered. `synap_find` leaves this off and still lists them.
+   */
+  excludeGoalTemplates?: boolean;
 }
 
 function stageNames(stages: unknown): string[] {
@@ -106,15 +112,17 @@ export async function matchSessionTemplate(
   const matched = rankRouteCandidates({
     entity: {},
     intentText,
-    candidates: rows.map((p) => ({
-      kind: "playbook" as const,
-      id: p.id,
-      name: p.name,
-      text: [p.description, p.goalTemplate, ...stageNames(p.stages)],
-      subjectProfileSlug: null,
-      description: p.description ?? undefined,
-      scope: p.scope,
-    })),
+    candidates: rows
+      .filter((p) => !(input.excludeGoalTemplates && p.scope === "project"))
+      .map((p) => ({
+        kind: "playbook" as const,
+        id: p.id,
+        name: p.name,
+        text: [p.description, p.goalTemplate, ...stageNames(p.stages)],
+        subjectProfileSlug: null,
+        description: p.description ?? undefined,
+        scope: p.scope,
+      })),
   }).filter((r) => r.signals.some((s) => s.type === "intent"));
 
   return {

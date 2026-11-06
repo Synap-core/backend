@@ -6,6 +6,9 @@
  * `get` also returns the skills that `require` this tool (the links graph),
  * so a tool detail page can show "the skills that use it".
  */
+import { proofCheckedByApproval } from "../utils/presence-input.js";
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -397,11 +400,29 @@ export const toolsRouter = router({
    * dispatcher (`external-dispatch.ts`).
    */
   setApproved: protectedProcedure
-    .input(z.object({ id: z.string().uuid(), approved: z.boolean() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        approved: z.boolean(),
+        /** Proof of presence (W3): turning a tool ON is setup. */
+        presence: presenceProofSchema.optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Approval is the human step — refuse an acting agent first.
       refuseAgentApprover(ctx.agentUserId);
       const userId = requireUserId(ctx.userId);
+      // Turning OFF only takes power away; turning ON needs the person
+      // (unless the capability.enable executor calls: its approval checked).
+      if (input.approved && !proofCheckedByApproval(ctx)) {
+        await assertPresenceForRequest({
+          userId,
+          kind: "tool",
+          id: input.id,
+          proof: input.presence ?? null,
+          door: "trpc.tools.setApproved",
+        });
+      }
       const existing = await db.query.tools.findFirst({
         where: eq(tools.id, input.id),
       });

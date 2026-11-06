@@ -25,7 +25,7 @@ describe("proposalFateLine", () => {
         { kind: "expires", expiresAt: inHours(6), orSessionEnd: true },
         NOW
       )
-    ).toBe("Expires in 6h, or when the session ends");
+    ).toBe("Expires in 6h, or when the job ends");
     expect(
       proposalFateLine(
         { kind: "expires", expiresAt: inHours(-1), orSessionEnd: true },
@@ -36,7 +36,7 @@ describe("proposalFateLine", () => {
 
   it("the three other fates", () => {
     expect(proposalFateLine({ kind: "dies_with_session" }, NOW)).toBe(
-      "Ends with the session"
+      "Ends with the job"
     );
     expect(proposalFateLine({ kind: "until_decided" }, NOW)).toBe(
       "Stays until you decide"

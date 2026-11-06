@@ -252,6 +252,11 @@ jobs:
       - name: Commit version bumps
         env:
           PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          # The bot's push must not run the developer pre-push hook (.husky/pre-push):
+          # its main typecheck refused the bump push of run 42025398081 after the
+          # packages were already on npm, leaving main behind npm (main red 37137fba).
+          # The packages this step commits were built and published above.
+          SYNAP_HOOK_SKIP: "1"
         run: |
           AUTH=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)
           echo "::add-mask::$AUTH"

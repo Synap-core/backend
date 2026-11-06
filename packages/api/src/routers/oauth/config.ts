@@ -16,10 +16,15 @@ import {
   isValidScope,
   type ApiKeyScope,
 } from "@synap/database/schema";
+import {
+  GRANT_SUBJECT_CATALOG,
+  assertPermissions,
+} from "@synap-core/types/grants";
 import { resolveFirstPartyClientName } from "@synap-core/types/vocabulary";
 
 import {
   canonicalizeIssuerUrl,
+  nativeRedirectRule,
   type FirstPartyRedirectRule,
 } from "./protocol.js";
 import type { StoredClient } from "./store.js";
@@ -228,6 +233,76 @@ export function resolveFirstPartyClient(
  * client acts on.
  */
 export const OAUTH_SUPPORTED_SCOPES = ["mcp.read", "mcp.write"] as const;
+
+/**
+ * The scope of a client that signs a PERSON in on a device: its token is the
+ * person on this pod's app API (`/trpc` and the routes beside it), the same
+ * person device token the built-in Synap apps get (`FIRST_PARTY_CLIENTS`,
+ * `services/person-device-token.ts`). Founder decision 2026-11-05: any app
+ * may be such a client, registered like every app by its client metadata
+ * document; the pod names none of them in code.
+ *
+ * Only a DOCUMENT that declares it makes a client one (`personDeviceClient`),
+ * never a request: DCR registers within `OAUTH_SUPPORTED_SCOPES` (which never
+ * holds it), and a document that also asks for `synap_requests` is refused.
+ * The person confirms every sign-in on the consent screen, which names the
+ * client by its domain.
+ */
+export const PERSON_SCOPE = "person";
+
+/** What the AS metadata advertises (`scopes_supported`). */
+export const OAUTH_ADVERTISED_SCOPES = [
+  ...OAUTH_SUPPORTED_SCOPES,
+  PERSON_SCOPE,
+] as const;
+
+/**
+ * A client whose metadata document declares the `person` scope, as every AS
+ * door sees it: the same device sign-in as the built-in Synap apps
+ * (`clientKind: "first_party"`), its redirect rules derived from the URIs its
+ * document lists (`nativeRedirectRule`; an https one is exact). Null for any
+ * other client, so the caller keeps the client it had.
+ *
+ * Safe on a cached row: a document validated before `person` existed was
+ * cached with `mcp.*` scopes only, so no old row can become one.
+ */
+export function personDeviceClient(
+  client: StoredClient | null | undefined
+): StoredClient | null {
+  if (!client || client.clientKind !== "cimd") return null;
+  if (!client.scopes.includes(PERSON_SCOPE)) return null;
+  return {
+    ...client,
+    clientKind: "first_party",
+    firstPartyRedirects: client.redirectUris.map(
+      (uri) =>
+        nativeRedirectRule(uri) ?? { kind: "claimed-https" as const, uri }
+    ),
+    scopes: [],
+    requestedPermissions: [],
+  };
+}
+
+/**
+ * What a pod APP (website client, CIMD) may ask a person for in its metadata
+ * document's `synap_requests`: `<subject>.<action>` for every subject x action
+ * the grant catalog offers a person to give. Derived from
+ * `GRANT_SUBJECT_CATALOG`, the catalog the consent screen draws its ticks from,
+ * and checked by `assertPermissions`, the check `client-metadata.ts` runs on
+ * every request, so this list never drifts from what the server accepts. It is
+ * a SUBSET of the grammar (a valid pattern outside it, `vault.redeem` or `*`,
+ * is still accepted), not a second grammar.
+ *
+ * Deliberately NOT in `scopes_supported`: an app's `scope` parameter is
+ * narrowed to `OAUTH_SUPPORTED_SCOPES` (client-metadata.ts), so advertising
+ * these there would invite a request the server drops. Advertised as the
+ * `synap_app_permissions` extension instead.
+ */
+export const OAUTH_APP_PERMISSIONS: readonly string[] =
+  GRANT_SUBJECT_CATALOG.flatMap((spec) =>
+    spec.actions.map((action) => `${spec.subject}.${action}`)
+  );
+assertPermissions(OAUTH_APP_PERMISSIONS);
 
 /** Granted when a client registers or authorizes without naming any scope. */
 export const OAUTH_DEFAULT_SCOPES = ["mcp.read", "mcp.write"] as const;

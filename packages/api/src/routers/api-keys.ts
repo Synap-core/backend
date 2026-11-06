@@ -5,6 +5,9 @@
  * SECURITY: Keys are displayed ONCE and never stored in plaintext.
  */
 
+import { presenceInput } from "../utils/presence-input.js";
+import { presenceProofSchema } from "@synap-core/types/presence";
+import { assertPresenceForRequest } from "../services/presence/gate.js";
 import {
   router,
   protectedProcedure,
@@ -494,6 +497,7 @@ export const apiKeysRouter = router({
    * SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
   create: credentialProcedure
+    .input(presenceInput)
     .input(
       z
         .object({
@@ -683,6 +687,7 @@ export const apiKeysRouter = router({
    * Rotate an API key (create new, revoke old)
    */
   rotate: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -782,6 +787,7 @@ export const apiKeysRouter = router({
    * key is changed on the app's page, where its approved requests live.
    */
   setGrants: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -944,11 +950,24 @@ export const apiKeysRouter = router({
           )
           .max(8)
           .nullish(),
+        /** Proof of presence (W3): connecting a computer is setup. */
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, APPROVE_COMPUTER_SIGNED_IN);
-      return decideDeviceRequest({ ...input, personId: ctx.userId });
+      const { presence, ...decision } = input;
+      if (decision.decision === "approve") {
+        await assertPresenceForRequest({
+          userId: ctx.userId,
+          kind: "device_request",
+          id: decision.requestId,
+          proof: presence ?? null,
+          door: "trpc.apiKeys.decideDeviceRequest",
+          requestedFrom: decision.computerName ?? null,
+        });
+      }
+      return decideDeviceRequest({ ...decision, personId: ctx.userId });
     }),
 
   /**
@@ -990,11 +1009,22 @@ export const apiKeysRouter = router({
             }),
           })
           .optional(),
+        /** Proof of presence (W3): a key that acts as the person is setup. */
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, APPROVE_KEY_REQUEST_SIGNED_IN);
       if (input.draft) assertGrantInput(input.draft.grant);
+      if (input.decision === "approve") {
+        await assertPresenceForRequest({
+          userId: ctx.userId,
+          kind: "key_request",
+          id: input.requestId,
+          proof: input.presence ?? null,
+          door: "trpc.apiKeys.decideKeyRequest",
+        });
+      }
       return decideKeyRequest({
         requestId: input.requestId,
         personUserId: ctx.userId,
@@ -1011,6 +1041,7 @@ export const apiKeysRouter = router({
   getMachineDefaults: podAdminProcedure.query(() => readMachineDefaults()),
 
   setMachineDefaults: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(z.object({ keyTtlDays: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
@@ -1144,6 +1175,7 @@ export const apiKeysRouter = router({
    * Pod-admin only. Tied to the operator's userId for audit purposes.
    */
   createSystemKey: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(ServiceKeyInputSchema.refine(scopeOrUses, SCOPE_OR_USES))
     .mutation(async ({ input, ctx }) => {
@@ -1204,6 +1236,7 @@ export const apiKeysRouter = router({
    * Use this when provisioning credentials for external services via the connections UI.
    */
   adminCreateServiceKey: podAdminProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       ServiceKeyInputSchema.extend({ workspaceId: z.string().uuid() }).refine(
@@ -1288,6 +1321,7 @@ export const apiKeysRouter = router({
    * audit 2026-10-28, F3); the server is the check a page edit cannot skip.
    */
   connectIntegration: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         integration: integrationKindSchema,
@@ -1487,6 +1521,7 @@ export const apiKeysRouter = router({
    * Minting on redeem (not here) means no plaintext key touches the browser.
    */
   beginMcpConnect: credentialProcedure
+    .input(presenceInput)
     .input(
       z.object({
         agentType: z.literal("claude-web"),
@@ -1595,6 +1630,9 @@ export const apiKeysRouter = router({
         // "Sign in with Synap": the `appSignIn.fingerprint` the screen
         // rendered — an approval is only for exactly what was shown.
         appSignInFingerprint: z.string().max(128).optional(),
+        // Proof of presence (W3): connecting an app or an AI client is setup.
+        // The challenge names this authorization (`oauthConsent`).
+        presence: presenceProofSchema.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -1753,6 +1791,7 @@ export const apiKeysRouter = router({
    * of the key (`userId = ctx.userId`).
    */
   createForWorkspace: workspaceProcedure
+    .input(presenceInput)
     .use(requireFreshAuthentication)
     .input(
       z

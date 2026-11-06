@@ -82,10 +82,13 @@ import {
   FIRST_PARTY_CLIENT_IDS,
   OAUTH_DEFAULT_SCOPES,
   OAUTH_REVOCABLE_AGENT_TYPES,
+  OAUTH_ADVERTISED_SCOPES,
+  OAUTH_APP_PERMISSIONS,
   OAUTH_SUPPORTED_SCOPES,
   mapCpScopesToPodScopes,
   oauthKeyInstanceId,
   parseOauthKeyInstanceId,
+  personDeviceClient,
   resolveFirstPartyClient,
   resolveIssuer,
   resolveOAuthAgentType,
@@ -128,6 +131,7 @@ import {
   insertClient,
   type StoredClient,
 } from "./store.js";
+import { isClientMetadataUrl } from "./client-id-url.js";
 import { logOAuthRefusal } from "./refusal-log.js";
 import { renderAuthorizeRefusalPage } from "./refusal-page.js";
 import {
@@ -223,8 +227,21 @@ oauthApp.get("/.well-known/oauth-protected-resource/mcp", (c) => {
  */
 function authorizationServerMetadata(issuer: string) {
   return {
-    ...buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES),
+    // `person` beside `mcp.*`: a client whose metadata document declares it
+    // signs a person in on a device (config.ts `PERSON_SCOPE`). An app reads
+    // it here to know this pod has that sign-in, and falls back otherwise.
+    ...buildAuthorizationServerMetadata(issuer, OAUTH_ADVERTISED_SCOPES),
     synap_first_party_clients: [...FIRST_PARTY_CLIENT_IDS],
+    // A Synap extension: what a pod app (website client) may ask for in its
+    // `synap_requests`. `scopes_supported` stays the `scope` values an MCP or
+    // app client may send; the two are different grammars (config.ts).
+    synap_app_permissions: [...OAUTH_APP_PERMISSIONS],
+    // A Synap extension, the CONTRACT for the device sign-in: Hub REST
+    // (`/api/hub/*`) and `/api/account-recovery/status` accept a Synap app's
+    // device token as the person (hub `authenticatePersonDevice`). An app
+    // uses the device sign-in only on a pod that advertises it; an older pod
+    // keeps the app's older sign-in, whose Hub reads still work there.
+    synap_person_device_hub: true,
   };
 }
 
@@ -566,7 +583,14 @@ async function exchangeAppRefreshToken(
   if (!params.client_id) {
     throw new OAuthError("invalid_request", "client_id is required");
   }
-  const firstParty = resolveFirstPartyClient(params.client_id);
+  // A device's refresh: a built-in Synap app, or a client whose document
+  // declares `person` (read from its cached row, as a pod app's is).
+  let cached: StoredClient | null | undefined;
+  let firstParty = resolveFirstPartyClient(params.client_id);
+  if (!firstParty && isClientMetadataUrl(params.client_id)) {
+    cached = await findClient(params.client_id);
+    firstParty = personDeviceClient(cached);
+  }
   if (firstParty) {
     // RFC 8707: a Synap app's resource is this pod itself, checked before
     // the token is spent (`firstPartyResourceForIssuer`).
@@ -597,7 +621,8 @@ async function exchangeAppRefreshToken(
     );
     return personDeviceTokenResponse(tokens);
   }
-  const client = await findClient(params.client_id);
+  const client =
+    cached === undefined ? await findClient(params.client_id) : cached;
   if (!client) throw new OAuthError("invalid_client", "Unknown client");
   if (client.clientKind !== "cimd") {
     // An MCP (DCR) client is issued no refresh token (spec 17 §6.6). One that
@@ -695,9 +720,10 @@ async function resolveTokenClient(
 ): Promise<StoredClient | null> {
   const firstParty = resolveFirstPartyClient(clientId);
   if (firstParty) return firstParty;
-  return isAppClientId(clientId)
-    ? resolveAppClient(clientId)
-    : findClient(clientId);
+  if (isAppClientId(clientId)) return resolveAppClient(clientId);
+  const client = await findClient(clientId);
+  // A document declaring `person` signs the person in on a device.
+  return personDeviceClient(client) ?? client;
 }
 
 /**

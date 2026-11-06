@@ -24,7 +24,7 @@
 #               database AND of the running release; the refusal names minFromRelease
 #   pull        a pull fails                     → nothing changes at all
 #   source      --from-source --dev-host         → synap-dev/* only, never ghcr
-#   sourcepod   --from-source on a pod (no --dev-host) → refused, nothing built (P5)
+#   sourcepod   --from-source typed on a pod (no --dev-host) → builds, with one warning
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
 #   eve-unpinned / port80 / skip-edge             → edge refusals + eve pin
 #   kprefer/kgood  rollback kratos.yml: valid .before wins; a broken one → kratos.yml.good (W6-HEAL N5)
@@ -833,21 +833,22 @@ grep -qE "^builder prune -af" "$FAKE/log" && ok "sourcefail: the (poisoned) Buil
 [ "$(cur_id)" = "$R1" ] && ok "sourcefail: the release is unchanged after a failed build" || bad "sourcefail: current-release=$(cur_id)"
 
 # ── 6c. a pod never builds its own images (pod resilience plan P5) ────────────
-# Without --dev-host (or SYNAP_ALLOW_SOURCE_BUILD=1) --from-source is refused
-# before anything runs, the refusal names the release path, and it is recorded.
+# A build a person typed (--from-source, no --dev-host, no SYNAP_ALLOW_SOURCE_BUILD) is
+# honoured (founder, 2026-11-04): one warning, then it builds like a dev host's.
 setup sourcepod r1
 mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
 cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
 cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
-: > "$REPO/packages/database/migrations/0011_old.sql"
+: > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcepod: git fixture"
 LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
 : > "$FAKE/log"
 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
-[ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && ! grep -qE "^compose .*(up|run|stop)" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
-  && ok "sourcepod: --from-source without --dev-host is refused: no build, no compose, release and .env unchanged" || { bad "sourcepod: rc=$rc builds=$(grep -c '^build ' "$FAKE/log")"; show; }
-grep -q 'synap update --release' "$S/out" && grep -q -- '--dev-host' "$S/out" && ok "sourcepod: the refusal names the release path and the dev-host override" || bad "sourcepod: message: $(tail -3 "$S/out")"
-[ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && ok "sourcepod: recorded as aborted, with why" || bad "sourcepod: record=$(last status) $(last reason)"
+[ "$rc" = 0 ] && [ "$(grep -c '^build ' "$FAKE/log")" = 2 ] \
+  && ok "sourcepod: an explicit --from-source on a host not declared a dev host builds" || { bad "sourcepod: rc=$rc builds=$(grep -c '^build ' "$FAKE/log")"; show; }
+[ "$(grep -c 'building from source uses a lot of memory' "$S/out")" = 1 ] && grep -q 'synap update --release' "$S/out" \
+  && ok "sourcepod: one warning, naming the release path" || bad "sourcepod: warning count=$(grep -c 'building from source uses' "$S/out")"
+! grep -q 'not declared a dev host' "$S/out" && ok "sourcepod: not refused" || bad "sourcepod: refusal text present"
 # SYNAP_ALLOW_SOURCE_BUILD in deploy/.env declares a dev host for every run (the unattended source channel too)
 setup sourceenv r1
 mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
@@ -861,7 +862,8 @@ LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
 : > "$FAKE/log"
 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
 [ "$rc" = 0 ] && [ "$(grep -c '^build ' "$FAKE/log")" = 2 ] && ok "sourceenv: SYNAP_ALLOW_SOURCE_BUILD=true in .env lets this dev host build" || { bad "sourceenv: .env override rc=$rc"; show; }
-# The unattended source channel on a pod (a buildable checkout): refused and recorded, never built
+# The unattended source channel on a pod (a buildable checkout): refused and recorded, never built, even though
+# an explicit --from-source is honoured (nothing unattended is typed by a person)
 setup sourcetimer r1
 mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release" "$DEPLOY/state"
 cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
@@ -874,6 +876,21 @@ LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
 SYNAP_SKIP_GIT_SYNC=1 run_update --unattended; rc=$?
 [ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && [ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && [ "$(cur_id)" = "$R1" ] \
   && ok "sourcetimer: a pod's unattended 'source' channel is refused and recorded, never built" || { bad "sourcetimer: rc=$rc record=$(last status)"; show; }
+# The same unattended run with UE_SOURCE_EXPLICIT=1 inherited from its environment (a shell
+# where it was exported, a wrapper): still refused. Only this installer's own re-exec keeps it
+# (review bf96d410, #782 follow-up).
+setup sourceinherit r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release" "$DEPLOY/state"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
+echo '{"auto":true,"channel":"source","window":"00:00-00:00"}' > "$DEPLOY/state/update-policy.json"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourceinherit: git fixture"
+LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+: > "$FAKE/log"
+UE_SOURCE_EXPLICIT=1 SYNAP_SKIP_GIT_SYNC=1 run_update --unattended; rc=$?
+[ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && [ "$(last status)" = aborted ] && last reason | grep -q 'not declared a dev host' && [ "$(cur_id)" = "$R1" ] \
+  && ok "sourceinherit: an inherited UE_SOURCE_EXPLICIT=1 does not pass the unattended refusal" || { bad "sourceinherit: rc=$rc builds=$(grep -c '^build ' "$FAKE/log") record=$(last status)"; show; }
 
 # ── 7. edge=traefik: caddy never touched, every other service comes up ───────
 setup traefik r1; publish "$R2" 0012_new.sql
