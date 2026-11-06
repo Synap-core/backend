@@ -2251,6 +2251,29 @@ describe("rung 2.05 — human gates can never auto-approve", () => {
     }
   });
 
+  it("floors the direct-door spelling a stored autoApproveFor row uses", () => {
+    // subject `focus_session` + action `dev.deploy_approval` composes
+    // `focus_session.dev.deploy_approval`. A split on the first dot would
+    // floor a different key and leave this one executable.
+    for (const action of [
+      "dev.plan_approval",
+      "dev.deploy_approval",
+    ] as const) {
+      const verdict = decideAgentPolicy({
+        subjectType: "focus_session",
+        action,
+        autoApproveFor: [`focus_session.${action}`, "focus_session.*", "*"],
+        governanceRuleVerdict: "auto",
+        isAgentOwnedWorkspace: true,
+        writesRequireProposal: false,
+      });
+      expect(verdict.verdict).toBe("propose");
+      expect(verdict.verdict === "propose" && verdict.reasonCode).toBe(
+        "HUMAN_GATE"
+      );
+    }
+  });
+
   it("floors nothing else — an unrelated write is untouched", () => {
     // Guards against a substring/prefix match creeping in later.
     expect(

@@ -696,6 +696,14 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   "dev.deploy_approval",
   "focus_session.plan_approval",
   "focus_session.deploy_approval",
+  // The direct doors are `focus_session/dev.plan_approval` and
+  // `focus_session/dev.deploy_approval`. A gate composes
+  // `${subjectType}.${action}`, so the event key is
+  // `focus_session.dev.deploy_approval`. That is the spelling a stored
+  // autoApproveFor row uses. The shorter keys above stay: this list never
+  // shrinks, and a call site that passes action `deploy_approval` still floors.
+  "focus_session.dev.plan_approval" satisfies DirectProposalEventKey,
+  "focus_session.dev.deploy_approval" satisfies DirectProposalEventKey,
   // A cleanup pack NEVER auto-applies (founder, 2026-09-14). Packs are filed
   // directly (`insertPendingProposal`, pod-hygiene cron) and never reach this
   // engine, so no rule matches one today; flooring the key is what makes
