@@ -3,12 +3,19 @@
  * one space, in ONE read (CRM Messages contract b4f8c2cd, A; build map
  * ca310f27 slice 1). Hub `GET /channels/conversations`.
  *
- * Who is listed: a person (any record) wearing a live role in the space (a
- * facet stamped there, or a pod-wide facet whose role is granted to it), whom
- * the caller can read, and who has an external channel bound to them or an
- * open send (pending, held or failed). One row per person: their name and
- * company, their channel ids, the last message, the draft waiting (or the
- * failed send), unread inbound messages and their LinkedIn reach.
+ * Who is listed: a person (any record) whom the caller can read, who has an
+ * external channel bound to them or an open send (pending, held or failed),
+ * and who is a lead of the space in one of two ways (plan 87088d2d W1):
+ *   - they wear a live role in the space themselves (a facet stamped there,
+ *     or a pod-wide facet whose role is granted to it): `lead.kind` person;
+ *   - or they `works_at` (person → company) a company the caller can read
+ *     that wears such a role: `lead.kind` company, the company's id. Most
+ *     company leads are reached through their contact.
+ * A person who is a lead themselves stays `person` even when their company
+ * is one too. `lead.stage` is that role's status. One row per person: their
+ * name and company, the lead it belongs to, their channel ids, the last
+ * message, the draft waiting (or the failed send), unread inbound messages
+ * and their LinkedIn reach.
  *
  * Every read carries the caller's floor AND the key's grant, through the
  * existing doors:
@@ -19,7 +26,11 @@
  *   - their channels: `channelVisibilityWhere` (a channel follows its person);
  *   - their sends: `proposalUserFloor` (floor + `proposal` grant): a key that
  *     cannot read proposals sees no drafts, never someone else's;
- *   - their company: `entityReadVisibleWhere` on the company.
+ *   - their company, and the lead company that lists them: the same
+ *     `entityReadVisibleWhere` + `roleInWorkspaceLensWhere` + listing rule
+ *     on the company;
+ *   - the lead's stage: `roleFacetInWorkspaceLensWhere`, the facet form of
+ *     the same role rule.
  *
  * SET-BASED: a fixed number of queries whatever the number of people (never
  * one per person). Paged by keyset on (last activity, person id), newest
@@ -42,13 +53,17 @@ import {
   channelMembers,
   channels,
   entities,
+  entityFacets,
   messages,
   proposals,
   relations,
 } from "@synap/database/schema";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
-import { roleInWorkspaceLensWhere } from "../../utils/project-scope.js";
+import {
+  roleFacetInWorkspaceLensWhere,
+  roleInWorkspaceLensWhere,
+} from "../../utils/project-scope.js";
 import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { storedLinkedinReach } from "../connectors/linkedin-reach.js";
 import {
@@ -72,6 +87,12 @@ export interface SpaceConversation {
     name: string | null;
     company: { id: string; name: string | null } | null;
   };
+  /**
+   * The lead this person is listed for: themselves (`person`), or the
+   * company they work at (`company`, its id). `stage` is that role's status
+   * in the space (null when the role has none).
+   */
+  lead: { kind: "person" | "company"; id: string; stage: string | null };
   channelIds: string[];
   lastMessage: {
     text: string;
@@ -193,9 +214,10 @@ export async function listSpaceConversations(
     proposalUserFloor(userId)
   );
 
-  // 1. The people: a role in the space (a facet stamped there, or a pod-wide
-  //    facet whose role is granted to it: most leads are pod-wide), readable,
-  //    and a channel or an open send bound to them.
+  // 1. The people: readable, a channel or an open send bound to them, and a
+  //    lead of the space: a role in it (a facet stamped there, or a pod-wide
+  //    facet whose role is granted to it: most leads are pod-wide), or
+  //    `works_at` a readable company that has one.
   const withChannel = database
     .select({ id: channels.contextObjectId })
     .from(channels)
@@ -204,6 +226,32 @@ export async function listSpaceConversations(
     .select({ id: drizzleSql<string>`${proposals.data} ->> 'entityId'` })
     .from(proposals)
     .where(and(openSendWhere, drizzleSql`${proposals.data} ? 'entityId'`));
+  const leadCompanyWhere = and(
+    isNull(entities.deletedAt),
+    roleInWorkspaceLensWhere(
+      entities.workspaceId,
+      entities.id,
+      userId,
+      workspaceId
+    ),
+    entityReadVisibleWhere(userId),
+    listableEntityWhere()
+  );
+  const contactOfLeadCompany = database
+    .select({ id: relations.sourceEntityId })
+    .from(relations)
+    .where(
+      and(
+        eq(relations.type, "works_at"),
+        inArray(
+          relations.targetEntityId,
+          database
+            .select({ id: entities.id })
+            .from(entities)
+            .where(leadCompanyWhere)
+        )
+      )
+    );
   const people = await database
     .select({
       id: entities.id,
@@ -214,11 +262,14 @@ export async function listSpaceConversations(
     .where(
       and(
         isNull(entities.deletedAt),
-        roleInWorkspaceLensWhere(
-          entities.workspaceId,
-          entities.id,
-          userId,
-          workspaceId
+        or(
+          roleInWorkspaceLensWhere(
+            entities.workspaceId,
+            entities.id,
+            userId,
+            workspaceId
+          ),
+          inArray(entities.id, contactOfLeadCompany)
         ),
         entityReadVisibleWhere(userId),
         // THE LISTING RULE (FB1020 B5): no probe-key row, no demo row.
@@ -395,6 +446,7 @@ export async function listSpaceConversations(
     const reach = storedLinkedinReach(props);
     const conversation: SpaceConversation = {
       person: { id: p.id, name: p.title ?? null, company: null },
+      lead: { kind: "person", id: p.id, stage: null },
       channelIds: own.map((c) => c.id),
       lastMessage,
       draft,
@@ -428,8 +480,12 @@ export async function listSpaceConversations(
       ? encodeConversationsCursor({ at: last.lastActivityAt, id: last.id })
       : null;
 
-  // 7. The company of each person on the page (`works_at`), when readable.
+  // 7. The company of each person on the page (`works_at`), when readable,
+  // 8. the lead company each of them works at (a role in the space), and
+  // 9. the role facets in the space of those people and companies: who the
+  //    row's lead is, and its stage.
   if (page.length > 0) {
+    const pageIds = page.map((r) => r.id);
     const companies = await database
       .select({
         personId: relations.sourceEntityId,
@@ -441,17 +497,79 @@ export async function listSpaceConversations(
       .where(
         and(
           eq(relations.type, "works_at"),
-          inArray(
-            relations.sourceEntityId,
-            page.map((r) => r.id)
-          ),
+          inArray(relations.sourceEntityId, pageIds),
           isNull(entities.deletedAt),
           entityReadVisibleWhere(userId)
         )
       )
-      .orderBy(desc(relations.createdAt));
+      .orderBy(desc(relations.createdAt), desc(entities.id));
+    const leadCompanies = await database
+      .select({
+        personId: relations.sourceEntityId,
+        id: entities.id,
+        name: entities.title,
+      })
+      .from(relations)
+      .innerJoin(entities, eq(entities.id, relations.targetEntityId))
+      .where(
+        and(
+          eq(relations.type, "works_at"),
+          inArray(relations.sourceEntityId, pageIds),
+          leadCompanyWhere
+        )
+      )
+      .orderBy(desc(relations.createdAt), desc(entities.id));
+    const roleHolders = [
+      ...new Set([...pageIds, ...leadCompanies.map((c) => c.id)]),
+    ];
+    // A role's stage: the facet with a status first, then the newest one.
+    const roles = await database
+      .select({
+        entityId: entityFacets.entityId,
+        status: entityFacets.status,
+      })
+      .from(entityFacets)
+      .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+      .where(
+        and(
+          inArray(entityFacets.entityId, roleHolders),
+          roleFacetInWorkspaceLensWhere(
+            entities.workspaceId,
+            userId,
+            workspaceId
+          )
+        )
+      )
+      .orderBy(
+        drizzleSql`${entityFacets.status} IS NULL`,
+        desc(entityFacets.updatedAt),
+        desc(entityFacets.id)
+      );
+    const roleOf = new Map<string, string | null>();
+    for (const f of roles) {
+      if (!roleOf.has(f.entityId)) roleOf.set(f.entityId, f.status ?? null);
+    }
     for (const r of page) {
-      const company = companies.find((c) => c.personId === r.id);
+      const leadCompany = leadCompanies.find((c) => c.personId === r.id);
+      if (roleOf.has(r.id)) {
+        r.conversation.lead = {
+          kind: "person",
+          id: r.id,
+          stage: roleOf.get(r.id) ?? null,
+        };
+      } else if (leadCompany) {
+        r.conversation.lead = {
+          kind: "company",
+          id: leadCompany.id,
+          stage: roleOf.get(leadCompany.id) ?? null,
+        };
+      }
+      // The company shown: the lead company the row is listed for, else
+      // the newest readable one.
+      const company =
+        r.conversation.lead.kind === "company"
+          ? leadCompany
+          : companies.find((c) => c.personId === r.id);
       if (company) {
         r.conversation.person.company = {
           id: company.id,

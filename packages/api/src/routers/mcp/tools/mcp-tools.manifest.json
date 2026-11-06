@@ -621,7 +621,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `documentId` attaches an EXISTING document from the entity's own space as the body (e.g. one left orphaned) and always goes to review (a document from another space is refused: the person attaches it); replacing a body the entity already has also needs `replaceBody: true`; undo puts the previous body back. `profileSlug` converts it to another kind, keeping its id and links (always reviewed).",
+      "description": "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `documentId` attaches an EXISTING document from the entity's own space as the body (e.g. one left orphaned) and always goes to review (a document from another space is refused: the person attaches it); replacing a body the entity already has also needs `replaceBody: true`; undo puts the previous body back. `profileSlug` converts it to another kind, keeping its id and links (always reviewed). `homeWorkspaceId` files a POD-WIDE record for a space so its members (and that space's apps) read it; null clears it.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -696,6 +696,10 @@
           "replaceBody": {
             "type": "boolean",
             "description": "Set true with documentId when the entity ALREADY has a body and you mean to replace it (it is kept, detached, and comes back on undo). Without it the call is refused naming the current body. Always a proposal."
+          },
+          "homeWorkspaceId": {
+            "type": ["string", "null"],
+            "description": "File a POD-WIDE record (one in no space) for this space, its home: the space's members and its apps then read it. Refused on a record that lives in a space (move it instead) and unless the person can write in that space. Always a proposal for you; undo puts the previous home back. null clears the home."
           },
           "reasoning": {
             "type": "string",

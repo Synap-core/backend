@@ -9,6 +9,7 @@ import { z } from "zod";
 import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { ENTITY_RESTORE_REASON_CODES } from "@synap-core/types/entities";
+import { isSpaceWriteRole } from "@synap-core/types/workspaces";
 import { workspaceProcedure, podProcedure } from "../../trpc.js";
 import {
   db,
@@ -17,6 +18,7 @@ import {
   isNull,
   isNotNull,
   getDb,
+  getWorkspaceMembership,
   eventRepository,
   EntityRepository,
   extractIdentitySignals,
@@ -188,6 +190,17 @@ export const mutateProcs = {
         batchId: z.string().uuid().optional(),
         /** When true, removes workspace scoping — entity becomes pod-wide (visible in all workspaces). */
         global: z.boolean().optional(),
+        /**
+         * The space a POD-WIDE record is filed for (its home, 0355): that
+         * space's members, and a key limited to it, read it. Allowed only on
+         * a pod-wide row (`workspaceId` null): a row stamped in a space is
+         * moved instead (`moveToWorkspace`). Setting one needs a member who
+         * may WRITE in that space (the rule `create`'s `homeWorkspaceId`
+         * holds) and a key whose grant writes there; `null` clears it. An
+         * agent's home (a widening: the space's members start reading the
+         * record) is always reviewed. Finding a70f910f.
+         */
+        homeWorkspaceId: z.string().uuid().nullable().optional(),
         /** Workspace used for permission, audit, overlays, and side effects. */
         targetWorkspaceId: z.string().uuid().optional(),
         /**
@@ -229,6 +242,7 @@ export const mutateProcs = {
           profileId: true,
           // `sourceFileDocumentId` tells a source file from a body.
           properties: true,
+          homeWorkspaceId: true,
         },
       });
       if (!existing) {
@@ -237,6 +251,35 @@ export const mutateProcs = {
           message: `Entity not found: ${input.id}`,
         });
       }
+      // HOME (finding a70f910f): validated BEFORE the permission check, so a
+      // proposal never carries a home the proposer could not set. Only a
+      // pod-wide row has a home; one stamped in a space moves instead.
+      if (input.homeWorkspaceId !== undefined) {
+        if (existing.workspaceId !== null || input.global === true) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Only a pod-wide record has a home space. This one lives in a space: move it to another space instead.",
+          });
+        }
+        if (input.homeWorkspaceId !== null) {
+          const homeMembership = await getWorkspaceMembership(
+            await getDb(),
+            input.homeWorkspaceId,
+            ctx.userId
+          );
+          if (!homeMembership || !isSpaceWriteRole(homeMembership.role)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message:
+                "Only a member who can write in a space can file a record for it",
+            });
+          }
+        }
+      }
+      const homeChange =
+        input.homeWorkspaceId !== undefined &&
+        input.homeWorkspaceId !== (existing.homeWorkspaceId ?? null);
       // Repointing the body is validated BEFORE the permission check, so a
       // proposal can never carry an unchecked document id either.
       let attachedDocumentAuthor: string | null = null;
@@ -294,6 +337,10 @@ export const mutateProcs = {
         existing.workspaceId ??
         null;
       const governanceWorkspaceId = existing.workspaceId ?? overlayWorkspaceId;
+      // A home filed for a space is a write INTO that space's view: the gate
+      // decides there (as `create`'s `homeWorkspaceId` does).
+      const permWorkspaceId =
+        existing.workspaceId ?? input.homeWorkspaceId ?? governanceWorkspaceId;
 
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
       const issuer = input.viewContext
@@ -384,7 +431,8 @@ export const mutateProcs = {
           input.documentId === undefined &&
           input.properties === undefined &&
           !input.deleteProperties?.length &&
-          input.global !== true;
+          input.global !== true &&
+          input.homeWorkspaceId === undefined;
         if (nothingElse) {
           if (statusMove.status === "proposed") {
             return {
@@ -443,6 +491,9 @@ export const mutateProcs = {
           properties: input.properties,
           documentId: input.documentId,
           profileSlug: input.profileSlug,
+          ...(input.homeWorkspaceId !== undefined
+            ? { homeWorkspaceId: input.homeWorkspaceId }
+            : {}),
         },
       });
 
@@ -475,10 +526,16 @@ export const mutateProcs = {
         !!input.documentId &&
         input.documentId !== existing.documentId &&
         !agentAttachesOwnDocument;
+      // An AI write that files a pod-wide record for a space widens who
+      // reads it (that space's members): a scope change, always reviewed.
+      // Clearing a home narrows and stays on the ordinary lane.
+      const aiHomesRecord =
+        isAiWriteRequest(input) && homeChange && input.homeWorkspaceId !== null;
       const forcePropose =
         promotesToGlobal ||
         changesProfileType ||
         aiAttachesBody ||
+        aiHomesRecord ||
         input.forcePropose === true;
 
       // A promotion to pod-wide lands the row pod-wide: the key's grant must
@@ -491,12 +548,22 @@ export const mutateProcs = {
           data: { id: input.id },
         });
       }
+      // A home lands the row in that space's view: the key's grant must allow
+      // writing there too (a key limited to one space homes nothing elsewhere).
+      if (input.homeWorkspaceId) {
+        await assertKeyMayWrite({
+          subjectType: "entity",
+          action: "update",
+          workspaceId: input.homeWorkspaceId,
+          data: { id: input.id },
+        });
+      }
 
       // 2. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: governanceWorkspaceId,
+        workspaceId: permWorkspaceId,
         // The key's grant is checked on the row's own workspace: a pod-wide
         // entity is pod-scope, never the caller's lens (S7).
         grantWorkspaceId: existing.workspaceId ?? null,
@@ -521,6 +588,11 @@ export const mutateProcs = {
           // used to approve and change nothing).
           ...(input.replaceBody ? { replaceBody: true } : {}),
           profileSlug: input.profileSlug,
+          // Approval replays the write through this procedure: the home rides
+          // with it, or an approved home would change nothing.
+          ...(input.homeWorkspaceId !== undefined
+            ? { homeWorkspaceId: input.homeWorkspaceId }
+            : {}),
           ...(input.batchId ? { batchId: input.batchId } : {}),
         },
       });
@@ -595,6 +667,25 @@ export const mutateProcs = {
 
       const unmodeled = unmodeledOfPatch(written.unmodeled, input.properties);
 
+      // 3a. The home (finding a70f910f), checked above: a pod-wide row only.
+      // The `workspace_id IS NULL` guard holds it if the row moved meanwhile.
+      let writtenHome: { homeWorkspaceId?: string | null } = {};
+      if (input.homeWorkspaceId !== undefined) {
+        const [homed] = await database
+          .update(entities)
+          .set({ homeWorkspaceId: input.homeWorkspaceId })
+          .where(and(eq(entities.id, input.id), isNull(entities.workspaceId)))
+          .returning({ homeWorkspaceId: entities.homeWorkspaceId });
+        if (!homed) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "This record moved into a space while the home was being set; nothing about its home was written.",
+          });
+        }
+        writtenHome = { homeWorkspaceId: homed.homeWorkspaceId ?? null };
+      }
+
       if (receiptId && undoBefore) {
         // Best-effort: the write is committed; a failed stamp leaves the
         // receipt unstamped (revert then fails loud), never fails the write.
@@ -603,7 +694,7 @@ export const mutateProcs = {
             proposalId: receiptId,
             entityId: input.id,
             before: undoBefore,
-            after: written,
+            after: { ...written, ...writtenHome },
             database,
           });
         } catch (err) {
@@ -727,6 +818,12 @@ export const mutateProcs = {
         origin: ctx.origin,
         data: {
           profileSlug: input.profileSlug ?? oldEntity?.type ?? undefined,
+          ...(homeChange
+            ? {
+                homeWorkspaceId: input.homeWorkspaceId,
+                "previous.homeWorkspaceId": existing.homeWorkspaceId ?? null,
+              }
+            : {}),
           ...(Object.keys(changedProperties).length > 0
             ? {
                 changedKeys: Object.keys(changedProperties),
@@ -809,6 +906,7 @@ export const mutateProcs = {
           preview: written.preview,
           properties: written.properties,
           documentId: written.documentId ?? null,
+          ...writtenHome,
         },
         // Keys of THIS patch the kind does not model (finding c161fd43):
         // stored verbatim, never reported as landed. Only when there are some.
