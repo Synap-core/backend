@@ -68,7 +68,11 @@ const VIDEO_WORKER = {
 
 const step = (data: Record<string, unknown>) =>
   executePlaybookRun(
-    { playbookId: "pb-video", playbookName: "Produce a video", ...data } as never,
+    {
+      playbookId: "pb-video",
+      playbookName: "Produce a video",
+      ...data,
+    } as never,
     { trigger: { payload: {}, subject: "post-1" }, steps: {} } as never,
     "ws-1",
     "owner-1",
@@ -101,7 +105,10 @@ describe("an activator's only keeps a thing by its value", () => {
   });
 
   it("a video post files its one proposal, whatever the case of its value", async () => {
-    h.subject = post({ "post-status": "Briefed", "post-format": "short video" });
+    h.subject = post({
+      "post-status": "Briefed",
+      "post-format": "short video",
+    });
     const out = await step({ mode: "propose", worker: VIDEO_WORKER });
     expect(out).toMatchObject({ status: "proposed", proposalId: "p-1" });
     expect(h.proposals).toBe(1);

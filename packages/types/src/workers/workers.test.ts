@@ -36,7 +36,9 @@ describe("skippedByOnly (an activator's only)", () => {
   it("keeps a thing whose value is listed, trimmed and in any case, or a list holding one", () => {
     expect(skippedByOnly(only, { "post-format": "Short Video" })).toBe(false);
     expect(skippedByOnly(only, { "post-format": " long video " })).toBe(false);
-    expect(skippedByOnly(only, { "post-format": ["Carousel", "Short Video"] })).toBe(false);
+    expect(
+      skippedByOnly(only, { "post-format": ["Carousel", "Short Video"] })
+    ).toBe(false);
   });
   it("leaves out a thing whose value is not listed, empty, absent or not text", () => {
     expect(skippedByOnly(only, { "post-format": "Carousel" })).toBe(true);
