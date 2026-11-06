@@ -3310,6 +3310,57 @@
                                 "minLength": 1,
                                 "maxLength": 60
                               },
+                              "media": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["image", "video", "audio"]
+                                  },
+                                  "ref": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": ["url"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["assetId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entityId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["entityId"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "alt": { "type": "string", "maxLength": 200 }
+                                },
+                                "required": ["kind", "ref"]
+                              },
                               "followUp": {
                                 "type": "object",
                                 "properties": {
@@ -3347,6 +3398,64 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 60
+                                        },
+                                        "media": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "image",
+                                                "video",
+                                                "audio"
+                                              ]
+                                            },
+                                            "ref": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "url": {
+                                                      "type": "string",
+                                                      "maxLength": 2000,
+                                                      "format": "uri"
+                                                    }
+                                                  },
+                                                  "required": ["url"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "assetId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["assetId"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "entityId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["entityId"],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            "alt": {
+                                              "type": "string",
+                                              "maxLength": 200
+                                            }
+                                          },
+                                          "required": ["kind", "ref"]
                                         }
                                       },
                                       "required": ["label"],
@@ -3998,6 +4107,57 @@
                                 "minLength": 1,
                                 "maxLength": 60
                               },
+                              "media": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["image", "video", "audio"]
+                                  },
+                                  "ref": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": ["url"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["assetId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entityId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["entityId"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "alt": { "type": "string", "maxLength": 200 }
+                                },
+                                "required": ["kind", "ref"]
+                              },
                               "followUp": {
                                 "type": "object",
                                 "properties": {
@@ -4035,6 +4195,64 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 60
+                                        },
+                                        "media": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "image",
+                                                "video",
+                                                "audio"
+                                              ]
+                                            },
+                                            "ref": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "url": {
+                                                      "type": "string",
+                                                      "maxLength": 2000,
+                                                      "format": "uri"
+                                                    }
+                                                  },
+                                                  "required": ["url"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "assetId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["assetId"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "entityId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["entityId"],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            "alt": {
+                                              "type": "string",
+                                              "maxLength": 200
+                                            }
+                                          },
+                                          "required": ["kind", "ref"]
                                         }
                                       },
                                       "required": ["label"],
@@ -4872,6 +5090,57 @@
                                 "minLength": 1,
                                 "maxLength": 60
                               },
+                              "media": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["image", "video", "audio"]
+                                  },
+                                  "ref": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": ["url"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["assetId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entityId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["entityId"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "alt": { "type": "string", "maxLength": 200 }
+                                },
+                                "required": ["kind", "ref"]
+                              },
                               "followUp": {
                                 "type": "object",
                                 "properties": {
@@ -4909,6 +5178,64 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 60
+                                        },
+                                        "media": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "image",
+                                                "video",
+                                                "audio"
+                                              ]
+                                            },
+                                            "ref": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "url": {
+                                                      "type": "string",
+                                                      "maxLength": 2000,
+                                                      "format": "uri"
+                                                    }
+                                                  },
+                                                  "required": ["url"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "assetId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["assetId"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "entityId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["entityId"],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            "alt": {
+                                              "type": "string",
+                                              "maxLength": 200
+                                            }
+                                          },
+                                          "required": ["kind", "ref"]
                                         }
                                       },
                                       "required": ["label"],
@@ -5562,6 +5889,57 @@
                                 "minLength": 1,
                                 "maxLength": 60
                               },
+                              "media": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["image", "video", "audio"]
+                                  },
+                                  "ref": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": ["url"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["assetId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entityId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["entityId"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "alt": { "type": "string", "maxLength": 200 }
+                                },
+                                "required": ["kind", "ref"]
+                              },
                               "followUp": {
                                 "type": "object",
                                 "properties": {
@@ -5599,6 +5977,64 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 60
+                                        },
+                                        "media": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "image",
+                                                "video",
+                                                "audio"
+                                              ]
+                                            },
+                                            "ref": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "url": {
+                                                      "type": "string",
+                                                      "maxLength": 2000,
+                                                      "format": "uri"
+                                                    }
+                                                  },
+                                                  "required": ["url"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "assetId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["assetId"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "entityId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["entityId"],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            "alt": {
+                                              "type": "string",
+                                              "maxLength": 200
+                                            }
+                                          },
+                                          "required": ["kind", "ref"]
                                         }
                                       },
                                       "required": ["label"],
@@ -6171,6 +6607,57 @@
                               "minLength": 1,
                               "maxLength": 60
                             },
+                            "media": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": ["image", "video", "audio"]
+                                },
+                                "ref": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "url": {
+                                          "type": "string",
+                                          "maxLength": 2000,
+                                          "format": "uri"
+                                        }
+                                      },
+                                      "required": ["url"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "assetId": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        }
+                                      },
+                                      "required": ["assetId"],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "entityId": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        }
+                                      },
+                                      "required": ["entityId"],
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "alt": { "type": "string", "maxLength": 200 }
+                              },
+                              "required": ["kind", "ref"]
+                            },
                             "followUp": {
                               "type": "object",
                               "properties": {
@@ -6208,6 +6695,60 @@
                                         "type": "string",
                                         "minLength": 1,
                                         "maxLength": 60
+                                      },
+                                      "media": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": ["image", "video", "audio"]
+                                          },
+                                          "ref": {
+                                            "anyOf": [
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "url": {
+                                                    "type": "string",
+                                                    "maxLength": 2000,
+                                                    "format": "uri"
+                                                  }
+                                                },
+                                                "required": ["url"],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "assetId": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 200
+                                                  }
+                                                },
+                                                "required": ["assetId"],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "entityId": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 200
+                                                  }
+                                                },
+                                                "required": ["entityId"],
+                                                "additionalProperties": false
+                                              }
+                                            ]
+                                          },
+                                          "alt": {
+                                            "type": "string",
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["kind", "ref"]
                                       }
                                     },
                                     "required": ["label"],
@@ -7418,6 +7959,57 @@
                           "minLength": 1,
                           "maxLength": 60
                         },
+                        "media": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["image", "video", "audio"]
+                            },
+                            "ref": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "maxLength": 2000,
+                                      "format": "uri"
+                                    }
+                                  },
+                                  "required": ["url"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "assetId": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["assetId"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "entityId": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["entityId"],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            },
+                            "alt": { "type": "string", "maxLength": 200 }
+                          },
+                          "required": ["kind", "ref"]
+                        },
                         "followUp": {
                           "type": "object",
                           "properties": {
@@ -7452,6 +8044,60 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 60
+                                  },
+                                  "media": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": ["image", "video", "audio"]
+                                      },
+                                      "ref": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "url": {
+                                                "type": "string",
+                                                "maxLength": 2000,
+                                                "format": "uri"
+                                              }
+                                            },
+                                            "required": ["url"],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "assetId": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200
+                                              }
+                                            },
+                                            "required": ["assetId"],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "entityId": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200
+                                              }
+                                            },
+                                            "required": ["entityId"],
+                                            "additionalProperties": false
+                                          }
+                                        ]
+                                      },
+                                      "alt": {
+                                        "type": "string",
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "ref"]
                                   }
                                 },
                                 "required": ["label"],
@@ -9079,6 +9725,60 @@
                                       "minLength": 1,
                                       "maxLength": 60
                                     },
+                                    "media": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["image", "video", "audio"]
+                                        },
+                                        "ref": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "url": {
+                                                  "type": "string",
+                                                  "maxLength": 2000,
+                                                  "format": "uri"
+                                                }
+                                              },
+                                              "required": ["url"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "assetId": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["assetId"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "entityId": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["entityId"],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        },
+                                        "alt": {
+                                          "type": "string",
+                                          "maxLength": 200
+                                        }
+                                      },
+                                      "required": ["kind", "ref"]
+                                    },
                                     "followUp": {
                                       "type": "object",
                                       "properties": {
@@ -9118,6 +9818,66 @@
                                                 "type": "string",
                                                 "minLength": 1,
                                                 "maxLength": 60
+                                              },
+                                              "media": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "image",
+                                                      "video",
+                                                      "audio"
+                                                    ]
+                                                  },
+                                                  "ref": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "url": {
+                                                            "type": "string",
+                                                            "maxLength": 2000,
+                                                            "format": "uri"
+                                                          }
+                                                        },
+                                                        "required": ["url"],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "assetId": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          }
+                                                        },
+                                                        "required": ["assetId"],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "entityId": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "entityId"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      }
+                                                    ]
+                                                  },
+                                                  "alt": {
+                                                    "type": "string",
+                                                    "maxLength": 200
+                                                  }
+                                                },
+                                                "required": ["kind", "ref"]
                                               }
                                             },
                                             "required": ["label"],
@@ -9762,6 +10522,57 @@
                                 "minLength": 1,
                                 "maxLength": 60
                               },
+                              "media": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["image", "video", "audio"]
+                                  },
+                                  "ref": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": ["url"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["assetId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entityId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["entityId"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "alt": { "type": "string", "maxLength": 200 }
+                                },
+                                "required": ["kind", "ref"]
+                              },
                               "followUp": {
                                 "type": "object",
                                 "properties": {
@@ -9799,6 +10610,64 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 60
+                                        },
+                                        "media": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "image",
+                                                "video",
+                                                "audio"
+                                              ]
+                                            },
+                                            "ref": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "url": {
+                                                      "type": "string",
+                                                      "maxLength": 2000,
+                                                      "format": "uri"
+                                                    }
+                                                  },
+                                                  "required": ["url"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "assetId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["assetId"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "entityId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["entityId"],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            "alt": {
+                                              "type": "string",
+                                              "maxLength": 200
+                                            }
+                                          },
+                                          "required": ["kind", "ref"]
                                         }
                                       },
                                       "required": ["label"],
@@ -10600,6 +11469,60 @@
                                       "minLength": 1,
                                       "maxLength": 60
                                     },
+                                    "media": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["image", "video", "audio"]
+                                        },
+                                        "ref": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "url": {
+                                                  "type": "string",
+                                                  "maxLength": 2000,
+                                                  "format": "uri"
+                                                }
+                                              },
+                                              "required": ["url"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "assetId": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["assetId"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "entityId": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["entityId"],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        },
+                                        "alt": {
+                                          "type": "string",
+                                          "maxLength": 200
+                                        }
+                                      },
+                                      "required": ["kind", "ref"]
+                                    },
                                     "followUp": {
                                       "type": "object",
                                       "properties": {
@@ -10639,6 +11562,66 @@
                                                 "type": "string",
                                                 "minLength": 1,
                                                 "maxLength": 60
+                                              },
+                                              "media": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "image",
+                                                      "video",
+                                                      "audio"
+                                                    ]
+                                                  },
+                                                  "ref": {
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "url": {
+                                                            "type": "string",
+                                                            "maxLength": 2000,
+                                                            "format": "uri"
+                                                          }
+                                                        },
+                                                        "required": ["url"],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "assetId": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          }
+                                                        },
+                                                        "required": ["assetId"],
+                                                        "additionalProperties": false
+                                                      },
+                                                      {
+                                                        "type": "object",
+                                                        "properties": {
+                                                          "entityId": {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200
+                                                          }
+                                                        },
+                                                        "required": [
+                                                          "entityId"
+                                                        ],
+                                                        "additionalProperties": false
+                                                      }
+                                                    ]
+                                                  },
+                                                  "alt": {
+                                                    "type": "string",
+                                                    "maxLength": 200
+                                                  }
+                                                },
+                                                "required": ["kind", "ref"]
                                               }
                                             },
                                             "required": ["label"],
@@ -11308,6 +12291,57 @@
                                 "minLength": 1,
                                 "maxLength": 60
                               },
+                              "media": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["image", "video", "audio"]
+                                  },
+                                  "ref": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "url": {
+                                            "type": "string",
+                                            "maxLength": 2000,
+                                            "format": "uri"
+                                          }
+                                        },
+                                        "required": ["url"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "assetId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["assetId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entityId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["entityId"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "alt": { "type": "string", "maxLength": 200 }
+                                },
+                                "required": ["kind", "ref"]
+                              },
                               "followUp": {
                                 "type": "object",
                                 "properties": {
@@ -11345,6 +12379,64 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 60
+                                        },
+                                        "media": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "image",
+                                                "video",
+                                                "audio"
+                                              ]
+                                            },
+                                            "ref": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "url": {
+                                                      "type": "string",
+                                                      "maxLength": 2000,
+                                                      "format": "uri"
+                                                    }
+                                                  },
+                                                  "required": ["url"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "assetId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["assetId"],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "entityId": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["entityId"],
+                                                  "additionalProperties": false
+                                                }
+                                              ]
+                                            },
+                                            "alt": {
+                                              "type": "string",
+                                              "maxLength": 200
+                                            }
+                                          },
+                                          "required": ["kind", "ref"]
                                         }
                                       },
                                       "required": ["label"],
@@ -15754,6 +16846,57 @@
                           "minLength": 1,
                           "maxLength": 60
                         },
+                        "media": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["image", "video", "audio"]
+                            },
+                            "ref": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "url": {
+                                      "type": "string",
+                                      "maxLength": 2000,
+                                      "format": "uri"
+                                    }
+                                  },
+                                  "required": ["url"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "assetId": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["assetId"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "entityId": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["entityId"],
+                                  "additionalProperties": false
+                                }
+                              ]
+                            },
+                            "alt": { "type": "string", "maxLength": 200 }
+                          },
+                          "required": ["kind", "ref"]
+                        },
                         "followUp": {
                           "type": "object",
                           "properties": {
@@ -15788,6 +16931,60 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 60
+                                  },
+                                  "media": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": ["image", "video", "audio"]
+                                      },
+                                      "ref": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "url": {
+                                                "type": "string",
+                                                "maxLength": 2000,
+                                                "format": "uri"
+                                              }
+                                            },
+                                            "required": ["url"],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "assetId": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200
+                                              }
+                                            },
+                                            "required": ["assetId"],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "entityId": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200
+                                              }
+                                            },
+                                            "required": ["entityId"],
+                                            "additionalProperties": false
+                                          }
+                                        ]
+                                      },
+                                      "alt": {
+                                        "type": "string",
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "ref"]
                                   }
                                 },
                                 "required": ["label"],
