@@ -454,6 +454,8 @@ describe("an agent key's whole-package update is filed for the person", () => {
           profiles: [{ slug: "brand" }],
         },
         via: "package-updates.apply",
+        // The body is the catalog's own (L7: never reviewed as app content).
+        catalogFixed: true,
       },
     ]);
     // Filed, not applied.

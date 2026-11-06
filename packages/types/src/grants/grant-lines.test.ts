@@ -42,6 +42,15 @@ describe("grantLines", () => {
     expect(lines.join(" ")).not.toMatch(/facet|entity\.|\+\d+ more/);
   });
 
+  // Rules out: "Add to my pod"'s permission read as "Install Packages" (a
+  // word the product never uses) or as the raw pattern (L7; founder,
+  // 2026-11-05). The exact string, not the helper compared to itself.
+  it("package.install reads as adding packs and templates", () => {
+    expect(grantLines(draft("package.install"))).toEqual([
+      "Add packs and templates to your pod",
+    ]);
+  });
+
   it("uses the pod's own name for a kind when it has one", () => {
     expect(
       grantLines(draft("entity.public-contract.read"), {

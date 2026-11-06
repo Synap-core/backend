@@ -425,6 +425,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../connectors/external-dispatch.js"),
     why: "the person's send: filed through the send door (grant verdict, gate), then the approve door",
   },
+  "POST /packages/apply": {
+    via: "proposeTemplateApply",
+    load: () => import("../services/template-apply/propose.js"),
+    why: "workspace.create / workspace.update through checkPermissionOrPropose; a key holding package.install proposes a fresh install",
+  },
   "POST /proposals": {
     via: "fencedProposalVerdict",
     load: () => import("../access/fenced-proposal.js"),

@@ -21,6 +21,21 @@ const agent = {
   alwaysAllowed: AGENT_ALWAYS_ALLOWED,
 };
 
+describe("summarizeGrant — the consent line of Add to my pod", () => {
+  // Rules out: the consent screen (`describeAppSignIn` reads `what`)
+  // showing "+1 more" for the one thing an "Add to my pod" app asks (L7;
+  // founder, 2026-11-05). The exact strings.
+  it("says package.install as its act, and still counts the unnamed rest", () => {
+    expect(
+      summarizeGrant({ permissions: ["package.install"], workspaceIds: ["w1"] })
+        .what
+    ).toBe("Add packs and templates to your pod");
+    expect(summarizeGrant(draft("package.install", "vault.redeem")).what).toBe(
+      "Add packs and templates to your pod; +1 more"
+    );
+  });
+});
+
 describe("summarizeGrant — an agent's catalog", () => {
   // Rules out: the summary reading only GRANT_SUBJECT_CATALOG, so an agent's
   // building subjects fall into "other" and read "+1 more".

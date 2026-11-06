@@ -123,6 +123,30 @@ export function packageCapabilityKey(entry: unknown): string | undefined {
   return text(obj(c?.definition)?.key) ?? text(c?.templateKey);
 }
 
+/** The lists that are objects of their own (MCP servers and `waitsOn` belong to a capability). */
+const OBJECT_LISTS = [
+  "spaces",
+  "kinds",
+  "views",
+  "playbooks",
+  "automations",
+  "capabilities",
+] as const;
+
+/**
+ * How many objects installing a package adds: what makes it a template (one)
+ * or a pack (several), `resolvePackageNoun` (founder, 2026-11-05). Reads a
+ * stored summary too (`data.contents` on a proposal), so each list is read
+ * defensively.
+ */
+export function packageObjectCount(contents: unknown): number {
+  const c = obj(contents) ?? {};
+  return OBJECT_LISTS.reduce(
+    (n, k) => n + (Array.isArray(c[k]) ? (c[k] as unknown[]).length : 0),
+    0
+  );
+}
+
 export function summarizePackageContents(
   definition: unknown,
   context: PackageContentsContext = {}

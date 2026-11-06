@@ -118,6 +118,17 @@ export const vocabularySentencesEn = {
   "vocabulary.templateNoun.work.other": "Work templates",
   "vocabulary.templateNoun.space.one": "Space template",
   "vocabulary.templateNoun.space.other": "Space templates",
+  // `resolvePackageNoun`: what installs, named by what it holds (founder,
+  // 2026-11-05): ONE object (a capability, a playbook, a cell, a kind, an
+  // automation) is a template; several (a space with its kinds and views, a
+  // set of workflows) are a pack.
+  "vocabulary.packageNoun.template.one": "Template",
+  "vocabulary.packageNoun.template.other": "Templates",
+  "vocabulary.packageNoun.pack.one": "Pack",
+  "vocabulary.packageNoun.pack.other": "Packs",
+  // `resolveGrantPermissionSentence`: a permission the person reads as its
+  // act, not as a verb and a subject.
+  "vocabulary.grant.packageInstall": "Add packs and templates to your pod",
   // `resolveNeedsYouItemCount` for a kind no table names: its words are a
   // humanized token, counted with English plural rules.
   "vocabulary.needsYou.count.uncurated":

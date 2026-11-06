@@ -54,6 +54,12 @@ export type FencedReadDoor =
       readonly subject: string;
       readonly full: readonly string[];
       readonly action: string;
+      /**
+       * Also admit a key that reads every `full` subject unbounded (it gets
+       * the whole answer), when the door served such keys before it was
+       * narrowed for one that holds `<subject>.<action>` only.
+       */
+      readonly orReadsFull?: boolean;
     }
   | { readonly bound: "refused"; readonly reason: string };
 
@@ -90,12 +96,14 @@ const PERSON = (subject: string): FencedReadDoor => ({
 const NARROWED = (
   subject: string,
   full: readonly string[],
-  action = "read"
+  action = "read",
+  opts: { orReadsFull?: boolean } = {}
 ): FencedReadDoor => ({
   bound: "narrowed",
   subject,
   full,
   action,
+  ...(opts.orReadsFull ? { orReadsFull: true } : {}),
 });
 const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
@@ -183,7 +191,12 @@ export function grantBoundsDoor(
   if (door.bound === "seamed") return true;
   if (door.bound === "person") return grantReadsSubject(grant, door.subject);
   if (door.bound === "narrowed")
-    return grantHoldsAction(grant, door.subject, door.action);
+    return (
+      grantHoldsAction(grant, door.subject, door.action) ||
+      (door.orReadsFull === true &&
+        door.full.length > 0 &&
+        grantBoundsDoor(READS(...door.full), grant))
+    );
   // A deny-all scope (`permissions: []`) reads nothing — `every` over a door
   // that declares no subject would otherwise let it through.
   return grant.scopes.some(
@@ -323,6 +336,29 @@ export const SESSION_PACKET_SUBJECTS: readonly string[] = [
   "track",
   "project",
 ];
+
+/** What the package preview reads from the pod (POST /packages/preflight). */
+export const PACKAGE_PREFLIGHT_SUBJECTS: readonly string[] = [
+  "entity",
+  "project",
+  "proposal",
+];
+
+/**
+ * May this request's key read the pod's parts of a package preview (the
+ * target space, the kinds it would reuse, the rows an update would change)?
+ * Every unfenced caller may; a fenced key only when one scope reads every
+ * subject unbounded. Otherwise POST /packages/preflight answers what the
+ * package brings and says the rest was withheld.
+ */
+export function packagePreflightReadable(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...PACKAGE_PREFLIGHT_SUBJECTS), grant!)
+  );
+}
 
 /**
  * May this request's key read a session's whole packet? Every unfenced
@@ -705,9 +741,17 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // space and its template state (`resolvePreflightComposeTarget`,
   // `previewTemplateApply`: proposals), the pod's kinds, and the rows an update
   // would change (`pendingTemplateDataChanges`, every entity of the package's
-  // kinds, read with no floor). The same subjects as GET /workspaces: no pin
-  // narrows it, so a pinned key (an app) is refused.
-  [/^\/packages\/preflight\/?$/, READS("entity", "project", "proposal")],
+  // kinds, read with no floor). No pin narrows those, so a key gets them only
+  // when it reads them unbounded (`packagePreflightReadable`). A key that may
+  // ask to install (`package.install`, an app: its grant is always pinned) is
+  // admitted too and gets what the package itself brings, the pod's parts
+  // said withheld (L7 "Add to my pod").
+  [
+    /^\/packages\/preflight\/?$/,
+    NARROWED("package", PACKAGE_PREFLIGHT_SUBJECTS, "install", {
+      orReadsFull: true,
+    }),
+  ],
   // "Recall again" (`recallSessionAgain`): runs the session's recall as its
   // OWNER, pod-wide (`retrieve()`, the engine behind `synap_ask`), and writes
   // what it found into the session and its room, which the key then reads. So

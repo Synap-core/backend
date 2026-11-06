@@ -38,7 +38,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { db, eq, getRequestGrant, type KeyGrant } from "@synap/database";
 import { entities, profiles } from "@synap/database/schema";
 import { grantRequestKey, grantRequestKeys } from "@synap/governance-policy";
-import { permits, type GrantRequest } from "@synap/governance-policy/grants";
+import {
+  patternMatches,
+  permits,
+  type GrantRequest,
+} from "@synap/governance-policy/grants";
+import { placeBeyondPodWideReads } from "@synap-core/types/grants";
 
 export interface GrantWriteInput {
   subjectType: string;
@@ -46,6 +51,52 @@ export interface GrantWriteInput {
   workspaceId?: string | null;
   projectId?: string | null;
   data?: Record<string, unknown> | null;
+  /**
+   * A NAMED permission that also permits this write (`namedPermissionPermits`):
+   * the door's own act, asked for by name, when the gate's subject/action is
+   * broader than what the person consented to. Set by the template-apply
+   * filing (`package.install`, services/template-apply/propose.ts).
+   */
+  namedPermission?: NamedGrantPermission;
+}
+
+/** A door's named permission (`<subject>.<action>`) and the space it lands in. */
+export interface NamedGrantPermission {
+  subject: string;
+  action: string;
+  /** The space the write lands in; null = it makes a new one. */
+  workspaceId: string | null;
+}
+
+/**
+ * Does one scope hold the named permission for this write? Only a pattern
+ * that NAMES the subject counts (`package.install`, `package.*`), never a bare
+ * `*`: a key pinned to one space with `*` was never asked about this act. The
+ * scope's space pin holds when the write lands in a space it names; a write
+ * that makes a NEW space has none to check, so the pin cannot narrow it (the
+ * person ticked the permission in the spaces they gave, and an app's grant is
+ * always pinned). A scope pinned to projects or objects never holds it (fail
+ * closed: a new space belongs to neither).
+ */
+export function namedPermissionPermits(
+  grant: KeyGrant,
+  named: NamedGrantPermission
+): boolean {
+  return grant.scopes.some((scope) => {
+    if (scope.projectIds || scope.entityIds) return false;
+    const holds = scope.permissions.some(
+      (p) =>
+        p.split(".")[0] === named.subject &&
+        patternMatches(p, { subject: named.subject, action: named.action })
+    );
+    if (!holds) return false;
+    // Where the scope reaches for a write, read through the ONE parse
+    // (access model B, `packages/types/src/grants/reach.ts`).
+    const place = placeBeyondPodWideReads(scope);
+    if (!place) return false;
+    if (place.kind === "unbounded" || named.workspaceId === null) return true;
+    return place.ids.includes(named.workspaceId);
+  });
 }
 
 /**
@@ -146,14 +197,20 @@ export async function grantRequestForWrite(
 }
 
 /**
- * null when the write may proceed (no grant, or the grant permits it); a
- * denial reason otherwise. `grant` defaults to the request's ambient grant.
+ * The first request key the grant does not permit for this write, or null
+ * when it permits every one (the named permission, then each request). Pure:
+ * it records nothing, so a door may ASK before it decides (`grantWriteDenial`
+ * is the one that refuses).
  */
-export async function grantWriteDenial(
+export async function grantDeniedKey(
   input: GrantWriteInput,
-  grant: KeyGrant | undefined = getRequestGrant()
-): Promise<string | null> {
-  if (!grant) return null;
+  grant: KeyGrant
+): Promise<{ key: string; workspaceId: string | null } | null> {
+  if (
+    input.namedPermission &&
+    namedPermissionPermits(grant, input.namedPermission)
+  )
+    return null;
   // A door folded onto another action (`entity/transition` → update) is also
   // permitted by a pattern naming the door itself (`grantRequestKeys`).
   const actions = grantRequestKeys(input.subjectType, input.action).map(
@@ -168,14 +225,28 @@ export async function grantWriteDenial(
       )
     )
       continue;
-    const key = [req.subject, req.qualifier, req.action]
-      .filter(Boolean)
-      .join(".");
-    const message = `This key's grant does not allow "${key}"${
-      req.workspaceId ? ` in workspace ${req.workspaceId}` : ""
-    }.`;
-    recordGrantDenial(message, key);
-    return message;
+    return {
+      key: [req.subject, req.qualifier, req.action].filter(Boolean).join("."),
+      workspaceId: req.workspaceId ?? null,
+    };
   }
   return null;
+}
+
+/**
+ * null when the write may proceed (no grant, or the grant permits it); a
+ * denial reason otherwise. `grant` defaults to the request's ambient grant.
+ */
+export async function grantWriteDenial(
+  input: GrantWriteInput,
+  grant: KeyGrant | undefined = getRequestGrant()
+): Promise<string | null> {
+  if (!grant) return null;
+  const denied = await grantDeniedKey(input, grant);
+  if (!denied) return null;
+  const message = `This key's grant does not allow "${denied.key}"${
+    denied.workspaceId ? ` in workspace ${denied.workspaceId}` : ""
+  }.`;
+  recordGrantDenial(message, denied.key);
+  return message;
 }

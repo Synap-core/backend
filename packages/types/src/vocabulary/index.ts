@@ -106,6 +106,9 @@ export * from "./place-words.js";
 /** The MCP OAuth scopes in words (`resolveOAuthScopeLabel`), for consent. */
 export * from "./oauth-scope-words.js";
 
+/** Template or pack, from what a package holds; `package.install` in words. */
+export * from "./package-words.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately
