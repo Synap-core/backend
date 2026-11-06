@@ -76,7 +76,7 @@ describe("runPlaybook — lineage", () => {
   });
 
   it("writes no edge when the run was not started from a session", async () => {
-    await runPlaybook(INPUT).catch(() => undefined);
+    await runPlaybook(INPUT).catch((e) => console.log("ERR", e));
     expect(instantiateSession).toHaveBeenCalledOnce();
     expect(recordSessionSpawn).not.toHaveBeenCalled();
   });
