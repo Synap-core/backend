@@ -249,6 +249,7 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
       "routers/proposals/executors/agent.ts",
       "routers/proposals/executors/capability.ts",
       "routers/proposals/executors/skill.ts",
+      "routers/proposals/executors/workspace.ts",
     ]);
   });
 
@@ -427,9 +428,11 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
       trpc.indexOf("export const requireFreshAuthentication"),
       trpc.indexOf("export const credentialProcedure")
     );
-    expect(mw).toMatch(/sensitiveActionReason\(opts\.path\)/);
-    expect(mw).toMatch(/assertPresenceForAction\(/);
+    expect(mw).toMatch(/isSensitiveActionPath\(path\)/);
+    expect(mw).toMatch(/passPresenceForAction\(/);
     expect(mw).toMatch(/getRawInput\(\)/);
+    // The pass rides to the procedure: the service behind the act asks it.
+    expect(mw).toMatch(/opts\.next\(\{ ctx: \{ presencePass \} \}\)/);
   });
 
   /** Writes that turn a skill, tool or MCP server ON with no gate, and why. */
@@ -469,6 +472,236 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     expect(
       Object.keys(ON_WRITERS).filter((p) => !writers.includes(p)),
       "ON_WRITERS names a file that no longer turns anything on"
+    ).toEqual([]);
+  });
+
+  // ── Review of 6 Nov: every DOOR to a sensitive act, not only tRPC ─────────
+  //
+  // `SENSITIVE_ACTIONS` is keyed by tRPC path, so a Hub REST or Hub tRPC twin
+  // of the same act (or an MCP tool tomorrow) took no proof. The fix is at
+  // the SERVICE: it requires the gate's pass (`services/presence/pass.ts`),
+  // and the scans below are derived from the CALLERS of those services, so a
+  // new twin joins them by calling the service.
+
+  /** Exported functions whose body asks for the gate's pass. */
+  function passServices(): Array<{ name: string; path: string }> {
+    const out: Array<{ name: string; path: string }> = [];
+    for (const f of FILES) {
+      const fns = [...f.src.matchAll(/^export async function (\w+)\(/gm)].map(
+        (m) => ({ name: m[1]!, at: m.index! })
+      );
+      fns.forEach((fn, i) => {
+        const body = f.src.slice(fn.at, fns[i + 1]?.at ?? undefined);
+        if (/\bassertPresencePass\(/.test(body)) {
+          out.push({ name: fn.name, path: f.path });
+        }
+      });
+    }
+    return out;
+  }
+
+  /**
+   * The door around a call: the nearest Hono route (`app.post("…"`) or tRPC
+   * entry (`  name: xProcedure`) above it, up to the call.
+   */
+  function doorAround(src: string, at: number): string {
+    const before = src.slice(0, at);
+    const starts = [
+      ...before.matchAll(
+        /app\.(?:get|post|put|patch|delete)\(|^ {2}[A-Za-z]+:\s*[A-Za-z]+Procedure\b/gm
+      ),
+    ];
+    const last = starts.at(-1);
+    return last ? before.slice(last.index) : before;
+  }
+
+  it("every sensitive service asks for the gate's pass, and only the gate mints one", () => {
+    const services = passServices();
+    // Non-vacuity: the acts the review named.
+    expect(services.map((s) => s.name)).toEqual(
+      expect.arrayContaining([
+        "issueKey",
+        "setAppRedirectUris",
+        "setAppWriteMode",
+        "createNamedAgent",
+      ])
+    );
+    const minters = FILES.filter((f) => /\bmintPresencePass\(/.test(f.src))
+      .map((f) => f.path)
+      .sort();
+    expect(minters).toEqual([
+      "services/presence/gate.ts",
+      "services/presence/pass.ts",
+    ]);
+  });
+
+  it("every caller of a sensitive service hands it a pass from a gate (tRPC step-up or a Hub twin's gate)", () => {
+    const services = passServices();
+    const ungated: string[] = [];
+    let calls = 0;
+    for (const svc of services) {
+      for (const f of FILES) {
+        if (f.path === svc.path) continue;
+        for (const m of f.src.matchAll(
+          new RegExp(`\\b${svc.name}\\(\\{`, "g")
+        )) {
+          calls++;
+          const door = doorAround(f.src, m.index!);
+          const args = f.src.slice(m.index!, m.index! + 900);
+          const passArg = /\bpresence:\s*(ctx\.presencePass|pass)\b/.exec(args);
+          const viaTrpc =
+            passArg?.[1] === "ctx.presencePass" &&
+            /\bcredentialProcedure\b|requireFreshAuthentication/.test(door);
+          const viaHub =
+            passArg?.[1] === "pass" &&
+            /\bgateHubTwin\(|\bpassPresenceForAction\(/.test(door);
+          if (!viaTrpc && !viaHub) ungated.push(`${f.path} → ${svc.name}`);
+        }
+      }
+    }
+    // Non-vacuity: the tRPC doors and the Hub twins are both seen.
+    expect(calls).toBeGreaterThanOrEqual(7);
+    expect(
+      ungated,
+      "Hand the service the pass of a gate: tRPC `presence: ctx.presencePass` on a credentialProcedure in SENSITIVE_ACTIONS, or a Hub twin's `const pass = await gateHubTwin(…)` (rest/_presence.ts)"
+    ).toEqual([]);
+  });
+
+  /**
+   * Writers of how an agent's writes land (`applyAgentPosture`,
+   * `syncAutoApproveRules`, in `@synap/database`, which cannot ask the
+   * gate): every caller file gates, or is listed with why it needs no proof.
+   */
+  const POSTURE_WRITERS: Record<string, string> = {
+    "routers/agent-users.ts":
+      "only inside agentUsers.update and agentUsers.setPosture (SENSITIVE_ACTIONS, the step-up middleware gates them)",
+    "routers/hub-protocol/rest/workspaces.ts":
+      "the default preset of a workspace the agent itself provisions, once, at creation (floor-covered verbs only)",
+    "services/agent-connect.ts":
+      "the write mode chosen while APPROVING agent/connect (a sensitive approval: assertPresenceForApproval)",
+    "services/app-connect.ts":
+      "ask-first for a NEW app agent and on revoke (both tighten); setAppWriteMode asks the gate's pass itself",
+    "services/machine-connect.ts":
+      "the write mode chosen while APPROVING a device request (device_request: assertPresenceForRequest)",
+  };
+
+  it("every caller of the posture writers gates, or is listed with why", () => {
+    const callers = FILES.filter((f) =>
+      /\b(?:applyAgentPosture|syncAutoApproveRules)\(\{/.test(f.src)
+    ).map((f) => f.path);
+    expect(callers).toEqual(
+      expect.arrayContaining([
+        "routers/hub-protocol/rest/agent-users.ts",
+        "routers/agent-users.ts",
+      ])
+    );
+    // Per call site: the door around each write (its Hono route or tRPC
+    // entry, up to the call) asks the gate, unless the file is listed.
+    const unlisted: string[] = [];
+    for (const p of callers) {
+      if (p in POSTURE_WRITERS) continue;
+      const src = FILES.find((f) => f.path === p)!.src;
+      for (const m of src.matchAll(
+        /\b(?:applyAgentPosture|syncAutoApproveRules)\(\{/g
+      )) {
+        const door = doorAround(src, m.index!);
+        if (!/\bgateHubTwin\(|\bpassPresenceForAction\(/.test(door)) {
+          unlisted.push(`${p}:${src.slice(0, m.index).split("\n").length}`);
+        }
+      }
+    }
+    expect(
+      unlisted,
+      "Gate this posture write (gateHubTwin / passPresenceForAction with agentUsers.setPosture) in its route, or list the file in POSTURE_WRITERS with the reason"
+    ).toEqual([]);
+    expect(
+      Object.keys(POSTURE_WRITERS).filter((p) => !callers.includes(p)),
+      "POSTURE_WRITERS names a file that no longer writes a posture"
+    ).toEqual([]);
+  });
+
+  /**
+   * Doors that ADD an intelligence service (`insert(intelligenceServices)`):
+   * its origin then receives delegation tokens, so it is the sensitive act
+   * `intelligenceRegistry.register`, whichever door adds it.
+   */
+  const SERVICE_ADDERS: Record<string, string> = {
+    "routers/intelligence-registry.ts":
+      "intelligenceRegistry.register (SENSITIVE_ACTIONS, the step-up middleware gates it)",
+    "routers/intelligence.ts":
+      "intelligence.registerCustomService (SENSITIVE_ACTIONS) and provisionMcpService (the pod's own Firecrawl service)",
+    "routers/sync.ts":
+      "a pod-to-pod sync pull of the person's own rows (no new origin is trusted by the pull)",
+  };
+
+  it("every door that adds an intelligence service gates, or is listed with why", () => {
+    const adders = FILES.filter((f) =>
+      /\.insert\(intelligenceServices\)/.test(f.src)
+    ).map((f) => f.path);
+    expect(adders).toContain("routers/hub-protocol/services.ts");
+    const services = FILES.find(
+      (f) => f.path === "routers/hub-protocol/services.ts"
+    )!.src;
+    // The Hub twin gates every caller but the IS's own internal key.
+    expect(services).toMatch(
+      /if \(ctx\.keyType !== "is_internal"\) \{\s*await passPresenceForAction\(\{[^}]*path: "intelligenceRegistry\.register"/
+    );
+    const unlisted = adders.filter(
+      (p) =>
+        !(p in SERVICE_ADDERS) &&
+        !/\bpassPresenceForAction\(|\bgateHubTwin\(/.test(
+          FILES.find((f) => f.path === p)!.src
+        )
+    );
+    expect(unlisted).toEqual([]);
+    expect(
+      Object.keys(SERVICE_ADDERS).filter((p) => !adders.includes(p))
+    ).toEqual([]);
+  });
+
+  /** Routers that hold a SENSITIVE_ACTIONS procedure, by their export name. */
+  function sensitiveRouterNames(): string[] {
+    const root = FILES.find((f) => f.path === "root.ts")!.src;
+    const prefixes = new Set(
+      Object.keys(SENSITIVE_ACTIONS).map((p) => p.split(".")[0]!)
+    );
+    return [...root.matchAll(/^ {2}(\w+):\s*(\w+Router)\s*,?\s*$/gm)]
+      .filter((m) => prefixes.has(m[1]!))
+      .map((m) => m[2]!);
+  }
+
+  /** Server-side callers of a sensitive router that need no `presenceChecked`, and why. */
+  const SENSITIVE_ROUTER_CALLERS: Record<string, string> = {
+    "routers/hub-protocol/rest/vault.ts":
+      "secretsVaultRouter.deleteSecret only (takes power away)",
+  };
+
+  it("a server-side caller of a sensitive router names the check it rests on (presenceChecked)", () => {
+    // `<router>.createCaller(ctx).create(…)` runs with the RELATIVE path
+    // ("create"), so the step-up middleware cannot see the act: the caller
+    // must rest on an approval that checked the proof, and say so.
+    const names = sensitiveRouterNames();
+    expect(names).toEqual(
+      expect.arrayContaining(["apiKeysRouter", "governanceRulesRouter"])
+    );
+    const missing: string[] = [];
+    let seen = 0;
+    for (const f of FILES) {
+      for (const m of f.src.matchAll(/\b(\w+Router)\s*\.createCaller\(/g)) {
+        if (!names.includes(m[1]!)) continue;
+        seen++;
+        const ctxArg = f.src.slice(m.index!, m.index! + 600);
+        if (/presenceChecked:\s*"applyProposalApproval"/.test(ctxArg)) continue;
+        if (f.path in SENSITIVE_ROUTER_CALLERS) continue;
+        missing.push(`${f.path} ${m[1]}.createCaller`);
+      }
+    }
+    expect(seen, "the scan sees the apiKeys executors").toBeGreaterThanOrEqual(
+      3
+    );
+    expect(
+      missing,
+      'Pass presenceChecked: "applyProposalApproval" (only from an executor applyProposalApproval dispatched), or list the caller in SENSITIVE_ROUTER_CALLERS with the reason'
     ).toEqual([]);
   });
 });

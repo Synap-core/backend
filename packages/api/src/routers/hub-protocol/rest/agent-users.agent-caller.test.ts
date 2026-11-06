@@ -85,6 +85,17 @@ vi.mock(
   })
 );
 
+// The proof-of-presence gate (review of 6 Nov: these doors are the Hub twins
+// of agentUsers.create / agentUsers.setPosture). The gate itself is real on
+// PGlite in services/presence/presence.pglite.test.ts; here it is a spy.
+const presence = vi.hoisted(() => ({
+  pass: { action: "agentUsers.create", userId: "h", proved: true },
+  gate: vi.fn(),
+}));
+vi.mock("../../../services/presence/gate.js", () => ({
+  passPresenceForAction: (args: unknown) => presence.gate(args),
+}));
+
 vi.mock("../../../utils/workspace-role.js", () => ({
   isPodAdmin: vi.fn(async () => false),
 }));
@@ -118,11 +129,12 @@ import type { HubHono, HubVariables } from "./_shared.js";
 const SIBLING = "33333333-3333-4333-8333-333333333333";
 
 /** `true` = an agent key; `"is"` = the IS internal key (no agentUserId). */
-function buildApp(asAgent: boolean | "is"): HubHono {
+function buildApp(asAgent: boolean | "is", asKey = false): HubHono {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
     c.set("userId", HUMAN);
+    if (asKey) c.set("apiKeyId", "key-1");
     if (asAgent === true) c.set("agentUserId", AGENT);
     if (asAgent === "is") c.set("keyType", "is_internal");
     await next();
@@ -139,6 +151,7 @@ const json = (method: string, body: unknown) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  presence.gate.mockResolvedValue({ verdict: null, pass: presence.pass });
   appAgent.is = false;
   h.updates = 0;
   h.agentRow = {
@@ -165,10 +178,60 @@ describe("POST /agent-users", () => {
     );
     expect(res.status).toBe(201);
     expect(vi.mocked(createNamedAgent)).toHaveBeenCalledWith(
-      expect.objectContaining({ createdByUserId: HUMAN })
+      expect.objectContaining({
+        createdByUserId: HUMAN,
+        presence: presence.pass,
+      })
     );
   });
+
+  it("GUARDRAIL: asks the gate for agentUsers.create, bound to this body", async () => {
+    await buildApp(false).request(
+      "/agent-users",
+      json("POST", { name: "Terminal agent", agentType: "claude" })
+    );
+    expect(presence.gate).toHaveBeenCalledWith({
+      userId: HUMAN,
+      path: "agentUsers.create",
+      input: { name: "Terminal agent", agentType: "claude" },
+      proof: null,
+      keyCaller: false,
+      door: "POST /agent-users",
+    });
+  });
+
+  it("GUARDRAIL: a refusal from the gate mints nothing, and carries its code", async () => {
+    presence.gate.mockRejectedValueOnce(refusedNoProof());
+    const res = await buildApp(false, true).request(
+      "/agent-users",
+      json("POST", { name: "Terminal agent", agentType: "claude" })
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "PRESENCE_REQUIRED" });
+    expect(vi.mocked(createNamedAgent)).not.toHaveBeenCalled();
+    expect(presence.gate).toHaveBeenCalledWith(
+      expect.objectContaining({ keyCaller: true })
+    );
+  });
+
+  it("a malformed proof is a bad request, and the gate is never asked", async () => {
+    const res = await buildApp(false).request(
+      "/agent-users",
+      json("POST", { name: "x", agentType: "claude", presence: { kind: "no" } })
+    );
+    expect(res.status).toBe(400);
+    expect(presence.gate).not.toHaveBeenCalled();
+    expect(vi.mocked(createNamedAgent)).not.toHaveBeenCalled();
+  });
 });
+
+/** What the gate throws under `enforce` with no proof. */
+function refusedNoProof(): Error {
+  return Object.assign(new Error("This needs the person, not a key."), {
+    code: "FORBIDDEN",
+    cause: { reasonCode: "PRESENCE_REQUIRED" },
+  });
+}
 
 describe("PATCH /agent-users/:id/governance", () => {
   const patch = (
@@ -239,6 +302,31 @@ describe("PATCH /agent-users/:id/governance", () => {
     expect(res.status).toBe(200);
     expect(vi.mocked(syncAutoApproveRules)).toHaveBeenCalled();
   });
+
+  it("GUARDRAIL: asks the gate for agentUsers.setPosture, bound to this agent and body", async () => {
+    await patch(false, { posture: null });
+    expect(presence.gate).toHaveBeenCalledWith({
+      userId: HUMAN,
+      path: "agentUsers.setPosture",
+      input: { posture: null, agentUserId: AGENT },
+      proof: null,
+      keyCaller: false,
+      door: "PATCH /agent-users/:agentUserId/governance",
+    });
+  });
+
+  it.each(BODIES)(
+    "GUARDRAIL: a refusal from the gate writes nothing (%s)",
+    async (_label, body) => {
+      presence.gate.mockRejectedValueOnce(refusedNoProof());
+      const res = await patch(false, body);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: "PRESENCE_REQUIRED" });
+      expect(vi.mocked(applyAgentPosture)).not.toHaveBeenCalled();
+      expect(vi.mocked(syncAutoApproveRules)).not.toHaveBeenCalled();
+      expect(h.updates).toBe(0);
+    }
+  );
 });
 
 describe("GET /agent-users/:id/governance", () => {

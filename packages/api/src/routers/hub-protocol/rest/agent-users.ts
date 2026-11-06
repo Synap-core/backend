@@ -38,6 +38,7 @@ import {
 } from "@synap-core/types/agents";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
+import { gateHubTwin, refusalBody } from "./_presence.js";
 import {
   AgentAssignmentQuerySchema,
   AgentAssignmentReadSchema,
@@ -118,19 +119,26 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       );
     }
 
+    // It mints an agent key: the sensitive act `agentUsers.create`, with the
+    // proof bound to this call.
+    const pass = await gateHubTwin(c, {
+      action: "agentUsers.create",
+      input: { ...(body as Record<string, unknown>) },
+      door: "POST /agent-users",
+    });
+    if (pass instanceof Response) return pass;
+
     try {
       const result = await createNamedAgent({
         name: parsed.data.name,
         agentType: parsed.data.agentType,
         createdByUserId: callerId,
+        presence: pass,
       });
       return c.json(result, 201);
     } catch (err) {
       logger.error({ err }, "POST /agent-users failed");
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err)
-      );
+      return c.json(refusalBody(err), httpStatusForTrpcError(err));
     }
   });
 
@@ -783,6 +791,15 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         );
       }
 
+      // How an agent's writes land is a sensitive act (`agentUsers.setPosture`):
+      // the proof is bound to this call, whichever form the body takes.
+      const pass = await gateHubTwin(c, {
+        action: "agentUsers.setPosture",
+        input: { ...(body ?? {}), agentUserId },
+        door: "PATCH /agent-users/:agentUserId/governance",
+      });
+      if (pass instanceof Response) return pass;
+
       if (
         posture === null ||
         (posture !== undefined && isAgentPostureName(posture))
@@ -852,10 +869,7 @@ export function registerAgentUsersRoutes(app: HubHono): void {
         { err, agentUserId },
         "PATCH /agent-users/:agentUserId/governance failed"
       );
-      return c.json(
-        { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err)
-      );
+      return c.json(refusalBody(err), httpStatusForTrpcError(err));
     }
   });
 }

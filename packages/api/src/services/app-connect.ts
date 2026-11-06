@@ -100,6 +100,7 @@ import {
 } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
+import { assertPresencePass, type PresencePass } from "./presence/pass.js";
 import {
   assertNeverPlace,
   EVERYWHERE_IN_POD,
@@ -1164,7 +1165,13 @@ export async function issueKey(args: {
   actorKeyType?: string | null;
   /** The door issuing it (the agent's provenance on first issue). */
   via: AppKeyDoor;
+  /** The gate's pass for `apps.issueKey` (`passPresenceForAction`). */
+  presence: PresencePass | null;
 }): Promise<{ apiKey: string; keyId: string }> {
+  assertPresencePass(args.presence, {
+    actions: ["apps.issueKey"],
+    userId: args.ownerUserId,
+  });
   assertOwnerCredential("mint an app key", {
     agentUserId: args.actorAgentUserId,
     keyType: args.actorKeyType,
@@ -2165,7 +2172,13 @@ export async function setAppRedirectUris(args: {
   actorAgentUserId?: string | null;
   /** The calling key's type — `is_internal` is an agent caller. */
   actorKeyType?: string | null;
+  /** The gate's pass for `apps.setRedirectUris` (`passPresenceForAction`). */
+  presence: PresencePass | null;
 }): Promise<AppWithGrants> {
+  assertPresencePass(args.presence, {
+    actions: ["apps.setRedirectUris"],
+    userId: args.ownerUserId,
+  });
   assertOwnerCredential("change where an app signs people in", {
     agentUserId: args.actorAgentUserId,
     keyType: args.actorKeyType,
@@ -2465,7 +2478,13 @@ export async function setAppWriteMode(args: {
   actorAgentUserId?: string | null;
   /** The calling key's type — `is_internal` is an agent caller. */
   actorKeyType?: string | null;
+  /** The gate's pass for `apps.setWriteMode` (`passPresenceForAction`). */
+  presence: PresencePass | null;
 }): Promise<AppWriteModeView> {
+  assertPresencePass(args.presence, {
+    actions: ["apps.setWriteMode"],
+    userId: args.ownerUserId,
+  });
   assertOwnerCredential("change how an app's changes land", {
     agentUserId: args.actorAgentUserId,
     keyType: args.actorKeyType,

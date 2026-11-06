@@ -10,36 +10,169 @@
  */
 import { createLogger } from "@synap-core/core";
 import {
+  enrollmentSubject,
+  PRESENCE_EXPIRED,
+  PRESENCE_INVALID,
+  PRESENCE_REQUEST_KINDS,
+  PRESENCE_USED,
   presenceKeyFingerprint,
+  presenceMessage,
+  presenceRequestSubject,
   type PresenceProof,
 } from "@synap-core/types/presence";
+import {
+  and,
+  db,
+  drizzleSql,
+  eq,
+  gt,
+  isNull,
+  presenceChallenges,
+  presenceDeviceKeys,
+} from "@synap/database";
 import { NotificationService } from "../../notifications/NotificationService.js";
-import { assertPresenceForRequest } from "./gate.js";
-import { hasProofFactor } from "./proof.js";
+import {
+  assertPresenceForRequest,
+  presenceRequiredError,
+  recordMissing,
+} from "./gate.js";
+import { readPresenceMode } from "./mode.js";
+import {
+  hasProofFactor,
+  PresenceError,
+  presencePodOrigin,
+  verifyDeviceSignature,
+} from "./proof.js";
 
 const logger = createLogger({ module: "presence-factors" });
 
 export { hasProofFactor };
 
 /**
- * May this person enrol this new device key? Their first factor rests on the
- * fresh sign-in `enrollChallenge` checked. Once they hold one, an EXISTING
- * factor must prove `device_enroll:<fingerprint of the new key>` (refused
- * under `enforce` without it, recorded in `report`).
+ * Enrol a device key (step 2 of `presence.devices.enroll`): the new key's
+ * signature over its enrolment challenge (proof of possession), then the
+ * factor decision, then the challenge spent and the key stored.
+ *
+ * The decision is ONE first factor per person, made inside the transaction
+ * that stores the key, under a per-person advisory lock (review of 6 Nov:
+ * `hasProofFactor` and the insert were two steps, so two concurrent first
+ * enrolments both saw "no factor" and both skipped the proof). The person's
+ * first factor rests on the fresh sign-in `enrollChallenge` checked; once
+ * they hold one, an EXISTING factor must prove `device_enroll:<fingerprint
+ * of the new key>` (refused under `enforce` without it, recorded in
+ * `report`). A proof sent is checked and spent before the lock is taken.
+ *
+ * Throws `PresenceError` (the router maps it) or the gate's refusal.
+ * Not covered: a first PASSKEY added in Kratos' settings flow at the same
+ * moment as a first device key (Kratos writes it outside this lock).
  */
-export async function assertMayEnrollDeviceKey(args: {
+export async function enrollDeviceKey(args: {
   userId: string;
+  challengeId: string;
+  label: string;
   publicKey: string;
+  signature: string;
   proof?: PresenceProof | null;
-}): Promise<void> {
-  if (!(await hasProofFactor(args.userId))) return;
-  await assertPresenceForRequest({
-    userId: args.userId,
-    kind: "device_enroll",
-    id: await presenceKeyFingerprint(args.publicKey),
-    proof: args.proof ?? null,
-    door: "presence.devices.enroll",
+}): Promise<{ id: string }> {
+  const challenge = await db.query.presenceChallenges.findFirst({
+    where: and(
+      eq(presenceChallenges.id, args.challengeId),
+      eq(presenceChallenges.userId, args.userId)
+    ),
   });
+  if (!challenge || challenge.subject !== enrollmentSubject(challenge.id)) {
+    throw new PresenceError(PRESENCE_INVALID, "Unknown challenge.");
+  }
+  if (challenge.consumedAt) {
+    throw new PresenceError(PRESENCE_USED, "This challenge was used.");
+  }
+  if (challenge.expiresAt <= new Date()) {
+    throw new PresenceError(PRESENCE_EXPIRED, "This challenge expired.");
+  }
+  const message = presenceMessage({
+    podOrigin: presencePodOrigin(),
+    challengeId: challenge.id,
+    subject: challenge.subject,
+    nonce: challenge.nonce,
+  });
+  if (!verifyDeviceSignature(args.publicKey, message, args.signature)) {
+    throw new PresenceError(
+      PRESENCE_INVALID,
+      "This key did not sign the enrolment challenge."
+    );
+  }
+
+  const fingerprint = await presenceKeyFingerprint(args.publicKey);
+  const subject = { kind: "device_enroll" as const, id: fingerprint };
+  const door = "presence.devices.enroll";
+  // A proof that was sent is checked (and spent) before the lock, when the
+  // person holds a factor it could come from (a first enrolment ignores it,
+  // as before).
+  const verdict =
+    args.proof && (await hasProofFactor(args.userId))
+      ? await assertPresenceForRequest({
+          userId: args.userId,
+          ...subject,
+          proof: args.proof,
+          door,
+        })
+      : null;
+  const { mode } = await readPresenceMode();
+
+  const outcome = await db.transaction(async (tx) => {
+    await tx.execute(
+      drizzleSql`select pg_advisory_xact_lock(hashtextextended(${`presence-factor:${args.userId}`}, 0))`
+    );
+    const held = await hasProofFactor(args.userId, tx);
+    if (held && !verdict && mode === "enforce") {
+      return { kind: "refused" as const };
+    }
+    const [spent] = await tx
+      .update(presenceChallenges)
+      .set({ consumedAt: new Date(), method: "device_key" })
+      .where(
+        and(
+          eq(presenceChallenges.id, challenge.id),
+          isNull(presenceChallenges.consumedAt),
+          gt(presenceChallenges.expiresAt, new Date())
+        )
+      )
+      .returning({ id: presenceChallenges.id });
+    if (!spent) return { kind: "used" as const };
+    const [row] = await tx
+      .insert(presenceDeviceKeys)
+      .values({
+        userId: args.userId,
+        label: args.label,
+        publicKey: args.publicKey,
+      })
+      .returning({ id: presenceDeviceKeys.id });
+    return {
+      kind: "enrolled" as const,
+      id: row!.id,
+      unproved: held && !verdict,
+    };
+  });
+
+  if (outcome.kind === "refused") {
+    throw await presenceRequiredError({
+      userId: args.userId,
+      subject: presenceRequestSubject(subject.kind, subject.id),
+    });
+  }
+  if (outcome.kind === "used") {
+    throw new PresenceError(PRESENCE_USED, "This challenge was used.");
+  }
+  if (outcome.unproved) {
+    await recordMissing({
+      userId: args.userId,
+      subject: presenceRequestSubject(subject.kind, subject.id),
+      what: subject.kind,
+      reason: PRESENCE_REQUEST_KINDS.device_enroll,
+      door,
+    });
+  }
+  return { id: outcome.id };
 }
 
 /**

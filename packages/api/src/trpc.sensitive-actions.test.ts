@@ -11,8 +11,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+const PASS = { action: "apiKeys.create", userId: "p", proved: false };
 const h = vi.hoisted(() => ({
-  gate: vi.fn(async (_args: unknown) => null as unknown),
+  gate: vi.fn(
+    async (_args: unknown) =>
+      ({ verdict: null, pass: null }) as { verdict: unknown; pass: unknown }
+  ),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -23,7 +27,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 vi.mock("./services/presence/gate.js", () => ({
-  assertPresenceForAction: (args: unknown) => h.gate(args),
+  passPresenceForAction: (args: unknown) => h.gate(args),
 }));
 vi.mock("./utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 vi.mock("./utils/split-brain-service.js", () => ({
@@ -34,20 +38,25 @@ import { credentialProcedure, router } from "./trpc.js";
 import { presenceInput } from "./utils/presence-input.js";
 
 const seen: unknown[] = [];
+const passes: unknown[] = [];
 const app = router({
   apiKeys: router({
     create: credentialProcedure
       .input(presenceInput)
       .input(z.object({ keyName: z.string(), days: z.number().default(30) }))
-      .mutation(({ input }) => {
+      .mutation(({ input, ctx }) => {
         seen.push(input);
+        passes.push(ctx.presencePass);
         return "created";
       }),
   }),
   shares: router({
     share: credentialProcedure
       .input(z.object({ id: z.string() }))
-      .mutation(() => "shared"),
+      .mutation(({ ctx }) => {
+        passes.push(ctx.presencePass);
+        return "shared";
+      }),
   }),
 });
 
@@ -73,8 +82,9 @@ const proof = {
 
 beforeEach(() => {
   h.gate.mockReset();
-  h.gate.mockResolvedValue(null);
+  h.gate.mockResolvedValue({ verdict: null, pass: PASS });
   seen.length = 0;
+  passes.length = 0;
 });
 
 describe("requireFreshAuthentication: sensitive actions", () => {
@@ -87,9 +97,12 @@ describe("requireFreshAuthentication: sensitive actions", () => {
       path: "apiKeys.create",
       input: { keyName: "ci", presence: proof },
       proof,
+      keyCaller: false,
     });
-    // The proof never reaches the handler's input.
+    // The proof never reaches the handler's input; the gate's pass reaches
+    // its context (the service behind the act asks for it).
     expect(seen).toEqual([{ keyName: "ci", days: 30 }]);
+    expect(passes).toEqual([PASS]);
   });
 
   it("a refusal from the gate stops the call", async () => {
@@ -104,7 +117,10 @@ describe("requireFreshAuthentication: sensitive actions", () => {
     await expect(
       app.createCaller(staleDevice).apiKeys.create({ keyName: "ci" } as never)
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    h.gate.mockResolvedValueOnce({ method: "device_key" });
+    h.gate.mockResolvedValueOnce({
+      verdict: { method: "device_key" },
+      pass: PASS,
+    });
     await expect(
       app
         .createCaller(staleDevice)
@@ -112,9 +128,19 @@ describe("requireFreshAuthentication: sensitive actions", () => {
     ).resolves.toBe("created");
   });
 
-  it("an everyday credential door never asks the gate", async () => {
+  it("an everyday credential door never asks the gate, and carries no pass", async () => {
     await app.createCaller(browser).shares.share({ id: "x" });
     expect(h.gate).not.toHaveBeenCalled();
+    expect(passes).toEqual([null]);
+  });
+
+  it("a key caller is named to the gate (its refusal says where the person does it)", async () => {
+    await app
+      .createCaller({ ...(browser as object), apiKeyId: "k1" } as never)
+      .apiKeys.create({ keyName: "ci" } as never);
+    expect(h.gate).toHaveBeenCalledWith(
+      expect.objectContaining({ keyCaller: true })
+    );
   });
 
   it("a malformed proof is a bad request, not a missing one", async () => {

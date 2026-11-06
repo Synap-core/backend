@@ -149,6 +149,10 @@ import {
   MORNING_BRIEF_QUEUE,
 } from "./morning-brief-worker.js";
 import { handlePodHealth, POD_HEALTH_QUEUE } from "./pod-health-worker.js";
+import {
+  handlePresenceChallengeSweep,
+  PRESENCE_CHALLENGE_SWEEP_QUEUE,
+} from "./presence-challenge-sweep.js";
 import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 import {
@@ -411,6 +415,8 @@ const ALL_QUEUES = [
   MORNING_BRIEF_QUEUE,
   // The pod health check (every 2 min; handler slot, IoC).
   POD_HEALTH_QUEUE,
+  // Proof of presence: the hourly sweep of expired challenges.
+  PRESENCE_CHALLENGE_SWEEP_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
@@ -1014,6 +1020,12 @@ export async function registerAllWorkers(): Promise<void> {
   // The pod health check (every 2 min; handler slot filled by the api layer).
   await boss.work(POD_HEALTH_QUEUE, async () => handlePodHealth());
   logger.info("Registered worker: pod-health-check");
+
+  // Proof of presence: delete the challenges past their retention (hourly).
+  await boss.work(PRESENCE_CHALLENGE_SWEEP_QUEUE, async () =>
+    handlePresenceChallengeSweep()
+  );
+  logger.info("Registered worker: presence-challenge-sweep");
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.
