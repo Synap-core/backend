@@ -481,6 +481,16 @@
                   "unreachable",
                   "misconfigured"
                 ]
+              },
+              "agent": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "partial",
+                  "empty",
+                  "unreachable",
+                  "misconfigured"
+                ]
               }
             },
             "required": [
@@ -489,7 +499,8 @@
               "template",
               "cell",
               "skill",
-              "view"
+              "view",
+              "agent"
             ]
           }
         },

@@ -16454,7 +16454,7 @@ declare const MARKETPLACE_TRUST_LEVELS: readonly [
 	"showcase"
 ];
 export type MarketplaceTrust = (typeof MARKETPLACE_TRUST_LEVELS)[number];
-export type CatalogKind = "automation" | "capability" | "cell" | "skill" | "template" | "view";
+export type CatalogKind = "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 export interface KeyDetail {
 	grants: Array<{
 		clientId: string | null;
@@ -42810,7 +42810,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				slug: string;
 				source?: string | undefined;
 			};
@@ -42823,7 +42823,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				installMode: "install" | "open_site" | "propose" | "refuse";
 				installed: boolean | null;
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				name: string;
 				objectKind: string;
 				official: boolean;
@@ -42844,7 +42844,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					connectors?: boolean | undefined;
 					network?: boolean | undefined;
 				} | undefined;
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				params?: Record<string, unknown> | undefined;
 				slug: string;
 				source?: string | undefined;
@@ -42857,7 +42857,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cursor?: number | undefined;
-				kind?: "automation" | "capability" | "cell" | "skill" | "template" | "view" | undefined;
+				kind?: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view" | undefined;
 				limit?: number | undefined;
 				query?: string | undefined;
 				source?: string | undefined;
@@ -42890,7 +42890,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		preflight: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				kind: "automation" | "capability" | "cell" | "skill" | "template" | "view";
+				kind: "agent" | "automation" | "capability" | "cell" | "skill" | "template" | "view";
 				slug: string;
 				source?: string | undefined;
 				workspaceId?: string | undefined;
@@ -57238,6 +57238,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentPausedBy: string | null;
 					agentRole: string | null;
 					agentTemplate: string | null;
+					agentTemplateSlug: string | null;
 					agentType: string | null;
 					avatarUrl: string | null;
 					computerBelongsTo: "agent" | "person" | "shared" | null;
