@@ -33,7 +33,15 @@ import {
   PRESENCE_ENROLL_FRESH_SECONDS,
   enrollmentSubject,
 } from "@synap-core/types/presence";
-import { and, db, desc, eq, isNull, presenceDeviceKeys } from "@synap/database";
+import {
+  and,
+  count,
+  db,
+  desc,
+  eq,
+  isNull,
+  presenceDeviceKeys,
+} from "@synap/database";
 
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { assertPresenceForRequest } from "../services/presence/gate.js";
@@ -222,6 +230,37 @@ export const presenceRouter = router({
   mode: podAdminProcedure.query(async () => {
     const state = await readPresenceMode();
     return { ...state, missingLast30d: await missingSince(30) };
+  }),
+
+  /**
+   * The caller's own proof factors, counted: their passkeys (from the pod's
+   * sign-in service) and their Relay device keys. What pod admin shows before
+   * the person relies on "Approvals need you in person". A failed passkey read
+   * fails the call, never "no passkey".
+   */
+  factors: protectedProcedure.query(async ({ ctx }) => {
+    assertSignedInPerson(ctx, SIGNED_IN);
+    let passkeys: number;
+    try {
+      passkeys = (await readPasskeys(ctx.userId)).length;
+    } catch (err) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message:
+          "Couldn't read your passkeys from the pod's sign-in service. Try again in a moment.",
+        cause: err,
+      });
+    }
+    const [row] = await db
+      .select({ n: count() })
+      .from(presenceDeviceKeys)
+      .where(
+        and(
+          eq(presenceDeviceKeys.userId, ctx.userId),
+          isNull(presenceDeviceKeys.revokedAt)
+        )
+      );
+    return { passkeys, deviceKeys: Number(row?.n ?? 0) };
   }),
 
   /**
