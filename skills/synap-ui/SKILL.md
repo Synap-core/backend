@@ -30,6 +30,10 @@ You build the surfaces the user sees: views over their data, bento dashboards, f
 
 ---
 
+## Apps are views of pod state
+
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+
 ## Before you build anything
 
 Always inventory. Never hallucinate view types, widget kinds, or profiles.
