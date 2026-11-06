@@ -21,7 +21,12 @@ import {
   type KratosFlow,
   type SubmitFlowResult,
 } from "../../../lib/kratos-flow";
-import { PasskeyCancelled, type PasskeyPlacement } from "../../../lib/passkey";
+import {
+  PasskeyCancelled,
+  PasskeyCreateFailed,
+  type PasskeyPlacement,
+} from "../../../lib/passkey";
+import { presenceT } from "../../_lib/presence/copy";
 
 export type JoinOutcome =
   /** The account exists and the invite is accepted. */
@@ -125,6 +130,9 @@ export async function joinWithPasskey(
     });
   } catch (err) {
     if (err instanceof PasskeyCancelled) return { kind: "cancelled" };
+    if (err instanceof PasskeyCreateFailed) {
+      return { kind: "refused", message: presenceT()(`create.${err.reason}`) };
+    }
     return {
       kind: "refused",
       message: err instanceof Error && err.message ? err.message : JOIN_FAILED,

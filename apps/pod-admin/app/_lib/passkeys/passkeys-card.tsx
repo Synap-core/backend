@@ -41,6 +41,7 @@ import {
   createPasskey,
   isPasskeySupported,
   PasskeyCancelled,
+  PasskeyCreateFailed,
   type PasskeyPlacement,
 } from "../../../lib/passkey";
 import { formatDate } from "../../../lib/format";
@@ -48,6 +49,7 @@ import { trpc } from "../../../lib/trpc";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { CopyButton, errorDetail } from "../copy-button";
 import { PresenceDeclined } from "../presence/presence-model";
+import { presenceT } from "../presence/copy";
 import { useAuthorizePasskeyChange } from "../presence/use-factor-doors";
 import { usePodSensitivity } from "../presence/use-sensitivity";
 import { en, fr } from "./copy";
@@ -203,7 +205,11 @@ export function PasskeysCard({
     } catch (err) {
       if (!(err instanceof PasskeyCancelled)) {
         setError({
-          message: t("passkeys.addFailed"),
+          // Why the browser refused, precisely; its own words behind Copy details.
+          message:
+            err instanceof PasskeyCreateFailed
+              ? presenceT()(`create.${err.reason}`)
+              : t("passkeys.addFailed"),
           detail: errorDetail(err),
         });
       }

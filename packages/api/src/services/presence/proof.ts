@@ -25,6 +25,7 @@ import { TRPCError } from "@trpc/server";
 import { kratosAdmin } from "@synap/auth";
 import { isRefusedSiteBase } from "@synap-core/types/tenancy";
 import {
+  aaguidFromBytes,
   PRESENCE_CHALLENGE_TTL_SECONDS,
   PRESENCE_EXPIRED,
   PRESENCE_INVALID,
@@ -221,15 +222,42 @@ export function passkeyRpId(podOrigin: string, consoleOrigin: string): string {
 interface KratosPasskeyCredential {
   id?: string;
   public_key?: string;
-  authenticator?: { sign_count?: number };
+  /** The authenticator's AAGUID (16 bytes) and its signature counter. */
+  authenticator?: { sign_count?: number; aaguid?: string | null };
+  /** Kratos' name for the passkey's store ("iCloud Keychain"), from its AAGUID. */
+  display_name?: string | null;
+}
+
+/** One passkey of the person, as the presence ceremony needs it. */
+export interface PodPasskey {
+  id: string;
+  publicKey: Uint8Array<ArrayBuffer>;
+  counter: number;
+  /** Lowercase hyphenated AAGUID, or null when Kratos recorded none. */
+  aaguid: string | null;
+  /** Kratos' name for where it lives, or null. */
+  displayName: string | null;
+}
+
+/** Kratos' passkey credentials → the pod's passkeys (pure; `readPasskeys` reads them). */
+export function passkeysFromKratos(
+  credentials: ReadonlyArray<KratosPasskeyCredential> | undefined
+): PodPasskey[] {
+  return (credentials ?? [])
+    .filter((c) => c.id && c.public_key)
+    .map((c) => ({
+      id: b64url(Buffer.from(c.id!, "base64")),
+      publicKey: new Uint8Array(Buffer.from(c.public_key!, "base64")),
+      counter: c.authenticator?.sign_count ?? 0,
+      aaguid: c.authenticator?.aaguid
+        ? aaguidFromBytes(Buffer.from(c.authenticator.aaguid, "base64"))
+        : null,
+      displayName: c.display_name?.trim() || null,
+    }));
 }
 
 /** The person's passkeys, read from Kratos (the one place they are registered). */
-export async function readPasskeys(
-  userId: string
-): Promise<
-  Array<{ id: string; publicKey: Uint8Array<ArrayBuffer>; counter: number }>
-> {
+export async function readPasskeys(userId: string): Promise<PodPasskey[]> {
   const { data } = await kratosAdmin.getIdentity({
     id: userId,
     includeCredential: ["passkey" as never],
@@ -239,13 +267,7 @@ export async function readPasskeys(
       | Record<string, { config?: { credentials?: KratosPasskeyCredential[] } }>
       | undefined
   )?.passkey?.config;
-  return (config?.credentials ?? [])
-    .filter((c) => c.id && c.public_key)
-    .map((c) => ({
-      id: b64url(Buffer.from(c.id!, "base64")),
-      publicKey: new Uint8Array(Buffer.from(c.public_key!, "base64")),
-      counter: c.authenticator?.sign_count ?? 0,
-    }));
+  return passkeysFromKratos(config?.credentials);
 }
 
 /**

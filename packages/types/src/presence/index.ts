@@ -697,3 +697,5 @@ export async function presenceActionDigest(
 export function presenceActionSubject(path: string, digest: string): string {
   return `action:${path}:${digest}`;
 }
+
+export * from "./authenticators.js";
