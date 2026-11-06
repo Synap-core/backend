@@ -35117,6 +35117,33 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				facet: {
+					agentUserId: string | null;
+					contextEntityId: string | null;
+					correlationId: string | null;
+					createdAt: Date;
+					createdByKind: ProvenanceKind | null;
+					createdByUserId: string | null;
+					deletedAt: Date | null;
+					entityId: string;
+					id: string;
+					metadata: unknown;
+					profileId: string;
+					properties: unknown;
+					sourceProposalId: string | null;
+					status: string | null;
+					statusCategory: string | null;
+					updatedAt: Date;
+					userId: string;
+					workspaceId: string | null;
+				};
+				facetId: string;
+				message: string;
+				proposalId?: undefined;
+				proposalType?: undefined;
+				reviewUrl?: undefined;
+				status: "exists";
+			} | {
 				facet: Record<string, unknown> | null;
 				facetId?: undefined;
 				message: string;
