@@ -18,12 +18,17 @@
  * an empty result and a failed read are different facts. A row the pod says
  * this person may not change is drawn locked, with why.
  */
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
 import {
   dialState,
   type DialQuery,
   type DialSave,
   type DialState,
 } from "../../../(admin)/settings/review/_lib/pod-defaults-model";
+import type { QueryLike } from "../../../proposal/[id]/proposal-session-model";
+
+export type { QueryLike };
 
 export const DEFAULT_ROWS = [
   "presence",
@@ -34,45 +39,38 @@ export const DEFAULT_ROWS = [
 ] as const;
 export type DefaultRow = (typeof DEFAULT_ROWS)[number];
 
-/** A tRPC query as TanStack hands it over, any data shape. */
-export interface QueryLike<T> {
-  isLoading: boolean;
-  isError: boolean;
-  data?: T | undefined;
-}
+type Outputs = inferRouterOutputs<AppRouter>;
 
 /** `presence.mode` (the fields this step reads). */
-export interface PresenceModeData {
-  mode: "enforce" | "report";
-  source: "env" | "setting" | "default";
-}
+export type PresenceModeData = Pick<
+  Outputs["presence"]["mode"],
+  "mode" | "source"
+>;
 
-/** `proactive.getPodDefaults`. */
-export interface ProactiveDefaultsData {
-  defaults: {
-    enabled: boolean;
-    nudgeDensity: "low" | "medium" | "high";
-    schedules: {
-      morningBriefing: boolean;
-      weeklyDigest: boolean;
-      healthCheck: boolean;
-    };
-  };
-}
+/** `presence.factors`: the person's passkeys and Relay device keys. */
+export type PresenceFactorsData = Outputs["presence"]["factors"];
 
-/** `proactive.getLibraryKeepAlive`. */
-export interface LibraryKeepAliveData {
-  settings: { enabled: boolean; archiveAfterDays: number };
-}
+/** `proactive.getPodDefaults` (the fields this step reads and sends back). */
+export type ProactiveDefaultsData = Pick<
+  Outputs["proactive"]["getPodDefaults"],
+  "defaults"
+>;
+
+/** `proactive.getLibraryKeepAlive` (the fields this step reads). */
+export type LibraryKeepAliveData = Pick<
+  Outputs["proactive"]["getLibraryKeepAlive"],
+  "settings"
+>;
 
 function dial<T>(
   read: QueryLike<T>,
   toDial: (data: T) => { enabled: boolean; canManage: boolean }
 ): DialQuery {
+  const failed = read.error != null;
   return {
     isLoading: read.isLoading,
-    isError: read.isError,
-    data: read.data === undefined ? undefined : toDial(read.data),
+    isError: failed,
+    data: failed || read.data === undefined ? undefined : toDial(read.data),
   };
 }
 
@@ -137,10 +135,11 @@ export function presenceSave(save: {
   isPending: boolean;
   variables?: { mode: "enforce" | "report" } | undefined;
 }): DialSave {
+  const { isPending, variables } = save;
   return {
-    isPending: save.isPending,
-    variables: save.variables
-      ? { enabled: save.variables.mode === "enforce" }
+    isPending,
+    variables: variables
+      ? { enabled: variables.mode === "enforce" }
       : undefined,
   };
 }
@@ -150,9 +149,24 @@ export function enabledSave(save: {
   isPending: boolean;
   variables?: { enabled?: boolean } | undefined;
 }): DialSave {
-  const enabled = save.variables?.enabled;
+  const { isPending, variables } = save;
+  const enabled = variables?.enabled;
   return {
-    isPending: save.isPending,
+    isPending,
     variables: typeof enabled === "boolean" ? { enabled } : undefined,
   };
+}
+
+/**
+ * What the presence row says under its switch about the person's own
+ * factors: an INVITE to add a passkey when they hold none (a new owner has
+ * neither a passkey nor Relay's Face ID, and turning approvals in person off
+ * again needs one), a failed read with Try again, or nothing.
+ */
+export type FactorNote = "none" | "failed" | null;
+
+export function factorNote(read: QueryLike<PresenceFactorsData>): FactorNote {
+  if (read.error != null) return "failed";
+  if (read.isLoading || !read.data) return null;
+  return read.data.passkeys + read.data.deviceKeys === 0 ? "none" : null;
 }

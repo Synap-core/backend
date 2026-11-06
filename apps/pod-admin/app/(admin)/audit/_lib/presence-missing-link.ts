@@ -9,6 +9,11 @@
  *   /audit?presence=missing&kind=<kind> one kind (`data.proposalType`)
  */
 import {
+  SENSITIVE_ACTIONS,
+  sensitiveActionTitle,
+  type SensitiveActionPath,
+} from "@synap-core/types/presence";
+import {
   buildObjectActionTitle,
   humanizeToken,
 } from "@synap-core/types/vocabulary";
@@ -51,10 +56,15 @@ export function presenceMissingQuery(
 }
 
 /**
- * A kind's words. A kind is an approval's `<targetType>/<proposalType>`, a
- * request kind (`key_request`) or a sensitive action path (`apiKeys.create`).
+ * A kind's words, the one derivation the Security card and this page share.
+ * A kind is a sensitive action path (`apiKeys.create`: its title through the
+ * title door), an approval's `<targetType>/<proposalType>` (the proposal's own
+ * title words) or a request kind (`key_request`).
  */
 export function presenceKindWords(kind: string): string {
+  if (Object.hasOwn(SENSITIVE_ACTIONS, kind)) {
+    return sensitiveActionTitle(kind as SensitiveActionPath);
+  }
   const slash = kind.indexOf("/");
   if (slash > 0) {
     return buildObjectActionTitle({
@@ -62,7 +72,5 @@ export function presenceKindWords(kind: string): string {
       action: kind.slice(slash + 1),
     });
   }
-  // A dotted action path reads through `sensitiveActionTitle`
-  // (`@synap-core/types/presence`) once that export is on main.
   return humanizeToken(kind);
 }

@@ -226,9 +226,9 @@ describe("the one wording of proof of presence", () => {
     expect(sensitiveActionTitle("apiKeys.create", { locale: "fr" })).toBe(
       "Créer la clé API"
     );
-    expect(
-      sensitiveActionTitle("secretsVault.reveal", { locale: "fr" })
-    ).toBe("Voir le secret");
+    expect(sensitiveActionTitle("secretsVault.reveal", { locale: "fr" })).toBe(
+      "Voir le secret"
+    );
     expect(
       sensitiveActionTitle("intelligenceRegistry.register", { locale: "en" })
     ).toBe("Connect AI service");

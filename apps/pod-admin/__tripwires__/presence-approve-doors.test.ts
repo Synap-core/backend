@@ -98,8 +98,8 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /**
  * Each sensitive action, derived: its tRPC accessor (the last two segments,
  * `governanceRules.create.useMutation`) or its full path in quotes that is not
- * an object key (a proxy route's procedure name; `action-words.ts` keys its
- * words by path, which is not a call).
+ * an object key (a proxy route's procedure name; a table keyed by path is
+ * not a call).
  */
 for (const path of SENSITIVE_PATHS) {
   const [router, proc] = path.split(".").slice(-2) as [string, string];

@@ -90,7 +90,7 @@ export function useAuthorizePasskeyChange() {
           : Promise.reject(
               new PresenceRefusedError(
                 PRESENCE_REQUIRED,
-                "Adding a passkey needs a confirmation from your passkey."
+                presenceT()("passkeyAdd.needsProof")
               )
             ),
     });

@@ -43,6 +43,21 @@ describe("presenceDialogView", () => {
     expect(view.secondary).toBe("tryAgain");
   });
 
+  it("after Add a passkey opened its tab: come back and press Try again, which leads", () => {
+    const view = presenceDialogView({
+      phase: ready({ passkey: false }),
+      passkeySupported: true,
+      addPasskeyOpened: true,
+    });
+    expect(view.status).toEqual({ word: "comeBack" });
+    expect(view.primary).toBe("tryAgain");
+    expect(view.secondary).toBe("addPasskey");
+    setAmbientCatalogLocale("en");
+    expect(presenceT()("comeBack")).toMatch(
+      /come back here and press Try again/
+    );
+  });
+
   it("a browser that cannot use a passkey: no primary action and no Try again", () => {
     const view = presenceDialogView({
       phase: ready(),

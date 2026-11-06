@@ -1,47 +1,44 @@
 /**
- * The "Approvals need you in person" card (W3 slice 3), derived in one place
- * from `presence.mode` (pure, so each state is tested):
- *  - the mark: ON (`enforce`) or recording only (`report`);
+ * The "Approvals need you in person" card, derived in one place from
+ * `presence.mode` (pure, so each state is tested):
+ *  - the mark: ON (`enforce`) or OFF (`report`), in the shared presence words;
  *  - where the mode comes from: the operator's env floor (ON, and it cannot
  *    be switched off here), a pod admin's change, or the default;
  *  - what `report` let through in the last 30 days (`presence.missing`), by
- *    what it was, capped, named through the vocabulary door, never a raw
- *    token.
+ *    kind, capped, each row a door to the audit log filtered to that kind,
+ *    and "Show all N" to all of them;
+ *  - whether turning it ON asks first: only when the person has no factor to
+ *    turn it off again with (or their factors could not be read).
  */
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@synap-core/api-types";
 import {
-  PRESENCE_REQUEST_KINDS,
-  SENSITIVE_ACTIONS,
-  type SensitiveActionPath,
-} from "@synap-core/types/presence";
-import {
-  buildObjectActionTitle,
-  humanizeToken,
-} from "@synap-core/types/vocabulary";
-import { actionDoing } from "../../../_lib/presence/action-words";
+  presenceKindWords,
+  presenceMissingHref,
+} from "../../audit/_lib/presence-missing-link";
 import type { StatusKind } from "../../components/status-pill";
 
-/** `presence.mode`'s answer (dates as the tRPC transformer hands them). */
-export interface PresenceModeRead {
-  mode: "enforce" | "report";
-  source: "env" | "setting" | "default";
-  changedAt: string | Date | null;
-  changedBy: string | null;
-  missingLast30d: {
-    total: number;
-    byKind: ReadonlyArray<{ kind: string; count: number }>;
-  };
-}
+type Outputs = inferRouterOutputs<AppRouter>["presence"];
+
+/** `presence.mode`'s answer. */
+export type PresenceModeRead = Outputs["mode"];
+
+/** `presence.factors`' answer. */
+export type PresenceFactors = Outputs["factors"];
 
 /** How many kinds the card lists before "Show all". */
 export const MISSING_CAP = 3;
 
+/** `missingSince` files a row with no kind under this one: nothing to open. */
+const UNKNOWN_KIND = "unknown";
+
 export interface PresenceModeView {
   on: boolean;
-  mark: { kind: StatusKind; word: "presence.mark.on" | "presence.mark.off" };
+  mark: { kind: StatusKind; word: "presence.on" | "presence.off" };
   line: "presence.line.on" | "presence.line.off";
   source:
     | { word: "presence.source.env" }
-    | { word: "presence.source.changed"; at: string | Date }
+    | { word: "presence.source.changed"; at: string }
     | { word: "presence.source.default" };
   /** The switch can move: not while the operator's env holds it ON. */
   canSwitch: boolean;
@@ -51,41 +48,19 @@ export interface PresenceModeView {
       | "presence.missing.wouldRefuse"
       | "presence.missing.before";
     total: number;
-    rows: Array<{ label: string; count: number }>;
-    /** Kinds left out of `rows` until "Show all". */
-    more: number;
+    /** Each kind, a door to its audit rows (none for an unknown kind). */
+    rows: Array<{
+      kind: string;
+      label: string;
+      count: number;
+      href: string | null;
+    }>;
+    /** The audit log of every kind, when the rows leave some out. */
+    showAll: { href: string; n: number } | null;
   };
 }
 
-/** The first letter of a sentence-case phrase of our own catalog (en, fr). */
-function sentenceStart(text: string): string {
-  return text.charAt(0).toLocaleUpperCase() + text.slice(1);
-}
-
-/**
- * What a `presence.missing` kind was, in words: a sensitive action's path
- * (what the person did), a request kind, or an approval's
- * `targetType/proposalType` (the proposal's own title words).
- */
-export function missingKindLabel(kind: string): string {
-  if (Object.hasOwn(SENSITIVE_ACTIONS, kind)) {
-    return sentenceStart(actionDoing(kind as SensitiveActionPath));
-  }
-  if (Object.hasOwn(PRESENCE_REQUEST_KINDS, kind)) return humanizeToken(kind);
-  const slash = kind.indexOf("/");
-  if (slash > 0) {
-    return buildObjectActionTitle({
-      action: kind.slice(slash + 1),
-      objectKind: kind.slice(0, slash),
-    });
-  }
-  return humanizeToken(kind);
-}
-
-export function presenceModeView(
-  read: PresenceModeRead,
-  opts: { showAll?: boolean } = {}
-): PresenceModeView {
+export function presenceModeView(read: PresenceModeRead): PresenceModeView {
   const on = read.mode === "enforce";
   const source: PresenceModeView["source"] =
     read.source === "env"
@@ -94,16 +69,17 @@ export function presenceModeView(
         ? { word: "presence.source.changed", at: read.changedAt }
         : { word: "presence.source.default" };
   const { total, byKind } = read.missingLast30d;
-  const all = byKind.map((r) => ({
-    label: missingKindLabel(r.kind),
+  const rows = byKind.slice(0, MISSING_CAP).map((r) => ({
+    kind: r.kind,
+    label: presenceKindWords(r.kind),
     count: r.count,
+    href: r.kind === UNKNOWN_KIND ? null : presenceMissingHref(r.kind),
   }));
-  const rows = opts.showAll ? all : all.slice(0, MISSING_CAP);
   return {
     on,
     mark: on
-      ? { kind: "healthy", word: "presence.mark.on" }
-      : { kind: "stale", word: "presence.mark.off" },
+      ? { kind: "healthy", word: "presence.on" }
+      : { kind: "stale", word: "presence.off" },
     line: on ? "presence.line.on" : "presence.line.off",
     source,
     canSwitch: read.source !== "env",
@@ -116,7 +92,24 @@ export function presenceModeView(
             : "presence.missing.wouldRefuse",
       total,
       rows: total === 0 ? [] : rows,
-      more: total === 0 ? 0 : all.length - rows.length,
+      showAll:
+        total > 0 && byKind.length > rows.length
+          ? { href: presenceMissingHref(), n: total }
+          : null,
     },
   };
+}
+
+/**
+ * Does turning it ON ask first? Turning it OFF again needs a proof, so the
+ * person is asked only when they hold no factor to give one (a passkey, a
+ * Relay device key), or when that could not be read: never a needless
+ * dialog for someone who can already prove.
+ */
+export function turningOnAsks(factors: {
+  isError: boolean;
+  data?: PresenceFactors | undefined;
+}): boolean {
+  if (factors.isError || !factors.data) return true;
+  return factors.data.passkeys + factors.data.deviceKeys === 0;
 }

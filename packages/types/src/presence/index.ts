@@ -15,10 +15,7 @@
 
 import { z } from "zod";
 import type { Catalog, Locale } from "../i18n/index.js";
-import {
-  buildObjectActionTitle,
-  type VerbMood,
-} from "../vocabulary/index.js";
+import { buildObjectActionTitle, type VerbMood } from "../vocabulary/index.js";
 
 /** The first line of every signed presence message (its version). */
 export const PRESENCE_MESSAGE_VERSION = "synap-presence-v1" as const;
@@ -485,7 +482,7 @@ export const presenceWordsEn = {
   "presence.sensitive":
     "Connecting an AI or an app, changing keys and rules, deploys and deletions",
   "presence.where":
-    "Approve them in pod admin with a passkey, in Relay with Face ID, or in the desktop app with Touch ID.",
+    "You approve in pod admin with a passkey, in Relay with Face ID, or in the desktop app with Touch ID.",
 } as const;
 
 export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
@@ -496,7 +493,7 @@ export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
   "presence.sensitive":
     "Connecter une IA ou une app, modifier des clés et des règles, les déploiements et les suppressions",
   "presence.where":
-    "Approuvez-les dans l’administration du pod avec une clé d’accès, dans Relay avec Face ID, ou dans l’app de bureau avec Touch ID.",
+    "Vous approuvez dans l’administration du pod avec une clé d’accès, dans Relay avec Face ID, ou dans l’app de bureau avec Touch ID.",
 };
 
 /** The shared presence words, per catalog language (`useT` / `createT`). */

@@ -12,10 +12,11 @@
  * and the click that sent the approval was spent on the first, refused, try.
  *
  * It names what is being approved (the request's heading, derived like its
- * page through `proposalHeading` and the vocabulary door) and why the browser
- * asks for Touch ID or a security key. With no passkey on this pod, or a
- * browser that cannot use one, it says so: add one under Security, or
- * approve in Relay with Face ID.
+ * page through `proposalHeading` and the vocabulary door); why the browser
+ * asks for Touch ID or a security key is one "Why?" away. With no passkey on
+ * this pod, or a browser that cannot use one, it says so: add one on the
+ * passkeys page (a new tab; the dialog then says to come back and press Try
+ * again), or approve in Relay with Face ID.
  */
 
 import {
@@ -54,6 +55,7 @@ import {
   isPasskeyAssertionSupported,
 } from "../../../lib/passkey";
 import { proposalHeading } from "../../proposal/[id]/proposal-heading";
+import { PASSKEYS_PATH } from "../../settings/security/passkeys-path";
 import { presenceT } from "./copy";
 import { presenceDialogView } from "./dialog-model";
 import {
@@ -193,6 +195,22 @@ function PresenceDialog({
   const mine = state.ask === ask;
   const phase: Phase = mine ? state.phase : { kind: "reading" };
   const shown = mine && state.shown;
+  // What the person opened in this ask's dialog: the "Why?" and the passkey
+  // tab. Each belongs to one ask, like its phase.
+  const [opened, setOpened] = useState<{
+    ask: Ask | null;
+    why: boolean;
+    addPasskey: boolean;
+  }>({ ask: null, why: false, addPasskey: false });
+  const ours = opened.ask === ask;
+  const whyOpen = ours && opened.why;
+  const toggle = (part: "why" | "addPasskey", value: boolean) =>
+    setOpened((prev) => ({
+      ask,
+      why: prev.ask === ask ? prev.why : false,
+      addPasskey: prev.ask === ask ? prev.addPasskey : false,
+      [part]: value,
+    }));
   // The ask the latest read belongs to: a late answer of a closed ask is dropped.
   const live = useRef<Ask | null>(null);
   const setPhase = (forAsk: Ask, next: Phase) => {
@@ -295,6 +313,7 @@ function PresenceDialog({
     passkeySupported: isPasskeyAssertionSupported(),
     progress,
     inBrowserOnly: doing !== null,
+    addPasskeyOpened: ours && opened.addPasskey,
   });
   const reread = () => ask && void read.current(ask, null);
   const status = !view.status
@@ -332,7 +351,22 @@ function PresenceDialog({
           ) : (
             <p>{t("action.unnamed")}</p>
           )}
-          <p className="text-foreground/65">{t(doing ? "why.act" : "why")}</p>
+          <div className="flex flex-col items-start gap-1">
+            <button
+              type="button"
+              aria-expanded={whyOpen}
+              aria-controls="presence-dialog-why"
+              onClick={() => toggle("why", !whyOpen)}
+              className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+            >
+              {t("whyToggle")}
+            </button>
+            {whyOpen && (
+              <p id="presence-dialog-why" className="text-foreground/65">
+                {t(doing ? "why.act" : "why")}
+              </p>
+            )}
+          </div>
           {view.notice && (
             <div className="flex flex-col gap-1 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
               {view.notice === "noPasskey" && (
@@ -378,6 +412,17 @@ function PresenceDialog({
               {t("tryAgain")}
             </Button>
           )}
+          {view.secondary === "addPasskey" && (
+            <Button
+              as="a"
+              href={PASSKEYS_PATH}
+              target="_blank"
+              rel="noopener"
+              variant="flat"
+            >
+              {t("addPasskey")}
+            </Button>
+          )}
           {view.primary === "tryAgain" && (
             <Button color="primary" autoFocus onPress={reread}>
               {t("tryAgain")}
@@ -386,11 +431,12 @@ function PresenceDialog({
           {view.primary === "addPasskey" && (
             <Button
               as="a"
-              href="/settings/security#passkeys"
+              href={PASSKEYS_PATH}
               target="_blank"
               rel="noopener"
               color="primary"
               autoFocus
+              onPress={() => toggle("addPasskey", true)}
             >
               {t("addPasskey")}
             </Button>

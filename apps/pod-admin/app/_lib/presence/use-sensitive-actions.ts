@@ -20,9 +20,11 @@
  * `error`, `data`) and takes `onSuccess` / `onError` itself.
  */
 
-import type { SensitiveActionPath } from "@synap-core/types/presence";
+import {
+  sensitiveActionTitle,
+  type SensitiveActionPath,
+} from "@synap-core/types/presence";
 import { trpc } from "../../../lib/trpc";
-import { actionDoing } from "./action-words";
 import {
   usePresenceDoor,
   type DoorHandlers,
@@ -47,7 +49,10 @@ function useSensitiveAction<M extends DoorMutation<never, unknown>>(
 ) {
   return usePresenceDoor(
     mutation,
-    (input) => ({ action: { path, input }, doing: actionDoing(path) }),
+    (input) => ({
+      action: { path, input },
+      doing: sensitiveActionTitle(path),
+    }),
     defaults
   );
 }
