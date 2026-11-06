@@ -158,7 +158,9 @@ export function PresenceModeCard() {
           <>
             {t("presence.on.consequence")}{" "}
             <a
-              href="/settings/security#passkeys"
+              href="#passkeys"
+              // Your passkeys are on this page (W5): close, then scroll there.
+              onClick={() => setConfirm(null)}
               className="font-medium text-primary underline-offset-2 hover:underline"
             >
               {t("presence.on.passkeys")}

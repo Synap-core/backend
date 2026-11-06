@@ -14,6 +14,7 @@ import {
   PresenceRefusedError,
   approveEachWithPresence,
   approveWithPresence,
+  asksUpFront,
   needsPresence,
   presenceRefusal,
   proveEachUpFront,
@@ -275,6 +276,55 @@ describe("needsPresence (the pod's own test)", () => {
       })
     ).toBe(true);
     expect(needsPresence({})).toBe(false);
+  });
+
+  it("W5: a row the pod switched off is not asked; the rest still is", () => {
+    const choice = {
+      approvalsOff: ["focus_session/dev.deploy_approval", "governance."],
+      actionsOff: [],
+    };
+    const deploy = {
+      targetType: "focus_session",
+      proposalType: "dev.deploy_approval",
+    };
+    expect(needsPresence(deploy)).toBe(true);
+    expect(needsPresence(deploy, choice)).toBe(false);
+    expect(
+      needsPresence(
+        { targetType: "governance_rule", proposalType: "governance.widen" },
+        choice
+      )
+    ).toBe(false);
+    expect(
+      needsPresence({ targetType: "entity", proposalType: "delete" }, choice)
+    ).toBe(true);
+    // Filed as the person: always asked, whatever the pod switched off.
+    expect(needsPresence({ ...deploy, data: { asPerson: true } }, choice)).toBe(
+      true
+    );
+    // Unread or failed read: the lists as written.
+    expect(needsPresence(deploy, null)).toBe(true);
+  });
+});
+
+describe("asksUpFront (W5)", () => {
+  const choice = { approvalsOff: [], actionsOff: ["apiKeys.create"] };
+  it("a switched-off action goes without a proof; others are asked", () => {
+    expect(
+      asksUpFront({ action: { path: "apiKeys.create", input: {} } }, choice)
+    ).toBe(false);
+    expect(
+      asksUpFront({ action: { path: "apiKeys.rotate", input: {} } }, choice)
+    ).toBe(true);
+    expect(
+      asksUpFront({ action: { path: "apiKeys.create", input: {} } }, null)
+    ).toBe(true);
+  });
+  it("a request a door decides is always asked", () => {
+    expect(
+      asksUpFront({ request: { kind: "presence_mode", id: "report" } }, choice)
+    ).toBe(true);
+    expect(asksUpFront({ proposalId: "p1" }, choice)).toBe(true);
   });
 });
 

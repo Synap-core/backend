@@ -273,10 +273,17 @@ export const presenceRouter = router({
   /**
    * What asks for a passkey on this pod (W5): the rows of the sensitive lists
    * a pod admin switched off, none by default. Every signed-in person may read
-   * it, so a client asks for a proof only where the pod will.
+   * it, so a client asks for a proof only where the pod will. `mode` is the
+   * mode in force (read with the choice, one cached read): a member's
+   * Security page says up front that their last passkey stays while it is
+   * `enforce` (`presence.mode` itself is a pod admin read).
    */
   sensitivity: protectedProcedure.query(async () => {
-    return readPresenceSensitivity();
+    const [choice, { mode }] = await Promise.all([
+      readPresenceSensitivity(),
+      readPresenceMode(),
+    ]);
+    return { ...choice, mode };
   }),
 
   /**
