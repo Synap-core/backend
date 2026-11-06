@@ -31,8 +31,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   recordSessionSpawn,
 }));
-vi.mock("../focus-sessions/session-blocked-by.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
+vi.mock("../focus-sessions/session-blocked-by.js", () => ({
   addCreateTimeBlockers,
 }));
 vi.mock("./playbook-lifecycle.js", async (importOriginal) => ({
