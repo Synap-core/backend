@@ -341,6 +341,7 @@ export function activatorRuleDecl(input: {
     ...(perMoment ? { writes: a.mode } : {}),
     // Omitted when undeclared, so every rule compiled before it is unchanged.
     ...(a.unless ? { unless: a.unless } : {}),
+    ...(a.only ? { only: a.only } : {}),
   };
   const common = {
     playbookId,

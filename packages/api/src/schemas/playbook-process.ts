@@ -72,6 +72,19 @@ export const playbookActivatorSchema = z
         present: z.literal(true),
       })
       .optional(),
+    // Keep only a thing whose property holds one of these values (read off
+    // the thing when the worker fires: `skippedByOnly`, `@synap-core/types/workers`).
+    only: z
+      .strictObject({
+        property: z
+          .string()
+          .trim()
+          .min(1)
+          .max(120)
+          .regex(/^[A-Za-z0-9_-]+$/, "a property slug"),
+        in: z.array(statusValueSchema).min(1).max(50),
+      })
+      .optional(),
   })
   .refine((a) => (a.on !== "enters_status" && a.on !== "count") || !!a.status, {
     message:
@@ -115,6 +128,17 @@ export const playbookActivatorSchema = z
       message:
         'unless leaves out ONE thing: only a per_thing "created" or "enters_status" activator takes it',
       path: ["unless"],
+    }
+  )
+  .refine(
+    (a) =>
+      a.only === undefined ||
+      ((a.on === "created" || a.on === "enters_status") &&
+        a.size !== "per_moment"),
+    {
+      message:
+        'only keeps ONE thing by its value: only a per_thing "created" or "enters_status" activator takes it',
+      path: ["only"],
     }
   );
 
