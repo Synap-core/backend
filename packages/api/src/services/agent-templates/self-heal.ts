@@ -250,7 +250,31 @@ async function ensureAsk(
       .where(eq(focusSessions.id, sessionId));
   }
   const wanted = agents.map((a) => a.id).sort();
+  const write: { before: ExpectedOutput[]; after: ExpectedOutput[] | null } = {
+    before: [],
+    after: null,
+  };
   await updateExpectedOutputsLocked(sessionId, (current) => {
+    write.before = current;
+    write.after = nextAskOutputs(current);
+    return write.after;
+  });
+  // A pass nobody is watching hands the person a question: tell them, once.
+  // `newlyOwedSlots` counts only a NEW card; keeping the open one current
+  // (an agent joins or leaves it) or retiring it is not news.
+  if (write.after) {
+    const { notifySessionNeedsYou } =
+      await import("../focus-sessions/notify-needs-you.js");
+    await notifySessionNeedsYou({
+      sessionId,
+      byAgent: true,
+      recipientUserId: ownerId,
+      reason: { kind: "slots", before: write.before, after: write.after },
+    });
+  }
+  return sessionId;
+
+  function nextAskOutputs(current: ExpectedOutput[]): ExpectedOutput[] | null {
     const open = current.findIndex(isOpenTemplateAsk);
     if (open >= 0) {
       const has = askFieldIds(current[open]!).sort();
@@ -290,8 +314,7 @@ async function ensureAsk(
           }
         : slot,
     ] as ExpectedOutput[];
-  });
-  return sessionId;
+  }
 }
 
 export async function selfHealAgentTemplateLinks(

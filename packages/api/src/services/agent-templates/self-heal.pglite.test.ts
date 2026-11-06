@@ -20,6 +20,13 @@ const h = vi.hoisted(() => ({
   },
   db: null as unknown,
   createdSessions: [] as Array<Record<string, unknown>>,
+  /** Each needs-you call: who is told, and how many slots it announces as new. */
+  notified: [] as Array<{
+    sessionId: string;
+    byAgent: boolean;
+    recipientUserId?: string;
+    newlyOwed: number;
+  }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -46,6 +53,39 @@ vi.mock("../focus-sessions/create-session.js", () => ({
     return { status: "created", session: { id } };
   },
 }));
+
+// The needs-you producer's own suite owns the push; here: the card door calls
+// it, for the right person, and only a NEW card counts as news (the REAL
+// `newlyOwedSlots`, which the producer uses to decide).
+vi.mock("../focus-sessions/notify-needs-you.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../focus-sessions/notify-needs-you.js")
+    >();
+  return {
+    ...actual,
+    notifySessionNeedsYou: async (p: {
+      sessionId: string;
+      byAgent: boolean;
+      recipientUserId?: string;
+      reason: { kind: string; before?: unknown; after?: unknown };
+    }) => {
+      h.notified.push({
+        sessionId: p.sessionId,
+        byAgent: p.byAgent,
+        recipientUserId: p.recipientUserId,
+        newlyOwed:
+          p.reason.kind === "slots"
+            ? actual.newlyOwedSlots(
+                p.reason.before as never,
+                p.reason.after as never
+              ).length
+            : 0,
+      });
+      return true;
+    },
+  };
+});
 
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
@@ -182,6 +222,7 @@ beforeEach(async () => {
     `delete from agent_templates; delete from api_keys; delete from focus_sessions; delete from users;`
   );
   h.createdSessions.length = 0;
+  h.notified.length = 0;
 });
 
 async function installOfficial() {
@@ -243,6 +284,29 @@ describe("D10 — clear matches link, the rest is asked ONCE", () => {
     await selfHealAgentTemplateLinks();
     expect(h.createdSessions).toHaveLength(1);
     expect(await openCardFields()).toEqual([[eve, deepseek].sort()]);
+  });
+
+  it("the person is told when a card is filed; keeping it current or a pass with nothing new is not news", async () => {
+    await installOfficial();
+    await agent("eve", "Eve");
+    await selfHealAgentTemplateLinks();
+    const told = h.notified.filter((n) => n.newlyOwed > 0);
+    expect(told).toHaveLength(1);
+    expect(told[0]).toMatchObject({
+      byAgent: true,
+      recipientUserId: OWNER,
+      newlyOwed: 1,
+    });
+
+    // Nothing changed: no write, no call.
+    const calls = h.notified.length;
+    await selfHealAgentTemplateLinks();
+    expect(h.notified).toHaveLength(calls);
+
+    // Another agent joins the SAME card: written, but nothing new is owed.
+    await agent("deepseek", "Deepseek");
+    await selfHealAgentTemplateLinks();
+    expect(h.notified.filter((n) => n.newlyOwed > 0)).toHaveLength(1);
   });
 
   it("each person gets their own card, about their own agents", async () => {
