@@ -12,7 +12,13 @@
  */
 import { and, db, drizzleSql, eq, gt, isNull } from "@synap/database";
 import { presenceChallenges } from "@synap/database/schema";
-import { presenceRequestSubject } from "@synap-core/types/presence";
+import {
+  PRESENCE_LAST_PASSKEY,
+  presenceRequestSubject,
+} from "@synap-core/types/presence";
+import { TRPCError } from "@trpc/server";
+import { readPresenceMode } from "./mode.js";
+import { readPasskeys } from "./proof.js";
 
 export const PASSKEY_CHANGE_GRANT_SECONDS = 300;
 
@@ -47,4 +53,38 @@ export async function redeemPasskeyChangeGrant(
     )
     .returning({ id: presenceChallenges.id });
   return Boolean(redeemed);
+}
+
+/**
+ * May this person remove one of their passkeys (W5)? Not their last one
+ * while the proof of presence is on: pod admin proves only with a passkey,
+ * so they would lose the way to approve there. A failed read of their
+ * passkeys fails the call, never "allowed".
+ *
+ * Kratos' settings guard cannot tell a removal from an addition (its
+ * pre-persist web_hook sees the identity without credentials), so this door,
+ * which every removal in pod admin passes to get its grant, is where it is
+ * refused.
+ */
+export async function assertMayRemovePasskey(userId: string): Promise<void> {
+  if ((await readPresenceMode()).mode !== "enforce") return;
+  let passkeys: number;
+  try {
+    passkeys = (await readPasskeys(userId)).length;
+  } catch (err) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message:
+        "Couldn't read your passkeys from the pod's sign-in service. Try again in a moment.",
+      cause: err,
+    });
+  }
+  if (passkeys <= 1) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This is your last passkey, and approvals need you in person on this pod: add another passkey first, or turn that off in pod admin, Security.",
+      cause: { reasonCode: PRESENCE_LAST_PASSKEY },
+    });
+  }
 }

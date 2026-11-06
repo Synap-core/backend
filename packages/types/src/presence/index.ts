@@ -44,6 +44,14 @@ export const PRESENCE_REFUSAL_CODES = [
 
 export type PresenceRefusalCode = (typeof PRESENCE_REFUSAL_CODES)[number];
 
+/**
+ * A passkey removal refused because it is the person's last passkey while the
+ * proof of presence is on (W5): pod admin proves only with a passkey, so the
+ * person would lose the way to approve here. Not a presence refusal (no proof
+ * would change it): it is never in `PRESENCE_REFUSAL_CODES`.
+ */
+export const PRESENCE_LAST_PASSKEY = "PRESENCE_LAST_PASSKEY" as const;
+
 /** Is `code` (an error's `data.reasonCode`, a Hub `code`) a presence refusal? */
 export function isPresenceCode(code: unknown): code is PresenceRefusalCode {
   return (PRESENCE_REFUSAL_CODES as readonly unknown[]).includes(code);
@@ -109,17 +117,126 @@ export const SENSITIVE_PROPOSAL_TYPE_PREFIXES: Readonly<
 };
 
 /**
- * Is approving this proposal sensitive, and why? Exact `targetType/proposalType`
- * first, then the `proposalType` alone, then a prefix: the registry's own
- * lookup order, so a proposal never escapes by being typed one way or the other.
+ * What a pod admin switched OFF of the sensitive lists (W5, founder 6 Nov
+ * 2026: "pod settings (pod admin) should enable the user to select what is
+ * considered sensitive & what is not"). Stored per pod
+ * (`pod_settings.settings.presenceSensitivity`), written only by
+ * `presence.setSensitivity`. Absent or empty = every row on: today's lists.
+ * Only a row of `SENSITIVE_APPROVALS` / `SENSITIVE_PROPOSAL_TYPE_PREFIXES` /
+ * `SENSITIVE_ACTIONS` can be switched: a request filed AS the person and the
+ * requests a door decides (`PRESENCE_REQUEST_KINDS`) always ask.
  */
-export function sensitiveApprovalReason(proposal: {
+export interface PresenceSensitivityChoice {
+  /** Keys of `SENSITIVE_APPROVALS` or `SENSITIVE_PROPOSAL_TYPE_PREFIXES` switched off. */
+  approvalsOff: readonly string[];
+  /** Paths of `SENSITIVE_ACTIONS` switched off. */
+  actionsOff: readonly string[];
+}
+
+/** The default: nothing switched off, so the lists above hold as written. */
+export const DEFAULT_PRESENCE_SENSITIVITY: PresenceSensitivityChoice = {
+  approvalsOff: [],
+  actionsOff: [],
+};
+
+/** One switchable row of "What asks for your passkey". */
+export interface PresenceSensitivityRow {
+  /** An approval (`<targetType>/<proposalType>`, a type, or a type prefix) or an action (a tRPC path). */
+  kind: "approval" | "action";
+  key: string;
+  reason: SensitiveReason;
+  /** A type prefix (`governance.`): every proposal type that starts with it. */
+  prefix?: true;
+}
+
+/** Every switchable row, derived from the lists, in their order. */
+export function presenceSensitivityRows(): PresenceSensitivityRow[] {
+  return [
+    ...Object.entries(SENSITIVE_APPROVALS).map(([key, reason]) => ({
+      kind: "approval" as const,
+      key,
+      reason,
+    })),
+    ...Object.entries(SENSITIVE_PROPOSAL_TYPE_PREFIXES).map(
+      ([key, reason]) => ({
+        kind: "approval" as const,
+        key,
+        reason,
+        prefix: true as const,
+      })
+    ),
+    ...Object.entries(SENSITIVE_ACTIONS).map(([key, reason]) => ({
+      kind: "action" as const,
+      key,
+      reason: reason as SensitiveReason,
+    })),
+  ];
+}
+
+/**
+ * A choice as the pod stores it: only keys of the lists, each once, sorted.
+ * An unknown key (a row removed from the lists since) is dropped, never kept
+ * to switch off a row that may come back meaning something else.
+ */
+export function normalizePresenceSensitivity(
+  choice: Partial<PresenceSensitivityChoice> | null | undefined
+): PresenceSensitivityChoice {
+  const approvals = new Set([
+    ...Object.keys(SENSITIVE_APPROVALS),
+    ...Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES),
+  ]);
+  const actions = new Set(Object.keys(SENSITIVE_ACTIONS));
+  const keep = (keys: readonly string[] | undefined, known: Set<string>) =>
+    [...new Set(keys ?? [])].filter((k) => known.has(k)).sort();
+  return {
+    approvalsOff: keep(choice?.approvalsOff, approvals),
+    actionsOff: keep(choice?.actionsOff, actions),
+  };
+}
+
+/**
+ * Does `next` switch OFF a row `current` asks for? That change lets a
+ * session alone do more, so it needs a proof of presence in every mode;
+ * switching rows back ON only takes power away.
+ */
+export function sensitivityLoosens(
+  current: PresenceSensitivityChoice,
+  next: PresenceSensitivityChoice
+): boolean {
+  const was = (list: readonly string[]) => new Set(list);
+  const approvals = was(current.approvalsOff);
+  const actions = was(current.actionsOff);
+  return (
+    next.approvalsOff.some((k) => !approvals.has(k)) ||
+    next.actionsOff.some((k) => !actions.has(k))
+  );
+}
+
+/**
+ * The request id a proof for a sensitivity change names
+ * (`presence_sensitivity:<id>`): hex SHA-256 of the normalized new choice, so
+ * the proof is bound to exactly the rows the person saw switched off.
+ */
+export function presenceSensitivityId(
+  choice: PresenceSensitivityChoice
+): Promise<string> {
+  return sha256Hex(canonicalJson(normalizePresenceSensitivity(choice)));
+}
+
+/** The wire shape of a choice (`presence.setSensitivity`). */
+export const presenceSensitivitySchema = z.object({
+  approvalsOff: z.array(z.string().min(1).max(200)).max(200),
+  actionsOff: z.array(z.string().min(1).max(200)).max(200),
+});
+
+/** The row of the approval lists this proposal falls under, or null. */
+function sensitiveApprovalRow(proposal: {
   targetType: string;
   proposalType: string;
-}): SensitiveReason | null {
+}): { key: string; reason: SensitiveReason } | null {
   const composite = `${proposal.targetType}/${proposal.proposalType}`;
   if (Object.prototype.hasOwnProperty.call(SENSITIVE_APPROVALS, composite)) {
-    return SENSITIVE_APPROVALS[composite]!;
+    return { key: composite, reason: SENSITIVE_APPROVALS[composite]! };
   }
   if (
     Object.prototype.hasOwnProperty.call(
@@ -127,14 +244,38 @@ export function sensitiveApprovalReason(proposal: {
       proposal.proposalType
     )
   ) {
-    return SENSITIVE_APPROVALS[proposal.proposalType]!;
+    return {
+      key: proposal.proposalType,
+      reason: SENSITIVE_APPROVALS[proposal.proposalType]!,
+    };
   }
   for (const [prefix, reason] of Object.entries(
     SENSITIVE_PROPOSAL_TYPE_PREFIXES
   )) {
-    if (proposal.proposalType.startsWith(prefix)) return reason;
+    if (proposal.proposalType.startsWith(prefix))
+      return { key: prefix, reason };
   }
   return null;
+}
+
+/**
+ * Is approving this proposal sensitive, and why? Exact `targetType/proposalType`
+ * first, then the `proposalType` alone, then a prefix: the registry's own
+ * lookup order, so a proposal never escapes by being typed one way or the other.
+ * With the pod's `choice`, a row a pod admin switched off is not sensitive;
+ * the row that matched decides (a switched-off composite never falls through
+ * to its type alone).
+ */
+export function sensitiveApprovalReason(
+  proposal: {
+    targetType: string;
+    proposalType: string;
+  },
+  choice?: PresenceSensitivityChoice | null
+): SensitiveReason | null {
+  const row = sensitiveApprovalRow(proposal);
+  if (!row) return null;
+  return choice?.approvalsOff.includes(row.key) ? null : row.reason;
 }
 
 /**
@@ -269,6 +410,12 @@ export const PRESENCE_REQUEST_KINDS = {
   passkey_change: "setup",
   /** presence.setMode back to `report`: switching the proof off. The id is `report`. */
   presence_mode: "governance",
+  /**
+   * presence.setSensitivity when it switches a row OFF (W5): what asks for a
+   * passkey, chosen by a pod admin. The id is `presenceSensitivityId` of the
+   * new choice.
+   */
+  presence_sensitivity: "governance",
 } as const satisfies Record<string, SensitiveReason>;
 
 export type PresenceRequestKind = keyof typeof PRESENCE_REQUEST_KINDS;
@@ -373,9 +520,19 @@ export const SENSITIVE_ACTIONS = {
 
 export type SensitiveActionPath = keyof typeof SENSITIVE_ACTIONS;
 
-/** Is this tRPC path a sensitive action? */
-export function sensitiveActionReason(path: string): SensitiveReason | null {
-  return (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[path] ?? null;
+/**
+ * Is this tRPC path a sensitive action? With the pod's `choice`, a path a pod
+ * admin switched off is not (the step-up's fresh sign-in still holds).
+ */
+export function sensitiveActionReason(
+  path: string,
+  choice?: PresenceSensitivityChoice | null
+): SensitiveReason | null {
+  if (!Object.prototype.hasOwnProperty.call(SENSITIVE_ACTIONS, path)) {
+    return null;
+  }
+  if (choice?.actionsOff.includes(path)) return null;
+  return (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[path]!;
 }
 
 /**

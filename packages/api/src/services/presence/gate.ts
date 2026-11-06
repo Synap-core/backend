@@ -8,6 +8,7 @@
  * fails when one does not call it.
  *
  * Which approvals: `sensitiveApprovalReason` (`@synap-core/types/presence`,
+ * read against the pod's choice of what asks for a passkey, W5),
  * the ONE list), plus every request the CLI filed AS THE PERSON
  * (`data.asPerson`). Everything else passes untouched.
  *
@@ -42,7 +43,7 @@ import {
   type SensitiveReason,
 } from "@synap-core/types/presence";
 import { isUuid } from "@synap-core/types/property-render";
-import { readPresenceMode } from "./mode.js";
+import { readPresenceMode, readPresenceSensitivity } from "./mode.js";
 import { db, eq, users, EventRepository, sql } from "@synap/database";
 
 import {
@@ -70,12 +71,18 @@ function filedAsPerson(proposal: GatedProposal): boolean {
   return data?.asPerson === true;
 }
 
-/** Why approving this needs a proof, or null when it does not. */
-function presenceReasonFor(
+/**
+ * Why approving this needs a proof, or null when it does not. A row of the
+ * lists asks unless a pod admin switched it off (W5): the pod's choice is
+ * read only for a proposal a row matches, so an everyday approval never
+ * waits on it. A failed read throws (never "switched off").
+ */
+async function presenceReasonFor(
   proposal: GatedProposal
-): SensitiveReason | "as_person" | null {
+): Promise<SensitiveReason | "as_person" | null> {
   if (filedAsPerson(proposal)) return "as_person";
-  return sensitiveApprovalReason(proposal);
+  if (!sensitiveApprovalReason(proposal)) return null;
+  return sensitiveApprovalReason(proposal, await readPresenceSensitivity());
 }
 
 /**
@@ -234,7 +241,7 @@ export async function assertPresenceForApproval(args: {
   /** Which door, for the log and the event. */
   door: string;
 }): Promise<PresenceVerdict | null> {
-  const reason = presenceReasonFor(args.proposal);
+  const reason = await presenceReasonFor(args.proposal);
   if (!reason) return null;
   return checkPresence({
     userId: args.userId,
@@ -286,7 +293,15 @@ export async function assertPresenceForAction(args: {
   input: unknown;
   proof?: PresenceProof | null;
 }): Promise<PresenceVerdict | null> {
-  const reason = sensitiveActionReason(args.path);
+  const listed = sensitiveActionReason(args.path);
+  if (!listed) return null;
+  // A path a pod admin switched off (W5) needs no proof: the step-up's fresh
+  // sign-in holds instead (`requireFreshAuthentication`). A proof sent anyway
+  // (a client that reads the full list) is still verified and still counts
+  // as the step-up.
+  const reason =
+    sensitiveActionReason(args.path, await readPresenceSensitivity()) ??
+    (args.proof ? listed : null);
   if (!reason) return null;
   const digest = await presenceActionDigest(args.path, args.input);
   return checkPresence({

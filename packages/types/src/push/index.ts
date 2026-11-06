@@ -310,6 +310,7 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // not you, something you own is broken into (W3 slice 3).
   "security.factor_changed": "work-broke",
   "security.presence_mode_changed": "work-broke",
+  "security.presence_sensitivity_changed": "work-broke",
   // Not a 10-second decision: in-app / Home only.
   "connector.sync.failed": null,
   "inbox.mention": null,
