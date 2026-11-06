@@ -102,6 +102,10 @@ import {
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { readStartOffers, type StartOffersRead } from "./start-offers.js";
+// Types only, statically: the writer is loaded where it runs (below). A static
+// import puts `move-status` → `permission-check` on this module's graph and
+// closes an import cycle through `permission-check` (see complete-session.ts).
+import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -379,6 +383,14 @@ export interface CreateFocusSessionParams {
    */
   offerStartContext?: boolean;
   /**
+   * BIND ON FACTS (founder decisions d01–d03, 2026-11-05; `bind-on-facts.ts`):
+   * once the row exists, the pod binds the playbook the FACTS name (the
+   * subject's kind, the parent's playbook, a `main red:` title) through the
+   * follow door, and records why on `metadata.boundBy`. Text never binds.
+   * Set by the AI start doors only. The reply carries ONE `binding` line.
+   */
+  bindOnFacts?: boolean;
+  /**
    * The GOAL whose loop proposes this run (work model W4, `runGoalLoop`):
    * the start is ALWAYS a proposal a person approves (the gate's
    * `forcePropose`, whoever switched the loop on), and the proposal carries
@@ -457,6 +469,11 @@ export type CreateFocusSessionResult =
        */
       playbooks?: SessionPlaybookCandidates;
       /**
+       * Present iff `bindOnFacts` decided something: ONE line saying which
+       * playbook the pod bound and why, or the fact-based offer.
+       */
+      binding?: string;
+      /**
        * True when the session the gate had auto-opened for this client was
        * adopted (goal/title/criteria updated) rather than a new row
        * created. `session.id` is then that session's id.
@@ -485,6 +502,13 @@ export type CreateFocusSessionResult =
       subjectRef?: SubjectRefResolution;
       /** Present iff `targets` were given: which were added, which already were. */
       targets?: SessionTargetsWrite;
+      /**
+       * Born INTO a first stage that asks for a subject status: what happened
+       * to the subject (written, proposed, skipped with why, failed) — the
+       * same report an advance's reply carries (`reportedSubjectMove`).
+       * Absent when there was nothing to move, and for a gated first stage.
+       */
+      subjectMove?: StageSubjectStatusOutcome;
     }
   | {
       /**
@@ -821,9 +845,10 @@ export async function createFocusSession(
 
   // PLAYBOOKS — only when the AI door asked and the caller named none
   // (`templateId: null` skips matching). SUGGEST-ONLY since 2026-09-20: the
-  // door hands back the pod's existing processes, ranked, and applies NOTHING.
-  // Naming `templateId` is the only way a playbook binds at start. After the
-  // twin check, so a repeated start of the same work still dedups.
+  // door hands back the pod's existing processes, ranked, and applies NOTHING:
+  // words never bind. A playbook binds when the caller names it (`templateId`)
+  // or when a FACT names it (`bindOnFacts`, below, once the row exists). After
+  // the twin check, so a repeated start of the same work still dedups.
   let playbookCandidates: SessionPlaybookCandidates | undefined;
   if (params.matchTemplate && params.templateId === undefined) {
     try {
@@ -1365,6 +1390,41 @@ export async function createFocusSession(
     }
   }
 
+  // BIRTH STAGE = SUBJECT STATUS (finding e100ddf6): the session was seeded
+  // INTO its first stage, so that stage's `subjectStatus` is written now, by
+  // the advance's own rule and writer (ungated writes, gated holds). After the
+  // commit, never inside it: a subject write that fails is reported on the
+  // reply, and never fails a session that already exists.
+  let subjectMove: StageSubjectStatusOutcome | undefined;
+  if (sessionOut.currentStage && sessionOut.subjectEntityId) {
+    try {
+      const { writeBirthStageSubjectStatus, reportedSubjectMove } =
+        await import("./stage-subject-status.js");
+      subjectMove = reportedSubjectMove(
+        await writeBirthStageSubjectStatus({
+          session: {
+            id: sessionOut.id,
+            playbookId: sessionOut.playbookId ?? null,
+            subjectEntityId: sessionOut.subjectEntityId,
+            workspaceId: sessionOut.workspaceId ?? null,
+          },
+          toStage: sessionOut.currentStage,
+          userId,
+          agentUserId: agentUserId ?? null,
+        })
+      );
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: sessionOut.id },
+        "birth stage subject-status not written — session kept"
+      );
+      subjectMove = {
+        status: "failed",
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
   // parent). AFTER the session exists, and never inside the transaction — a bad
   // parent handle must not roll back a legitimate session. The producer owns the
@@ -1523,6 +1583,54 @@ export async function createFocusSession(
     }
   }
 
+  // BIND ON FACTS (d01–d03): the explicit bind is recorded; otherwise the
+  // ladder decides from facts and binds through the follow door. A courtesy
+  // of the door, never a gate: a failure is said back on the line, and the
+  // session stays as it was created.
+  let binding: string | undefined;
+  if (params.bindOnFacts) {
+    try {
+      const { bindOnFacts: bindSessionOnFacts, stampBoundBy } =
+        await import("./bind-on-facts.js");
+      if (playbook) {
+        await stampBoundBy(sessionOut.id, {
+          rung: "explicit",
+          reason: "you named it",
+          playbookId: playbook.id,
+          phase: "start",
+          at: new Date().toISOString(),
+        });
+      } else if (!sessionOut.playbookId) {
+        const bound = await bindSessionOnFacts({
+          sessionId: sessionOut.id,
+          userId,
+          agentUserId,
+          phase: "start",
+          title: sessionOut.title ?? null,
+          workspaceId: sessionOut.workspaceId ?? null,
+          subjectEntityId: sessionOut.subjectEntityId ?? null,
+          parentSessionId,
+        });
+        binding = bound.line;
+        if (bound.decision === "bind") {
+          // The words were never going to bind; the fact did.
+          playbookCandidates = undefined;
+          const reloaded = await db.query.focusSessions.findFirst({
+            where: eq(focusSessions.id, sessionOut.id),
+          });
+          if (reloaded) sessionOut = reloaded;
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: sessionOut.id },
+        "bind on facts failed — the session starts unbound"
+      );
+      binding =
+        "No playbook bound: the pod could not read the facts to decide.";
+    }
+  }
+
   // START OFFERS (F5/F6) — a courtesy, never a gate: each part reports its
   // own failure, and a throw past them reads `unavailable`, never "none".
   const offers: StartOffersRead | undefined = params.offerStartContext
@@ -1559,8 +1667,10 @@ export async function createFocusSession(
       ? { candidates: twinMatch.candidates }
       : {}),
     ...(playbookCandidates ? { playbooks: playbookCandidates } : {}),
+    ...(binding ? { binding } : {}),
     ...(outcome.adopted ? { adopted: true as const } : {}),
     ...(subjectRefResolution ? { subjectRef: subjectRefResolution } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
+    ...(subjectMove ? { subjectMove } : {}),
   };
 }

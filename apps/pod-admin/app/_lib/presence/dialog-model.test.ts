@@ -1,5 +1,5 @@
 /**
- * The proof-of-presence dialog's states (review bf96d410, lane E): what it
+ * The proof-of-presence dialog's states (review bf96d410): what it
  * says and offers in each, so a failed read never reads as "no passkey",
  * and the dialog never promises a way that is not there.
  */
@@ -41,6 +41,21 @@ describe("presenceDialogView", () => {
     expect(view.notice).toBe("noPasskey");
     expect(view.primary).toBe("addPasskey");
     expect(view.secondary).toBe("tryAgain");
+  });
+
+  it("after Add a passkey opened its tab: come back and press Try again, which leads", () => {
+    const view = presenceDialogView({
+      phase: ready({ passkey: false }),
+      passkeySupported: true,
+      addPasskeyOpened: true,
+    });
+    expect(view.status).toEqual({ word: "comeBack" });
+    expect(view.primary).toBe("tryAgain");
+    expect(view.secondary).toBe("addPasskey");
+    setAmbientCatalogLocale("en");
+    expect(presenceT()("comeBack")).toMatch(
+      /come back here and press Try again/
+    );
   });
 
   it("a browser that cannot use a passkey: no primary action and no Try again", () => {

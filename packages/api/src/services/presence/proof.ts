@@ -21,6 +21,7 @@
  */
 
 import crypto from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import { kratosAdmin } from "@synap/auth";
 import { isRefusedSiteBase } from "@synap-core/types/tenancy";
 import {
@@ -90,11 +91,35 @@ function webauthnChallengeOf(message: string): string {
   return b64url(crypto.createHash("sha256").update(message, "utf8").digest());
 }
 
+/**
+ * At most this many challenges a person may ask for in a minute (every
+ * challenge door: `presence.challenge`, `devices.enrollChallenge`). A person
+ * confirming things asks for a few; a loop asking for thousands only fills
+ * the table (the jobs sweep `presence-challenge-sweep` empties what expired).
+ */
+export const PRESENCE_CHALLENGES_PER_MINUTE = 20;
+
 /** Issue a challenge for (person, subject). The subject is a proposal id or `enroll:<id>`. */
 export async function issuePresenceChallenge(args: {
   userId: string;
   subject: string | ((challengeId: string) => string);
 }): Promise<IssuedChallenge> {
+  const [recent] = await db
+    .select({ n: count() })
+    .from(presenceChallenges)
+    .where(
+      and(
+        eq(presenceChallenges.userId, args.userId),
+        gt(presenceChallenges.createdAt, new Date(Date.now() - 60_000))
+      )
+    );
+  if (Number(recent?.n ?? 0) >= PRESENCE_CHALLENGES_PER_MINUTE) {
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message:
+        "Too many confirmations asked for in the last minute. Wait a moment, then try again.",
+    });
+  }
   const id = crypto.randomUUID();
   const subject =
     typeof args.subject === "function" ? args.subject(id) : args.subject;
@@ -230,8 +255,12 @@ export async function readPasskeys(
  * unapproved. (Here, beside `readPasskeys`, so the gate can ask it without
  * the factor-change graph of `factors.ts`, which re-exports it.)
  */
-export async function hasProofFactor(userId: string): Promise<boolean> {
-  const [row] = await db
+export async function hasProofFactor(
+  userId: string,
+  /** A transaction to read the device keys in (the enrolment's, under its lock). */
+  executor: Pick<typeof db, "select"> = db
+): Promise<boolean> {
+  const [row] = await executor
     .select({ n: count() })
     .from(presenceDeviceKeys)
     .where(

@@ -39,6 +39,7 @@ import {
   convergeActivatorsAtBoot,
   reconcileCapabilitiesToTemplates,
   reconcileStandaloneConfigsToTemplates,
+  installOfficialAgentTemplates,
   backfillCapabilityEmits,
   notifyCapabilityUpdatesAvailable,
   normalizeIssuerUrl,
@@ -986,6 +987,18 @@ async function runStartupHooksInner(): Promise<void> {
     logger.warn(
       { err },
       "Failed to reconcile standalone configs to templates on startup (non-fatal)"
+    );
+  }
+
+  // The catalog installs every official agent template on every pod (founder
+  // decision D8) — from the cached catalog, so a restart installs what the
+  // last sync listed even before the next sync runs. Never throws.
+  try {
+    await installOfficialAgentTemplates();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to install the official agent templates on startup (non-fatal)"
     );
   }
 

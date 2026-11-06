@@ -75,6 +75,7 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { GrantRepository } from "@synap/database";
+import { mintPresencePass } from "./presence/pass.js";
 import {
   AI_READ_PROPOSE_ROLE_ID,
   GRANT_PRESETS,
@@ -627,6 +628,7 @@ describe('a NEW agent from /setup/agent starts with "AI — read & propose"', ()
       name: "Named",
       agentType: "named-fresh",
       createdByUserId: OWNER,
+      presence: mintPresencePass("agentUsers.create", OWNER, true),
     });
     const caps = (
       await q<{ caps: string[] }>(
@@ -969,5 +971,105 @@ describe("re-running init names this computer's unnamed key", () => {
       idempotent: true,
     });
     expect(await labelOf(named.keyId)).toBe("Studio");
+  });
+});
+
+describe("D9 — the template a connect names applies with that same approval", () => {
+  const linkOf = async (id: string) =>
+    (
+      await q<{ agent_template_slug: string | null }>(
+        `select agent_template_slug from users where id = $1`,
+        [id]
+      )
+    ).rows[0]!.agent_template_slug;
+
+  async function newAgent(): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into users (id, email, user_type, created_by_user_id, agent_type, agent_metadata)
+       values ($1, $2, 'agent', $3, 'claude-code', $4::jsonb)`,
+      [id, `${id}@x`, OWNER, JSON.stringify({ capabilities: PRESET })]
+    );
+    return id;
+  }
+
+  async function pendingWithTemplate(agent: string, template: string | null) {
+    const keyId = await mintKey(agent, false);
+    const { proposalId } = await fileAgentConnectProposal({
+      keyId,
+      agentUserId: agent,
+      ownerUserId: OWNER,
+      agentName: "Claude Code",
+      agentType: "claude-code",
+      expiresAt: null,
+      template,
+    });
+    return { keyId, proposalId };
+  }
+
+  beforeAll(async () => {
+    await q(
+      `insert into agent_templates (slug, name, harness, aliases, worker, tried, practices, metadata)
+       values ('claude-code', 'Claude Code', 'claude-code', '[]'::jsonb, true, true, '{"skills":[]}'::jsonb, '{}'::jsonb)`
+    );
+  });
+
+  it("filing links nothing; the approval links the agent to the named template", async () => {
+    const agent = await newAgent();
+    const { keyId, proposalId } = await pendingWithTemplate(
+      agent,
+      "claude-code"
+    );
+    const data = (
+      await q<{ data: { template?: string } }>(
+        `select data from proposals where id = $1`,
+        [proposalId]
+      )
+    ).rows[0]!.data;
+    expect(data.template).toBe("claude-code");
+    expect(await linkOf(agent)).toBeNull();
+    expect(await approvePendingAgentKey({ keyId, approverId: OWNER })).toBe(
+      "approved"
+    );
+    expect(await linkOf(agent)).toBe("claude-code");
+  });
+
+  it("a rejected connection links nothing", async () => {
+    const agent = await newAgent();
+    const { keyId } = await pendingWithTemplate(agent, "claude-code");
+    expect(await rejectPendingAgentKey({ keyId, approverId: OWNER })).toBe(
+      "rejected"
+    );
+    expect(await linkOf(agent)).toBeNull();
+  });
+
+  it("a re-connect never re-points an agent that is already linked", async () => {
+    const agent = await newAgent();
+    await q(`update users set agent_template_slug = 'codex' where id = $1`, [
+      agent,
+    ]);
+    const { keyId } = await pendingWithTemplate(agent, "claude-code");
+    expect(await approvePendingAgentKey({ keyId, approverId: OWNER })).toBe(
+      "approved"
+    );
+    expect(await linkOf(agent)).toBe("codex");
+  });
+
+  it("a template the pod has not installed links nothing (the self-healing pass links it later)", async () => {
+    const agent = await newAgent();
+    const { keyId } = await pendingWithTemplate(agent, "hermes");
+    expect(await approvePendingAgentKey({ keyId, approverId: OWNER })).toBe(
+      "approved"
+    );
+    expect(await linkOf(agent)).toBeNull();
+  });
+
+  it("a connect that names no template links nothing", async () => {
+    const agent = await newAgent();
+    const { keyId } = await pendingWithTemplate(agent, null);
+    expect(await approvePendingAgentKey({ keyId, approverId: OWNER })).toBe(
+      "approved"
+    );
+    expect(await linkOf(agent)).toBeNull();
   });
 });

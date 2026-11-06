@@ -1478,6 +1478,15 @@ export const systemRouter = router({
         toDate: z.string().datetime().optional(),
         limit: z.number().min(1).max(200).default(50),
         offset: z.number().min(0).default(0),
+        /**
+         * The approvals and changes that went through without a proof of
+         * presence (report mode): only `presence.missing` events, and with
+         * `kind` only those of that kind (`data.proposalType`, the key the
+         * Security card counts by). Every other filter still narrows.
+         */
+        presenceMissing: z
+          .object({ kind: z.string().min(1).max(200).optional() })
+          .optional(),
       })
     )
     .query(async ({ input }) => {
@@ -1509,10 +1518,21 @@ export const systemRouter = router({
       const actions =
         input.actions ?? (input.action ? [input.action] : undefined);
 
+      // The lens reads `presence.missing`, the event `record()` in
+      // services/presence/gate.ts writes. Its subject (a proposal or a
+      // presence request) is outside AUDIT_SUBJECT_TYPES, so the lens drops
+      // that list.
+      const lens = input.presenceMissing;
+
       const events = await eventRepository.searchEvents({
         userId: input.userId ?? undefined,
+        eventType: lens ? "presence.missing" : undefined,
         subjectType: input.subjectType ?? undefined,
-        subjectTypes: input.subjectType ? undefined : AUDIT_SUBJECT_TYPES,
+        subjectTypes:
+          lens || input.subjectType ? undefined : AUDIT_SUBJECT_TYPES,
+        dataEquals: lens?.kind
+          ? { key: "proposalType", value: lens.kind }
+          : undefined,
         actions,
         workspaceId: input.workspaceId ?? undefined,
         fromDate: input.fromDate ? new Date(input.fromDate) : undefined,
@@ -1523,11 +1543,14 @@ export const systemRouter = router({
 
       // Restrict to phase=completed so we surface only successful audit events.
       // Action filtering is now handled by searchEvents on the backend.
-      const filtered = events.filter((ev) => {
-        const parts = ev.eventType.split(".");
-        const phase = parts[parts.length - 1];
-        return phase === "completed";
-      });
+      // `presence.missing` has no phase segment: the lens keeps every row.
+      const filtered = lens
+        ? events
+        : events.filter((ev) => {
+            const parts = ev.eventType.split(".");
+            const phase = parts[parts.length - 1];
+            return phase === "completed";
+          });
 
       // Batch-resolve actor user info so the UI can show readable names.
       const uniqueUserIds = Array.from(new Set(filtered.map((e) => e.userId)));

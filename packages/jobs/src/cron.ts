@@ -157,6 +157,10 @@ import {
   POD_HEALTH_QUEUE,
   POD_HEALTH_CRON,
 } from "./workers/pod-health-worker.js";
+import {
+  PRESENCE_CHALLENGE_SWEEP_QUEUE,
+  PRESENCE_CHALLENGE_SWEEP_CRON,
+} from "./workers/presence-challenge-sweep.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -290,6 +294,16 @@ export async function registerCronSchedules(): Promise<void> {
   // pod's own numbers against the alert thresholds; handler slot, IoC)
   await scheduleSafe(boss, POD_HEALTH_QUEUE, POD_HEALTH_CRON, {});
   logger.info("Registered cron: pod-health-check (every 2min)");
+
+  // Presence challenge sweep (hourly at :17 — deletes the proof-of-presence
+  // challenges that expired more than a day ago)
+  await scheduleSafe(
+    boss,
+    PRESENCE_CHALLENGE_SWEEP_QUEUE,
+    PRESENCE_CHALLENGE_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: presence-challenge-sweep (hourly)");
 
   // Session titler (every 10min — derived names for untitled runs/captures, one
   // generated name per unnamed work session/receipt, one outcome-aware rename

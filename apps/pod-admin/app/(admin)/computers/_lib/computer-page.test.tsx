@@ -93,10 +93,20 @@ describe("/computers/[id] — whose computer it is", () => {
     }
   });
 
-  it("a row from before 0388 (no answer) gets no guessed choice", () => {
+  // Rules out (review S5): an older computer with no door to classify it,
+  // and a guessed answer.
+  it("a row from before 0388 offers the three answers with none chosen", () => {
     h.answers.set("machines.adminList", [computer({})]);
-    const page = text(renderToStaticMarkup(<ComputerPage />));
-    expect(page).not.toContain("Whose computer it is");
+    const html = renderToStaticMarkup(<ComputerPage />);
+    const page = text(html);
+    expect(page).toContain("Whose computer it is");
+    expect(page).toContain("Not set yet. Choose one.");
+    for (const label of ["Personal", "An agent's", "Shared"]) {
+      expect(page).toContain(label);
+    }
     expect(page).not.toContain("Whose it is");
+    const radios = html.match(/<input[^>]*type="radio"[^>]*>/g) ?? [];
+    expect(radios).toHaveLength(3);
+    expect(radios.filter((r) => /\schecked/.test(r))).toEqual([]);
   });
 });

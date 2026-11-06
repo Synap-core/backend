@@ -157,6 +157,15 @@ export interface Context {
    */
   governanceProposalId?: string;
   /**
+   * INTERNAL CHANNEL — never from a request (`createContext` never sets it).
+   * A proposal executor calling a router through `createCaller` sets it when
+   * `applyProposalApproval` already checked the proof of presence for this
+   * approval, so the procedure does not ask again (`proofCheckedByApproval`,
+   * `utils/presence-input.ts`). The tripwire `presence-gate-every-door` pins
+   * which files set it.
+   */
+  presenceChecked?: "applyProposalApproval";
+  /**
    * The message ID that triggered this hub-protocol request.
    * When set, proposals created during this request are linked to this message.
    */

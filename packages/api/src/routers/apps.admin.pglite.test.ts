@@ -72,6 +72,7 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { AppRepository } from "@synap/database";
+import { mintPresencePass } from "../services/presence/pass.js";
 import { issueKey } from "../services/app-connect.js";
 import { appsRouter } from "./apps.js";
 
@@ -144,7 +145,13 @@ beforeAll(async () => {
     { permission: "entity.person.read", workspaceId: SALES },
   ]);
   publicId = app.publicId;
-  await issueKey({ publicId, ownerUserId: MEMBER, via: "ui" });
+  await issueKey({
+    publicId,
+    ownerUserId: MEMBER,
+    via: "ui",
+    // The gate's pass: the gate itself is tested in services/presence.
+    presence: mintPresencePass("apps.issueKey", MEMBER, true),
+  });
   await q(`update api_keys set last_used_at = '2026-10-01T10:00:00Z'`);
 }, 120_000);
 

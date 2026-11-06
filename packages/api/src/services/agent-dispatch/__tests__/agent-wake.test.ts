@@ -19,9 +19,10 @@ import {
   resolveAgentTemplate,
   type AgentWakeInput,
 } from "../agent-wake.js";
+import type { InstalledAgentTemplate } from "../../agent-templates/installed.js";
 
-const CLAUDE = resolveAgentTemplate("claude-code")!;
-const CURSOR = resolveAgentTemplate("cursor")!;
+const CLAUDE = resolveAgentTemplate({ agentType: "claude-code" })!;
+const CURSOR = resolveAgentTemplate({ agentType: "cursor" })!;
 
 /** A pull agent on a computer whose runner can start it: `can_wake`. */
 const WAKEABLE: AgentWakeInput = {
@@ -38,13 +39,13 @@ const wake = (over: Partial<AgentWakeInput>): AgentWake =>
 
 describe("resolveAgentTemplate — the one template seam", () => {
   it("names the template from the agent's type, built in (no catalog version)", () => {
-    expect(resolveAgentTemplate("claude-code")).toEqual({
+    expect(resolveAgentTemplate({ agentType: "claude-code" })).toEqual({
       slug: "claude-code",
       label: "Claude Code",
       version: null,
       wakes: true,
     });
-    expect(resolveAgentTemplate("codex")).toMatchObject({
+    expect(resolveAgentTemplate({ agentType: "codex" })).toMatchObject({
       label: "Codex",
       wakes: true,
     });
@@ -52,12 +53,79 @@ describe("resolveAgentTemplate — the one template seam", () => {
 
   it("a client that cannot be started headless has a template without wake", () => {
     expect(CURSOR).toMatchObject({ slug: "cursor", wakes: false });
-    expect(resolveAgentTemplate("raycast")?.wakes).toBe(false);
+    expect(resolveAgentTemplate({ agentType: "raycast" })?.wakes).toBe(false);
+  });
+
+  it("an installed template wins over the built-in row: its name, its catalog version, its wake", () => {
+    const installed: InstalledAgentTemplate[] = [
+      {
+        slug: "claude-code",
+        name: "Claude Code (catalog)",
+        harness: "claude-code",
+        aliases: [],
+        worker: true,
+        wakes: true,
+        version: "h-0123456789ab",
+      },
+      {
+        slug: "hermes",
+        name: "Hermes Agent",
+        harness: "hermes",
+        aliases: [],
+        worker: true,
+        wakes: true,
+        version: "h-ba9876543210",
+      },
+    ];
+    expect(
+      resolveAgentTemplate({ agentType: "claude-code" }, installed)
+    ).toEqual({
+      slug: "claude-code",
+      label: "Claude Code (catalog)",
+      version: "h-0123456789ab",
+      wakes: true,
+    });
+    // A type the built-in registry never had: only the catalog names it.
+    expect(resolveAgentTemplate({ agentType: "hermes" })).toBeNull();
+    expect(resolveAgentTemplate({ agentType: "hermes" }, installed)?.slug).toBe(
+      "hermes"
+    );
+  });
+
+  it("the agent's link names its template, whatever its type says", () => {
+    const installed: InstalledAgentTemplate[] = [
+      {
+        slug: "claude-code",
+        name: "Claude Code",
+        harness: "claude-code",
+        aliases: [],
+        worker: true,
+        wakes: true,
+        version: "h-0123456789ab",
+      },
+    ];
+    expect(
+      resolveAgentTemplate(
+        { agentType: "claude-code-devbox", templateSlug: "claude-code" },
+        installed
+      )
+    ).toMatchObject({ slug: "claude-code", version: "h-0123456789ab" });
+    // Unlinked, the same type names nothing.
+    expect(
+      resolveAgentTemplate({ agentType: "claude-code-devbox" }, installed)
+    ).toBeNull();
+    // A link to a template that is not installed falls back to the type.
+    expect(
+      resolveAgentTemplate(
+        { agentType: "cursor", templateSlug: "gone" },
+        installed
+      )
+    ).toMatchObject({ slug: "cursor", version: null });
   });
 
   it("a type that names no template has none, never a guess", () => {
     for (const t of ["meta", "acme", "", null, undefined])
-      expect(resolveAgentTemplate(t)).toBeNull();
+      expect(resolveAgentTemplate({ agentType: t })).toBeNull();
   });
 });
 

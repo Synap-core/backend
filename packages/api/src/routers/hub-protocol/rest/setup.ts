@@ -108,6 +108,10 @@ import {
   type PendingKeyOutcome,
 } from "../../../services/agent-connect.js";
 import {
+  checkConnectTemplate,
+  linkAgentToTemplate,
+} from "../../../services/agent-templates/link.js";
+import {
   API_KEY_SCOPES,
   API_KEY_TOOL_PROFILES,
   APP_PERSON_KEY_TYPE,
@@ -758,6 +762,19 @@ export function registerSetupRoutes(app: HubHono): void {
         },
         400
       );
+    }
+
+    // OPTIONAL — the agent template `synap agents add` names (founder
+    // decision D9). It is applied by the SAME approval that connects the
+    // agent (below: carried on the `agent/connect` proposal), or at once when
+    // no approval is needed; never a second step, never without the first.
+    const connectTemplate: string | null =
+      body.template === undefined || body.template === null
+        ? null
+        : (body.template as string);
+    if (connectTemplate !== null) {
+      const refusal = await checkConnectTemplate(connectTemplate, agentType);
+      if (refusal) return c.json({ error: refusal }, 400);
     }
     // 0395 — the agent's JOB, optional: `role` a slug ("crm-worker"),
     // `roleLabel` its name ("CRM worker"). Part of the agent's identity: the
@@ -1410,6 +1427,7 @@ export function registerSetupRoutes(app: HubHono): void {
             agentType,
             instanceId,
             expiresAt: apiKey.expiresAt ?? null,
+            template: connectTemplate,
             // The computer the audit names ("requested from …"): the
             // filing key's own machine record, never this request's body.
             asPerson: asPerson ? { instanceLabel: surfaceHostSeat } : null,
@@ -1433,6 +1451,11 @@ export function registerSetupRoutes(app: HubHono): void {
           registration: registrationTrace,
         });
       }
+
+      // No approval to wait on (a person's own key, an issuer, the
+      // provisioning token): the template applies now.
+      if (connectTemplate)
+        await linkAgentToTemplate(agentUserId, connectTemplate);
 
       return c.json({
         agentUserId,

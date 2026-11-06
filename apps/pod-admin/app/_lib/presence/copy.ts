@@ -1,8 +1,9 @@
 /**
  * The words of the proof-of-presence dialog, as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. Client
- * words: a request, never a proposal. DRAFT French, awaiting the founder's
- * review.
+ * words: a request, never a proposal. A sensitive action is named by its
+ * title (`sensitiveActionTitle`, `@synap-core/types/presence`), never a
+ * second word list here. DRAFT French, awaiting the founder's review.
  */
 import {
   ambientCatalogLocale,
@@ -15,7 +16,8 @@ export const en = {
   "title.progress": "Confirm it’s you ({index} of {total})",
   action: "To approve “{action}”, confirm with your passkey.",
   "action.unnamed": "To approve this request, confirm with your passkey.",
-  act: "To {doing}, confirm with your passkey.",
+  act: "Confirm “{doing}” with your passkey.",
+  whyToggle: "Why?",
   why: "Some approvals need you in person, not only a signed-in browser: an app or an AI using your session can’t approve them for you. Your browser will ask for Touch ID, Windows Hello or your security key.",
   "why.act":
     "Some changes need you in person, not only a signed-in browser: an app or an AI using your session can’t make them for you. Your browser will ask for Touch ID, Windows Hello or your security key.",
@@ -44,10 +46,14 @@ export const en = {
   "relay.device": "Or approve it in Relay on {device}, with Face ID.",
   "relay.any": "Or approve it in Relay on your phone, with Face ID.",
   addPasskey: "Add a passkey",
+  comeBack:
+    "Add your passkey in the tab that opened, then come back here and press Try again.",
   declined: "Not approved: you didn’t confirm it’s you.",
   "declined.act": "Nothing changed: you didn’t confirm it’s you.",
-  "doing.passkeyAdd": "add a passkey to your account",
-  "doing.modeOff": "turn off “Approvals need you in person”",
+  "doing.passkeyAdd": "Add a passkey to your account",
+  "doing.modeOff": "Turn off approvals in person",
+  "passkeyAdd.needsProof":
+    "Adding a passkey needs a confirmation from your passkey.",
 };
 
 const fr: Catalog<typeof en> = {
@@ -56,7 +62,8 @@ const fr: Catalog<typeof en> = {
   action: "Pour approuver « {action} », confirmez avec votre clé d’accès.",
   "action.unnamed":
     "Pour approuver cette demande, confirmez avec votre clé d’accès.",
-  act: "Pour {doing}, confirmez avec votre clé d’accès.",
+  act: "Confirmez « {doing} » avec votre clé d’accès.",
+  whyToggle: "Pourquoi ?",
   why: "Certaines approbations demandent votre présence, pas seulement un navigateur connecté : une app ou une IA qui utilise votre session ne peut pas les approuver à votre place. Votre navigateur va demander Touch ID, Windows Hello ou votre clé de sécurité.",
   "why.act":
     "Certaines modifications demandent votre présence, pas seulement un navigateur connecté : une app ou une IA qui utilise votre session ne peut pas les faire à votre place. Votre navigateur va demander Touch ID, Windows Hello ou votre clé de sécurité.",
@@ -86,10 +93,14 @@ const fr: Catalog<typeof en> = {
   "relay.device": "Ou approuvez dans Relay sur {device}, avec Face ID.",
   "relay.any": "Ou approuvez dans Relay sur votre téléphone, avec Face ID.",
   addPasskey: "Ajouter une clé d’accès",
+  comeBack:
+    "Ajoutez votre clé d’accès dans l’onglet qui s’est ouvert, puis revenez ici et appuyez sur Réessayer.",
   declined: "Non approuvée : vous n’avez pas confirmé que c’est vous.",
   "declined.act": "Rien n’a changé : vous n’avez pas confirmé que c’est vous.",
-  "doing.passkeyAdd": "ajouter une clé d’accès à votre compte",
-  "doing.modeOff": "désactiver « Les approbations demandent votre présence »",
+  "doing.passkeyAdd": "Ajouter une clé d’accès à votre compte",
+  "doing.modeOff": "Désactiver les approbations en personne",
+  "passkeyAdd.needsProof":
+    "Ajouter une clé d’accès demande une confirmation avec votre clé d’accès.",
 };
 
 /** The presence dialog's translator, in the ambient catalog locale. */

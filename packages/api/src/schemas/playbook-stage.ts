@@ -70,6 +70,10 @@ export const relationTypeSlugSchema = z
       'relationToSubject must be a relation type slug (lowercase, e.g. "made_for")',
   });
 
+const FOR_EACH_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
+const FOR_EACH_MESSAGE =
+  'forEach must name a collection as an identifier path (e.g. "shots" or "subject.shots"), not prose';
+
 const STAGE_DOMAIN_MESSAGE =
   'Stage domain must be a workspace template slug (lowercase, e.g. "crm"), not a workspace id or name';
 
@@ -210,6 +214,28 @@ export const playbookStageSchema = z.looseObject({
    * executor will ever map.
    */
   tier: playbookStageTierSchema.optional(),
+  /**
+   * Run the stage once per item of a collection — see `PlaybookStage.forEach`.
+   * STRICT like `gate` and `onFail`: it is a control, so a misspelled key
+   * ("each", "ovr") must not survive as a stage that looks fanned out and is
+   * not. `over` and `as` are identifier paths, so prose or a template string is
+   * refused at the door.
+   */
+  forEach: z
+    .strictObject({
+      over: z
+        .string()
+        .trim()
+        .regex(FOR_EACH_PATH, { message: FOR_EACH_MESSAGE })
+        .max(200),
+      as: z
+        .string()
+        .trim()
+        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, { message: FOR_EACH_MESSAGE })
+        .max(60)
+        .optional(),
+    })
+    .optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -264,6 +290,10 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // is started by the tracks service, which does not pick a model, and nothing
   // consumes the tier yet.
   "tier",
+  // A track stage session is started once by the tracks service; fanning a
+  // stage out over a collection is a session RUN's concern, and nothing
+  // consumes it yet.
+  "forEach",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =

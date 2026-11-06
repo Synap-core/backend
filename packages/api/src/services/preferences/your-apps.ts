@@ -59,6 +59,97 @@ export type YourApp =
 
 export type YourAppKind = YourApp["kind"];
 
+/**
+ * "Your apps", as the founder settled it on 5 Nov 2026 (S4): "apps are the
+ * external ones; views, cells etc. on the pod itself are surfaces". So an
+ * app is something OUTSIDE the pod that opens on it:
+ *
+ *   app       a pod app the person connected (an App Connect app signed in
+ *             through the pod's own OAuth door, `apps.mode = 'oauth'`, not
+ *             revoked), opened at its `client_uri` (the homepage its client
+ *             metadata declares, same origin as its `client_id`), else at the
+ *             origin of its `client_id`;
+ *   website   a site they keep as a tool (the shared rule, as before).
+ *
+ * Pins, spaces and documents are SURFACES (Relay's "Your surfaces", the
+ * desktop's rail and spaces), never apps. Pinned and space rows stay in
+ * {@link yourApps} only until Relay and the desktop read this list; then that
+ * list goes. Ordered: apps by name, then websites by name.
+ */
+export type ExternalApp =
+  | {
+      /** `app:<publicId>`. */
+      key: string;
+      kind: "app";
+      name: string;
+      publicId: string;
+      /** Its host: the app's identity. */
+      domain: string;
+      /** Where it opens: its `client_uri`, else its `client_id`'s origin. */
+      url: string;
+      /** A Synap app (first-party origin) vs an unverified one. */
+      verified: boolean;
+    }
+  | Extract<YourApp, { kind: "website" }>;
+
+/** A connected pod app, as the router reads it (only the fields read here). */
+export interface ExternalAppsPodAppRow {
+  publicId: string;
+  name: string;
+  /** `apps.oauth_client_id`: the app's metadata-document URL. */
+  clientId: string;
+  /** `oauth_clients.client_uri`, when its document declared one. */
+  clientUri: string | null;
+  verified: boolean;
+}
+
+/** Where a pod app opens: its homepage, else its client_id's origin; null if neither is an http(s) URL. */
+function podAppUrl(
+  row: ExternalAppsPodAppRow
+): { url: string; domain: string } | null {
+  for (const candidate of [row.clientUri, row.clientId]) {
+    if (!candidate) continue;
+    try {
+      const u = new URL(candidate);
+      if (u.protocol !== "https:" && u.protocol !== "http:") continue;
+      return {
+        url: candidate === row.clientUri ? u.toString() : u.origin,
+        domain: u.host,
+      };
+    } catch {
+      // Not a URL: try the next one.
+    }
+  }
+  return null;
+}
+
+export function externalApps(input: {
+  podApps: readonly ExternalAppsPodAppRow[];
+  links: readonly YourAppsLinkRow[];
+}): ExternalApp[] {
+  const apps: ExternalApp[] = input.podApps
+    .flatMap((row) => {
+      const at = podAppUrl(row);
+      const name = row.name.trim() || at?.domain || "";
+      return at && name
+        ? [
+            {
+              key: `app:${row.publicId}`,
+              kind: "app" as const,
+              name,
+              publicId: row.publicId,
+              domain: at.domain,
+              url: at.url,
+              verified: row.verified,
+            },
+          ]
+        : [];
+    })
+    .sort(byName);
+  const websites = yourApps({ pins: [], spaces: [], links: input.links });
+  return [...apps, ...(websites as Extract<YourApp, { kind: "website" }>[])];
+}
+
 /** A rail pin as `readRailPins` returns it (only the fields read here). */
 export interface YourAppsPinRow {
   key: string;

@@ -67,6 +67,8 @@ ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_at" timestamp with ti
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_paused_by" text;
 -- 0388: whose computer it is ('person' | 'agent' | 'shared'; NULL off computers).
 ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "computer_belongs_to" text;
+-- 0404: the agent's link to its installed agent template (by slug).
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "agent_template_slug" text;
 DO $$ BEGIN
   ALTER TABLE "users" ADD CONSTRAINT "users_computer_belongs_to_check"
     CHECK ("computer_belongs_to" IS NULL
@@ -2513,6 +2515,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS "agent_configs_user_preset_unique"
 CREATE INDEX IF NOT EXISTS idx_users_agent_template
   ON users ((agent_metadata->>'agentTemplate'))
   WHERE user_type = 'agent';
+
+-- ─── 33b. agent_templates (0404) ─────────────────────────────────────────────
+-- One row per AI program, installed pod-wide by the catalog kind `agent`.
+
+CREATE TABLE IF NOT EXISTS "agent_templates" (
+  "id"           uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
+  "slug"         text    NOT NULL,
+  "name"         text    NOT NULL,
+  "harness"      text    NOT NULL,
+  "aliases"      jsonb   NOT NULL DEFAULT '[]',
+  "worker"       boolean NOT NULL DEFAULT false,
+  "tried"        boolean NOT NULL DEFAULT false,
+  "detect"       jsonb,
+  "wake"         jsonb,
+  "practices"    jsonb   NOT NULL DEFAULT '{"skills":[]}',
+  "metadata"     jsonb   NOT NULL DEFAULT '{}',
+  "created_at"   timestamp with time zone NOT NULL DEFAULT now(),
+  "updated_at"   timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "agent_templates_slug_unique"
+  ON "agent_templates" ("slug");
+CREATE INDEX IF NOT EXISTS "agent_templates_harness_idx"
+  ON "agent_templates" ("harness");
+CREATE INDEX IF NOT EXISTS "idx_users_agent_template_slug"
+  ON "users" ("agent_template_slug")
+  WHERE "agent_template_slug" IS NOT NULL;
 
 -- ─── 34. intelligence_services ───────────────────────────────────────────────
 

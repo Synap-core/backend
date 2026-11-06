@@ -112,7 +112,13 @@ export const CP_CATALOG_SYNC_CRON = "*/10 * * * *";
 // from @synap-core/control-plane-types@1.1.0 once published — this inline shape
 // duplicates that contract (P2.10.3) and must not drift from it.
 export type CatalogKind =
-  "capability" | "automation" | "template" | "cell" | "skill" | "view";
+  | "capability"
+  | "automation"
+  | "template"
+  | "cell"
+  | "skill"
+  | "view"
+  | "agent";
 export const CATALOG_KINDS: readonly CatalogKind[] = [
   "capability",
   "automation",
@@ -120,6 +126,7 @@ export const CATALOG_KINDS: readonly CatalogKind[] = [
   "cell",
   "skill",
   "view",
+  "agent",
 ];
 
 interface CatalogEntry {
@@ -449,7 +456,7 @@ async function fetchCapabilities(
  */
 async function fetchPackages(
   source: string,
-  category: "workspace" | "workflow" | "skill" | "view",
+  category: "workspace" | "workflow" | "skill" | "view" | "agent",
   /**
    * Ask for retired (tombstoned) rows too — the template kind only, so template
    * health can say "retired, replaced by X". The `total` the CP reports covers
@@ -496,7 +503,7 @@ function isIncludeRetiredRefusal(res: {
 
 async function fetchPackagesPages(
   source: string,
-  category: "workspace" | "workflow" | "skill" | "view",
+  category: "workspace" | "workflow" | "skill" | "view" | "agent",
   includeRetired: boolean
 ): Promise<SourceFetch<CatalogFetch>> {
   return fetchAllPages(async (limit, offset) => {
@@ -633,6 +640,11 @@ async function fetchKind(
       return fetchPackages(source, "skill");
     case "view":
       return fetchPackages(source, "view");
+    // agent: the CP category `agent` (an AI program a person connects,
+    // founder decision D8). Same list route; the definition is fetched per
+    // slug when the pod installs it (`installOfficialAgentTemplates`).
+    case "agent":
+      return fetchPackages(source, "agent");
     case "cell":
       return fetchCells(source);
   }

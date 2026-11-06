@@ -91,8 +91,8 @@ export function readOmitsStoredBody(doc: {
 /**
  * Whether a read may check this document as a stored HTML page (`documents.type
  * = "html"`), up to the same {@link MARKDOWN_READ_MAX_CHARS}. A page is never
- * parsed as markdown: its one check is the frame policy's (`diagnoseHtmlPage`,
- * a scan of its markup for network loads), so the author reads why a page whose
+ * parsed as markdown: its checks are the frame's (`diagnoseHtmlPage`: its
+ * markup's network loads, and its size), so the author reads why a page whose
  * code is on a CDN does not run. A stored file holding HTML (`type = "file"`) is
  * a file, not a page.
  */
