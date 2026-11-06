@@ -8,7 +8,9 @@ import {
   getPasskeyAssertion,
   passkeyCreationOptions,
   passkeyRequestOptions,
+  placePasskey,
   PRESENCE_PROMPT_TIMEOUT_MS,
+  type PlacedCreationOptions,
 } from "./passkey";
 
 const bytes = (b: ArrayBuffer | ArrayBufferView | undefined) =>
@@ -82,6 +84,94 @@ describe("passkeyCreationOptions", () => {
   });
 });
 
+/**
+ * What Kratos v1.3.1 really sends (`driver/config/config.go` PasskeyConfig):
+ * "platform" on every passkey, a required resident key, UV preferred.
+ */
+const kratosData = JSON.stringify({
+  publicKey: {
+    challenge: "AQID",
+    rp: { name: "Synap", id: "lab.pod.synap.live" },
+    user: { id: "BAUG", name: "ada@example.com", displayName: "Ada" },
+    pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+    timeout: 60000,
+    attestation: "none",
+    authenticatorSelection: {
+      authenticatorAttachment: "platform",
+      requireResidentKey: true,
+      residentKey: "required",
+      userVerification: "preferred",
+    },
+    excludeCredentials: [{ id: "DA", type: "public-key" }],
+    extensions: { credProps: true },
+  },
+});
+
+describe("placePasskey: where the new passkey lives", () => {
+  const kratos = () => passkeyCreationOptions(kratosData);
+
+  it("this device: platform attachment and the client-device hint", () => {
+    const o = placePasskey(kratos(), "device");
+    expect(o.authenticatorSelection?.authenticatorAttachment).toBe("platform");
+    expect(o.hints).toEqual(["client-device"]);
+  });
+
+  it("password manager: no attachment and no hint, so nothing is hidden", () => {
+    const o = placePasskey(kratos(), "manager");
+    expect(o.authenticatorSelection).not.toHaveProperty(
+      "authenticatorAttachment"
+    );
+    expect(o).not.toHaveProperty("hints");
+  });
+
+  it.each(["device", "manager"] as const)(
+    "%s keeps every other field Kratos sent",
+    (placement) => {
+      const o = placePasskey(kratos(), placement);
+      expect(o.authenticatorSelection).toMatchObject({
+        requireResidentKey: true,
+        residentKey: "required",
+        userVerification: "preferred",
+      });
+      expect(bytes(o.challenge as ArrayBuffer)).toEqual([1, 2, 3]);
+      expect(bytes(o.user.id as ArrayBuffer)).toEqual([4, 5, 6]);
+      expect(o.user.name).toBe("ada@example.com");
+      expect(o.rp).toEqual({ name: "Synap", id: "lab.pod.synap.live" });
+      expect(o.pubKeyCredParams).toEqual([{ type: "public-key", alg: -7 }]);
+      expect(o.timeout).toBe(60000);
+      expect(o.attestation).toBe("none");
+      expect(o.extensions).toEqual({ credProps: true });
+      expect(bytes(o.excludeCredentials![0]!.id as ArrayBuffer)).toEqual([12]);
+    }
+  );
+
+  it("the answer wins over a server's own placement fields", () => {
+    const server = {
+      ...kratos(),
+      hints: ["security-key"],
+    } as PlacedCreationOptions;
+    expect(placePasskey(server, "device").hints).toEqual(["client-device"]);
+    expect(placePasskey(server, "manager")).not.toHaveProperty("hints");
+    const crossPlatform = {
+      ...kratos(),
+      authenticatorSelection: { authenticatorAttachment: "cross-platform" },
+    } as PublicKeyCredentialCreationOptions;
+    expect(
+      placePasskey(crossPlatform, "device").authenticatorSelection
+        ?.authenticatorAttachment
+    ).toBe("platform");
+  });
+
+  it("a server that sent no authenticatorSelection still gets the device answer", () => {
+    const { authenticatorSelection: _none, ...bare } = kratos();
+    const o = placePasskey(bare, "device");
+    expect(o.authenticatorSelection).toEqual({
+      authenticatorAttachment: "platform",
+    });
+    expect(placePasskey(bare, "manager").authenticatorSelection).toEqual({});
+  });
+});
+
 describe("createPasskey", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -102,7 +192,7 @@ describe("createPasskey", () => {
       },
     }));
     stubWebAuthn(create);
-    const value = await createPasskey(registrationData, {
+    const value = await createPasskey(registrationData, "device", {
       name: "ada@example.com",
     });
     expect(JSON.parse(value)).toEqual({
@@ -114,12 +204,43 @@ describe("createPasskey", () => {
     expect(create).toHaveBeenCalledWith({ publicKey: expect.any(Object) });
   });
 
+  it.each([
+    ["device", "platform", ["client-device"]],
+    ["manager", undefined, undefined],
+  ] as const)(
+    "asks the browser with the %s answer merged in",
+    async (placement, attachment, hints) => {
+      const create = vi.fn(async (_o: unknown) => ({
+        id: "c",
+        rawId: new Uint8Array([1]).buffer,
+        type: "public-key",
+        response: {
+          attestationObject: new Uint8Array([2]).buffer,
+          clientDataJSON: new Uint8Array([3]).buffer,
+        },
+      }));
+      stubWebAuthn(create);
+      await createPasskey(kratosData, placement);
+      const { publicKey } = create.mock.calls[0]![0] as {
+        publicKey: PlacedCreationOptions;
+      };
+      expect(publicKey.authenticatorSelection?.authenticatorAttachment).toBe(
+        attachment
+      );
+      expect(publicKey.hints).toEqual(hints);
+      expect(publicKey.authenticatorSelection?.residentKey).toBe("required");
+      expect(publicKey.authenticatorSelection?.userVerification).toBe(
+        "preferred"
+      );
+    }
+  );
+
   it("a dismissed prompt is PasskeyCancelled, not an error to show", async () => {
     stubWebAuthn(async () => {
       throw new DOMException("denied", "NotAllowedError");
     });
     await expect(
-      createPasskey(registrationData, { name: "a@b.c" })
+      createPasskey(registrationData, "manager", { name: "a@b.c" })
     ).rejects.toBeInstanceOf(PasskeyCancelled);
   });
 });

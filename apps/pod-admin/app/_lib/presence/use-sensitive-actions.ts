@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The console's SENSITIVE ACTIONS (W3 slice 3, backend#827, founder decision
+ * The console's SENSITIVE ACTIONS (founder decision
  * 1 of 4 Nov), with the proof of presence: a call that creates, rotates or
  * widens a credential or a governance rule directly, with no proposal to
  * approve. The pod's list is `SENSITIVE_ACTIONS` (`@synap-core/types/presence`),
@@ -20,9 +20,11 @@
  * `error`, `data`) and takes `onSuccess` / `onError` itself.
  */
 
-import type { SensitiveActionPath } from "@synap-core/types/presence";
+import {
+  sensitiveActionTitle,
+  type SensitiveActionPath,
+} from "@synap-core/types/presence";
 import { trpc } from "../../../lib/trpc";
-import { actionDoing } from "./action-words";
 import {
   usePresenceDoor,
   type DoorHandlers,
@@ -47,7 +49,10 @@ function useSensitiveAction<M extends DoorMutation<never, unknown>>(
 ) {
   return usePresenceDoor(
     mutation,
-    (input) => ({ action: { path, input }, doing: actionDoing(path) }),
+    (input) => ({
+      action: { path, input },
+      doing: sensitiveActionTitle(path),
+    }),
     defaults
   );
 }

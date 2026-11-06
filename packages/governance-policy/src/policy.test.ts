@@ -72,6 +72,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   setState: "write", // hub-protocol/rest/artifacts.ts
   execute: "write", // hub-protocol/rest/commands.ts, materializer.ts
   run: "write", // playbooks.ts run
+  set_run_choice: "write", // playbooks.setRunChoice (run choice v3)
   grant_capability: "write",
   assign_agent: "write", // agent-hand-off.ts (focus_session roster add)
   register: "write", // widget-definitions.ts

@@ -12,6 +12,13 @@
  *    (done, failed, skipped by someone else's move) is left alone: its result
  *    says what happened to it.
  *
+ * NEVER OUT OF DONE OR LOST: an end move is cleanup of work that stopped. A
+ * subject or target whose status is already in a done or lost category
+ * (another session verified it, a person closed it) is left alone and
+ * reported `skipped: already_settled` — read from the thing's CURRENT status
+ * at the close, never assumed (finding 8f1c774f: a stale session cancelled
+ * after another verified its finding moved it back to "open").
+ *
  * Each move goes through THE writer the stage path uses
  * (`writeSubjectStatusValue`, stage-subject-status.ts): the status door as
  * the session, governed like any write of the closer (its rules: an "ask
@@ -142,7 +149,8 @@ export async function applySessionEndMoves(input: {
       actor: input.actor,
       // The session's END is the guardrail: the move is governed like any
       // write of the closer, without the done/lost default floor (founder,
-      // 2026-11-05, plan b38e5e64 §7.2).
+      // 2026-11-05, plan b38e5e64 §7.2) — and never takes a thing out of
+      // done or lost (`already_settled`, the writer's own check).
       atSessionEnd: true,
     });
     moves.push({ ...thing, outcome });

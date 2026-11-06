@@ -43,7 +43,11 @@ export type PlaybookDoorOutcome<T> =
   /** No workspace resolved for a write — never pick an arbitrary membership. */
   | { kind: "missing_workspace" };
 
-function callerFor(identity: PlaybookDoorIdentity, workspaceId: string | null) {
+/** The caller context of a door: the verified identity, never the body. */
+export function playbookDoorContext(
+  identity: PlaybookDoorIdentity,
+  workspaceId: string | null
+) {
   return createHubProtocolCallerContext(
     identity.userId,
     identity.scopes,
@@ -53,7 +57,13 @@ function callerFor(identity: PlaybookDoorIdentity, workspaceId: string | null) {
     identity.agentUserId ?? null,
     identity.keyType ?? null,
     identity.keyWorkspaceId ?? null
-  ).then((ctx) => playbooksRouter.createCaller(ctx));
+  );
+}
+
+function callerFor(identity: PlaybookDoorIdentity, workspaceId: string | null) {
+  return playbookDoorContext(identity, workspaceId).then((ctx) =>
+    playbooksRouter.createCaller(ctx)
+  );
 }
 
 /**

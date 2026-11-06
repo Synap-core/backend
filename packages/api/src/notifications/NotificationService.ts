@@ -39,6 +39,7 @@ import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
+import { formatMessage, type ParamValue } from "@synap-core/types/i18n";
 import { sendExpoPush } from "./expo-push.js";
 import { openLink, podPublicOrigin } from "../utils/deep-links.js";
 import {
@@ -95,6 +96,38 @@ function interpolate(template: string, data: Record<string, unknown>): string {
     const value = data[key];
     return value !== undefined && value !== null ? String(value) : "";
   });
+}
+
+/**
+ * A notification's title and body from its registry row and the producer's
+ * data: mustache `{{variable}}` by default, or, for a row declaring
+ * `messageSyntax: "icu"`, ICU messages formatted in English (notifications are
+ * not rendered per locale yet, rule i18n §8). Only string and number values
+ * reach an ICU message; a missing one selects `other`. Pure.
+ */
+export function renderNotificationText(
+  def: Pick<
+    NotificationDef,
+    "titleTemplate" | "bodyTemplate" | "messageSyntax"
+  >,
+  data: Record<string, unknown>
+): { title: string; body: string } {
+  if (def.messageSyntax === "icu") {
+    const params: Record<string, ParamValue> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value === "string" || typeof value === "number") {
+        params[key] = value;
+      }
+    }
+    return {
+      title: formatMessage(def.titleTemplate, params, "en"),
+      body: formatMessage(def.bodyTemplate, params, "en"),
+    };
+  }
+  return {
+    title: interpolate(def.titleTemplate, data),
+    body: interpolate(def.bodyTemplate, data),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -547,8 +580,7 @@ export const NotificationService = {
       return undefined;
     }
 
-    const title = interpolate(def.titleTemplate, input.data);
-    const body = interpolate(def.bodyTemplate, input.data);
+    const { title, body } = renderNotificationText(def, input.data);
     const actions = materializeActions(def.actions, input);
 
     const groupKey = resolveNotificationGroupKey(def, input);

@@ -7,18 +7,25 @@
  *   - the agents to offer     `readAgentsForHandoff` (the roster, with each
  *                             agent's wake mark and whether a hand-off naming
  *                             it would be admitted);
- *   - what the next run does  `resolveRunChoice`, the SAME rule the run uses.
- * Surfaces draw the result; none re-derives it.
+ *   - what the next run does  `resolveRunChoice`, the SAME rule the run uses;
+ *   - what Synap AI runs on   `readActiveAiProvider` (the IS default's rule,
+ *                             one global choice, never per playbook).
+ * Only agents that are awake or can wake are offered; the others are listed
+ * in `hidden`, grouped by why (decision D3). The ask happens whenever nothing
+ * is stored (decision D4). Surfaces draw the result; none re-derives it.
  */
 
 import type {
   AgentWake,
+  AgentWakeRefusal,
   PlaybookRunChoice,
+  RunChoiceHidden,
   RunChoiceOption,
 } from "@synap-core/types/agents";
 import {
-  SYNAP_AI_LABEL,
   resolveAgentReachLabel,
+  resolveRunChoiceHiddenLabel,
+  resolveSynapAiProviderLabel,
   resolveAgentWakeHowLabel,
   resolveAgentWakeRefusalLabel,
   resolveAgentWakeStateLabel,
@@ -26,6 +33,7 @@ import {
 import type { Playbook } from "@synap/database/schema";
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
 import { readAgentsForHandoff } from "../agent-dispatch/agents-for-handoff.js";
+import { readActiveAiProvider } from "./active-provider.js";
 import { resolveRunChoice } from "./run-playbook.js";
 
 /** A wake mark's words: its state, and the reason when it cannot wake. */
@@ -88,21 +96,33 @@ export function distinctAgentLabels(
 
 export async function readPlaybookRunChoice(p: {
   userId: string;
-  playbook: Pick<Playbook, "id" | "executor">;
+  playbook: Pick<Playbook, "id" | "executor" | "workspaceId">;
 }): Promise<PlaybookRunChoice> {
   const synapAiAllowed = p.playbook.executor !== "external-agent";
-  const [stored, roster, decided] = await Promise.all([
+  const [stored, roster, decided, provider] = await Promise.all([
     readStoredRunChoice({ ownerId: p.userId, playbookId: p.playbook.id }),
     readAgentsForHandoff(p.userId),
     resolveRunChoice({ userId: p.userId, playbook: p.playbook }),
+    synapAiAllowed
+      ? readActiveAiProvider({
+          userId: p.userId,
+          workspaceId: p.playbook.workspaceId ?? null,
+        })
+      : Promise.resolve(null),
   ]);
   // The person's own agents a hand-off could reach: the pod's own agents are
-  // Synap AI, offered once as such, never one row per persona.
-  const offered = roster.agents.filter(
-    (a) => a.reach !== "pod" && a.canTakeYourWork
+  // Synap AI, offered once as such, never one row per persona. An agent that
+  // is not theirs to send work to (not owned, not in the room, the wrong
+  // reach) is no option at all; one that is theirs but paused or unable to
+  // wake is hidden, with its reason.
+  const theirs = roster.agents.filter(
+    (a) => a.reach !== "pod" && (a.canTakeYourWork || a.whyNot === "paused")
   );
+  const canRun = (a: (typeof theirs)[number]) =>
+    a.canTakeYourWork && a.wake.state !== "cant_wake";
+  const offered = theirs.filter(canRun);
   const labels = distinctAgentLabels(
-    offered.map((a) => ({
+    theirs.map((a) => ({
       agentUserId: a.agentUserId,
       name: a.name,
       computer: a.computer?.name ?? null,
@@ -116,17 +136,28 @@ export async function readPlaybookRunChoice(p: {
     wake: a.wake,
     wakeLabel: wakeWords(a.wake),
     recommended: false,
+    provider: null,
   }));
-  const options: RunChoiceOption[] = synapAiAllowed
+  const hidden = groupHidden(
+    theirs
+      .filter((a) => !canRun(a))
+      .map((a) => ({
+        why: a.wake.why ?? "paused",
+        agentUserId: a.agentUserId,
+        name: labels.get(a.agentUserId) ?? (a.name?.trim() || "Agent"),
+      }))
+  );
+  const options: RunChoiceOption[] = provider
     ? [
         {
           choice: { executor: "is-agent" },
           name: null,
-          label: SYNAP_AI_LABEL,
+          label: resolveSynapAiProviderLabel(provider),
           wake: null,
           // Its line beside the agents' marks: the pod runs it itself.
           wakeLabel: resolveAgentWakeHowLabel("built_in"),
           recommended: true,
+          provider,
         },
         ...agentOptions,
       ]
@@ -149,10 +180,44 @@ export async function readPlaybookRunChoice(p: {
   return {
     playbookId: p.playbook.id,
     stored: remembered,
-    // A real choice only: something to pick besides the one way it can run.
-    ask: remembered === null && agentOptions.length > 0 && options.length > 1,
+    // Never a silent default (D4): with nothing stored, a launch asks, even
+    // when Synap AI is the only way it can run.
+    ask: remembered === null && options.length > 0,
     synapAiAllowed,
     options,
+    hidden,
+    hiddenLabel: resolveRunChoiceHiddenLabel(
+      hidden.reduce((n, h) => n + h.count, 0)
+    ),
     next: decided.runOn,
   };
+}
+
+/** Hidden agents by reason, largest group first, then roster order. */
+function groupHidden(
+  agents: readonly {
+    why: AgentWakeRefusal;
+    agentUserId: string;
+    name: string;
+  }[]
+): RunChoiceHidden[] {
+  const groups = new Map<
+    AgentWakeRefusal,
+    { names: string[]; agentUserIds: string[] }
+  >();
+  for (const a of agents) {
+    const group = groups.get(a.why) ?? { names: [], agentUserIds: [] };
+    group.names.push(a.name);
+    group.agentUserIds.push(a.agentUserId);
+    groups.set(a.why, group);
+  }
+  return [...groups.entries()]
+    .map(([why, group]) => ({
+      why,
+      label: resolveAgentWakeRefusalLabel(why),
+      count: group.names.length,
+      names: group.names,
+      agentUserIds: group.agentUserIds,
+    }))
+    .sort((a, b) => b.count - a.count);
 }

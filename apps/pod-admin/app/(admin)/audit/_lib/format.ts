@@ -6,10 +6,13 @@
  * `from` and `to` for the activity log's default date range: 30 days. The log
  * is only ever narrowed by it client-side, so a wide default costs nothing.
  */
-export function defaultDateRange(): { fromDate: string; toDate: string } {
+export function defaultDateRange(days = 30): {
+  fromDate: string;
+  toDate: string;
+} {
   const to = new Date();
   const from = new Date();
-  from.setDate(from.getDate() - 30);
+  from.setDate(from.getDate() - days);
   return {
     fromDate: from.toISOString(),
     toDate: to.toISOString(),

@@ -16,6 +16,9 @@
  * its own tests), `@synap/storage` (an in-memory blob map), audit log, side
  * effects, the scoped-key middleware — not this seam.
  *
+ * Also: a page is refused with `url` (hub door: a reference has no bytes to
+ * run) and with `entityId` (MCP door: an entity body is read as markdown).
+ *
  * Not covered: the MCP door's undeclared-argument refusal (its own test scans
  * every `args.<key>` a handler reads against the declared schema).
  */
@@ -165,6 +168,13 @@ async function storedType(id: string) {
   return rows[0]?.type;
 }
 
+async function documentCount() {
+  const { rows } = await h.client!.query<{ n: number }>(
+    `select count(*)::int as n from documents`
+  );
+  return rows[0]!.n;
+}
+
 const PAGE_WITH_CDN = `<!doctype html><html><head>
 <script src="https://cdn.example.com/chart.js"></script>
 </head><body><h1>Report</h1></body></html>`;
@@ -206,6 +216,51 @@ describe("synap_create_document — type html makes a page", () => {
     });
     expect(await storedType(res.documentId!)).toBe("markdown");
     expect(res).not.toHaveProperty("warnings");
+  });
+
+  it("GUARDRAIL: the hub door refuses html with a url (a page with no bytes) before anything is written", async () => {
+    const before = await documentCount();
+    const hub = hubDocumentsRouter.createCaller({
+      userId: USER,
+      scopes: [],
+    } as never);
+    await expect(
+      hub.createDocument({
+        userId: USER,
+        title: "A page by link",
+        type: "html",
+        url: "https://example.com/page.html",
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(
+        /not taken with `url`: send the page itself as `content`, or drop `type`/
+      ),
+    });
+    // The MCP door goes through it and says the same.
+    await expect(
+      mcpCreate({
+        title: "A page by link",
+        type: "html",
+        url: "https://example.com/page.html",
+      })
+    ).rejects.toThrow(/not taken with `url`/);
+    expect(await documentCount()).toBe(before);
+  });
+
+  it("GUARDRAIL: html with entityId (a page as an entity body) is refused before anything is written", async () => {
+    const before = await documentCount();
+    await expect(
+      mcpCreate({
+        title: "A page as a body",
+        content: "<!doctype html><p>Hello</p>",
+        type: "html",
+        entityId: randomUUID(),
+      })
+    ).rejects.toThrow(
+      /not attached with `entityId`.*create the page without `entityId`; it opens at \/open\/<id>/
+    );
+    expect(await documentCount()).toBe(before);
   });
 
   it("a type other than markdown or html is refused before anything is written", async () => {

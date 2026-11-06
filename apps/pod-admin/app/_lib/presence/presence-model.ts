@@ -64,7 +64,7 @@ export type PresenceChallengeSubject =
  *    proposal is named by its own heading.
  *  - `doing`: what the person is DOING when it is a change of their own, not
  *    an approval (a sensitive action, a passkey change, the mode switched
- *    off): "To {doing}, confirm with your passkey". Only this browser can
+ *    off), as its title: "Confirm “{doing}” with your passkey". Only this browser can
  *    prove it (Relay approves requests, it cannot sign this page's call), so
  *    the dialog offers no Relay.
  */

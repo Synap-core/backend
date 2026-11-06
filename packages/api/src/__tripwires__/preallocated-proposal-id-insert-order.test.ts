@@ -157,7 +157,7 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
     "services/import-orchestrator.ts":
       "import apply / applyLarge — stamps `input.proposalId`, the analyze-time proposal `resolveApplyOperations` just loaded as PENDING, so the FK target exists.",
     "routers/proposals/executors/playbook.ts":
-      "playbook/run approval replay — stamps `proposal.id`, a row loaded from the DB, so the FK target already exists; it also tells `playbooks.run` to gate on the approver, not the agent.",
+      "playbook/run and playbook/run-choice approval replays — each stamps `proposal.id`, a row loaded from the DB, so the FK target already exists; the run replay also tells `playbooks.run` to gate on the approver, not the agent.",
     "services/proposals/redecide-graph-revision.ts":
       "re-decide of an agent's revised graph — stamps `claimed.id`, the row its compare-and-set just RETURNED (pending → auto_approved), so the FK target exists.",
     "services/forms/direct-materialize.ts":
@@ -226,6 +226,7 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
 
     // The playbook-run replay stamps the loaded proposal's id, never a minted one.
     expect(found.get("routers/proposals/executors/playbook.ts")).toEqual([
+      "proposal.id",
       "proposal.id",
     ]);
 

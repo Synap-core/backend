@@ -28,7 +28,14 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { classifyOwedAsk } from "@synap-core/types/needs-you";
-import { clearAskLater, setAskLater, stampAskLater } from "./ask-later.js";
+import {
+  askLaterReturnSlot,
+  clearAskLater,
+  runAskLaterReturn,
+  setAskLater,
+  stampAskLater,
+  type ScheduleAskLaterReturn,
+} from "./ask-later.js";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const OWNER = "owner-1";
@@ -185,5 +192,106 @@ describe("stampAskLater — pure", () => {
     expect(stampAskLater([DONE as never], "draft", NOW)).toEqual({
       status: "not_owed",
     });
+  });
+});
+
+describe("an ask back from Later (founder D3, 5 Nov 2026)", () => {
+  const until = new Date(NOW.getTime() + 3 * HOUR);
+  const scheduled: Array<{ payload: unknown; startAfter: Date }> = [];
+  const schedule: ScheduleAskLaterReturn = async (payload, startAfter) => {
+    scheduled.push({ payload, startAfter });
+  };
+  const notified: Array<Record<string, unknown>> = [];
+  const notify = (async (p: Record<string, unknown>) => {
+    notified.push(p);
+    return true;
+  }) as never;
+
+  beforeEach(() => {
+    scheduled.length = 0;
+    notified.length = 0;
+  });
+
+  const later = (at: Date = until) =>
+    setAskLater({
+      sessionId: SESSION,
+      userId: OWNER,
+      expectedLabel: "pick-a-name",
+      until: at,
+      now: NOW,
+      schedule,
+    });
+  const payload = (at: Date = until) => ({
+    sessionId: SESSION,
+    label: "Pick a name",
+    laterUntil: at.toISOString(),
+  });
+
+  it("each Later schedules its return at its own time", async () => {
+    await later();
+    expect(scheduled).toEqual([{ payload: payload(), startAfter: until }]);
+  });
+
+  it("when the time comes, the person is told again through the one needs-you producer, as the asking agent", async () => {
+    await later();
+    expect(await runAskLaterReturn(payload(), { notify })).toEqual({
+      status: "told",
+    });
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toMatchObject({
+      sessionId: SESSION,
+      byAgent: true,
+      agentUserId: "agent-1",
+      reason: {
+        kind: "back",
+        slot: { label: "Pick a name", laterUntil: until.toISOString() },
+      },
+    });
+  });
+
+  it("a stale return tells nobody: Undo, a later Later, an answered ask", async () => {
+    await later();
+    await clearAskLater({
+      sessionId: SESSION,
+      userId: OWNER,
+      expectedLabel: "pick-a-name",
+    });
+    expect(await runAskLaterReturn(payload(), { notify })).toEqual({
+      status: "stale",
+    });
+
+    await later();
+    await later(new Date(NOW.getTime() + 24 * HOUR));
+    expect(await runAskLaterReturn(payload(), { notify })).toEqual({
+      status: "stale",
+    });
+
+    await h.client!.query(
+      `UPDATE focus_sessions SET expected_outputs = $2::jsonb WHERE id = $1`,
+      [
+        SESSION,
+        JSON.stringify([
+          { ...OWED, owner: "agent", laterUntil: until.toISOString() },
+          DONE,
+        ]),
+      ]
+    );
+    expect(await runAskLaterReturn(payload(), { notify })).toEqual({
+      status: "stale",
+    });
+    expect(notified).toEqual([]);
+  });
+
+  it("askLaterReturnSlot — pure: the owed slot with exactly that Later, else nothing", () => {
+    const stamped = { ...OWED, laterUntil: until.toISOString() } as never;
+    expect(
+      askLaterReturnSlot([stamped], "pick-a-name", until.toISOString())
+    ).toBe(stamped);
+    expect(
+      askLaterReturnSlot([stamped], "pick-a-name", NOW.toISOString())
+    ).toBeNull();
+    expect(
+      askLaterReturnSlot([OWED as never], "pick-a-name", until.toISOString())
+    ).toBeNull();
   });
 });

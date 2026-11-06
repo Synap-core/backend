@@ -1,19 +1,17 @@
 /**
- * A sensitive action's proof (W3 slice 3) is bound to the exact call: the
+ * A sensitive action's proof is bound to the exact call: the
  * challenge names `{action: {path, input}}`, and the pod digests the raw input
  * it receives minus `presence`. These pin the client half of that contract
  * against the pod's own digest (`presenceActionDigest`, the one the step-up
- * middleware runs), and that the dialog's words never reach the pod.
+ * middleware runs), and that the dialog's words never reach the pod. Each
+ * action's words are the shared title (`SENSITIVE_ACTION_TOKENS`), tested
+ * in `@synap-core/types/presence`.
  */
 import { describe, expect, it } from "vitest";
 import {
-  SENSITIVE_ACTIONS,
   presenceActionDigest,
   presenceActionSubject,
-  type SensitiveActionPath,
 } from "@synap-core/types/presence";
-import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
-import { actionDoing } from "./action-words";
 import { challengeInput } from "./presence-model";
 
 describe("a sensitive action's challenge", () => {
@@ -54,20 +52,5 @@ describe("a sensitive action's challenge", () => {
         })
       )
     ).not.toBe(presenceActionSubject("apiKeys.setGrants", named));
-  });
-
-  it("every sensitive action has its words, in each catalog (never a raw path)", () => {
-    for (const locale of ["en", "fr"] as const) {
-      setAmbientCatalogLocale(locale);
-      for (const path of Object.keys(
-        SENSITIVE_ACTIONS
-      ) as SensitiveActionPath[]) {
-        const words = actionDoing(path);
-        expect(words, `${locale} ${path}`).toBeTruthy();
-        expect(words).not.toContain(".");
-      }
-    }
-    setAmbientCatalogLocale("en");
-    expect(actionDoing("apiKeys.create")).toBe("create a key");
   });
 });

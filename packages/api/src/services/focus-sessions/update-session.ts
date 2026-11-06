@@ -369,6 +369,14 @@ export type UpdateFocusSessionResult =
        */
       followRefusal?: string;
       /**
+       * The late re-resolve (founder decision d02, `bind-on-facts.ts`): the
+       * FIRST time a subject or a goal arrives on a session that follows no
+       * playbook, the pod runs the facts ladder once. ONE line: what it bound
+       * and why, or the fact-based offer. Absent when it did not run or
+       * found nothing.
+       */
+      binding?: string;
+      /**
        * What a `trackId`/`trackStage` in the patch did — present only when the
        * patch carried one. `domainNote` says the step names another domain and
        * the session was filed where it is, not moved.
@@ -2882,6 +2890,36 @@ export async function updateFocusSession(
     }
   }
 
+  // ── BIND ON THE FIRST FACT (d02) ────────────────────────────────────────────
+  // A subject or a goal that arrived WITH this patch (it is on the row now and
+  // was not before) re-runs the facts ladder ONCE per session, through the
+  // follow door. Never when this patch itself followed or released a playbook:
+  // the caller's own choice wins, and a released playbook is never re-bound.
+  let binding: string | undefined;
+  let reboundSession: typeof updated | undefined;
+  const latest = followedSession ?? updated;
+  const subjectArrived = !existing.subjectEntityId && !!latest.subjectEntityId;
+  const goalArrived = !existing.trackId && !!latest.trackId;
+  if (
+    params.followPlaybookId === undefined &&
+    !latest.playbookId &&
+    (subjectArrived || goalArrived)
+  ) {
+    const { rebindOnFirstFact } = await import("./bind-on-facts.js");
+    const rebound = await rebindOnFirstFact({
+      session: latest,
+      userId,
+      agentUserId,
+    });
+    binding = rebound?.line;
+    if (rebound?.decision === "bind") {
+      const reloaded = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+      });
+      if (reloaded) reboundSession = reloaded as typeof updated;
+    }
+  }
+
   // The project now lists the space its adopted work lives in (one `uses` door).
   let trackFilingOutcome:
     | NonNullable<
@@ -2956,7 +2994,7 @@ export async function updateFocusSession(
   // than `updated` and carries the `playbookId`, the merged criteria and the
   // merged deliverables. Returning the pre-follow row would tell the caller its
   // attach did nothing.
-  const finalSession = followedSession ?? updated;
+  const finalSession = reboundSession ?? followedSession ?? updated;
   return {
     status: "updated",
     session: gatedStatus
@@ -2967,6 +3005,7 @@ export async function updateFocusSession(
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),
+    ...(binding ? { binding } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
     ...(subjectMove ? { subjectMove } : {}),
