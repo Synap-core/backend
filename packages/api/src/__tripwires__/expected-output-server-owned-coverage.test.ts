@@ -94,7 +94,7 @@ const SAMPLE: Required<
   decisionId: "66666666-6666-6666-6666-666666666666",
   relationToSubject: "made_for",
   optional: true,
-  blocks: { entityId: "33333333-3333-3333-3333-333333333333", to: "contacted" },
+  blocks: { entityId: "33333333-3333-4333-8333-333333333333", to: "contacted" },
   blockerKey: "not_connected",
   clearedBy: { intent: "request_connection" },
   subjectEdge: {
