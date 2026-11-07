@@ -111,7 +111,9 @@ import { dirname, join, relative } from "node:path";
 // converted — its service now reads `AccountRecoveryCodeRepository`.
 // 44 → 43 on 2026-11-03 (#698): `services/connectors/inbound-recorder.test.ts`
 // converted — the recorder now imports `isUniqueViolation` from the one door.
-const BASELINE = 43;
+// 43 → 42 on 2026-11-07 (#894): `routers/__tests__/file-upload-membership.test.ts`
+// converted — the write gate now imports `personOfOwner` from @synap/database.
+const BASELINE = 42;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");
