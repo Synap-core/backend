@@ -5,14 +5,14 @@ published to one catalog and installed through shared substrate — not hardcode
 the pod backend. The marketplace is that **package layer**, and the catalog
 (`synap_packages`) is **kind-agnostic** — one door serves every kind:
 
-| Kind                      | Configures                                                       | Standalone install (via `applyMarketInstall`)      |
-| ------------------------- | ---------------------------------------------------------------- | -------------------------------------------------- |
-| **workspace**             | a whole domain (profiles + views + bento + its caps/automations) | ✅ `createWorkspaceFromDefinitionIdempotent`       |
-| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)           | ✅ `createCapabilityFromDefinition`                |
-| **cell**                  | a renderer — the code that draws an entity/widget                | ✅ `installCellFromDefinition` (needs a cache row) |
-| **view**                  | a saved view/layout                                              | ✅ `viewsRouter.create` (needs a `workspaceId`)    |
-| **skill**                 | agent know-how                                                   | ✅ `skillsRouter.create` (pod-wide if no ws)       |
-| **workflow / automation** | a WHEN→ACTION flow                                               | ✅ `automationsRouter.create` into acting ws       |
+| Kind                      | Configures                                                                                     | Standalone install (via `applyMarketInstall`)                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **workspace**             | a whole domain (profiles + views + bento + its caps/automations)                               | ✅ `createWorkspaceFromDefinitionIdempotent`                                     |
+| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)                                         | ✅ `createCapabilityFromDefinition`                                              |
+| **cell**                  | a renderer — the code that draws an entity/widget                                              | ✅ `installCellFromDefinition` (needs a cache row)                               |
+| **view**                  | a saved view/layout                                                                            | ✅ `viewsRouter.create` (needs a `workspaceId`)                                  |
+| **skill**                 | agent know-how                                                                                 | ✅ `skillsRouter.create` (pod-wide if no ws)                                     |
+| **workflow / automation** | a WHEN→ACTION flow                                                                             | ✅ `automationsRouter.create` into acting ws                                     |
 | **agent**                 | one AI program a person connects: how a computer finds and wakes it, the skills its agents get | ✅ `installAgentTemplate` (official only; every pod installs every official one) |
 
 **All seven kinds install standalone today** through the ONE apply core
