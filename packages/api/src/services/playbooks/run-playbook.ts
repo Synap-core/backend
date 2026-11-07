@@ -1470,6 +1470,8 @@ async function executeSingleRun(
     playbookId: playbook.id,
     workspaceId: input.workspaceId,
     userId: actorId,
+    // The birth stage's subject move is governed as the agent that ran it.
+    agentUserId: input.agentUserId ?? null,
     params,
     ...(input.onMissingRequired
       ? { onMissingRequired: input.onMissingRequired }
