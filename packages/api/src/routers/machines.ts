@@ -4,7 +4,7 @@
  * A computer is an agent user of type `machine` that the person approved on
  * `/device`. This router is the person's view of THEIR computers (and, for a
  * pod admin, `adminList` — everyone's) and the acts on one: rename, set its
- * key lifetime, "Runs scripts", "Hosts services", whose computer it is,
+ * key lifetime, "Runs scripts", "Installs from the pod", whose computer it is,
  * revoke (which revokes the keys of every agent it hosts and of every
  * installation on it — `revokeMachine`, the one door).
  *

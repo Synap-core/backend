@@ -296,7 +296,7 @@ export const API_KEY_SCOPES = [
   // turns it on for one computer (`machines.setRunsScripts`), and only a
   // computer's own key is accepted by those routes.
   "box.runner",
-  // Host runner (installations, 0399): a COMPUTER that leases the host jobs
+  // Host runner (installations, 0409): a COMPUTER that leases the host jobs
   // of the installations on itself (`/host-jobs/*`): install, remove and
   // update them, run their provider ops and hosted verbs. Never in a default
   // bundle: the person turns it on for one computer

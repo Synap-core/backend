@@ -566,8 +566,8 @@ describe("machines.revoke — the installations on the computer (0409)", () => {
     const bindKey = await keyFor("binding-agent-1");
     const elsewhere = await keyFor("installation-agent-2");
     const [inst] = await q<{ id: string }>(
-      `insert into installations (user_id, capability_key, machine_user_id, agent_user_id, api_key_id, status)
-       values ($1, 'hyperframes', $2, 'installation-agent-1', $3, 'healthy') returning id`,
+      `insert into installations (user_id, kind, capability_key, machine_user_id, agent_user_id, api_key_id, status)
+       values ($1, 'service', 'hyperframes', $2, 'installation-agent-1', $3, 'installed') returning id`,
       [HUMAN, box, instKey]
     );
     await q(
@@ -576,8 +576,8 @@ describe("machines.revoke — the installations on the computer (0409)", () => {
       [inst!.id, HUMAN, bindKey]
     );
     await q(
-      `insert into installations (user_id, capability_key, machine_user_id, agent_user_id, api_key_id, status)
-       values ($1, 'hyperframes', $2, 'installation-agent-2', $3, 'healthy')`,
+      `insert into installations (user_id, kind, capability_key, machine_user_id, agent_user_id, api_key_id, status)
+       values ($1, 'service', 'hyperframes', $2, 'installation-agent-2', $3, 'installed')`,
       [HUMAN, other, elsewhere]
     );
 

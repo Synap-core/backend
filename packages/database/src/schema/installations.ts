@@ -79,12 +79,17 @@ export interface InstallationHealth {
   ports?: Array<{ service: string; port: number; host: string }>;
   /** Disk the installation uses on the computer, and what is free. */
   disk?: { usedMb?: number; freeMb?: number };
-  /** A tool's last verify: the check's exit code, an output excerpt, its hash. */
+  /**
+   * A tool's last verify, as the runner sent it (masked): whether it passed,
+   * the check's exit code (null: the program never started or timed out), an
+   * output excerpt and its hash, and the optional smoke run.
+   */
   verify?: {
-    exitCode: number;
+    ok: boolean;
+    exitCode: number | null;
     excerpt?: string;
     outputSha256?: string;
-    smoke?: { ok: boolean; detail?: string };
+    smoke?: { ok: boolean; exitCode?: number | null; excerpt?: string };
   };
 }
 

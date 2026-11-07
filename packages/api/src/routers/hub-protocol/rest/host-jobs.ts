@@ -1,17 +1,22 @@
 /**
- * Hub Protocol REST — host jobs, the host runner side (installations, 0399;
- * plan 64072312 U7). The wire is `@synap-core/types/host-jobs`.
+ * Hub Protocol REST — host jobs, the host runner side (installations, 0409;
+ * plan 64072312 U7; the ONE wire for both kinds, reconciliation f75fbb48
+ * §3.2). The wire is `@synap-core/types/host-jobs`.
  *
  *   POST /host-jobs/lease            {capacity?}              → {job | null}
  *   POST /host-jobs/:id/heartbeat    {leaseId, phase}         → {leaseExpiresAt, stopRequested, logsRequested}
- *   POST /host-jobs/:id/report       {leaseId, health?, log?} → {installationId, status}
+ *   POST /host-jobs/:id/report       {leaseId, health?, verify?, observedVersion?, os?, arch?, log?} → {installationId, status}
  *   POST /host-jobs/:id/finish       {leaseId, status, …}     → {id, status, installationStatus}
  *   GET  /host-jobs/:id/logs                                  → {id, status, log, logReceivedAt, logsRequestedAt}
  *
  * WHO MAY CALL the runner routes: a COMPUTER (`users.agent_type = 'machine'`,
  * the device-flow key) whose key holds `host.runner`, the scope the person
- * turns on for that computer (`machines.setHostsServices`). Any other caller
- * is refused before a row is read. A computer acts only on jobs of its OWN
+ * turns on for that computer ("Installs from the pod",
+ * `machines.setHostsServices`). Any other caller is refused before a row is
+ * read — an agent HOSTED on that computer (`users.host_user_id`, Claude Code
+ * on the Mac) included: it reads the computer's installations, it never
+ * writes what the computer observed, so it cannot forge the record dispatch
+ * relies on. A computer acts only on jobs of its OWN
  * person, for installations ON ITSELF; both floors are read off the rows,
  * never the request.
  *
@@ -56,9 +61,27 @@ import {
   leaseHostJob,
   reportHostJob,
   type HostLeaseRefusal,
+  type HostObserved,
   type HostRunner,
 } from "../../../services/host-jobs/host-jobs.js";
 import { boxStatusForVerdict } from "../../../services/box-runs/box-runs.js";
+
+/** What the runner observed, only the fields it sent (a tool's verify, …). */
+function observedFrom(b: {
+  observedVersion?: string | null;
+  os?: string;
+  arch?: string;
+  verify?: HostObserved["verify"];
+}): HostObserved {
+  return {
+    ...(b.observedVersion !== undefined
+      ? { observedVersion: b.observedVersion }
+      : {}),
+    ...(b.os !== undefined ? { os: b.os } : {}),
+    ...(b.arch !== undefined ? { arch: b.arch } : {}),
+    ...(b.verify !== undefined ? { verify: b.verify } : {}),
+  };
+}
 
 /**
  * The computer behind this request, or the refusal. Scope first (no read),
@@ -77,7 +100,7 @@ async function resolveHostRunner(c: {
       ok: false,
       status: 403,
       code: "SCOPE_REQUIRED",
-      error: `Insufficient scope: ${HOST_RUNNER_SCOPE} required. Turn on "Hosts services" for this computer.`,
+      error: `Insufficient scope: ${HOST_RUNNER_SCOPE} required. Turn on "Installs from the pod" for this computer.`,
     };
   }
   const agentUserId = c.get("agentUserId") as string | undefined;
@@ -230,6 +253,7 @@ export function registerHostJobsRoutes(app: HubHono): void {
       runner: who.runner,
       ...(parsed.data.health ? { health: parsed.data.health } : {}),
       ...(parsed.data.log ? { log: parsed.data.log } : {}),
+      ...observedFrom(parsed.data),
     });
     if (!out.ok) return refused(c, out);
     return c.json({ installationId: out.installationId, status: out.status });
@@ -257,6 +281,7 @@ export function registerHostJobsRoutes(app: HubHono): void {
       ...(b.log ? { log: b.log } : {}),
       ...(b.output ? { output: b.output } : {}),
       ...(b.cleanedUp ? { cleanedUp: b.cleanedUp } : {}),
+      observed: observedFrom(b),
     });
     if (!out.ok) return refused(c, out);
     return c.json({

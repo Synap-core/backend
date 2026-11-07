@@ -143,7 +143,7 @@ export interface MachineView {
    * waker ever ran on it; `online` = it polled within the wake lease.
    */
   waker: ComputerWaker | null;
-  /** "Hosts services" is on: the computer installs software on itself. */
+  /** "Installs from the pod" is on: the computer installs software on itself. */
   hostsServices: boolean;
   /** Whose computer it is (0388). Null only on a row written before it. */
   belongsTo: ComputerBelongsTo | null;
@@ -560,7 +560,7 @@ export async function setMachineRunsScripts(
 }
 
 /**
- * "Hosts services" (installations, 0399): the computer may lease the host
+ * "Installs from the pod" (installations, 0409): the computer may lease the host
  * jobs of the installations on itself. Recorded on the computer
  * (`agentMetadata.hostsServices`, so a reconnect mints the key with the
  * scope) AND applied to its live keys' `host.runner` scope now — the

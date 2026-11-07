@@ -74,7 +74,7 @@ export const KEY_SCOPES_NOT_DERIVED: Readonly<Record<string, string>> = {
   "box.runner":
     "Privileged: a computer's own key leasing its person's scripts (Runs scripts).",
   "host.runner":
-    "Privileged: a computer's own key installing, updating and removing software on itself (Hosts services).",
+    "Privileged: a computer's own key installing, updating and removing software on itself (Installs from the pod).",
   probe: "Marks a dogfood probe key; declared by the probe flow, never chosen.",
 };
 
