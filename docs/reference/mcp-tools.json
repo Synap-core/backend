@@ -2824,7 +2824,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve, each with where it stands (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. An agent key also gets `handedToYou`: the sessions the person handed to it (never one it started itself), then the ones that went stale in the last 7 days, marked `resume` with `quietSince` — continue that conversation, never start it fresh. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
+      "description": "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve, each with where it stands (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. An agent key also gets `handedToYou`: the sessions the person handed to it (never one it started itself), then the ones that went stale in the last 7 days, marked `resume` with `quietSince` — continue that conversation, never start it fresh. `yourTools` says which tools this key lists, what synap_ask is for, and the exact synap_load_skill call that unlocks more. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
       "parameters": [
         {
           "name": "detail",
@@ -19614,13 +19614,25 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a `system/<package>/<stem>` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic. Need a tool you do not see? Pass a tool group — 'tools:read', 'tools:data', 'tools:sessions', 'tools:governance', 'tools:schema', 'tools:spaces', 'tools:tracks', 'tools:build', 'tools:capabilities' — or 'tools:builder' for every tool; a skill that teaches a group unlocks it too.",
+      "description": "Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a `system/<package>/<stem>` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic. Need a tool you do not see? Pass a tool group as `ref`, e.g. synap_load_skill({ref: \"tools:read\"}): 'tools:read' (look things up beyond ask), 'tools:data' (precise writes beyond capture), 'tools:sessions' (the rest of the session lifecycle), 'tools:governance' (proposals and trust rules), 'tools:schema' (kinds, roles and who may see them), 'tools:spaces' (spaces, projects and focus), 'tools:tracks' (goals (tracks): multi-stage work over time), 'tools:build' (views, cells, playbooks and skills), 'tools:capabilities' (connected services, verbs and automations); or 'tools:builder' for every tool. A skill that teaches a group unlocks it too.",
       "parameters": [
         {
           "name": "ref",
           "type": "string",
-          "required": true,
+          "required": false,
           "description": "A skill slug/stem (e.g. 'document-embeds', 'system/synap/document-embeds'), 'catalog', or a tool group ('tools:tracks'; 'tools:builder' = every tool)."
+        },
+        {
+          "name": "skill",
+          "type": "string",
+          "required": false,
+          "description": "Same as `ref` (used when `ref` is absent)."
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": false,
+          "description": "Same as `ref` (used when `ref` is absent)."
         },
         {
           "name": "workspaceId",
@@ -19636,12 +19648,20 @@
             "type": "string",
             "description": "A skill slug/stem (e.g. 'document-embeds', 'system/synap/document-embeds'), 'catalog', or a tool group ('tools:tracks'; 'tools:builder' = every tool)."
           },
+          "skill": {
+            "type": "string",
+            "description": "Same as `ref` (used when `ref` is absent)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Same as `ref` (used when `ref` is absent)."
+          },
           "workspaceId": {
             "type": "string",
             "description": "Optional: also include this workspace's skills (you must be a member). Omit to use your declared workspace focus, if any; otherwise only pod-wide and your own skills are read."
           }
         },
-        "required": ["ref"]
+        "required": []
       }
     }
   ]

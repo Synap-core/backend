@@ -114,6 +114,12 @@ import {
 } from "../tool-profiles.js";
 import { loadKeyToolAccess, unlockKeyToolGroups } from "../tool-access.js";
 import {
+  loadSkillCall,
+  RECONNECT_NOTE,
+  toolGroupList,
+  yourToolsBlock,
+} from "../tool-guidance.js";
+import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
 } from "../../../services/focus-sessions/wait-for-answers.js";
@@ -658,6 +664,63 @@ export interface ToolsListContext {
 
 /** Above this many newly listed tools, the unlock reply names them instead of inlining schemas. */
 const UNLOCK_INLINE_SCHEMA_MAX = 15;
+
+/** `synap_load_skill`'s ref: `ref`, else its aliases `skill` / `name`. */
+function loadSkillRefArg(args: Record<string, unknown>): string {
+  for (const key of ["ref", "skill", "name"]) {
+    const v = args[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+/**
+ * Add `yourTools` (`tool-guidance.ts`) to an orient result, right after
+ * `startHere`: what this key lists, what `ask` is for, and the exact call that
+ * unlocks more — in a tool RESULT, which every client shows its model (some
+ * drop the MCP `instructions`). Tool names are this door's (`pod__*` for the
+ * claude.ai connector's key). A failed profile read is said, never guessed;
+ * an error or non-object result passes through untouched.
+ */
+async function withYourTools(
+  result: CallToolResult,
+  agentUserId: string | undefined,
+  keyId: string | undefined
+): Promise<CallToolResult> {
+  const first = result.content?.[0];
+  if (result.isError || result.content?.length !== 1 || first?.type !== "text")
+    return result;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(first.text);
+  } catch {
+    return result;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return result;
+  let yourTools: Record<string, unknown>;
+  try {
+    const [access, door] = await Promise.all([
+      keyId ? loadKeyToolAccess(keyId) : Promise.resolve(null),
+      import("../../../services/capability-briefs/resolve-skill-door.js").then(
+        (m) => m.resolveSkillDoor(agentUserId, keyId)
+      ),
+    ]);
+    yourTools = yourToolsBlock(access, door);
+  } catch (err) {
+    yourTools = {
+      unavailable: `Could not read this key's tool list: ${err instanceof Error ? err.message : String(err)}`,
+      unlock: `${loadSkillCall("synap_load_skill")} unlocks more tools. ${RECONNECT_NOTE}`,
+    };
+  }
+  const { startHere, ...rest } = parsed as Record<string, unknown>;
+  const out = {
+    ...(startHere !== undefined ? { startHere } : {}),
+    yourTools,
+    ...rest,
+  };
+  return { ...result, content: [{ type: "text", text: JSON.stringify(out) }] };
+}
 
 /**
  * `synap_load_skill`'s tool-depth half (V1 D4). Persists `groups` on an ENTRY
@@ -2331,7 +2394,7 @@ export const tools = {
         description:
           "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the open goals they serve, each with where it stands (`openGoals`: file work into one with trackId), the most-used kinds, runnable actions, and the skill to load for concept depth. An agent key also gets `handedToYou`: the sessions the person handed to it (never one it started itself), then the ones that went stale in the last " +
           workClockIn("stuck", "days") +
-          " days, marked `resume` with `quietSince` — continue that conversation, never start it fresh. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
+          " days, marked `resume` with `quietSince` — continue that conversation, never start it fresh. `yourTools` says which tools this key lists, what synap_ask is for, and the exact synap_load_skill call that unlocks more. Then your identity, what is known about the user, projects (commitments, each spanning workspaces) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow — and PIN a `workspaceId` and orient also returns that space's `brief`: what it is FOR (purpose, persona), the kinds it HOLDS, its rules, its SKILLS (the agent know-how this space activates — each `{ slug, mode, when? }`; `mode:'always'` is in effect now, `'on-demand'` when the task matches its `when`), plus its playbooks and anchors. That is the one door to 'what is this space for, and what does it know' — an unpinned orient carries no brief. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6819,7 +6882,7 @@ export const tools = {
           readOnlyHint: true,
           openWorldHint: false,
         },
-        description: `Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a \`system/<package>/<stem>\` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic. Need a tool you do not see? Pass a tool group — ${TOOL_GROUP_NAMES.map((g) => `'${toolGroupRef(g)}'`).join(", ")} — or '${BUILDER_REF}' for every tool; a skill that teaches a group unlocks it too.`,
+        description: `Load the full body of a seeded teaching skill (the L2 tier behind the one-line summaries you see on other tools' descriptions and in the catalog). Pass a \`system/<package>/<stem>\` slug, a bare stem (e.g. 'document-embeds'), or 'catalog' to list every available skill grouped by topic. Need a tool you do not see? Pass a tool group as \`ref\`, e.g. ${loadSkillCall("synap_load_skill")}: ${toolGroupList("'", true)}; or '${BUILDER_REF}' for every tool. A skill that teaches a group unlocks it too.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -6827,13 +6890,24 @@ export const tools = {
               type: "string",
               description: `A skill slug/stem (e.g. 'document-embeds', 'system/synap/document-embeds'), 'catalog', or a tool group ('${toolGroupRef("tracks")}'; '${BUILDER_REF}' = every tool).`,
             },
+            // Aliases: a model that guessed the parameter's name (Hermes sent
+            // `skill`, finding d812debd) still gets its skill, not a refusal.
+            skill: {
+              type: "string",
+              description: "Same as `ref` (used when `ref` is absent).",
+            },
+            name: {
+              type: "string",
+              description: "Same as `ref` (used when `ref` is absent).",
+            },
             workspaceId: {
               type: "string",
               description:
                 "Optional: also include this workspace's skills (you must be a member). Omit to use your declared workspace focus, if any; otherwise only pod-wide and your own skills are read.",
             },
           },
-          required: ["ref"],
+          // `ref` or one of its aliases; the handler refuses none of them set.
+          required: [],
         },
       },
     ];
@@ -6909,15 +6983,30 @@ export const tools = {
     if (badArg) return badArg;
 
     try {
+      if (name === "synap_orient") {
+        const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
+        const result = await executeMCPToolViaHubProtocol(
+          name,
+          args,
+          userId,
+          apiKeyScopes,
+          sessionUserId,
+          agentUserId,
+          keyType,
+          keyWorkspaceId,
+          signal
+        );
+        return await withYourTools(result, agentUserId, toolAccess?.keyId);
+      }
       if (name === "synap_load_skill") {
-        const ref = typeof args.ref === "string" ? args.ref.trim() : "";
+        const ref = loadSkillRefArg(args);
         if (!ref) {
           return {
             isError: true,
             content: [
               {
                 type: "text",
-                text: `\`ref\` is required: a skill stem (e.g. 'focus-sessions'), 'catalog', or a tool group ('${toolGroupRef("tracks")}'; '${BUILDER_REF}' = every tool).`,
+                text: `\`ref\` is required: a skill stem (e.g. 'focus-sessions'), 'catalog', or a tool group ('${toolGroupRef("tracks")}'; '${BUILDER_REF}' = every tool). Example: ${loadSkillCall("synap_load_skill")}.`,
               },
             ],
           };
