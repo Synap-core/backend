@@ -30,8 +30,8 @@ vi.mock("./handlers/read.js", async (importOriginal) => {
     ...actual,
     readHandlers: {
       ...actual.readHandlers,
-      synap_get_session: async () => big(60_000),
-      synap_get_entities: async () => big(100),
+      synap_get_entities: async (ctx: { args: { size?: number } }) =>
+        big(ctx.args.size ?? 100),
     },
   };
 });
@@ -101,8 +101,8 @@ describe("capReply", () => {
 describe("the cap is on the call path every tool takes", () => {
   it("an oversized real-door reply is truncated with the notice", async () => {
     const out = await executeMCPToolViaHubProtocol(
-      "synap_get_session",
-      {},
+      "synap_get_entities",
+      { size: 60_000 },
       "user-1",
       ["mcp.read"]
     );
