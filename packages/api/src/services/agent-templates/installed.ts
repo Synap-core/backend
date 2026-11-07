@@ -5,12 +5,14 @@
  * different answers.
  */
 
-import { db } from "@synap/database";
+import { db, drizzleSql, eq, or } from "@synap/database";
 import { agentTemplates } from "@synap/database/schema";
 import { readMarketSource } from "../capabilities/market-source.js";
 import {
   SURFACE_HARNESS_SLUGS,
   type AgentTemplateWake,
+  type McpToolGroupName,
+  type McpToolProfile,
 } from "@synap-core/types/agents";
 
 export interface InstalledAgentTemplate {
@@ -72,4 +74,48 @@ export async function loadEngineAgentTypes(): Promise<ReadonlySet<string>> {
     ...SURFACE_HARNESS_SLUGS,
     ...rows.map((r) => r.harness),
   ]);
+}
+
+/** The MCP tool surface a template gives its agents' first key. */
+export interface TemplateToolSurface {
+  toolProfile: McpToolProfile;
+  toolGroups: McpToolGroupName[];
+}
+
+/**
+ * The tool surface an agent of `agentType` starts on, from its INSTALLED
+ * template: the one the connect names (`template`) when it is installed for
+ * this type, else the templates whose harness (or an alias) is this type.
+ * null = no template declares one (the pod's default applies: entry). Two
+ * templates of one type that name different surfaces are not guessed
+ * between: null.
+ * A failed read throws.
+ */
+export async function loadTemplateToolSurface(
+  agentType: string,
+  templateSlug: string | null
+): Promise<TemplateToolSurface | null> {
+  const forType = or(
+    eq(agentTemplates.harness, agentType),
+    drizzleSql`${agentTemplates.aliases} @> ${JSON.stringify([agentType])}::jsonb`
+  );
+  const ofType = await db
+    .select({
+      slug: agentTemplates.slug,
+      toolProfile: agentTemplates.toolProfile,
+      toolGroups: agentTemplates.toolGroups,
+    })
+    .from(agentTemplates)
+    .where(forType);
+  const named = ofType.filter((r) => r.slug === templateSlug);
+  const rows = named.length > 0 ? named : ofType;
+  const surfaces = new Set(
+    rows.map((r) => JSON.stringify([r.toolProfile, r.toolGroups ?? []]))
+  );
+  const row = rows[0];
+  if (!row || surfaces.size !== 1 || !row.toolProfile) return null;
+  return {
+    toolProfile: row.toolProfile,
+    toolGroups: row.toolProfile === "entry" ? [...(row.toolGroups ?? [])] : [],
+  };
 }

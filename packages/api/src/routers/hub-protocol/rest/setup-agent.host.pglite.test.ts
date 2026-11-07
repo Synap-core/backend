@@ -23,7 +23,11 @@
  *     codex: a computer's key connects it with no `asPerson`, one agent per
  *     computer, its grant clipped to the computer's even when `asPerson` was
  *     asked; without the template it is refused, and the device door the
- *     same.
+ *     same;
+ *   - d812debd: an agent's FIRST key lists its template's tool surface
+ *     (`toolProfile` + `toolGroups`) when the connect asks for none; an
+ *     explicit `toolProfile` wins; a type whose template names none starts
+ *     on `entry`, nothing unlocked.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
@@ -426,5 +430,91 @@ describe("59c75aab: an installed agent template's type is an engine, like codex"
     });
     expect(asked.status).toBe(200);
     expect(h.connects[0]?.asPerson).not.toBeNull();
+  });
+});
+
+describe("d812debd: a template's tool surface is its agents' first key's", () => {
+  const FOUR = "human-tool-surface";
+  const ask = (bearer: string, body: Record<string, unknown>) =>
+    app().request("/setup/agent", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const keyOf = async (agentUserId: string) => {
+    const rows = await q<{ tool_profile: string | null; tool_groups: unknown }>(
+      `select tool_profile, tool_groups from api_keys
+       where user_id = $1 and revoked_at is null`,
+      [agentUserId]
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  };
+  const connect = async (
+    hostname: string,
+    body: Record<string, unknown>
+  ): Promise<string> => {
+    const box = await connectComputer(FOUR, hostname);
+    const res = await ask(box.computer.apiKey, body);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { agentUserId: string }).agentUserId;
+  };
+  // `api_keys.tool_groups` is a text[]: pglite returns an array.
+  const groups = (v: unknown) => (Array.isArray(v) ? [...v].sort() : v);
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, email, user_type, email_verified, timezone, locale, is_personal_agent)
+       values ($1, $1 || '@x', 'human', true, 'UTC', 'en', false)`,
+      [FOUR]
+    );
+    await q(
+      `insert into agent_templates (slug, name, harness, aliases, worker, tried, practices, tool_profile, tool_groups, metadata)
+       values ('reader-agent', 'Reader Agent', 'reader-agent', '["reader"]'::jsonb, false, true, '{"skills":[]}'::jsonb, 'entry', '["read"]'::jsonb, '{}'::jsonb),
+              ('plain-agent', 'Plain Agent', 'plain-agent', '[]'::jsonb, false, true, '{"skills":[]}'::jsonb, null, '[]'::jsonb, '{}'::jsonb)`
+    );
+  });
+
+  it("none asked: the first key lists the template's profile and groups", async () => {
+    const agent = await connect("ts-1", {
+      agentType: "reader-agent",
+      instanceId: "inst-ts-1",
+    });
+    const key = await keyOf(agent);
+    expect(key.tool_profile).toBe("entry");
+    expect(groups(key.tool_groups)).toEqual(["read"]);
+  });
+
+  it("the connect names the template: the same surface", async () => {
+    const agent = await connect("ts-2", {
+      agentType: "reader-agent",
+      instanceId: "inst-ts-2",
+      template: "reader-agent",
+    });
+    expect(groups((await keyOf(agent)).tool_groups)).toEqual(["read"]);
+  });
+
+  it("an explicit toolProfile wins over the template's", async () => {
+    const agent = await connect("ts-3", {
+      agentType: "reader-agent",
+      instanceId: "inst-ts-3",
+      toolProfile: "builder",
+    });
+    const key = await keyOf(agent);
+    expect(key.tool_profile).toBe("builder");
+    expect(groups(key.tool_groups) ?? []).toEqual([]);
+  });
+
+  it("a template that names no surface: entry, nothing unlocked, as before", async () => {
+    const agent = await connect("ts-4", {
+      agentType: "plain-agent",
+      instanceId: "inst-ts-4",
+    });
+    const key = await keyOf(agent);
+    expect(key.tool_profile).toBe("entry");
+    expect(groups(key.tool_groups) ?? []).toEqual([]);
   });
 });
