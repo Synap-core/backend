@@ -246,10 +246,8 @@ async function readSpaceOutputs(
     .limit(1);
   const intent = (row?.settings as { intent?: unknown } | null)?.intent as
     { primary?: unknown; produces?: unknown } | null | undefined;
-  const primary =
-    typeof intent?.primary === "string" && intent.primary.trim()
-      ? intent.primary.trim()
-      : null;
+  const raw = intent?.primary;
+  const primary = typeof raw === "string" && raw.trim() ? raw.trim() : null;
   const produces = Array.isArray(intent?.produces)
     ? intent.produces.filter((s): s is string => typeof s === "string")
     : [];
@@ -276,6 +274,18 @@ export async function readFlowOf(
     input.workspaceId !== undefined
       ? input.workspaceId
       : (ctx.workspaceId ?? undefined);
+
+  // The space's flows and the pod-wide ones; no lens = every flow the
+  // caller sees; `null` = pod-wide only.
+  const flowSpace =
+    typeof lensWorkspaceId === "string"
+      ? or(
+          isNull(playbooks.workspaceId),
+          eq(playbooks.workspaceId, lensWorkspaceId)
+        )
+      : lensWorkspaceId === null
+        ? isNull(playbooks.workspaceId)
+        : undefined;
 
   const [board, pbRows, workers, space] = await Promise.all([
     readBoard(
@@ -312,16 +322,7 @@ export async function readFlowOf(
               eq(playbooks.status, "active"),
               drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${input.profileSlug}`,
               drizzleSql`coalesce(${playbooks.scope}, 'session') <> 'project'`,
-              // The space's flows and the pod-wide ones; no lens = every
-              // flow the caller sees; `null` = pod-wide only.
-              lensWorkspaceId === undefined
-                ? undefined
-                : lensWorkspaceId === null
-                  ? isNull(playbooks.workspaceId)
-                  : or(
-                      isNull(playbooks.workspaceId),
-                      eq(playbooks.workspaceId, lensWorkspaceId)
-                    )
+              flowSpace
             )
           )
           .orderBy(playbooks.name)
