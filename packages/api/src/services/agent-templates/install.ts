@@ -75,6 +75,8 @@ export async function installAgentTemplate(input: {
     detect: spec.detect,
     wake: spec.wake,
     practices: spec.practices,
+    toolProfile: spec.toolProfile,
+    toolGroups: spec.toolGroups,
   };
   const metadata = stampMarketSource(
     undefined,

@@ -28,6 +28,7 @@
  */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import {
   ASK_ANSWER_BY_PAST_MESSAGE,
   ASK_LIMITS,
@@ -242,8 +243,7 @@ export const askPersonHandlers: McpHandlerMap = {
     }
     if (!args.ask || typeof args.ask !== "object" || Array.isArray(args.ask)) {
       return ok({
-        error:
-          "ask is required: HOW the person answers — {mode:'confirm'} | {mode:'choose', options:[…]} | {mode:'form', form:{fields:[…]}} | {mode:'act', steps:[…]} | {mode:'provide', provide:{…}}. NOTHING WAS FILED.",
+        error: `ask is required: HOW the person answers — {mode:'confirm'} | {mode:'choose', options:[…]} | {mode:'form', form:{fields:[…]}} | {mode:'act', steps:[…]} | {mode:'provide', provide:{…}}. NOTHING WAS FILED.${ASK_SKILL_HINT}`,
       });
     }
     const askArg = AskSchema.safeParse(args.ask);
@@ -251,7 +251,7 @@ export const askPersonHandlers: McpHandlerMap = {
       return ok({
         error: `Invalid ask — NOTHING WAS FILED: ${askArg.error.issues
           .map((i) => `ask.${i.path.join(".")}: ${i.message}`)
-          .join("; ")}`,
+          .join("; ")}.${ASK_SKILL_HINT}`,
       });
     }
     // The top-level ticket fields ride the ask (where they are stored); the

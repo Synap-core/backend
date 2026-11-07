@@ -2336,6 +2336,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0404_agent_templates.sql",
   },
   {
+    table: "agent_templates",
+    column: "tool_groups",
+    addedBy: "0407_agent_template_tool_surface.sql",
+  },
+  {
     table: "automation_runs",
     column: "definition_snapshot",
     addedBy: "0198_workflow_attribution_spine.sql",
