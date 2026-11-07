@@ -15,6 +15,7 @@
  * `requireScope`, and focus-session resolution helpers.
  */
 
+import { capReply } from "./reply-cap.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
 import {
@@ -297,7 +298,9 @@ export async function executeMCPToolViaHubProtocol(
   // for the host's iframe. LAST, so it is read back from the final text block
   // — `link`, `attribution` and `proposalUpdates` included — and the two
   // copies never diverge.
-  return withUiStructuredContent(toolName, digested);
+  // THE reply cap, applied last on the text the agent reads (and so on what
+  // the structured copy is built from): one door for every tool.
+  return withUiStructuredContent(toolName, capReply(toolName, digested));
 }
 
 /**
