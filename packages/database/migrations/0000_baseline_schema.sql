@@ -5722,7 +5722,10 @@ CREATE TABLE IF NOT EXISTS "status_wait_episode" (
   "ref"          jsonb,
   "ref_key"      text        NOT NULL DEFAULT '',
   "opened_at"    timestamptz NOT NULL DEFAULT now(),
-  "closed_at"    timestamptz
+  "closed_at"    timestamptz,
+  -- 0408: the status it waited in, and the blocker's name.
+  "status"       text,
+  "blocker_key"  text
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "uq_status_wait_episode_open"

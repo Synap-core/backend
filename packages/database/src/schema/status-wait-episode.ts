@@ -40,6 +40,13 @@ export const statusWaitEpisode = pgTable(
       .defaultNow()
       .notNull(),
     closedAt: timestamp("closed_at", { mode: "date", withTimezone: true }),
+    /**
+     * The status the subject stood on when the wait was first found (0408);
+     * null when it has none, or for an episode opened before it.
+     */
+    status: text("status"),
+    /** The owed slot's declared blocker name (`not_connected`, 0408), else null. */
+    blockerKey: text("blocker_key"),
   },
   (t) => ({
     // NULLS NOT DISTINCT in the migration: a kind's own wait (no facet) is

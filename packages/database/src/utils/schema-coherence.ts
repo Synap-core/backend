@@ -178,6 +178,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "ref_key",
     addedBy: "0386_status_wait_episode.sql",
   },
+  // The status a thing waited in and the blocker's name (0408). The episode
+  // writer inserts both, so without them every watcher tick fails its write.
+  {
+    table: "status_wait_episode",
+    column: "status",
+    addedBy: "0408_wait_episode_blocker.sql",
+  },
+  {
+    table: "status_wait_episode",
+    column: "blocker_key",
+    addedBy: "0408_wait_episode_blocker.sql",
+  },
   // A living document's scope and refresher (0387). Every document read
   // selects the row, so without them every document get and list 500s.
   {

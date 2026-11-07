@@ -65,6 +65,7 @@ import {
   needsYouPriority,
   type NeedsYouPriority,
   isSetAside,
+  type NeedsYouBlocks,
 } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
@@ -78,6 +79,7 @@ import type {
   ExpectedOutput,
   OutputRef,
   SlotAsk,
+  SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
@@ -433,6 +435,22 @@ export interface Signal {
    */
   unblocks?: string;
   /**
+   * `owed-slot`: the thing the ask's session is ABOUT (`focus_sessions.
+   * subject_entity_id`) — what lets a card be placed on its thing (plan
+   * e7f753db §9). An id only: its name travels in `blocks`, floored.
+   */
+  subjectEntityId?: string;
+  /**
+   * `owed-slot`: the THING the ask holds up, its status now and the status
+   * it cannot reach until the person answers (plan e7f753db §9;
+   * `OwedSlot.blockedThing`, resolved under the reader's entity floor).
+   */
+  blocks?: NeedsYouBlocks;
+  /** `owed-slot`: the blocker's domain name (`not_connected`), as declared. */
+  blockerKey?: string;
+  /** `owed-slot`: what clears the blocker, as declared (`SlotClearedBy`). */
+  clearedBy?: SlotClearedBy;
+  /**
    * WHERE the row came from — the small provenance door (lens grammar §5: a
    * source is shown only when it differs from the page's scope; the client
    * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -620,6 +638,10 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "convertible",
   "package",
   "waitKind",
+  "subjectEntityId",
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
@@ -1112,6 +1134,13 @@ export interface OwedSlotSignalInput {
   needsYouClass?: NeedsYouSlotClass;
   /** What the answer unblocks, straight from `listOwedSlots`. */
   unblocks?: string;
+  /** The session's subject, straight from `listOwedSlots`. */
+  subjectEntityId?: string | null;
+  /** The thing it holds up, resolved by `listOwedSlots` (`blockedThing`). */
+  blockedThing?: NeedsYouBlocks;
+  /** The declared blocker's name and door, straight from `listOwedSlots`. */
+  blockerKey?: string;
+  clearedBy?: SlotClearedBy;
 }
 
 /**
@@ -1167,6 +1196,17 @@ export interface OwedSlotSignalInput {
  *                                      agent did, the card's door
  *   blocksOpenPr                    → `blocksOpenPr` — the ask blocks an open
  *                                      PR: ordered first, never aged out
+ *   subjectEntityId                 → `subjectEntityId` — the thing the
+ *                                      session is about, so a card is placed
+ *                                      on its thing (plan e7f753db §9). It
+ *                                      was withheld while the session was the
+ *                                      only door; an id the reader's own
+ *                                      session already carries.
+ *   blockedThing                    → `blocks` — the thing the ask holds up,
+ *                                      its status now and after (plan §9),
+ *                                      named under the reader's entity floor
+ *   blockerKey, clearedBy           → carried straight through: the card
+ *                                      says what clears it
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -1182,11 +1222,9 @@ export interface OwedSlotSignalInput {
  *                     never from a kind string — undrawn context, not a hole.
  *                     (`kind` was withheld under this same reasoning until it
  *                     turned out to decide the VERB, not the icon.)
- *   subjectEntityId → the thing the session is about. A signal's door is the
- *                     session (`target`), and the kind lens already narrows
- *                     by thing in SQL (`subject`); its reader is the owed door
- *                     a pod app reads (`GET /focus-sessions/owed`), which
- *                     places each ask on its thing's own page.
+ *   blocks         → the blocker as declared; the card reads it RESOLVED,
+ *                     as `blockedThing` (above): an id the reader may not
+ *                     read must not reach it unnamed-but-present.
  */
 const _PROJECTED_OWED_SLOT_FIELDS = [
   "sessionId",
@@ -1214,13 +1252,17 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   // Read by the slot's class (`owedSlotClassOf`) AND carried: a returned ask
   // (the time is past) wears a "Back" mark on the phone (founder D3).
   "laterUntil",
+  "subjectEntityId",
+  "blockedThing",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
   "sessionStatus",
   "workspaceId",
   "icon",
-  "subjectEntityId",
+  "blocks",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 /**
@@ -1311,6 +1353,12 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   // The person's Later is read by a started session's slot class only
   // (`owedSlotClassOf`): a draft's ask reaches no class to fold it.
   "laterUntil",
+  // The thing each ask holds up belongs to the ask's own row, like its why:
+  // one draft row stands for N asks.
+  "blocks",
+  "blockedThing",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
@@ -1475,6 +1523,10 @@ export function signalFromOwedSlot(
       : {}),
     ...(row.askCause ? { askCause: row.askCause } : {}),
     ...(row.unblocks ? { unblocks: row.unblocks } : {}),
+    ...(row.subjectEntityId ? { subjectEntityId: row.subjectEntityId } : {}),
+    ...(row.blockedThing ? { blocks: row.blockedThing } : {}),
+    ...(row.blockerKey ? { blockerKey: row.blockerKey } : {}),
+    ...(row.clearedBy ? { clearedBy: row.clearedBy } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     // Review later wins over Older, like a cluster's: a client that predates

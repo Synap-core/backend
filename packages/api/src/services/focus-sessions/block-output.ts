@@ -49,6 +49,7 @@ import type {
   SlotAsk,
   SlotAskCause,
 } from "@synap/playbooks";
+import { blockerOutlivesHandBack } from "@synap/playbooks";
 import {
   findUnreachableOutputRefs,
   unreachableOutputRefError,
@@ -458,6 +459,12 @@ export function stampBlocked(
  * blocker and means nothing on an agent-owned slot (see
  * `BlockExpectedOutputParams.ask`), with any relay waiting on the person's tap
  * of that ask (`pendingRelay`). `ref` stays: it describes the deliverable.
+ *
+ * The blocker (`blocks`, `blockerKey`, `clearedBy`, plan e7f753db §9) goes
+ * with the ownership when the person's answer was what cleared it; when an
+ * agent's run clears it (`blockerOutlivesHandBack`) it STAYS: the slot is now
+ * the agent's runnable blocker and the thing stays blocked until that run
+ * delivers the slot.
  * Pure.
  */
 export function stampUnblocked(
@@ -479,6 +486,13 @@ export function stampUnblocked(
       pendingRelay: _pendingRelay,
       ...rest
     } = o;
-    return rest;
+    if (blockerOutlivesHandBack(o.clearedBy)) return rest;
+    const {
+      blocks: _blocks,
+      blockerKey: _blockerKey,
+      clearedBy: _clearedBy,
+      ...unblocked
+    } = rest;
+    return unblocked;
   });
 }

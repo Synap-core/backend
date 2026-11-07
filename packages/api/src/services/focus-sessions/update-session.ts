@@ -73,8 +73,14 @@ import type {
   SlotAskLookedAtKind,
   SlotAskSnapshot,
   SlotAskUrgency,
+  SlotBlocks,
+  SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
+import type {
+  ThingBlockerBlocks,
+  ThingBlockerClearedBy,
+} from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
@@ -498,6 +504,27 @@ const slotAnswerWireSchema = z.object({
   ...AnswerProvenanceSchema.shape,
 });
 
+/**
+ * The blocker trio's wire shapes (plan e7f753db §9). `blocks` names a thing
+ * and a status, both optional (defaults are read, never stored); `blockerKey`
+ * is a short snake_case domain name; `clearedBy` names exactly ONE door.
+ */
+export const slotBlocksWireSchema = z
+  .object({
+    entityId: z.string().uuid().optional(),
+    to: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+export const slotBlockerKeyWireSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]{0,63}$/, "a short snake_case name, e.g. not_connected");
+export const slotClearedByWireSchema = z.union([
+  z.object({ answer: z.literal(true) }).strict(),
+  z.object({ intent: z.string().trim().min(1).max(80) }).strict(),
+  z.object({ playbookId: z.string().uuid() }).strict(),
+  z.object({ capability: z.string().trim().min(1).max(120) }).strict(),
+]);
+
 export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
@@ -618,6 +645,12 @@ export const expectedOutputWireSchema = z.object({
       at: z.string(),
     })
     .optional(),
+  // The thing this slot holds up (plan e7f753db §9). DECLARED, like
+  // `unblocks`; `blocks.entityId` is floored at write by the same ref floor
+  // (`findUnreachableOutputRefs`).
+  blocks: slotBlocksWireSchema.optional(),
+  blockerKey: slotBlockerKeyWireSchema.optional(),
+  clearedBy: slotClearedByWireSchema.optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -655,6 +688,12 @@ const _lookedAtKindParity: _Mutual<
 > = true;
 void _lookedAtKindsAreRefKinds;
 void _lookedAtKindParity;
+// The blocker's two shapes, mirrored dependency-free in `@synap-core/types`
+// (`deriveThingBlocker` reads them through the waiting-on collector).
+const _blocksParity: _Mutual<SlotBlocks, ThingBlockerBlocks> = true;
+const _clearedByParity: _Mutual<SlotClearedBy, ThingBlockerClearedBy> = true;
+void _blocksParity;
+void _clearedByParity;
 
 /**
  * The slot fields the SERVER owns — written by governance, delegation and
@@ -741,6 +780,12 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   // could already drop a slot from the array outright; guarding this flag
   // would close no hole the wholesale patch leaves open.)
   "optional",
+  // WHICH thing the slot holds up, its domain name and what clears it (plan
+  // e7f753db §9). The declarer's word, like `unblocks`: naming a blocker
+  // closes nothing and receipts nothing.
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -845,6 +890,10 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason: renaming a sibling must not turn the playbook's
   // optional milestone invoice back into an owed one.
   "optional",
+  // Same erasure reason: renaming a sibling must not unblock a thing.
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
