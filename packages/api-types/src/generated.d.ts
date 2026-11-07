@@ -1205,6 +1205,13 @@ export interface AgentMetadata {
 	 */
 	runsScripts?: boolean;
 	/**
+	 * COMPUTER principals only: the person turned on "Wakes agents" — the pod
+	 * may count on this computer's waker (`synap waker`) to start its agents
+	 * when work is handed to them (plan v2 slice 4; `machines.setWakesAgents`).
+	 * Absent = off, the default.
+	 */
+	wakesAgents?: boolean;
+	/**
 	 * How many pushes a day this agent's work may send its person (founder
 	 * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
 	 * only by `agentUsers.setPushLimit`; read by the push producer
@@ -21821,9 +21828,9 @@ export interface HandoffAgent {
 	template: AgentTemplateRef | null;
 	/**
 	 * Can the pod get it working now (`deriveAgentWake`, THE wake rule): awake,
-	 * can_wake (with `how`), or cant_wake with the one reason. Until computers
-	 * can start agents (plan v2 slice 4) no computer is a waker, so a pull
-	 * agent nothing runs reads `cant_wake: no_waker`, never `can_wake`.
+	 * can_wake (with `how`), or cant_wake with the one reason. A pull agent
+	 * nothing runs reads `can_wake` only when its computer's waker holds the
+	 * wake lease and its "Wakes agents" switch is on (`computer-waker.ts`).
 	 */
 	wake: AgentWake;
 	/** direct = lands on the roster now; asks_you = the person approves first. */
@@ -21842,6 +21849,14 @@ export interface SetAgentJobResult {
 	role: string | null;
 	name: string;
 	seat: string | null;
+}
+/**
+ * What can start agents on a computer: its runner, online or not, and the
+ * computer's "Wakes agents" switch. `null` = nothing on it can start agents.
+ */
+export interface ComputerWaker {
+	online: boolean;
+	wakesAgents: boolean;
 }
 /** Where a principal's newest key stands — ONE derivation, server-side. */
 export type MachineKeyState = "active" | "expired" | "expiring" | "none" | "revoked";
@@ -21880,6 +21895,13 @@ export interface MachineView {
 	accessName: string | null;
 	/** "Runs scripts" is on: the computer leases its person's box runs. */
 	runsScripts: boolean;
+	/** "Wakes agents" is on: the pod may count on this computer's waker. */
+	wakesAgents: boolean;
+	/**
+	 * Its waker, as THE wake rule reads it (`computerWakerOf`): `null` = no
+	 * waker ever ran on it; `online` = it polled within the wake lease.
+	 */
+	waker: ComputerWaker | null;
 	/** Whose computer it is (0388). Null only on a row written before it. */
 	belongsTo: ComputerBelongsTo | null;
 	agents: HostedAgentView[];
@@ -43711,6 +43733,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "updated";
 			};
 		}>;
+		setWakesAgents: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				machineId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				status: "proposed";
+				wakesAgents?: undefined;
+			} | {
+				proposalId?: undefined;
+				status: "updated";
+				wakesAgents: boolean;
+			};
+		}>;
 	}>>;
 	marketplace: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -48155,7 +48223,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setKeyTtl" | "machines.setRunsScripts" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {
