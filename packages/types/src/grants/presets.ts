@@ -59,6 +59,11 @@ export const AI_READ_SUBJECTS = [
   "facet",
   "feed",
   "inbox",
+  // What is installed on the person's computers (installations, 0409;
+  // reconciliation f75fbb48 §3.2): an agent reads its computer's tools and
+  // services; it never writes what a computer observed (only the computer's
+  // own `host.runner` key does).
+  "installation",
   // The Library's groups (grant-read.ts). Reading them is what
   // `library.organize` (AI_GATE_VERBS, always a proposal) works from.
   "library",
