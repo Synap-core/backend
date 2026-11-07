@@ -146,7 +146,7 @@ describe("settings.intent — projected by the create and reconcile writers", ()
   it("(1b) the primary output lands with it, trimmed (One model, decision 3)", async () => {
     const r = await createWorkspaceFromDefinition({
       definition: {
-        workspaceName: "Sales",
+        workspaceName: "Pipeline",
         intent: {
           label: "Sales",
           produces: [{ profile: "lead" }, { profile: "deal" }],
