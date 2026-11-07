@@ -113,6 +113,7 @@ import {
   profiles,
   links,
   playbookRuns,
+  relations,
 } from "@synap/database";
 import { signalsRouter } from "./signals.js";
 
@@ -223,6 +224,9 @@ beforeAll(async () => {
     links,
     // The needs-you rule's facts (agent evidence, proposal waits).
     playbookRuns,
+    // The thing an owed slot holds up is named under the entity read floor
+    // (plan e7f753db §9), which reads project relations.
+    relations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
