@@ -24,7 +24,7 @@ describe("filterChipFace", () => {
         allLabel: "All rules",
         allCount: 6,
       })
-    ).toEqual({ text: "All rules", count: 6, isSet: false });
+    ).toEqual({ text: "All rules", count: 6, isSet: false, mark: null });
   });
 
   it("an unmeasured count shows no number, never 0", () => {
@@ -47,7 +47,7 @@ describe("filterChipFace", () => {
         selected: ["failing"],
         allLabel: "All",
       })
-    ).toEqual({ text: "Failing", count: 2, isSet: true });
+    ).toEqual({ text: "Failing", count: 2, isSet: true, mark: null });
   });
 
   it("a filter with no All is not 'set' on its default value", () => {
@@ -57,7 +57,12 @@ describe("filterChipFace", () => {
       allLabel: null,
       defaultSelected: ["active"],
     });
-    expect(face).toEqual({ text: "Active", count: 4, isSet: false });
+    expect(face).toEqual({
+      text: "Active",
+      count: 4,
+      isSet: false,
+      mark: null,
+    });
     expect(
       filterChipFace({
         options: OPTIONS,
@@ -85,7 +90,7 @@ describe("filterChipFace", () => {
         selected: ["active", "failing"],
         allLabel: "All",
       })
-    ).toEqual({ text: "2 selected", count: 6, isSet: true });
+    ).toEqual({ text: "2 selected", count: 6, isSet: true, mark: null });
     expect(
       filterChipFace({
         options: OPTIONS,

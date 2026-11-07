@@ -11,35 +11,22 @@
  *   5. Toast notifications after deletions
  */
 
-import {
-  addToast,
-  Button,
-  Checkbox,
-  Input,
-  Select,
-  SelectItem,
-  Spinner as _Spinner,
-  Switch,
-} from "@heroui/react";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Database,
-  Search,
-  Trash2,
-} from "lucide-react";
+import { addToast, Button, Checkbox } from "@heroui/react";
+import { Building2, Database, Globe, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { PageFallback, PageHeader, PageShell } from "../components/page-header";
+import { PageFallback, PageShell } from "../components/page-header";
 import {
-  ResourceRowEmpty,
-  ResourceRowError,
-  ResourceRowSkeleton,
-} from "../components/resource-row";
+  FilterChip,
+  ListCard,
+  ListToolbar,
+  PageHeader,
+} from "../components/list-page";
+import { kindOption } from "../components/filter-options";
+import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
 import { ConfirmModal } from "../components/confirm-modal";
-import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
 import { formatRelative, isUuid, readableError } from "../../../lib/format";
 import { openIn } from "../../../lib/open-in";
@@ -60,6 +47,9 @@ type EntityRow = {
 /** `?focus=` must be a real entity id before we spend a query on it —
  * `entities.adminGet` rejects anything that is not a UUID. */
 
+/** The scope chip's id for "no space"; a space id is a UUID, so no clash. */
+const POD_WIDE = "pod-wide";
+
 // ─── Page shell ───────────────────────────────────────────────────────
 
 export default function EntitiesPage() {
@@ -73,10 +63,11 @@ export default function EntitiesPage() {
 // ─── Main inner component ─────────────────────────────────────────────
 
 function EntitiesInner() {
-  const [search, setSearch] = useState("");
+  const searchBox = useDebouncedQuery();
+  const search = searchBox.query;
   const [profileSlug, setProfileSlug] = useState<string>("");
-  const [workspaceIdInput, setWorkspaceIdInput] = useState("");
-  const [podWideOnly, setPodWideOnly] = useState(false);
+  /** The scope filter: nothing = every space, POD_WIDE = no space, else a space id. */
+  const [scope, setScope] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
@@ -98,14 +89,14 @@ function EntitiesInner() {
   const LIMIT = 50;
 
   // Compute the effective workspaceId filter
-  const workspaceIdFilter: string | null | undefined = useMemo(() => {
-    if (podWideOnly) return null;
-    const trimmed = workspaceIdInput.trim();
-    if (trimmed.length === 36) return trimmed; // UUID length
-    return undefined; // no filter
-  }, [podWideOnly, workspaceIdInput]);
+  const workspaceIdFilter: string | null | undefined =
+    scope === null ? undefined : scope === POD_WIDE ? null : scope;
 
   const utils = trpc.useUtils();
+
+  const spacesQuery = trpc.workspaces.adminListAll.useQuery(undefined, {
+    staleTime: 60_000,
+  });
 
   const profilesQuery = trpc.entities.adminListProfiles.useQuery(
     { workspaceId: workspaceIdFilter },
@@ -127,7 +118,7 @@ function EntitiesInner() {
   useEffect(() => {
     setOffset(0);
     setSelectedIds(new Set());
-  }, [search, profileSlug, workspaceIdInput, podWideOnly]);
+  }, [search, profileSlug, scope]);
 
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
@@ -139,9 +130,6 @@ function EntitiesInner() {
 
   const items = (entitiesQuery.data?.items ?? []) as EntityRow[];
   const total = entitiesQuery.data?.total ?? 0;
-  const pageCount = Math.ceil(total / LIMIT);
-  const currentPage = Math.floor(offset / LIMIT) + 1;
-
   const profiles = profilesQuery.data ?? [];
 
   /**
@@ -267,195 +255,140 @@ function EntitiesInner() {
         }
       />
 
-      {/* Filters */}
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <div className="w-full max-w-xs">
-          <Input
-            placeholder="Search title, preview, properties…"
-            value={search}
-            onValueChange={setSearch}
-            radius="md"
-            variant="flat"
-            size="sm"
-            startContent={<Search className="h-3.5 w-3.5 text-foreground/40" />}
-            isClearable
-            onClear={() => setSearch("")}
+      <ListToolbar
+        search={
+          <ListSearch
+            value={searchBox.input}
+            onChange={searchBox.setInput}
+            label="Search title, preview, properties…"
+            className=""
           />
-        </div>
-
-        <div className="w-48">
-          <Select
-            placeholder="All types"
-            selectedKeys={profileSlug ? new Set([profileSlug]) : new Set()}
-            onSelectionChange={(keys) => {
-              const val = Array.from(keys)[0];
-              setProfileSlug(typeof val === "string" ? val : "");
-            }}
-            radius="md"
-            variant="flat"
-            size="sm"
-            aria-label="Filter by profile type"
-          >
-            {[
-              <SelectItem key="" textValue="All types">
-                All types
-              </SelectItem>,
-              ...profiles.map((p) => (
-                <SelectItem key={p.profileSlug} textValue={p.profileSlug}>
-                  {p.profileSlug}{" "}
-                  <span className="text-foreground/65">({p.count})</span>
-                </SelectItem>
-              )),
-            ]}
-          </Select>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 text-[12px] text-foreground/65">
-            <Switch
-              size="sm"
-              isSelected={podWideOnly}
-              onValueChange={(v) => {
-                setPodWideOnly(v);
-                if (v) setWorkspaceIdInput("");
-              }}
-              aria-label="Pod-wide only (no space)"
-            />
-            Pod-wide only
-          </label>
-        </div>
-
-        {!podWideOnly && (
-          <div className="w-72">
-            <Input
-              placeholder="Filter by space ID…"
-              value={workspaceIdInput}
-              onValueChange={setWorkspaceIdInput}
-              radius="md"
-              variant="flat"
-              size="sm"
-              isClearable
-              onClear={() => setWorkspaceIdInput("")}
-            />
-          </div>
-        )}
-      </div>
-
-      <SectionCard
-        title={`Entities${total > 0 ? ` (${total})` : ""}`}
-        actions={
-          pageCount > 1 ? (
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-foreground/65">
-                Page {currentPage} / {pageCount}
-              </span>
-              <Button
-                isIconOnly
-                variant="light"
-                size="sm"
-                radius="full"
-                isDisabled={offset === 0}
-                onPress={() => setOffset(Math.max(0, offset - LIMIT))}
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                isIconOnly
-                variant="light"
-                size="sm"
-                radius="full"
-                isDisabled={offset + LIMIT >= total}
-                onPress={() => setOffset(offset + LIMIT)}
-                aria-label="Next page"
-              >
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ) : null
         }
-      >
-        {/* Focused row that no active filter / page reaches — surfaced rather
+        filters={
+          <>
+            <FilterChip
+              label="Type"
+              allLabel="All types"
+              value={profileSlug || null}
+              onChange={(next) => setProfileSlug(next ?? "")}
+              options={profiles.map((p) =>
+                kindOption(p.profileSlug, { count: p.count })
+              )}
+            />
+            <FilterChip
+              label="Space"
+              allLabel="All spaces"
+              value={scope}
+              onChange={setScope}
+              options={[
+                { id: POD_WIDE, label: "Pod-wide only", icon: Globe },
+                ...(spacesQuery.data ?? []).map((s) => ({
+                  id: s.id,
+                  label: s.name,
+                  icon: Building2,
+                })),
+              ]}
+            />
+          </>
+        }
+      />
+
+      <ListCard
+        title="Entities"
+        count={total}
+        loading={entitiesQuery.isLoading || isAuthRedirecting}
+        isError={entitiesQuery.isError}
+        onRetry={() => void entitiesQuery.refetch()}
+        errorMessage="Couldn't load entities."
+        rowCount={items.length}
+        emptyMessage="No entities match the current filters."
+        skeletonRows={6}
+        above={
+          <>
+            {/* Focused row that no active filter / page reaches — surfaced rather
             than silently dropped. */}
-        {pinnedFocus && (
-          <div
-            data-row-id={pinnedFocus.id}
-            className="mb-3 rounded-md bg-content2/40 px-3 py-2 ring-1 ring-inset ring-foreground/10"
-          >
-            <p className="mb-1 text-[11px] text-foreground/65">
-              Not in the current view — shown because you navigated to it.
-            </p>
-            <div className="flex min-w-0 items-center gap-2">
-              <Database className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
-              <span className="truncate text-[12.5px] text-foreground">
-                {pinnedFocus.title ?? (
-                  <span className="text-foreground/65 italic">Untitled</span>
-                )}
-              </span>
-              <span className="truncate font-mono text-[11px] text-foreground/65">
-                {pinnedFocus.type}
-              </span>
-              <span className="truncate font-mono text-[11px] text-foreground/65">
-                {pinnedFocus.workspaceName ?? "Pod-wide"}
-              </span>
-            </div>
-          </div>
-        )}
-        {focusLookupEnabled && focusLookup.isError && (
-          <p className="mb-3 text-[11.5px] text-foreground/65">
-            The entity you navigated to could not be loaded — it may have been
-            deleted.
-          </p>
-        )}
-
-        {entitiesQuery.isLoading || isAuthRedirecting ? (
-          <ResourceRowSkeleton count={6} />
-        ) : entitiesQuery.isError ? (
-          <ResourceRowError message="Couldn't load entities." />
-        ) : items.length === 0 ? (
-          <ResourceRowEmpty message="No entities match the current filters." />
-        ) : (
-          <div className="flex flex-col">
-            {/* Table header */}
-            <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-3 pb-2 pt-1">
-              <Checkbox
-                size="sm"
-                isSelected={allSelected}
-                isIndeterminate={someSelected && !allSelected}
-                onValueChange={toggleAll}
-                aria-label="Select all on this page"
-              />
-              <div className="grid flex-1 grid-cols-[1fr_auto] gap-3 text-[10.5px] font-medium uppercase tracking-wider text-foreground/65 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
-                <span>Title</span>
-                <span className="hidden sm:block">Type</span>
-                <span className="hidden sm:block">Space</span>
-                <span className="hidden sm:block">Created by</span>
-                <span className="hidden sm:block">Created</span>
-                <span className="hidden sm:block" />
+            {pinnedFocus && (
+              <div
+                data-row-id={pinnedFocus.id}
+                className="mb-3 rounded-md bg-content2/40 px-3 py-2 ring-1 ring-inset ring-foreground/10"
+              >
+                <p className="mb-1 text-[11px] text-foreground/65">
+                  Not in the current view — shown because you navigated to it.
+                </p>
+                <div className="flex min-w-0 items-center gap-2">
+                  <Database className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
+                  <span className="truncate text-[12.5px] text-foreground">
+                    {pinnedFocus.title ?? (
+                      <span className="text-foreground/65 italic">
+                        Untitled
+                      </span>
+                    )}
+                  </span>
+                  <span className="truncate font-mono text-[11px] text-foreground/65">
+                    {pinnedFocus.type}
+                  </span>
+                  <span className="truncate font-mono text-[11px] text-foreground/65">
+                    {pinnedFocus.workspaceName ?? "Pod-wide"}
+                  </span>
+                </div>
               </div>
+            )}
+            {focusLookupEnabled && focusLookup.isError && (
+              <p className="mb-3 text-[11.5px] text-foreground/65">
+                The entity you navigated to could not be loaded — it may have
+                been deleted.
+              </p>
+            )}
+          </>
+        }
+        pagination={{
+          kind: "offset",
+          offset,
+          limit: LIMIT,
+          total,
+          onOffsetChange: setOffset,
+        }}
+      >
+        <div className="flex flex-col">
+          {/* Table header */}
+          <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-3 pb-2 pt-1">
+            <Checkbox
+              size="sm"
+              isSelected={allSelected}
+              isIndeterminate={someSelected && !allSelected}
+              onValueChange={toggleAll}
+              aria-label="Select all on this page"
+            />
+            <div className="grid flex-1 grid-cols-[1fr_auto] gap-3 text-[10.5px] font-medium uppercase tracking-wider text-foreground/65 sm:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
+              <span>Title</span>
+              <span className="hidden sm:block">Type</span>
+              <span className="hidden sm:block">Space</span>
+              <span className="hidden sm:block">Created by</span>
+              <span className="hidden sm:block">Created</span>
+              <span className="hidden sm:block" />
             </div>
-
-            {/* Rows */}
-            {items.map((item) => (
-              <EntityTableRow
-                key={item.id}
-                item={item}
-                isSelected={selectedIds.has(item.id)}
-                onToggle={() => toggleOne(item.id)}
-                onDeleted={() => {
-                  void utils.entities.adminList.invalidate();
-                  void utils.entities.adminListProfiles.invalidate();
-                  setSelectedIds((prev) => {
-                    const next = new Set(prev);
-                    next.delete(item.id);
-                    return next;
-                  });
-                }}
-              />
-            ))}
           </div>
-        )}
-      </SectionCard>
+
+          {/* Rows */}
+          {items.map((item) => (
+            <EntityTableRow
+              key={item.id}
+              item={item}
+              isSelected={selectedIds.has(item.id)}
+              onToggle={() => toggleOne(item.id)}
+              onDeleted={() => {
+                void utils.entities.adminList.invalidate();
+                void utils.entities.adminListProfiles.invalidate();
+                setSelectedIds((prev) => {
+                  const next = new Set(prev);
+                  next.delete(item.id);
+                  return next;
+                });
+              }}
+            />
+          ))}
+        </div>
+      </ListCard>
 
       {/* Bulk delete confirm */}
       <ConfirmModal

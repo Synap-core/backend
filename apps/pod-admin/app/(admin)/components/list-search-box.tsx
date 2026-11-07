@@ -31,11 +31,14 @@ export function ListSearch({
   value,
   onChange,
   label,
+  className = "mb-3 max-w-md",
 }: {
   value: string;
   onChange: (value: string) => void;
   /** Placeholder and accessible name: the catalog's `listSearch.<list>`. */
   label: string;
+  /** Spacing; inside a `ListToolbar` the row owns it: pass `""`. */
+  className?: string;
 }) {
   return (
     <Input
@@ -47,7 +50,7 @@ export function ListSearch({
       radius="md"
       variant="bordered"
       startContent={<Search size={14} className="text-foreground/40" />}
-      className="mb-3 max-w-md"
+      className={className}
     />
   );
 }

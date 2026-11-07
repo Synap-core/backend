@@ -11,6 +11,8 @@
  * always chosen, and the clear goes back to its default value.
  */
 
+import type { LucideIcon } from "lucide-react";
+
 /**
  * The id of the menu's "All" item (single selection only). A NUL-prefixed
  * string, so it cannot collide with an option id that came from the data.
@@ -29,7 +31,24 @@ export interface FilterOption<K extends string = string> {
   description?: string;
   /** Shown but not choosable. */
   disabled?: boolean;
+  /** A glyph drawn before the label, in the menu and on the chip once chosen. */
+  icon?: LucideIcon;
+  /** The glyph's tone for a status (`StatusPill`'s four kinds). */
+  tone?: FilterTone;
+  /** The glyph's colour as a design-token reference (`var(--synap-identity-3)`), for a kind. Never a literal colour. */
+  color?: string;
 }
+
+/** A status tone: the same four kinds as `StatusPill`. */
+export type FilterTone = "healthy" | "stale" | "down" | "unknown";
+
+/** The text colour class of a tone (token classes, tailwind.config.ts). */
+export const FILTER_TONE_CLASS: Record<FilterTone, string> = {
+  healthy: "text-status-healthy",
+  stale: "text-status-stale",
+  down: "text-status-down",
+  unknown: "text-foreground/55",
+};
 
 export type FilterSelectionMode = "single" | "multiple";
 
@@ -41,6 +60,8 @@ export interface FilterChipFace {
   count: number | string | null;
   /** The filter narrows the list away from its default: highlighted, and may carry a clear. */
   isSet: boolean;
+  /** The chosen value's glyph, tone and colour when exactly one is chosen. */
+  mark: Pick<FilterOption, "icon" | "tone" | "color"> | null;
 }
 
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
@@ -85,6 +106,7 @@ export function filterChipFace(input: {
       text: allLabel ?? "",
       count: showCount ? (allCount ?? null) : null,
       isSet,
+      mark: null,
     };
   }
   const byId = new Map(options.map((o) => [o.id, o]));
@@ -95,6 +117,9 @@ export function filterChipFace(input: {
       text: option?.label ?? id,
       count: showCount ? (option?.count ?? null) : null,
       isSet,
+      mark: option?.icon
+        ? { icon: option.icon, tone: option.tone, color: option.color }
+        : null,
     };
   }
   let count: number | null = null;
@@ -103,7 +128,7 @@ export function filterChipFace(input: {
     if (counts.every((c): c is number => typeof c === "number"))
       count = counts.reduce((a, b) => a + b, 0);
   }
-  return { text: manyLabel(selected.length), count, isSet };
+  return { text: manyLabel(selected.length), count, isSet, mark: null };
 }
 
 /** One item of the chip's menu. */
@@ -113,6 +138,9 @@ export interface FilterMenuItem {
   count: number | string | null;
   description?: string;
   disabled?: boolean;
+  icon?: LucideIcon;
+  tone?: FilterTone;
+  color?: string;
 }
 
 /**
@@ -133,6 +161,9 @@ export function filterMenuItems(input: {
     count: o.count ?? null,
     description: o.description,
     disabled: o.disabled,
+    icon: o.icon,
+    tone: o.tone,
+    color: o.color,
   }));
   if (mode === "multiple" || allLabel === null) return values;
   return [
