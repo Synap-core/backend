@@ -17,6 +17,7 @@ import {
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
+import { buildAskWireSchema } from "./ask-wire-schema.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import {
@@ -86,7 +87,6 @@ import {
 import {
   ASK_LIMITS,
   ASK_URGENCIES,
-  AskSchema,
   RELAY_SURFACE_MAX_CHARS,
 } from "@synap-core/types/ask";
 import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-answer.js";
@@ -331,24 +331,8 @@ function buildRuleSentenceJsonSchema(): Record<string, unknown> {
 
 const RULE_SENTENCE_JSON_SCHEMA = buildRuleSentenceJsonSchema();
 
-/**
- * JSON Schema for a declared slot's `ask`, DERIVED from `AskSchema` — the very
- * schema `expectedOutputWireSchema` parses `ask` with. Same reasoning as the two
- * builders above: the advertised shape and the parse that refuses a bad ask
- * cannot drift apart. `$schema` stripped for a deterministic manifest.
- */
-function buildAskJsonSchema(): Record<string, unknown> {
-  const derived = z.toJSONSchema(AskSchema, { io: "input" }) as Record<
-    string,
-    unknown
-  >;
-  delete derived.$schema;
-  derived.description =
-    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; the person may always answer in their own words instead unless allowOther:false), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. A choose option may open ONE follow-up the person answers next, {"prompt":"Which environment?","options":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. \'Skips 1,284 tests\'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` (\'high\' | \'medium\' | \'low\': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
-  return derived;
-}
-
-const ASK_JSON_SCHEMA = buildAskJsonSchema();
+/** The ONE compact wire `ask` (tools/ask-wire-schema.ts); the server parses with `AskSchema`. */
+const ASK_JSON_SCHEMA = buildAskWireSchema();
 
 /**
  * The PROCESS contract on `synap_create_playbook`, DERIVED from the schemas
@@ -599,23 +583,29 @@ const SESSION_OUTCOMES_PROPERTY = {
       },
       ref: {
         description:
-          'WHERE it lives — {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} or {"url":"https://..."}. A ref is evidence for a claimed deliverable.',
-        type: "object",
+          "WHERE it lives (evidence for a claimed deliverable): {kind, id} of something you can see, or {url}.",
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: [...OUTPUT_REF_KINDS] },
+              id: { type: "string" },
+            },
+            required: ["kind", "id"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: { url: { type: "string", format: "uri" } },
+            required: ["url"],
+            additionalProperties: false,
+          },
+        ],
       },
       ask: ASK_JSON_SCHEMA,
     },
     required: ["label"],
   },
-};
-
-/**
- * The same derived `ask` on `synap_post_message` — the question's typed ask,
- * filed on the `slotLabel` output. Only the prose differs.
- */
-const ROOM_QUESTION_ASK_JSON_SCHEMA = {
-  ...buildAskJsonSchema(),
-  description:
-    "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended; an option may open ONE follow-up {prompt, 2-4 options} and carry a `caution`), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Any mode may carry `risk` ('high' | 'medium' | 'low'). Omit for a free-text answer.",
 };
 
 /**
@@ -2458,7 +2448,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's GOALS (tracks in tool and field names) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); a write reply names it in `attribution.filed` when you did not name it. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. PLAYBOOKS BIND ON FACTS, never on words: the one you name with templateId; else the one active playbook for the subject's kind; else the one the parent session follows; else the main-red playbook for a `main red:` title. The result's `binding` line says which and why (or offers the few it could not choose between). With no templateId, its `playbooks` block also ranks the pod's playbooks against your title+goal, each with its `reason`: suggestions, NOTHING applied. Follow one later, or release one the pod bound, with synap_update_session followPlaybookId (null releases). Pass templateId: null to skip the ranked suggestions (facts still bind). The result's `offers` block (suggestions, NOTHING applied) lists `goals` — the project's open goals when you named no trackId: if the work serves one, file it with synap_update_session trackId — and `sessions` — open sessions on close work in the same goal or project: if one is the same work, continue it instead; a start that landed in NO project gets `homes` instead — up to 3 projects or goals it may belong in, each with its `reasons`: file it with synap_update_session projectId or trackId, or ask the person. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion — or an outcome with `verify` — on a new session: without one the start is refused (status 'refused', reasonCode NO_CRITERIA, nothing created); continuing an existing session needs none. Propose two to five binary, observable statements and let the person validate or rewrite them. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBySessionIds (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2543,6 +2533,7 @@ export const tools = {
             outcomes: SESSION_OUTCOMES_PROPERTY,
             criteria: {
               ...SESSION_CRITERIA_PROPERTY,
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes` with kind 'fact'. Binary acceptance criteria, each observable; written to the same storage.",
             },
@@ -2574,73 +2565,7 @@ export const tools = {
             },
             expectedOutputs: {
               type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  kind: { type: "string" },
-                  label: { type: "string" },
-                  icon: { type: "string" },
-                  // `status` and the other receipts (attestedBy, retiredAt,
-                  // satisfiedByProposalId, delegatedTo, owedSince…) are NOT
-                  // advertised, on purpose: a field a model is told about is a
-                  // field it will try to send, and each of these is stamped by
-                  // exactly one server door. The wire still ACCEPTS them so a
-                  // caller echoing a stored slot back does not lose them at the
-                  // parse; CHANGING one is refused (`mergeExpectedOutputs`).
-                  owner: {
-                    type: "string",
-                    enum: ["human", "agent"],
-                    description:
-                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them. Always add an `ask` (confirm / choose / ...): without one the person sees only a bare 'I did this'.",
-                  },
-                  blockedReason: {
-                    type: "string",
-                    enum: [...BLOCKED_REASONS],
-                    description:
-                      "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
-                  },
-                  why: {
-                    type: "string",
-                    maxLength: 500,
-                    description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
-                  },
-                  unblocks: {
-                    type: "string",
-                    maxLength: 200,
-                    description:
-                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
-                  },
-                  ref: {
-                    description:
-                      'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          kind: {
-                            type: "string",
-                            enum: [...OUTPUT_REF_KINDS],
-                          },
-                          id: { type: "string" },
-                        },
-                        required: ["kind", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          url: { type: "string", format: "uri" },
-                        },
-                        required: ["url"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
-                  ask: ASK_JSON_SCHEMA,
-                },
-                required: ["kind", "label"],
-              },
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes`. The concrete deliverables the session should produce, so the goal can stay one line.",
             },
@@ -2696,6 +2621,7 @@ export const tools = {
             outcomes: SESSION_OUTCOMES_PROPERTY,
             criteria: {
               ...SESSION_CRITERIA_PROPERTY,
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes` (kind 'fact'), which upserts by key. Replaces the session's acceptance criteria wholesale — the full list, not a delta.",
             },
@@ -2731,135 +2657,12 @@ export const tools = {
             },
             expectedOutputs: {
               type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  kind: { type: "string" },
-                  label: { type: "string" },
-                  icon: { type: "string" },
-                  // `status` and the other receipts (attestedBy, retiredAt,
-                  // satisfiedByProposalId, delegatedTo, owedSince…) are NOT
-                  // advertised, on purpose: a field a model is told about is a
-                  // field it will try to send, and each of these is stamped by
-                  // exactly one server door. The wire still ACCEPTS them so a
-                  // caller echoing a stored slot back does not lose them at the
-                  // parse; CHANGING one is refused (`mergeExpectedOutputs`).
-                  owner: {
-                    type: "string",
-                    enum: ["human", "agent"],
-                    description:
-                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them. Always add an `ask` (confirm / choose / ...): without one the person sees only a bare 'I did this'.",
-                  },
-                  blockedReason: {
-                    type: "string",
-                    enum: [...BLOCKED_REASONS],
-                    description:
-                      "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
-                  },
-                  why: {
-                    type: "string",
-                    maxLength: 500,
-                    description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
-                  },
-                  unblocks: {
-                    type: "string",
-                    maxLength: 200,
-                    description:
-                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
-                  },
-                  ref: {
-                    description:
-                      'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          kind: {
-                            type: "string",
-                            enum: [...OUTPUT_REF_KINDS],
-                          },
-                          id: { type: "string" },
-                        },
-                        required: ["kind", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          url: { type: "string", format: "uri" },
-                        },
-                        required: ["url"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
-                  ask: ASK_JSON_SCHEMA,
-                },
-                required: ["kind", "label"],
-              },
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes` (upserts by key). Adds or updates the listed deliverables (matched by key, then label); a deliverable you leave out is KEPT, never deleted. To drop one, use `retireOutput`.",
             },
             addOutput: {
               type: "object",
-              properties: {
-                kind: { type: "string" },
-                label: { type: "string" },
-                icon: { type: "string" },
-                owner: {
-                  type: "string",
-                  enum: ["human", "agent"],
-                  description:
-                    "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take.",
-                },
-                blockedReason: {
-                  type: "string",
-                  enum: [...BLOCKED_REASONS],
-                  description:
-                    "Only with owner='human'. The class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world.",
-                },
-                why: {
-                  type: "string",
-                  maxLength: 500,
-                  description:
-                    "Only with owner='human'. ONE line naming WHICH thing is missing, not its class; never a repeat of the label or the prompt.",
-                },
-                unblocks: {
-                  type: "string",
-                  maxLength: 200,
-                  description:
-                    "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
-                },
-                ref: {
-                  description:
-                    'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
-                  oneOf: [
-                    {
-                      type: "object",
-                      properties: {
-                        kind: {
-                          type: "string",
-                          enum: [...OUTPUT_REF_KINDS],
-                        },
-                        id: { type: "string" },
-                      },
-                      required: ["kind", "id"],
-                      additionalProperties: false,
-                    },
-                    {
-                      type: "object",
-                      properties: {
-                        url: { type: "string", format: "uri" },
-                      },
-                      required: ["url"],
-                      additionalProperties: false,
-                    },
-                  ],
-                },
-                ask: ASK_JSON_SCHEMA,
-              },
-              required: ["kind", "label"],
               description:
                 "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable). Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
             },
@@ -2871,7 +2674,7 @@ export const tools = {
             completeOutput: {
               type: "string",
               description:
-                "CLAIM the deliverable with this key (or exact label) as done — your claim, not the verdict. If evidence is attached (the object produced inside this session, or the slot's `ref`) the pod verifies it at once; otherwise it waits for review. REFUSED for a slot you declared owner='human'. The reply always carries `completeOutput.result`: 'completed' (claimed AND verified by evidence), 'claimed' (recorded, no evidence yet — attach it; do not report it as delivered), 'refused' (human-owned; nothing changed), or 'no_match' (no deliverable has that key/label; nothing changed). Read the field, not just the session.",
+                "CLAIM the deliverable with this key (or exact label) as done — your claim, not the verdict. With evidence attached (an object produced in this session, or the slot's `ref`) the pod verifies at once; otherwise it waits for review. Refused for an owner='human' slot. Read `completeOutput.result`: completed (verified) | claimed (no evidence yet: attach it, do not report it delivered) | refused (nothing changed) | no_match (nothing changed).",
             },
             addAgentId: {
               type: "string",
@@ -3283,8 +3086,6 @@ export const tools = {
             },
             ask: {
               ...ASK_JSON_SCHEMA,
-              description:
-                "HOW the person answers: confirm (yes/no; mark the one you recommend), choose (1-8 options, at most ONE recommended, each with a one-line consequence), form (a small flat form; never a secret), act (a task in the world, with steps and a url; they answer 'I did this'), provide (connection | file | secret, through the vault — never typed in chat). Prefer confirm/choose for a decision. May carry `risk`, `stakes` ('commitment' for deploy, spend, publish, delete: their own tap is then required) and `lookedAt`.",
             },
             why: {
               type: "string",
@@ -4096,16 +3897,10 @@ export const tools = {
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
           "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap, and re-sending a capped write through another door is how the same playbook lands in the pod twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person can see what is still owed instead of being told a percentage.\n" +
-          'PLAN EXAMPLE — a project, a root session with two children (one blocked by the other), a spec document:\n{ "entities": [ { "ref": "acme", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "projects": [ { "ref": "p1", "name": "Acme onboarding", "subjectRef": "acme", "evidenceRefs": ["acme"] } ], "sessions": [ { "ref": "s0", "title": "Onboard Acme", "goal": "Acme is live on the platform", "projectRef": "p1", "subjectRef": "acme" }, { "ref": "s1", "title": "Write the spec", "goal": "Spec signed off by Acme", "parentRef": "s0", "projectRef": "p1" }, { "ref": "s2", "title": "Build the import", "goal": "Acme data imported", "parentRef": "s0", "projectRef": "p1", "blockedByRefs": ["s1"] } ], "documents": [ { "ref": "spec", "title": "Acme onboarding spec", "content": "# Spec\\n…", "sessionRef": "s1" } ] }\n' +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
           "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n" +
           "\n" +
-          'EXAMPLE 1 — raw text:\n{ "text": "Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March." }\n' +
-          "\n" +
-          'EXAMPLE 2 — one structured entity, with properties + a long body:\n{ "entities": [ { "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com", "role": "Head of Data" }, "content": "## Notes\\nOwns the data platform. Wants a March demo." } ] }\n' +
-          "\n" +
-          'EXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
-          "\n" +
+          'EXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill("system/synap/multi-entity-capture").\n' +
           'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\n' +
           'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
         inputSchema: {
@@ -4457,7 +4252,7 @@ export const tools = {
               type: "string",
               enum: ["auto", "ask", "locked"],
               description:
-                "How much latitude the backend resolver has over the AI's workspace GUESS (rung 5) specifically — it does NOT gate the deterministic rungs above it (ontology role-routing, focus-session context, relational gravity), which still run and place the capture regardless of this setting. An AI guess NEVER moves a capture through this door, in any mode: 'auto' and 'ask' now do the SAME thing — the capture stays where it would have landed and the guess comes back as `pendingWorkspaceSwitch` ({ suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence }) for you to confirm with the user; there is no `movedToWorkspace` on the response any more. To ACT on a suggestion, re-call synap_capture with `workspaceId` set to `pendingWorkspaceSwitch.suggestedWorkspaceId` (that pin is recorded as the user accepting it). 'locked' = suppress the AI guess entirely, so no suggestion is returned; it does NOT freeze the capture onto the caller's/session workspace by itself. To pin an EXACT workspace and skip resolution altogether (deterministic rungs included), pass an explicit `workspaceId` (rung-1 placement) instead of relying on this setting.",
+                "Latitude over the AI's workspace GUESS only (the deterministic rungs always run). A guess NEVER moves a capture: 'auto' and 'ask' both keep it where it landed and return `pendingWorkspaceSwitch` {suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence} to confirm with the user; to accept, re-call with `workspaceId` = its suggestedWorkspaceId. 'locked' suppresses the guess. To pin an exact workspace, pass `workspaceId`.",
             },
             sessionId: {
               type: "string",
@@ -5947,7 +5742,7 @@ export const tools = {
               description:
                 "With kind 'question': the label of the session output the question is about. The question is filed ON that output (it becomes the person's, with your question as its why), so it shows as a card they can answer; their answer is recorded as its `answer` and hands it back to you.",
             },
-            ask: ROOM_QUESTION_ASK_JSON_SCHEMA,
+            ask: ASK_JSON_SCHEMA,
             toSessionId: {
               type: "string",
               description:
