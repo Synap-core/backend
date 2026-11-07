@@ -36,11 +36,7 @@ vi.mock("./handlers/read.js", async (importOriginal) => {
   };
 });
 
-import {
-  capReply,
-  REPLY_CAP_CHARS,
-  REPLY_CAP_EXEMPT,
-} from "./reply-cap.js";
+import { capReply, REPLY_CAP_CHARS, REPLY_CAP_EXEMPT } from "./reply-cap.js";
 import { executeMCPToolViaHubProtocol } from "./adapter.js";
 
 const text = (r: CallToolResult) => {
@@ -70,10 +66,12 @@ describe("capReply", () => {
 
   it("names a tool's own narrowing parameter, else a generic hint", () => {
     const big = reply("y".repeat(REPLY_CAP_CHARS + 1));
-    expect(JSON.parse(text(capReply("synap_get_document", big))).truncated.how)
-      .toMatch(/`limit`.*`offset`/);
-    expect(JSON.parse(text(capReply("synap_unknown", big))).truncated.how)
-      .toMatch(/Narrow the call/);
+    expect(
+      JSON.parse(text(capReply("synap_get_document", big))).truncated.how
+    ).toMatch(/`limit`.*`offset`/);
+    expect(
+      JSON.parse(text(capReply("synap_unknown", big))).truncated.how
+    ).toMatch(/Narrow the call/);
   });
 
   it("returns a reply within budget as the SAME object, byte for byte", () => {

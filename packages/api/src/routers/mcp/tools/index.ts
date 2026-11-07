@@ -1376,7 +1376,8 @@ export const tools = {
             },
             offset: {
               type: "number",
-              description: "Rows to skip (from a previous reply's `nextOffset`).",
+              description:
+                "Rows to skip (from a previous reply's `nextOffset`).",
             },
           },
           required: [],
@@ -3627,7 +3628,8 @@ export const tools = {
             },
             offset: {
               type: "number",
-              description: "Rows to skip (from a previous reply's `nextOffset`).",
+              description:
+                "Rows to skip (from a previous reply's `nextOffset`).",
             },
           },
           required: [],
@@ -4626,7 +4628,8 @@ export const tools = {
             },
             offset: {
               type: "number",
-              description: "Rows to skip (from a previous reply's `nextOffset`).",
+              description:
+                "Rows to skip (from a previous reply's `nextOffset`).",
             },
           },
           required: [],
@@ -4764,7 +4767,8 @@ export const tools = {
             },
             offset: {
               type: "number",
-              description: "Rows to skip (from a previous reply's `nextOffset`).",
+              description:
+                "Rows to skip (from a previous reply's `nextOffset`).",
             },
           },
           required: [],

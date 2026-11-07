@@ -11,7 +11,12 @@ const rows = Array.from({ length: 120 }, (_, i) => i);
 
 describe("pageSlice", () => {
   it("defaults to LIST_PAGE_DEFAULT rows and reports the total", () => {
-    const { page, paging } = pageSlice(rows, {}, LIST_PAGE_DEFAULT, LIST_PAGE_MAX);
+    const { page, paging } = pageSlice(
+      rows,
+      {},
+      LIST_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     expect(page).toHaveLength(LIST_PAGE_DEFAULT);
     expect(paging).toEqual({ total: 120, offset: 0, nextOffset: 50 });
   });
@@ -19,7 +24,8 @@ describe("pageSlice", () => {
   it("walks every page: whole list once, last page has no nextOffset", () => {
     const seen: number[] = [];
     let offset: number | undefined = 0;
-    let last: ReturnType<typeof pageSlice<number>>["paging"] | undefined;
+    let last:
+      { total: number; offset: number; nextOffset?: number } | undefined;
     while (offset !== undefined) {
       const { page, paging } = pageSlice(
         rows,

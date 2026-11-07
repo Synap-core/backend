@@ -390,7 +390,8 @@ export const readHandlers: McpHandlerMap = {
     const sliceAsked = args.limit !== undefined || args.offset !== undefined;
     const start = pageOffset(args.offset);
     const end =
-      start + pageLimit(args.limit, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+      start +
+      pageLimit(args.limit, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
     const result =
       sliceAsked && typeof body === "string"
         ? {

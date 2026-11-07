@@ -40,8 +40,7 @@ const HOW_TO_NARROW: Readonly<Record<string, string>> = {
   synap_get_graph:
     "Lower `limit` and page the neighbours with `offset` (use `nextOffset`).",
   synap_get_relations: "Lower `limit` (the newest relations come first).",
-  synap_ask:
-    "Call again with detail:'brief' or 'sources', or a lower `limit`.",
+  synap_ask: "Call again with detail:'brief' or 'sources', or a lower `limit`.",
   synap_list_proposals: "Lower `limit`, or use detail:'summary'.",
   synap_list_sessions: "Lower `limit` and page with `offset`.",
   synap_list_workspaces: "Lower `limit` and page with `offset`.",
