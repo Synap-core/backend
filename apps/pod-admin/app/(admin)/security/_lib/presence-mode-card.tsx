@@ -34,8 +34,10 @@ import {
   presenceRefusal,
 } from "../../../_lib/presence/presence-model";
 import { useSetPresenceMode } from "../../../_lib/presence/use-factor-doors";
-import { PRESENCE_NEEDS_TWO_WAYS } from "@synap-core/types/presence";
-import { SECOND_WAY_HREF } from "../../../settings/security/two-factor-path";
+import {
+  isTwoWaysRefusal,
+  WAYS_IN_HREF,
+} from "../../../_lib/presence/ways-in/ways-in-model";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
 import { StatusPill } from "../../components/status-pill";
@@ -45,12 +47,6 @@ import {
   turningOnAsks,
   warnsTwoWays,
 } from "./presence-mode-model";
-
-/** The pod refused it for fewer than two ways in. */
-function isTwoWaysRefusal(err: unknown): boolean {
-  const data = (err as { data?: { reasonCode?: unknown } | null } | null)?.data;
-  return data?.reasonCode === PRESENCE_NEEDS_TWO_WAYS;
-}
 
 const CATALOGS = { en, fr };
 
@@ -158,7 +154,7 @@ export function PresenceModeCard() {
                 {t("presence.twoWays")}
               </p>
               <Link
-                href={SECOND_WAY_HREF}
+                href={WAYS_IN_HREF}
                 className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
               >
                 {t("presence.addSecond")}
@@ -173,7 +169,7 @@ export function PresenceModeCard() {
               </p>
               <Button
                 as={Link}
-                href={SECOND_WAY_HREF}
+                href={WAYS_IN_HREF}
                 size="sm"
                 variant="flat"
                 radius="md"
@@ -261,7 +257,7 @@ export function PresenceModeCard() {
           <>
             {t("presence.on.consequence")}{" "}
             <Link
-              href={SECOND_WAY_HREF}
+              href={WAYS_IN_HREF}
               className="font-medium text-primary underline-offset-2 hover:underline"
             >
               {t("presence.addSecond")}

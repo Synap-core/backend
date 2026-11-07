@@ -325,14 +325,25 @@ export const presenceRouter = router({
 
   /**
    * The caller's own proof factors, counted: their passkeys (from the pod's
-   * sign-in service) and their Relay device keys. What pod admin shows before
+   * sign-in service), their device keys (Relay's Face ID, the desktop's
+   * Touch ID), the authenticator app and their unused recovery codes. What pod admin shows before
    * the person relies on "Approvals need you in person". A failed passkey read
    * fails the call, never "no passkey".
    */
   factors: protectedProcedure.query(async ({ ctx }) => {
     assertSignedInPerson(ctx, SIGNED_IN);
-    const counts = await countsOf(ctx.userId);
+    const [counts, mode] = await Promise.all([
+      countsOf(ctx.userId),
+      readPresenceMode(),
+    ]);
     return {
+      /**
+       * Whether approvals need the person in person on this pod: what makes
+       * "fewer than two ways in" a warning for every member, not only for a
+       * pod admin (who also reads `presence.mode`). A failed read fails the
+       * call, like the counts.
+       */
+      enforce: mode.mode === "enforce",
       passkeys: counts.passkeys,
       deviceKeys: counts.deviceKeys,
       /** A 2FA app in use. */
@@ -620,7 +631,7 @@ export const presenceRouter = router({
         assertBrowserSession(ctx);
         assertFreshSignIn(
           ctx,
-          "Sign in again, then add your 2FA app within 10 minutes."
+          "Sign in again, then add your authenticator app within 10 minutes."
         );
         const person = await db.query.users.findFirst({
           where: eq(users.id, ctx.userId),
@@ -651,7 +662,7 @@ export const presenceRouter = router({
         assertBrowserSession(ctx);
         assertFreshSignIn(
           ctx,
-          "Sign in again, then add your 2FA app within 10 minutes."
+          "Sign in again, then add your authenticator app within 10 minutes."
         );
         let added: { id: string; label: string };
         try {
@@ -708,7 +719,7 @@ export const presenceRouter = router({
       if (!app) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "You don't use a 2FA app here.",
+          message: "You don't use an authenticator app here.",
         });
       }
       void auditLog({

@@ -14,7 +14,7 @@ import {
 import { NoDoors } from "./RecoveryView";
 import {
   RECOVERED_COPY,
-  securityCardOrder,
+  securitySectionOrder,
 } from "../settings/security/SecurityView";
 import {
   recoveryCallDetail,
@@ -38,10 +38,10 @@ describe("no doors → EXPLAIN with the shared copy and a copyable message", () 
   });
 });
 
-describe("just recovered → the password card leads", () => {
-  it("orders password first only when recovered", () => {
-    expect(securityCardOrder(true)[0]).toBe("password");
-    expect(securityCardOrder(false)[0]).toBe("codes");
+describe("just recovered → signing in (the password) leads", () => {
+  it("orders signing in first only when recovered; otherwise the ways in lead", () => {
+    expect(securitySectionOrder(true)[0]).toBe("sign-in");
+    expect(securitySectionOrder(false)[0]).toBe("ways-in");
   });
   it("says what to do and by when", () => {
     expect(RECOVERED_COPY).toBe(
