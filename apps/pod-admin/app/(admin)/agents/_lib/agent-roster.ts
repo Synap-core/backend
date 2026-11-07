@@ -17,8 +17,15 @@ import {
   type AgentMark,
   type AgentMarkRowLike,
   type AgentReachRowLike,
+  type AgentTemplateRef,
+  type AgentWake,
 } from "@synap-core/types/agents";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import {
+  resolveAgentWakeRefusalFix,
+  resolveAgentWakeRefusalLabel,
+  resolveAgentWakeStateLabel,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { computerHref, navHref } from "../../../../lib/console-nav";
 import type { StatusKind } from "../../components/status-pill";
 import { AGENT_MARK_STATUS } from "../../components/status-tone";
@@ -283,4 +290,102 @@ export function agentsByCreator<R extends AgentRosterRowLike>(
   creatorId: string
 ): R[] {
   return rows.filter((r) => r.createdByUserId === creatorId);
+}
+
+// ─── Wake: can the pod get it working, and if not, what to do ──────────
+
+/** The slice of an `agentUsers.roster` agent this page reads. */
+export interface AgentWakeRowLike {
+  agentUserId: string;
+  template: AgentTemplateRef | null;
+  wake: AgentWake;
+}
+
+/**
+ * Where the roster's wake read stands: its agents by id once read, or the
+ * read failed. Loading is not a failure, and a failure is never "no agent".
+ */
+export type AgentWakeSource =
+  | { status: "loading" }
+  | { status: "failed" }
+  | { status: "read"; byAgent: ReadonlyMap<string, AgentWakeRowLike> };
+
+export type AgentWakeView =
+  /** Still reading, or the roster does not list it (the pod's own agents). */
+  | { kind: "unknown" }
+  /** The roster read failed: said, never drawn as "can't wake". */
+  | { kind: "unavailable" }
+  | {
+      kind: "known";
+      /** The template's name, or `null` when its type names none. */
+      template: string | null;
+      /** "Awake" · "Can wake" · "Can't wake". */
+      state: string;
+      cantWake: boolean;
+      /** Why not, in a few words; only when it can't wake. */
+      why: string | null;
+      /** What to do about it, one sentence; only when it can't wake. */
+      fix: string | null;
+      /** The command the fix names, with this agent's name in it. */
+      command: string | null;
+      /** The page the fix names (its computer), when there is one. */
+      fixHref: string | null;
+    };
+
+/** Index the roster's agents by id: the join this page makes with `list`. */
+export function agentWakeSource(read: {
+  isLoading: boolean;
+  isError: boolean;
+  data?: { agents: readonly AgentWakeRowLike[] } | null;
+}): AgentWakeSource {
+  if (read.isError) return { status: "failed" };
+  if (read.isLoading || !read.data) return { status: "loading" };
+  return {
+    status: "read",
+    byAgent: new Map(read.data.agents.map((a) => [a.agentUserId, a])),
+  };
+}
+
+/** The reasons whose fix is to run the Synap worker for it on a computer. */
+const WORKER_FIX = new Set(["no_computer", "no_waker"]);
+/** The reasons whose fix is on its computer's page. */
+const COMPUTER_FIX = new Set(["computer_offline", "wakes_off"]);
+
+/**
+ * One agent's wake, in words, with the door its fix names. The state and
+ * reason come from the pod (`deriveAgentWake`, served by `agentUsers.roster`);
+ * the words from the vocabulary door. Nothing is derived here.
+ */
+export function agentWakeView(
+  row: AgentRosterRowLike,
+  source: AgentWakeSource
+): AgentWakeView {
+  if (source.status === "failed") return { kind: "unavailable" };
+  if (source.status === "loading") return { kind: "unknown" };
+  const read = source.byAgent.get(row.id);
+  if (!read) return { kind: "unknown" };
+  const cantWake = read.wake.state === "cant_wake";
+  const why = cantWake ? read.wake.why : null;
+  return {
+    kind: "known",
+    template: read.template?.label ?? null,
+    state: resolveAgentWakeStateLabel(read.wake.state),
+    cantWake,
+    why: why ? resolveAgentWakeRefusalLabel(why) : null,
+    fix: why ? resolveAgentWakeRefusalFix(why) : null,
+    command:
+      why && WORKER_FIX.has(why) && row.name
+        ? `synap worker --agent ${row.name}`
+        : null,
+    fixHref: why && COMPUTER_FIX.has(why) ? hostComputerHref(row) : null,
+  };
+}
+
+/** "Claude Code · Can't wake: No computer" — `null` when nothing is known. */
+export function agentWakeLine(view: AgentWakeView): string | null {
+  if (view.kind !== "known") return null;
+  const template = view.template ?? "No agent template";
+  return view.why
+    ? `${template} · ${view.state}: ${view.why}`
+    : `${template} · ${view.state}`;
 }

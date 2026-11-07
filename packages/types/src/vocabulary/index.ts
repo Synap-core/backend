@@ -3815,6 +3815,40 @@ export function resolveAgentWakeRefusalLabel(
 }
 
 /**
+ * What a person does about each reason an agent can't be woken (`wake.why`),
+ * one plain sentence each: the fix, never the fault. A surface adds the door
+ * the sentence names (the computer's page, the command with the agent's
+ * name). `agents/wake.ts` holds the floor that a new reason ships with its fix.
+ */
+export const AGENT_WAKE_REFUSAL_FIXES = {
+  paused: "It is paused. Resume it to let it take work again.",
+  binding_broken:
+    "The connector it is set up with does not work. Fix that connector, or set it up again.",
+  no_template:
+    "No agent template matches its type. Install its program from the Marketplace's Agents tab.",
+  no_template_wake:
+    "Its program cannot be started by a computer. It works when someone opens it.",
+  no_computer:
+    "It is on no computer. Run the Synap worker for it on the computer that has its program.",
+  no_waker:
+    "Nothing on its computer starts agents yet. Run the Synap worker for it on that computer.",
+  computer_offline:
+    "Its computer is offline. Turn it on, or start Synap on it.",
+  wakes_off:
+    "Waking agents is turned off on its computer. Turn it back on there.",
+} as const;
+
+/** A wake refusal's fix; an unknown reason gets none rather than a guess. */
+export function resolveAgentWakeRefusalFix(
+  why: string | null | undefined
+): string | null {
+  if (!why) return null;
+  return (
+    (AGENT_WAKE_REFUSAL_FIXES as Readonly<Record<string, string>>)[why] ?? null
+  );
+}
+
+/**
  * The pod's own AI, as a person picks it from "who runs this" (a run choice of
  * `is-agent`, `@synap-core/types/agents` run-choice). ONE name everywhere a
  * surface offers it beside the person's agents.

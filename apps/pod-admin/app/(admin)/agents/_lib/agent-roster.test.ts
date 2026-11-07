@@ -3,6 +3,9 @@ import { AGENT_BINDING_ERROR_CODES } from "@synap-core/types/agents";
 import {
   agentReviewHref,
   agentsByCreator,
+  agentWakeLine,
+  agentWakeSource,
+  agentWakeView,
   buildAgentRoster,
   hostComputerHref,
   keyCountsLine,
@@ -11,6 +14,7 @@ import {
   standingLine,
   viaSynapAccount,
   type AgentRosterRowLike,
+  type AgentWakeRowLike,
 } from "./agent-roster";
 
 const NOW = Date.parse("2026-10-12T12:00:00Z");
@@ -284,5 +288,102 @@ describe("buildAgentRoster — a paused agent", () => {
     );
     expect(v.status.label).toBe("Active");
     expect(v.sentence).not.toContain("Paused");
+  });
+});
+
+describe("agentWakeView — the pod's wake read, in words, with the fix's door", () => {
+  const claude = {
+    slug: "claude-code",
+    label: "Claude Code",
+    version: "0.26.0",
+  };
+  const read = (agents: AgentWakeRowLike[]) =>
+    agentWakeSource({ isLoading: false, isError: false, data: { agents } });
+  const cant = (why: AgentWakeRowLike["wake"]["why"]) => ({
+    state: "cant_wake" as const,
+    how: null,
+    why,
+  });
+
+  it("no computer: the reason, the fix, and the worker command with its name", () => {
+    const v = agentWakeView(
+      row({}),
+      read([{ agentUserId: "a1", template: claude, wake: cant("no_computer") }])
+    );
+    expect(v).toMatchObject({
+      kind: "known",
+      template: "Claude Code",
+      state: "Can't wake",
+      cantWake: true,
+      why: "No computer",
+      command: "synap worker --agent devbox-worker",
+      fixHref: null,
+    });
+    expect(v.kind === "known" && v.fix).toMatch(/Run the Synap worker/);
+    expect(agentWakeLine(v)).toBe("Claude Code · Can't wake: No computer");
+  });
+
+  it("computer offline: the door is its computer's page, no command", () => {
+    const v = agentWakeView(
+      row({ hostComputer: { id: "c1", name: "mac" } }),
+      read([
+        { agentUserId: "a1", template: claude, wake: cant("computer_offline") },
+      ])
+    );
+    expect(v).toMatchObject({ kind: "known", command: null });
+    expect(v.kind === "known" && v.fixHref).toBe(
+      hostComputerHref(row({ hostComputer: { id: "c1", name: "mac" } }))
+    );
+  });
+
+  it("no template: says so by name, and points at the catalog", () => {
+    const v = agentWakeView(
+      row({}),
+      read([{ agentUserId: "a1", template: null, wake: cant("no_template") }])
+    );
+    expect(agentWakeLine(v)).toBe(
+      "No agent template · Can't wake: No agent template"
+    );
+    expect(v.kind === "known" && v.fix).toMatch(/Marketplace/);
+  });
+
+  it("awake: the state only, no reason, no fix", () => {
+    const v = agentWakeView(
+      row({}),
+      read([
+        {
+          agentUserId: "a1",
+          template: claude,
+          wake: { state: "awake", how: "runner", why: null },
+        },
+      ])
+    );
+    expect(v).toMatchObject({
+      kind: "known",
+      cantWake: false,
+      why: null,
+      fix: null,
+      command: null,
+    });
+    expect(agentWakeLine(v)).toBe("Claude Code · Awake");
+  });
+
+  it("a failed read is unavailable, never can't wake; loading or unlisted is unknown", () => {
+    expect(
+      agentWakeView(
+        row({}),
+        agentWakeSource({ isLoading: false, isError: true })
+      )
+    ).toEqual({ kind: "unavailable" });
+    expect(
+      agentWakeView(
+        row({}),
+        agentWakeSource({ isLoading: true, isError: false })
+      )
+    ).toEqual({ kind: "unknown" });
+    expect(agentWakeView(row({ id: "other" }), read([]))).toEqual({
+      kind: "unknown",
+    });
+    expect(agentWakeLine({ kind: "unavailable" })).toBeNull();
   });
 });
