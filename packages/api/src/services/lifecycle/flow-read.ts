@@ -24,7 +24,7 @@
  * a status the lifecycle does not declare is listed on its flow.
  *
  * Each card carries `blocker: null`: the blocker derivation (S3) fills it.
- * Doors: tRPC `flow.of`, Hub `GET /flow`, MCP `synap_flow`. A key bounded by
+ * Doors: tRPC `flow.of`, Hub `GET /flow`, MCP `synap_get_flow`. A key bounded by
  * a grant passes `readProfileUnderGrant` (the `GET /lifecycle` narrowing);
  * its rows are bounded by the access seams; what no seam bounds (workers) or
  * what its grant does not read (flows, without `playbook.read`) is listed in

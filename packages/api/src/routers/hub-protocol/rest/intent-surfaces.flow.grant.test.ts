@@ -16,7 +16,7 @@
  *    `facet.read`, a space the grant does not cover, or no space at all;
  *  - an app's answer showing flows or workers as "none" instead of withheld.
  *
- * Cannot see: the production pod; MCP `synap_flow` (same function, same
+ * Cannot see: the production pod; MCP `synap_get_flow` (same function, same
  * fence declaration `FLOW_OF`).
  */
 import { OpenAPIHono } from "@hono/zod-openapi";

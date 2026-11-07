@@ -485,7 +485,7 @@ export const readHandlers: McpHandlerMap = {
    * call `signals.needsYou`, so an agent and an outside reader see the same
    * rows by fold and the same count.
    */
-  synap_flow: async (ctx: McpToolContext): Promise<CallToolResult> => {
+  synap_get_flow: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const profileSlug =
