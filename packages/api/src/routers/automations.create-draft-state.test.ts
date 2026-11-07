@@ -151,7 +151,7 @@ describe("P2-3 draft-state remedy — automation create", () => {
     expect(result.message).toContain("active");
   });
 
-  it("materializeApprovedAutomation (proposal-approved, always agent-originated) also forces 'draft'", async () => {
+  it("materializeApprovedAutomation: an approval IS the activation — the author's status is kept, unstated lands 'active' via the executor", async () => {
     const captured: { values?: Record<string, unknown> } = {};
     const database = { insert: vi.fn(() => insertChain(captured)) };
 
@@ -170,7 +170,27 @@ describe("P2-3 draft-state remedy — automation create", () => {
       },
     });
 
-    expect(captured.values?.status).toBe("draft");
+    expect(captured.values?.status).toBe("active");
     expect(result).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  });
+
+  it("materializeApprovedAutomation keeps an explicit 'draft' (prepare, do not run)", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const database = { insert: vi.fn(() => insertChain(captured)) };
+    await materializeApprovedAutomation({
+      database: database as never,
+      agentUserId: "agent-1",
+      stableId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      definition: {
+        name: "Approved but held",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: MANUAL_FLOW,
+        status: "draft",
+        source: "ai",
+        metadata: { dataContract: VALID_DATA_CONTRACT },
+      },
+    });
+    expect(captured.values?.status).toBe("draft");
   });
 });
