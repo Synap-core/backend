@@ -26,8 +26,9 @@
  *     template (Cursor, a dispatch or house agent, no type at all);
  *   - template + wake: the template is the agent type's (built in, version
  *     null; none for a type that names none); the wake state is THE rule
- *     (`deriveAgentWake`) over this row's own facts, and with no computer able
- *     to start agents yet, no row reads `can_wake`;
+ *     (`deriveAgentWake`) over this row's own facts; a computer with no
+ *     waker leaves its agents `no_waker`, and a waker holding the lease with
+ *     "Wakes agents" on makes them `can_wake` (plan v2 slice 4);
  *   - PARITY: for every row, `canTakeYourWork` is exactly what the real
  *     `route()` answers when a hand-off NAMES that agent for this person.
  */
@@ -574,10 +575,83 @@ describe("readAgentsForHandoff — its template and whether it can be woken", ()
     });
   });
 
-  it("no computer can start agents yet, so no row reads can_wake", () => {
+  it("with no waker on any of this person's computers, no row reads can_wake", () => {
     // Non-vacuity: the roster holds both other states.
     const states = new Set(roster.agents.map((a) => a.wake.state));
     expect(states).toEqual(new Set(["awake", "cant_wake"]));
+  });
+});
+
+describe("readAgentsForHandoff — a computer's waker (plan v2 slice 4)", () => {
+  const OWNER_W = randomUUID();
+  const WAKES = randomUUID(); // waker polled 30 s ago, "Wakes agents" on
+  const SWITCH_OFF = randomUUID(); // waker polled 30 s ago, switch off
+  const LAPSED = randomUUID(); // waker last polled 5 min ago, switch on
+  const AGENT_ON = (m: string) => `${m.slice(0, 8)}-agent`;
+  let wr: Awaited<ReturnType<typeof readAgentsForHandoff>>;
+  const wrow = (machine: string) =>
+    wr.agents.find((a) => a.computer?.agentUserId === machine)!;
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, email, name, user_type) values ($1, 'w@x.test', 'W', 'human')`,
+      [OWNER_W]
+    );
+    for (const [m, on, polledAgo] of [
+      [WAKES, true, 30_000],
+      [SWITCH_OFF, false, 30_000],
+      [LAPSED, true, 5 * 60_000],
+    ] as const) {
+      await q(
+        `insert into users (id, email, name, user_type, agent_type, created_by_user_id, agent_metadata) values ($1, $2, $3, 'agent', 'machine', $4, $5::jsonb)`,
+        [
+          m,
+          `${m}@x.test`,
+          `computer-${m.slice(0, 4)}`,
+          OWNER_W,
+          JSON.stringify(on ? { wakesAgents: true } : {}),
+        ]
+      );
+      // The waker's lease: the stamp on the COMPUTER's own key.
+      await q(
+        `insert into api_keys (id, user_id, key_type, linked_user_id, is_active, last_used_at, worker_served_at, created_at)
+         values ($1, $2, 'hub_inbound', $3, true, $4, $4, now())`,
+        [randomUUID(), m, OWNER_W, ago(polledAgo)]
+      );
+      // A Claude Code on it that nothing runs now (used, never served).
+      const a = randomUUID();
+      await q(
+        `insert into users (id, email, name, user_type, agent_type, created_by_user_id, host_user_id) values ($1, $2, $3, 'agent', 'claude-code', $4, $5)`,
+        [a, `${a}@x.test`, AGENT_ON(m), OWNER_W, m]
+      );
+      await q(
+        `insert into api_keys (id, user_id, key_type, linked_user_id, is_active, last_used_at, created_at)
+         values ($1, $2, 'hub_inbound', $3, true, $4, now())`,
+        [randomUUID(), a, OWNER_W, ago(2 * 3_600_000)]
+      );
+    }
+    wr = await readAgentsForHandoff(OWNER_W, { now: NOW });
+  }, 60_000);
+
+  it("a waker holding the lease with Wakes agents on: its computer's agents read can_wake", () => {
+    expect(wrow(WAKES).wake).toEqual({
+      state: "can_wake",
+      how: "runner",
+      why: null,
+    });
+  });
+
+  it("the switch off reads wakes_off; a lapsed lease reads computer_offline (the rules, untouched)", () => {
+    expect(wrow(SWITCH_OFF).wake).toEqual({
+      state: "cant_wake",
+      how: "runner",
+      why: "wakes_off",
+    });
+    expect(wrow(LAPSED).wake).toEqual({
+      state: "cant_wake",
+      how: "runner",
+      why: "computer_offline",
+    });
   });
 });
 

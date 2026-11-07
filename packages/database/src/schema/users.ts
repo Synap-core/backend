@@ -121,6 +121,13 @@ export interface AgentMetadata {
    */
   runsScripts?: boolean;
   /**
+   * COMPUTER principals only: the person turned on "Wakes agents" — the pod
+   * may count on this computer's waker (`synap waker`) to start its agents
+   * when work is handed to them (plan v2 slice 4; `machines.setWakesAgents`).
+   * Absent = off, the default.
+   */
+  wakesAgents?: boolean;
+  /**
    * How many pushes a day this agent's work may send its person (founder
    * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
    * only by `agentUsers.setPushLimit`; read by the push producer

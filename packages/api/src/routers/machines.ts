@@ -43,6 +43,7 @@ import {
   renameMachine,
   setMachineOwnKeyTtlDays,
   setMachineRunsScripts,
+  setMachineWakesAgents,
 } from "../services/machine-roster.js";
 
 const MANAGE_COMPUTER_SIGNED_IN = "Manage a computer while signed in.";
@@ -162,6 +163,46 @@ export const machinesRouter = router({
         },
       });
       return { status: "updated" as const, runsScripts: input.enabled };
+    }),
+
+  /**
+   * "Wakes agents" (plan v2 slice 4): the pod may count on this computer's
+   * waker (`synap waker`) to start its agents when work is handed to them. A
+   * person's act, signed in, like "Runs scripts": turning it on lets a
+   * process on this computer start programs for the pod, so it rides the same
+   * gate. Off takes effect at the waker's next poll.
+   */
+  setWakesAgents: credentialProcedure
+    .input(presenceInput)
+    .input(z.object({ machineId: MachineIdShape, enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
+      const machine = await loadManageableMachine(
+        input.machineId,
+        ctx.userId,
+        await isPodAdmin(ctx.userId)
+      );
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        subjectType: "apiKey",
+        action: "update",
+        data: { machineUserId: machine.id, wakesAgents: input.enabled },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      await setMachineWakesAgents(machine.id, input.enabled);
+      void auditLog({
+        subjectType: "apiKey",
+        action: "update",
+        phase: "completed",
+        subjectId: machine.id,
+        userId: ctx.userId,
+        workspaceId: null,
+        data: { kind: "machine_wakes_agents", enabled: input.enabled },
+      });
+      return { status: "updated" as const, wakesAgents: input.enabled };
     }),
 
   /**
