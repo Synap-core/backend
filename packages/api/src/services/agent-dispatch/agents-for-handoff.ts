@@ -320,15 +320,7 @@ export async function readAgentsForHandoff(
       onComputer: !!computer,
       // What can start it: its host computer's waker (plan v2 slice 4), the
       // wake lease + the "Wakes agents" switch; `null` = no waker ever ran there.
-      waker: hostId
-        ? computerWakerOf(
-            {
-              wakerSeenAt: wakerSeenAt.get(hostId) ?? null,
-              wakesAgents: wakesAgentsOfMachine.get(hostId) ?? false,
-            },
-            now
-          )
-        : null,
+      waker: null,
     });
     // An agent adding ITSELF is joining, not a hand-off: never gated.
     const preview: { handOff: HandOffPreview; handOffReason: string | null } =
