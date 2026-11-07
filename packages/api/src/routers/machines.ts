@@ -4,7 +4,7 @@
  * A computer is an agent user of type `machine` that the person approved on
  * `/device`. This router is the person's view of THEIR computers (and, for a
  * pod admin, `adminList` — everyone's) and the acts on one: rename, set its
- * key lifetime, "Runs scripts", "Hosts services", whose computer it is,
+ * key lifetime, "Runs scripts", "Installs from the pod", whose computer it is,
  * revoke (which revokes the keys of every agent it hosts and of every
  * installation on it — `revokeMachine`, the one door).
  *
@@ -167,7 +167,7 @@ export const machinesRouter = router({
     }),
 
   /**
-   * "Hosts services" (installations, 0399): this computer may lease the host
+   * "Installs from the pod" (installations, 0409): this computer may lease the host
    * jobs of the installations on itself (`/host-jobs/*`, scope `host.runner`
    * on its key): install, update and remove software, run provider ops and
    * hosted verbs. The sibling of "Runs scripts", governed the same way: a

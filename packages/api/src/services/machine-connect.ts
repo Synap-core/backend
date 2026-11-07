@@ -1290,7 +1290,7 @@ async function mintForApprovedRequest(
     .limit(1);
   const runsScripts =
     (machineMeta?.meta as AgentMetadata | null)?.runsScripts === true;
-  // "Hosts services" survives a reconnect the same way (host.runner,
+  // "Installs from the pod" survives a reconnect the same way (host.runner,
   // machines.setHostsServices).
   const hostsServices =
     (machineMeta?.meta as AgentMetadata | null)?.hostsServices === true;
@@ -1605,7 +1605,7 @@ export async function setMachineBelongsTo(
 
 /**
  * Revoke a computer: its keys, the keys of every agent it hosts, AND the keys
- * of every installation on it and of each of their bindings (0399, addendum
+ * of every installation on it and of each of their bindings (0409, addendum
  * 000e75ff §7: "removing the computer revokes them all"), through the one
  * revoke door. The agents and installations stay listed with their history.
  */
