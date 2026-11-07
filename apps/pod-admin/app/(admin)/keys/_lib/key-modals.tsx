@@ -3,6 +3,8 @@
 /**
  * Reveal: the plaintext, shown exactly once after a create or rotate (an
  * Island dialog, page grammar §4). Making a key is a page, `/keys/new`.
+ * Any other secret shown once (a site's link) reuses it with its own `title`
+ * and `warning`.
  */
 
 import {
@@ -25,6 +27,8 @@ export function RevealKeyModal({
   plaintext,
   note,
   usage,
+  title,
+  warning,
   onClose,
 }: {
   keyName: string;
@@ -32,6 +36,10 @@ export function RevealKeyModal({
   note: "created" | "rotated";
   /** How to use it, for the doors it was made for. */
   usage?: ReactNode;
+  /** The heading, for a secret that is not a key (default: "Key created" / "Key rotated"). */
+  title?: string;
+  /** What holding it allows (default: the API key's warning). */
+  warning?: ReactNode;
   onClose: () => void;
 }) {
   const { isOpen, onOpenChange } = useDisclosure({
@@ -56,7 +64,7 @@ export function RevealKeyModal({
             <ShieldAlert className="h-3.5 w-3.5 text-foreground/85" />
           </span>
           <span className="font-medium">
-            {note === "created" ? "Key created" : "Key rotated"}
+            {title ?? (note === "created" ? "Key created" : "Key rotated")}
           </span>
         </ModalHeader>
         <ModalBody className="gap-3 pb-2">
@@ -73,8 +81,8 @@ export function RevealKeyModal({
             {plaintext}
           </Snippet>
           <p className="text-[11.5px] text-foreground/65">
-            Treat this like a password. Anyone with the key can act on this pod
-            within its scopes.
+            {warning ??
+              "Treat this like a password. Anyone with the key can act on this pod within its scopes."}
           </p>
           {usage}
         </ModalBody>

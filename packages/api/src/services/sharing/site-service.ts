@@ -66,14 +66,16 @@ import {
   uniqueViolationConstraint,
 } from "@synap/database";
 import {
+  cellInstances,
   entities,
   profiles,
   projects,
   relations,
   resourceShares,
+  workspaceMembers,
   workspaces,
 } from "@synap/database/schema";
-import { count, ne, sql } from "drizzle-orm";
+import { count, exists, ne, or, sql } from "drizzle-orm";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
@@ -103,10 +105,16 @@ import {
   type SiteConfigV1,
 } from "./site-config.js";
 import {
+  liveChartWhere,
   liveMemberCounts,
   liveMemberWhere,
   openMemberWorkspaces,
 } from "./site-members.js";
+import { readChartPayload, type ChartMode } from "./chart-payload.js";
+import {
+  resolvePublicDoors,
+  sharedClientIpFromEnv,
+} from "./public-doors-switch.js";
 import { projectPublishedProperties } from "./public-read.js";
 import { clampSiteLimit, SITE_MAX_LIMIT } from "./public-site-read.js";
 import {
@@ -257,9 +265,14 @@ export async function assertCanNarrowSite(
   );
 }
 
+/** Does the home space's policy allow publishing a project (the site)? */
+export function sitePolicyAllows(settings: unknown): boolean {
+  return resolveExposurePolicy(settings).project.public.read === "direct";
+}
+
 /** The home space's policy must allow publishing a project (the site). */
 export function assertSitePolicy(settings: unknown): void {
-  if (resolveExposurePolicy(settings).project.public.read !== "direct") {
+  if (!sitePolicyAllows(settings)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message:
@@ -1482,6 +1495,39 @@ export interface SiteStatus {
   membersNextCursor: string | null;
   /** Every non-revoked member row of the site (the rows the pages walk). */
   membersTotal: number;
+  /**
+   * The site's CHART members that are not revoked (published or taken back to
+   * draft), newest first, at most {@link SITE_STATUS_CHARTS_MAX}; `members`
+   * holds records only.
+   */
+  charts: SiteStatusChart[];
+  /** Every non-revoked chart row of the site (`charts` may show fewer). */
+  chartsTotal: number;
+  /** The home space's public-pages switch; null = the caller cannot read it (owner only). */
+  publicDoorsOpen: boolean | null;
+  /** Does the home space's policy allow a site; null = the caller cannot read it (owner only). */
+  policyAllowsSites: boolean | null;
+}
+
+/** The most charts one status read lists (`chartsTotal` counts them all). */
+export const SITE_STATUS_CHARTS_MAX = 100;
+
+/** One chart of a site, as its owner sees it. */
+export interface SiteStatusChart {
+  cellInstanceId: string;
+  /** The cell's CURRENT name, else the published title; null when it has neither. */
+  title: string | null;
+  /** From the stored payload; null when it no longer decodes (never served). */
+  cellKey: string | null;
+  mode: ChartMode | null;
+  publicId: string | null;
+  slug: string | null;
+  state: string;
+  publishedAt: Date | null;
+  /** A snapshot's capture instant; null for a live chart. */
+  capturedAt: string | null;
+  /** Served on the public web right now: the site is live AND the chart passes the chart doors' own predicate. */
+  live: boolean;
 }
 
 /**
@@ -1604,6 +1650,123 @@ async function statusMembers(
   };
 }
 
+/** The site's chart rows (non-revoked), newest first, capped; liveness from THE chart predicate. */
+async function statusCharts(
+  database: Db,
+  site: { id: string },
+  siteLive: boolean
+): Promise<{ charts: SiteStatusChart[]; total: number }> {
+  const ofSite = and(
+    eq(resourceShares.siteShareId, site.id),
+    eq(resourceShares.resourceType, "cell"),
+    isNull(resourceShares.revokedAt)
+  );
+  const rows = await database
+    .select({
+      id: resourceShares.id,
+      cellInstanceId: resourceShares.resourceId,
+      name: cellInstances.name,
+      publishedProperties: resourceShares.publishedProperties,
+      publicId: resourceShares.publicId,
+      slug: resourceShares.publicSlug,
+      state: resourceShares.state,
+      publishedAt: resourceShares.publishedAt,
+    })
+    .from(resourceShares)
+    .leftJoin(cellInstances, eq(cellInstances.id, resourceShares.resourceId))
+    .where(ofSite)
+    .orderBy(desc(resourceShares.createdAt), desc(resourceShares.id))
+    .limit(SITE_STATUS_CHARTS_MAX);
+  const [{ total } = { total: 0 }] = await database
+    .select({ total: count() })
+    .from(resourceShares)
+    .where(ofSite);
+  // THE public rule (`liveChartWhere`, what the chart doors serve), not a
+  // re-derivation; a payload that no longer decodes is never served either.
+  const servedIds = new Set<string>();
+  if (siteLive && rows.length > 0) {
+    const open = await openMemberWorkspaces(site.id);
+    const served = await database
+      .select({ id: resourceShares.id })
+      .from(resourceShares)
+      .where(
+        and(
+          liveChartWhere(site, open),
+          inArray(
+            resourceShares.id,
+            rows.map((r) => r.id)
+          )
+        )
+      );
+    for (const { id } of served) servedIds.add(id);
+  }
+  return {
+    charts: rows.map((r) => {
+      const payload = readChartPayload(r.publishedProperties);
+      return {
+        cellInstanceId: r.cellInstanceId,
+        title: r.name ?? payload?.title ?? null,
+        cellKey: payload?.cellKey ?? null,
+        mode: payload?.mode ?? null,
+        publicId: r.publicId,
+        slug: r.slug,
+        state: r.state,
+        publishedAt: r.publishedAt,
+        capturedAt: payload?.capturedAt ?? null,
+        live: servedIds.has(r.id) && payload !== null,
+      };
+    }),
+    total,
+  };
+}
+
+interface HomeSwitches {
+  publicDoorsOpen: boolean | null;
+  policyAllowsSites: boolean | null;
+}
+
+/**
+ * The home spaces' public-pages switch and site policy AS THIS CALLER MAY READ
+ * THEM. Both are owner-only reads (`getPublicDoors`, `getPolicy`: the space's
+ * `owner_id`), so a caller who does not own a space gets null for it ("can't
+ * check"), never a guess. One query for every space.
+ */
+async function homeSwitches(
+  database: Db,
+  userId: string,
+  workspaceIds: readonly string[]
+): Promise<Map<string, HomeSwitches>> {
+  const out = new Map<string, HomeSwitches>();
+  const ids = [...new Set(workspaceIds)];
+  if (ids.length === 0) return out;
+  const rows = await database
+    .select({
+      id: workspaces.id,
+      ownerId: workspaces.ownerId,
+      settings: workspaces.settings,
+    })
+    .from(workspaces)
+    .where(inArray(workspaces.id, ids));
+  const shared = sharedClientIpFromEnv();
+  for (const ws of rows) {
+    out.set(
+      ws.id,
+      ws.ownerId === userId
+        ? {
+            publicDoorsOpen: resolvePublicDoors(ws.settings, shared).enabled,
+            policyAllowsSites: sitePolicyAllows(ws.settings),
+          }
+        : { publicDoorsOpen: null, policyAllowsSites: null }
+    );
+  }
+  return out;
+}
+
+const UNREADABLE: HomeSwitches = {
+  publicDoorsOpen: null,
+  policyAllowsSites: null,
+};
+
 /**
  * A site's owner-side status, by site id or by project (its live site; null
  * when it has none), with one page of its members. Never a token or its hash.
@@ -1657,6 +1820,11 @@ export async function siteStatus(
   const counts = await liveMemberCounts(ref, Object.keys(config.collections));
   const live = isSiteLive({ ...site, hasToken: !!site.tokenHash });
   const page = await statusMembers(database, ref, live, req);
+  const charts = await statusCharts(database, ref, live);
+  const switches =
+    (await homeSwitches(database, actor.userId, [site.workspaceId!])).get(
+      site.workspaceId!
+    ) ?? UNREADABLE;
   return {
     siteId: site.id,
     projectId: site.resourceId,
@@ -1681,5 +1849,144 @@ export async function siteStatus(
     members: page.members,
     membersNextCursor: page.nextCursor,
     membersTotal: page.total,
+    charts: charts.charts,
+    chartsTotal: charts.total,
+    ...switches,
+  };
+}
+
+// ── List (owner read) ────────────────────────────────────────────────────────
+
+/** The most sites one `listSites` read returns (`truncated` says when more exist). */
+export const LIST_SITES_MAX = 200;
+
+/** One site in its owner's list: enough to say where it stands and what needs them. */
+export interface SiteSummary {
+  projectId: string;
+  projectName: string;
+  siteId: string;
+  state: string;
+  /** THE one derivation ({@link isSiteLive}); the home switch is `publicDoorsOpen`. */
+  live: boolean;
+  hasToken: boolean;
+  tokenPrefix: string | null;
+  publishedAt: Date | null;
+  homeWorkspaceId: string;
+  /** Non-revoked record rows: the site status's `membersTotal`. */
+  recordsTotal: number;
+  /** PUBLISHED record rows whose record changed after its snapshot (publish again). */
+  staleCount: number;
+  /** Non-revoked chart rows: the site status's `chartsTotal`. */
+  chartsTotal: number;
+  publicDoorsOpen: boolean | null;
+  policyAllowsSites: boolean | null;
+}
+
+/**
+ * Every unrevoked site of a project the caller ADMINISTERS — the project's
+ * owner, or an owner/admin of the site's home space (the
+ * {@link assertAnchorAdmin} rule, as SQL over loaded rows) — newest site
+ * first, at most {@link LIST_SITES_MAX}. A site whose project was deleted is
+ * not listed (it has no project to open it by). Never a token or its hash.
+ */
+export async function listSites(
+  actor: ShareActor
+): Promise<{ sites: SiteSummary[]; truncated: boolean }> {
+  const database = await getDb();
+  const rows = await database
+    .select({
+      ...SITE_COLUMNS,
+      projectName: projects.name,
+    })
+    .from(resourceShares)
+    .innerJoin(projects, eq(projects.id, resourceShares.resourceId))
+    .where(
+      and(
+        siteRowWhere(),
+        isNull(resourceShares.revokedAt),
+        or(
+          eq(projects.userId, actor.userId),
+          exists(
+            database
+              .select({ one: sql`1` })
+              .from(workspaceMembers)
+              .where(
+                and(
+                  eq(workspaceMembers.workspaceId, resourceShares.workspaceId),
+                  eq(workspaceMembers.userId, actor.userId),
+                  inArray(workspaceMembers.role, ["owner", "admin"])
+                )
+              )
+          )
+        )
+      )
+    )
+    .orderBy(desc(resourceShares.createdAt), desc(resourceShares.id))
+    .limit(LIST_SITES_MAX + 1);
+  const listed = rows.slice(0, LIST_SITES_MAX).filter((r) => r.workspaceId);
+  if (listed.length === 0) {
+    return { sites: [], truncated: rows.length > LIST_SITES_MAX };
+  }
+  // Every count in ONE grouped read over the listed sites' member rows.
+  const counted = await database
+    .select({
+      siteId: resourceShares.siteShareId,
+      records:
+        sql<number>`count(*) filter (where ${resourceShares.resourceType} = 'entity')`.mapWith(
+          Number
+        ),
+      stale:
+        sql<number>`count(*) filter (where ${resourceShares.resourceType} = 'entity' and ${resourceShares.state} = 'published' and ${entities.updatedAt} > ${resourceShares.publishedAt})`.mapWith(
+          Number
+        ),
+      charts:
+        sql<number>`count(*) filter (where ${resourceShares.resourceType} = 'cell')`.mapWith(
+          Number
+        ),
+    })
+    .from(resourceShares)
+    .leftJoin(
+      entities,
+      and(
+        eq(entities.id, resourceShares.resourceId),
+        eq(resourceShares.resourceType, "entity")
+      )
+    )
+    .where(
+      and(
+        inArray(
+          resourceShares.siteShareId,
+          listed.map((r) => r.id)
+        ),
+        isNull(resourceShares.revokedAt)
+      )
+    )
+    .groupBy(resourceShares.siteShareId);
+  const counts = new Map(counted.map((c) => [c.siteId, c] as const));
+  const switches = await homeSwitches(
+    database,
+    actor.userId,
+    listed.map((r) => r.workspaceId!)
+  );
+  return {
+    sites: listed.map((r) => {
+      const c = counts.get(r.id);
+      return {
+        projectId: r.resourceId,
+        projectName: r.projectName,
+        siteId: r.id,
+        state: r.state,
+        live: isSiteLive({ ...r, hasToken: !!r.tokenHash }),
+        hasToken: !!r.tokenHash,
+        tokenPrefix: r.tokenPrefix,
+        publishedAt: r.publishedAt,
+        homeWorkspaceId: r.workspaceId!,
+        recordsTotal: c?.records ?? 0,
+        staleCount: c?.stale ?? 0,
+        chartsTotal: c?.charts ?? 0,
+        ...(switches.get(r.workspaceId!) ?? UNREADABLE),
+      };
+    }),
+    truncated: rows.length > LIST_SITES_MAX,
   };
 }

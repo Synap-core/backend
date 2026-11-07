@@ -29,6 +29,7 @@ export type NavIconName =
   | "Building2"
   | "Shapes"
   | "Database"
+  | "Globe"
   | "Bot"
   | "Grid3x3"
   | "Laptop"
@@ -194,6 +195,15 @@ export const CONSOLE_NAV = [
         label: "Entities",
         icon: "Database",
         kind: "entity",
+        audience: "admin",
+      },
+      {
+        // A project published on the web: is it live, what does it publish,
+        // and its link (design 73df57f3). Admins only (open question 2).
+        id: "sites",
+        href: "/sites",
+        label: "Sites",
+        icon: "Globe",
         audience: "admin",
       },
     ],
@@ -433,6 +443,15 @@ export function computerHref(id: string): string {
  */
 export function agentHref(id: string): string {
   return `${navHref("agents")}/${encodeURIComponent(id)}`;
+}
+
+/** A project's site page, keyed by the PROJECT id (one site per project). */
+export function siteHref(
+  projectId: string,
+  sub?: "records" | "charts"
+): string {
+  const base = `${navHref("sites")}/${encodeURIComponent(projectId)}`;
+  return sub ? `${base}/${sub}` : base;
 }
 
 /**

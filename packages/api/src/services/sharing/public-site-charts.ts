@@ -26,29 +26,14 @@
  */
 
 import { createHash } from "node:crypto";
-import {
-  db,
-  and,
-  desc,
-  eq,
-  inArray,
-  isNull,
-  isNotNull,
-  or,
-} from "@synap/database";
-import { cellInstances, resourceShares } from "@synap/database/schema";
-import { exists, gt, sql, type SQL } from "drizzle-orm";
+import { db, and, desc, eq } from "@synap/database";
+import { resourceShares } from "@synap/database/schema";
 import { publicDoorsOpenFor } from "./public-doors-switch.js";
 import type { PublicShareClosed } from "./public-read.js";
-import {
-  resolveSite,
-  type PublicSiteRead,
-  type ResolvedSite,
-} from "./public-site-read.js";
+import { resolveSite, type PublicSiteRead } from "./public-site-read.js";
 import { PUBLIC_ID_RE, SLUG_MAX_LENGTH, SLUG_RE } from "./site-config.js";
-import { openMemberWorkspaces } from "./site-members.js";
+import { liveChartWhere, openMemberWorkspaces } from "./site-members.js";
 import {
-  CHART_COLLECTION,
   SITE_PUBLISH_MAX_CHARTS,
   holdsUuid,
   readChartPayload,
@@ -95,32 +80,6 @@ const weakEtag = (parts: unknown) =>
 const day = (d: Date) => d.toISOString().slice(0, 10);
 
 // ── Live members ─────────────────────────────────────────────────────────────
-
-/** A site's chart rows that are served right now (narrowing is live). */
-function liveChartWhere(
-  site: ResolvedSite,
-  openWorkspaceIds: readonly string[],
-  now: Date = new Date()
-): SQL {
-  if (openWorkspaceIds.length === 0) return sql`false`;
-  return and(
-    eq(resourceShares.siteShareId, site.id),
-    eq(resourceShares.audience, "public"),
-    eq(resourceShares.resourceType, "cell"),
-    eq(resourceShares.publishedCollection, CHART_COLLECTION),
-    eq(resourceShares.state, "published"),
-    isNull(resourceShares.revokedAt),
-    isNotNull(resourceShares.publishedAt),
-    or(isNull(resourceShares.expiresAt), gt(resourceShares.expiresAt, now)),
-    inArray(resourceShares.workspaceId, [...openWorkspaceIds]),
-    exists(
-      db
-        .select({ one: sql`1` })
-        .from(cellInstances)
-        .where(eq(cellInstances.id, resourceShares.resourceId))
-    )
-  )!;
-}
 
 const CHART_COLUMNS = {
   id: resourceShares.id,
