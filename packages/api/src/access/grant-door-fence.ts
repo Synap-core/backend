@@ -141,6 +141,29 @@ const LOAD_SKILL = READS();
  */
 const MEMORY_RECALL = READS("entity", "preference");
 
+/*
+ * MCP read tools whose Hub REST twin calls the SAME reader, so one
+ * declaration rules on both doors (as PROPOSAL_GET): a key that may call the
+ * tool over MCP may call its route over REST, and no other. The Raycast
+ * extension calls the REST twins with its own scoped key, which was refused
+ * every one of them while the same key could call the MCP tools.
+ */
+/** The lens map: MCP `synap_orient` and Hub `GET /orient` both call `discover()`. */
+const ORIENT = READS("entity", "project", "session", "proposal", "track");
+/** The kinds and roles: both call tRPC `profiles.listProfiles`. */
+const LIST_PROFILES = READS("entity");
+/** A space's automations: both call tRPC `automations.listAutomations`. */
+const LIST_AUTOMATIONS = READS("automation");
+/** One thread's context: both call tRPC `context.getThreadContext`. */
+const THREAD_CONTEXT = READS("channel", "entity", "document");
+/**
+ * The person's own personal channel, GET-OR-CREATE: MCP `synap_get_channel`
+ * (`channels.ensurePersonal`) and Hub `GET /channels/personal` resolve or
+ * create it through the same `resolveOrCreateChannel(…, PERSONAL,
+ * orchestrator)`. The door of what it returns: a channel row.
+ */
+const GET_CHANNEL = READS("channel");
+
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
@@ -691,6 +714,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // `proposal.read` sees no drafts). Admitted for `channel.read`; the route
   // then requires it in the space asked about.
   [/^\/channels\/conversations\/?$/, NARROWED("channel", [])],
+  // The REST twins of MCP read tools, one declaration each (see ORIENT):
+  [/^\/orient\/?$/, ORIENT],
+  [/^\/profiles\/?$/, LIST_PROFILES],
+  [/^\/automations\/?$/, LIST_AUTOMATIONS],
+  [route("/threads/:id/context"), THREAD_CONTEXT],
+  [/^\/channels\/personal\/?$/, GET_CHANNEL],
 ];
 
 /**
@@ -824,7 +853,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "preference",
     "project"
   ),
-  synap_orient: READS("entity", "project", "session", "proposal", "track"),
+  synap_orient: ORIENT,
   synap_find: READS("tool", "command", "playbook", "automation"),
   synap_get_entity: READS("entity", "relation", "facet", "document"),
   synap_get_graph: READS(
@@ -835,9 +864,9 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "session",
     "project"
   ),
-  synap_list_profiles: READS("entity"),
+  synap_list_profiles: LIST_PROFILES,
   synap_list_workspaces: READS("entity", "project"),
-  synap_get_thread_context: READS("channel", "entity", "document"),
+  synap_get_thread_context: THREAD_CONTEXT,
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: PROPOSAL_GET,
   synap_list_sessions: READS("session", "project"),
@@ -864,7 +893,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_playbooks: READS("playbook"),
   synap_match_playbooks: READS("playbook"),
   synap_list_capabilities: READS("tool", "command", "playbook", "automation"),
-  synap_list_automations: READS("automation"),
+  synap_list_automations: LIST_AUTOMATIONS,
   // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
   // worker rules and their automation runs, and the approvals they wait on.
   synap_list_workers: READS("track", "playbook", "automation", "proposal"),
@@ -985,7 +1014,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     // Get-OR-create: it RETURNS a channel row, the person's personal channel
     // (tRPC `channels.ensurePersonal`, owner-wide) or one bound to an object
     // (`channels.resolveOrCreateChannel`). The door of what it reads.
-    synap_get_channel: READS("channel"),
+    synap_get_channel: GET_CHANNEL,
     synap_post_message: WRITE,
     synap_revise_proposal: WRITE,
     synap_reject_proposal: WRITE,

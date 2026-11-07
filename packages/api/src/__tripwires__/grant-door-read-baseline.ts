@@ -31,7 +31,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /attention/lens-page",
   "GET /attention/needs-you",
   "GET /auth/key-state",
-  "GET /automations",
   "GET /automations/:automationId",
   "GET /automations/schema",
   "GET /briefs",
@@ -44,7 +43,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /centrality/status",
   "GET /channel-egress/pending",
   "GET /channels/:channelId/context-card",
-  "GET /channels/personal",
   "GET /compacted-states",
   "GET /compacted-states/:stateId",
   "GET /compacted-states/latest",
@@ -87,10 +85,8 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /needs-you",
   "GET /observability/routing-health",
   "GET /openapi.json",
-  "GET /orient",
   "GET /pod-apps",
   "GET /pod/config",
-  "GET /profiles",
   "GET /profiles/:slug/renderers",
   "GET /projects/:projectId/path",
   "GET /property-defs",
@@ -127,7 +123,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /subscriptions",
   "GET /subscriptions/:eventId/fanout",
   "GET /terminal/logs",
-  "GET /threads/:threadId/context",
   "GET /tools",
   "GET /tools/:id",
   "GET /tools/:id/credentials",
@@ -148,4 +143,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 128;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 123;
