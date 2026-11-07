@@ -108,9 +108,9 @@ describe("resolveAgentTemplate — the one template seam", () => {
       "hermes"
     );
     // The wake block a runner starts the agent with is the installed one, as installed.
-    expect(resolveAgentTemplate({ agentType: "hermes" }, installed)?.wake).toEqual(
-      HERMES_WAKE
-    );
+    expect(
+      resolveAgentTemplate({ agentType: "hermes" }, installed)?.wake
+    ).toEqual(HERMES_WAKE);
   });
 
   it("the agent's link names its template, whatever its type says", () => {
