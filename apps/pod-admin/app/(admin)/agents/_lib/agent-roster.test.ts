@@ -296,6 +296,7 @@ describe("agentWakeView — the pod's wake read, in words, with the fix's door",
     slug: "claude-code",
     label: "Claude Code",
     version: "0.26.0",
+    wake: null,
   };
   const read = (agents: AgentWakeRowLike[]) =>
     agentWakeSource({ isLoading: false, isError: false, data: { agents } });
