@@ -155,7 +155,11 @@ describe("openRunSession", () => {
     expect(result).toEqual({ sessionId: "new-session-id", reused: false });
     const inserted = insertValuesMock.mock.calls[0][0];
     expect(inserted.channelId).toBeNull();
-    expect(inserted.metadata).toEqual({ source: "automation" });
+    // No title given ⇒ the row writer names it from the goal (`derived`).
+    expect(inserted.metadata).toEqual({
+      source: "automation",
+      titleSource: "derived",
+    });
   });
 
   it("recovers from a concurrent unique-index race by reusing the winner's run session", async () => {
@@ -234,11 +238,13 @@ describe("openRunSession title", () => {
     expect(inserted.metadata).toMatchObject({ titleSource: "agent" });
   });
 
-  it("no title ⇒ no title and no provenance (the titler may name it later)", async () => {
+  it("no title ⇒ named from the goal, marked `derived` (the titler may still improve it)", async () => {
+    // No session is stored nameless: THE row writer (`insert-focus-session.ts`)
+    // derives the name, the same rule every birth door follows.
     await openRunSession({ userId: "u1", goal: "Sweep", source: "automation" });
     const inserted = insertValuesMock.mock.calls[0][0];
-    expect(inserted).not.toHaveProperty("title");
-    expect(inserted.metadata).not.toHaveProperty("titleSource");
+    expect(inserted.title).toBe("Sweep");
+    expect(inserted.metadata).toMatchObject({ titleSource: "derived" });
   });
 
   it("a REUSED channel session keeps its own name — nothing is inserted", async () => {
