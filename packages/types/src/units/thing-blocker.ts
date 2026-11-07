@@ -99,7 +99,7 @@ const NOT_BLOCKED: ThingBlocker = {
 
 /** Does this wait block the thing (the overlay rule above)? */
 export function isThingBlockingSource(source: WaitingOnSource): boolean {
-  return source.kind !== "hold" && waitingOnReasonOf(source) !== null;
+  return waitingOnReasonOf(source) !== null;
 }
 
 function ballRank(source: WaitingOnSource): number {
@@ -139,7 +139,7 @@ export function thingBlockerUnlocks(
 function clearedByOf(lead: WaitingOnSource): ThingBlockerClearedBy | null {
   if (lead.kind !== "owed_slot") return null;
   if (lead.clearedBy) return lead.clearedBy;
-  return lead.owner === "agent" ? null : { answer: true };
+  return { answer: true };
 }
 
 /**

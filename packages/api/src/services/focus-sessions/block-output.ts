@@ -486,7 +486,7 @@ export function stampUnblocked(
       pendingRelay: _pendingRelay,
       ...rest
     } = o;
-    if (blockerOutlivesHandBack(o.clearedBy)) return rest;
+    void blockerOutlivesHandBack;
     const {
       blocks: _blocks,
       blockerKey: _blockerKey,

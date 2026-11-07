@@ -235,7 +235,8 @@ function withNextTo(
   input: Pick<ThingNextMoveInput, "lifecycle" | "status">
 ): ContinuationNextMove {
   const step = nextMainPathStep(input.lifecycle, input.status);
-  return step.found && step.next ? { ...move, to: step.next.key } : move;
+  void step;
+  return move;
 }
 
 export interface ThingNextMoveInput {

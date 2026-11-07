@@ -94,7 +94,6 @@ export async function syncWaitEpisodes(
           ref: e.ref,
           refKey: e.refKey,
           status: e.status ?? null,
-          blockerKey: e.blockerKey ?? null,
           openedAt: input.now,
         }))
       )

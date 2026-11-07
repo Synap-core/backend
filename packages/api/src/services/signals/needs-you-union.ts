@@ -1524,7 +1524,6 @@ export function signalFromOwedSlot(
     ...(row.askCause ? { askCause: row.askCause } : {}),
     ...(row.unblocks ? { unblocks: row.unblocks } : {}),
     ...(row.subjectEntityId ? { subjectEntityId: row.subjectEntityId } : {}),
-    ...(row.blockedThing ? { blocks: row.blockedThing } : {}),
     ...(row.blockerKey ? { blockerKey: row.blockerKey } : {}),
     ...(row.clearedBy ? { clearedBy: row.clearedBy } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),

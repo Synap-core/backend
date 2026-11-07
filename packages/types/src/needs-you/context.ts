@@ -293,7 +293,7 @@ export function needsYouContextFromOwedSlot(
   }));
 
   return {
-    blocks: input.slot.blocks ?? null,
+    blocks: null,
     unblocks,
     meanwhile: meanwhile.value,
     lookedAt: refs.slice(0, LOOKED_AT_ROW_CAP),
