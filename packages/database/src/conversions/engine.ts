@@ -2666,6 +2666,7 @@ async function applyRenameTemplateRows(
   tx: Sql,
   op: RenameProfileOp & { fromTemplate: string }
 ): Promise<OpCounts> {
+  assertProfileSlugNotReserved(op.toSlug);
   const rows = await renameTemplateRows(tx, op);
   const ids = rows.filter((r) => !r.twin).map((r) => r.id);
   const kept = rows.length - ids.length;
@@ -2676,12 +2677,15 @@ async function applyRenameTemplateRows(
     UPDATE entities SET type = ${op.toSlug}, updated_at = now()
     WHERE profile_id = ANY(${ids}::uuid[]) AND type IS DISTINCT FROM ${op.toSlug}
   `;
-  const prof = await tx`
-    UPDATE profiles SET slug = ${op.toSlug},
-      display_name = coalesce(${op.displayName ?? null}::text, display_name),
-      updated_at = now()
-    WHERE id = ANY(${ids}::uuid[])
-  `;
+  const prof = op.displayName
+    ? await tx`
+        UPDATE profiles SET slug = ${op.toSlug}, display_name = ${op.displayName}, updated_at = now()
+        WHERE id = ANY(${ids}::uuid[])
+      `
+    : await tx`
+        UPDATE profiles SET slug = ${op.toSlug}, updated_at = now()
+        WHERE id = ANY(${ids}::uuid[])
+      `;
   if (prof.count) counts.profilesUpdated = prof.count;
   if (ents.count) counts.entitiesRetyped = ents.count;
   return counts;
