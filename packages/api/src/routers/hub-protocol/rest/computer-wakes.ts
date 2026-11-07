@@ -19,14 +19,24 @@
  * it decides nothing here. With the "Wakes agents" switch off the list is
  * empty and says so (`wakesAgents: false`): the switch is the person's.
  *
- * Not in the OpenAPI registry, like the device and box-run doors: a machine
+ * Checks a hub scope (`hub-protocol.read`, every computer key holds it) and,
+ * because the poll stamps the key (`apiKeys.workerServedAt`), refuses a
+ * stale device session like every Hub door that writes a key row. A scoped
+ * (grant) key is refused by the fence (`grant-door-fence.ts`): no grant makes
+ * a key a computer's waker. In the OpenAPI reference as a stub: a machine
  * protocol, not an agent-facing tool.
  */
 
 import { and, db, eq } from "@synap/database";
 import { users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
-import { logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  refuseStaleDeviceSession,
+  type HubHono,
+} from "./_shared.js";
+import { registerStub } from "./_codecs/_register.js";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import { readHandedToYou } from "../../../services/discover/start-here.js";
 import {
@@ -41,7 +51,26 @@ import {
 } from "../../../services/worker-served.js";
 
 export function registerComputerWakesRoutes(app: HubHono): void {
+  registerStub(app, {
+    method: "get",
+    path: "/computers/me/wakes",
+    tags: ["Computers"],
+    summary: "Which agents this computer's waker starts now",
+    description:
+      "A connected computer's own key only (the device-flow key). Each call is the waker's poll and stamps its lease. Answers the agents on this computer that can wake and have work handed to them; an empty list with `wakesAgents: false` while the person's \"Wakes agents\" switch is off.",
+  });
   app.get("/computers/me/wakes", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        {
+          code: "SCOPE_REQUIRED",
+          error: "Insufficient scope: hub-protocol.read required",
+        },
+        403
+      );
+    }
     const agentUserId = c.get("agentUserId") as string | undefined;
     const userId = c.get("userId") as string | undefined;
     const keyId = c.get("apiKeyId") as string | undefined;

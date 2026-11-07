@@ -68,12 +68,14 @@ function appAs(vars: {
   userId: string;
   agentUserId?: string;
   apiKeyId?: string;
+  scopes?: string[];
 }): HubHono {
   const app = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     c.set("userId", vars.userId);
     if (vars.agentUserId) c.set("agentUserId", vars.agentUserId);
     c.set("apiKeyId", vars.apiKeyId ?? KEY);
+    c.set("scopes", vars.scopes ?? ["hub-protocol.read"]);
     await next();
   });
   registerComputerWakesRoutes(app);
@@ -128,6 +130,22 @@ describe("GET /computers/me/wakes", () => {
       (await get(appAs({ userId: "someone-else", agentUserId: MACHINE })))
         .status
     ).toBe(403);
+    expect(h.rosterCalls).toHaveLength(0);
+  });
+
+  it("a key without hub-protocol.read is refused before it stamps a lease", async () => {
+    const res = await get(
+      appAs({ userId: PERSON, agentUserId: MACHINE, scopes: ["box.runner"] })
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe(
+      "SCOPE_REQUIRED"
+    );
+    const stamped = await q<{ n: number }>(
+      `select count(*)::int as n from api_keys where id = $1 and worker_served_at is not null`,
+      [KEY]
+    );
+    expect(stamped.rows[0]!.n).toBe(0);
     expect(h.rosterCalls).toHaveLength(0);
   });
 
