@@ -4,9 +4,10 @@
  * "Your passkeys": the ONE card that lists, adds and removes the signed-in
  * person's passkeys (W5, founder 6 Nov 2026: "handle (add/remove) passkeys
  * (seem to not be possible for now on the security setting when we talk
- * about the passkey)"). Shown on settings Security (`/settings/security`)
- * and on pod admin Security (`/security`), which before W5 had no passkey
- * card at all, only a link inside a confirm.
+ * about the passkey)"). Shown in "Ways to confirm it's you" (`WaysInSection`):
+ * the person's Security page (`/settings/security`) and the onboarding's
+ * secure-access step (`/start/access`). Pod security (`/security`) shows one
+ * line with a door here instead (founder, 7 Nov 2026).
  *
  *  - The list is Kratos' settings flow (`passkey_remove` nodes,
  *    `passkeys-model.ts`): when each was added, and Remove. Kratos has no
@@ -93,6 +94,7 @@ export function PasskeysCard({
   returnTo: string;
 }) {
   const t = useT(CATALOGS);
+  const utils = trpc.useUtils();
   const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   // A passkey change needs a grant from an existing factor (W3 slice 3).
@@ -177,8 +179,12 @@ export function PasskeysCard({
       // Kratos' own messages are its words for the field; shown as detail.
       if (errors.length)
         setError({ message: words.failed, detail: errors.join(" ") });
-      else if (r.flow.state === "success")
+      else if (r.flow.state === "success") {
         addToast({ title: words.done, color: "default" });
+        // The count of ways in beside this card (and the top bar's mark)
+        // reads `presence.factors`: a passkey added or removed changes it.
+        void utils.presence.factors.invalidate();
+      }
     } else if (r.kind === "redirect") window.location.assign(r.to);
     else if (r.kind === "session") void start();
     else setError({ message: words.failed });

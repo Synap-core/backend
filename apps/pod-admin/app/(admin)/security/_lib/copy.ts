@@ -29,7 +29,7 @@ const cardEn = {
   "presence.on.title": "Turn on approvals in person?",
   "presence.on.consequence":
     "You have fewer than two ways to confirm it’s you. The pod turns it on only with two, so losing one never locks you out.",
-  "presence.addSecond": "Add a 2FA app or recovery codes",
+  "presence.addSecond": "Add an authenticator app or recovery codes",
   "presence.twoWays.refused":
     "Not turned on: add a second way to confirm it’s you first.",
   "presence.on.confirm": "Turn on",
@@ -87,7 +87,7 @@ const cardFr: Catalog<typeof cardEn> = {
   "presence.on.consequence":
     "Vous avez moins de deux moyens de confirmer que c’est vous. Le pod ne l’active qu’avec deux, pour qu’en perdre un ne vous bloque jamais.",
   "presence.addSecond":
-    "Ajouter une app de double authentification ou des codes de récupération",
+    "Ajouter une app d’authentification ou des codes de récupération",
   "presence.twoWays.refused":
     "Pas activé : ajoutez d’abord un deuxième moyen de confirmer que c’est vous.",
   "presence.on.confirm": "Activer",

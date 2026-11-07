@@ -1301,7 +1301,7 @@ describe("proof of presence: the recovery ladder (6 Nov 2026)", () => {
     expect(await refusal(typed("totp", code))).toBe("accepted");
     const proved = h.events.find((e) => e.type === "presence.proved");
     expect(proved?.data).toMatchObject({ method: "totp" });
-    expect(String(proved?.data.actor)).toContain("2FA app");
+    expect(String(proved?.data.actor)).toContain("authenticator app");
     // The same code again: refused (its step was used).
     expect(await refusal(typed("totp", code))).toBe("PRESENCE_INVALID");
     // An earlier step's code: refused too.
@@ -1427,7 +1427,7 @@ describe("proof of presence: the recovery ladder (6 Nov 2026)", () => {
           issuer: "Synap",
         })
       )
-    ).toMatch(/already use a 2FA app/);
+    ).toMatch(/already use an authenticator app/);
   });
 
   it("GUARDRAIL: under enforce a removal never leaves fewer than two ways in; report lets it", async () => {

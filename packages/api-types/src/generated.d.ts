@@ -24548,12 +24548,8 @@ export interface StartFirstSessionResult {
 }
 declare const START_STEP_IDS: readonly [
 	"start:intent",
+	"start:access",
 	"start:defaults",
-	"start:views",
-	"start:path",
-	"start:setup",
-	"start:agent",
-	"start:first-work",
 	"start:done"
 ];
 export type StartStepId = (typeof START_STEP_IDS)[number];
@@ -45547,7 +45543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: string;
 					userId: string;
 				} | null;
-				next: "start:agent" | "start:defaults" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
+				next: "start:access" | "start:defaults" | "start:done" | "start:intent" | null;
 				starts: StartCard[] | undefined;
 				steps: StartStepState[];
 			};
@@ -48305,6 +48301,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				deviceKeys: number;
+				enforce: boolean;
 				passkeys: number;
 				recoveryCodes: number;
 				totp: boolean;
