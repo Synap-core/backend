@@ -58748,6 +58748,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					intent?: {
 						label: string;
+						primary?: string | undefined;
 						produces?: {
 							profile: string;
 						}[] | undefined;
@@ -59071,6 +59072,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					intent?: {
 						label: string;
+						primary?: string | undefined;
 						produces?: {
 							profile: string;
 						}[] | undefined;
