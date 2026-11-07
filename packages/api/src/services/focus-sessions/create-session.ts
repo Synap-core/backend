@@ -1244,52 +1244,51 @@ export async function createFocusSession(
     const adopted = !!session;
     if (!session) {
       // THE ONE row writer (`insert-focus-session.ts`).
-      session =
-        (await insertFocusSessionRow(tx as unknown as typeof db, {
-          id: sessionId,
-          userId,
-          goal,
-          // No title ⇒ the writer derives one (the same `derivedSessionTitle`).
-          title,
-          correlationId: correlationId ?? null,
-          workspaceId,
-          projectId,
-          trackId,
-          trackStage,
-          subjectEntityId,
-          templateId,
-          playbook,
-          expectedOutputs: birthSlots,
-          criteria: sessionCriteria,
-          // Binds the session to the calling client (write attribution); an
-          // explicit title is its author's (agent or person), which automation
-          // never renames.
-          metadata: {
-            ...(clientKey
-              ? { clientKey, ...conversationCwdPatch(clientKey) }
-              : {}),
-            // The agent that starts it (orient's `handedToYou` leaves it out).
-            ...startedByAgentPatch(agentUserId),
-            ...(params.governance ? { governance: params.governance } : {}),
-            ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
-            // @see the adopt branch above.
-            ...(paramResolution
-              ? { [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues }
-              : {}),
-          },
-          // Typed origin (migration 0240) — stamped from what this door already
-          // resolved, never re-sniffed from metadata. A session created here is
-          // a playbook run exactly when `templateId` resolved to a real
-          // playbook; automation-origin sessions never come through here, they
-          // come through `openRunSession`. Otherwise the discriminator is
-          // `agentUserId` — the SAME fact the governance membrane above already
-          // used to decide whether this write needs a proposal. An agent
-          // identity means an agent opened the session ("agent"); its absence
-          // means a person did ("human").
-          origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
-          channelId,
-          agentIds: directAgentIds,
-        })) ?? undefined;
+      session = await insertFocusSessionRow(tx as unknown as typeof db, {
+        id: sessionId,
+        userId,
+        goal,
+        // No title ⇒ the writer derives one (the same `derivedSessionTitle`).
+        title,
+        correlationId: correlationId ?? null,
+        workspaceId,
+        projectId,
+        trackId,
+        trackStage,
+        subjectEntityId,
+        templateId,
+        playbook,
+        expectedOutputs: birthSlots,
+        criteria: sessionCriteria,
+        // Binds the session to the calling client (write attribution); an
+        // explicit title is its author's (agent or person), which automation
+        // never renames.
+        metadata: {
+          ...(clientKey
+            ? { clientKey, ...conversationCwdPatch(clientKey) }
+            : {}),
+          // The agent that starts it (orient's `handedToYou` leaves it out).
+          ...startedByAgentPatch(agentUserId),
+          ...(params.governance ? { governance: params.governance } : {}),
+          ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
+          // @see the adopt branch above.
+          ...(paramResolution
+            ? { [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues }
+            : {}),
+        },
+        // Typed origin (migration 0240) — stamped from what this door already
+        // resolved, never re-sniffed from metadata. A session created here is
+        // a playbook run exactly when `templateId` resolved to a real
+        // playbook; automation-origin sessions never come through here, they
+        // come through `openRunSession`. Otherwise the discriminator is
+        // `agentUserId` — the SAME fact the governance membrane above already
+        // used to decide whether this write needs a proposal. An agent
+        // identity means an agent opened the session ("agent"); its absence
+        // means a person did ("human").
+        origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
+        channelId,
+        agentIds: directAgentIds,
+      });
     }
 
     // The playbook_runs ledger row (status "running") so the runs feed sees the

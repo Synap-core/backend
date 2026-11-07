@@ -221,7 +221,7 @@ export async function openRunSession(
       metadata,
     });
     // No conflict mode: a fresh id either lands or throws.
-    return session!;
+    return session;
   };
 
   // Best-effort by CONTRACT: this runs AFTER the session row is committed and

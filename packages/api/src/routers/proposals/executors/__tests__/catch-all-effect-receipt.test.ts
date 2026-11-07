@@ -731,7 +731,7 @@ describe("(6) focus_session/create — the reference effect receipt", () => {
     expect(src).toMatch(/ids:\s*insertedSessions\.map\(/);
     // The writer hands back the statement's own row (null on a conflict).
     expect(writerSrc).toMatch(
-      /const \[session\] =[\s\S]*?\.returning\(\)[\s\S]*?return session \?\? null;/
+      /const \[kept\] = await insert\.onConflictDoNothing\(\)\.returning\(\);\s*return kept \?\? null;/
     );
   });
 

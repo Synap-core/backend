@@ -135,6 +135,20 @@ export function sessionDefinitionColumns(
   };
 }
 
+/**
+ * Insert one session row. With no conflict mode the row is always returned (a
+ * conflict throws); with `onConflict: "nothing"` a taken id returns `null`.
+ */
+export async function insertFocusSessionRow(
+  database: typeof db,
+  row: NewFocusSessionRow,
+  options?: { onConflict?: undefined }
+): Promise<FocusSession>;
+export async function insertFocusSessionRow(
+  database: typeof db,
+  row: NewFocusSessionRow,
+  options: InsertFocusSessionOptions
+): Promise<FocusSession | null>;
 export async function insertFocusSessionRow(
   database: typeof db,
   row: NewFocusSessionRow,
@@ -168,9 +182,13 @@ export async function insertFocusSessionRow(
     // D8: a test-key request's session is a probe (no-op outside that scope).
     metadata: stampProbeMarker(metadata),
   });
-  const [session] =
-    options.onConflict === "nothing"
-      ? await insert.onConflictDoNothing().returning()
-      : await insert.returning();
-  return session ?? null;
+  if (options.onConflict === "nothing") {
+    const [kept] = await insert.onConflictDoNothing().returning();
+    return kept ?? null;
+  }
+  const [session] = await insert.returning();
+  // Unreachable for Postgres (an INSERT that does not throw returns its row);
+  // said rather than asserted, so a driver that ever drops it is loud.
+  if (!session) throw new Error("focus_sessions insert returned no row");
+  return session;
 }
