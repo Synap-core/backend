@@ -2588,7 +2588,11 @@ export async function applyRenameProfile(
   op: RenameProfileOp
 ): Promise<OpCounts> {
   assertProfileSlugNotReserved(op.toSlug);
-  if (op.fromTemplate !== undefined) return applyRenameTemplateRows(tx, op);
+  if (op.fromTemplate !== undefined)
+    return applyRenameTemplateRows(tx, {
+      ...op,
+      fromTemplate: op.fromTemplate,
+    });
   const clash = await tx<
     Array<{ scope: string | null; workspace_id: string | null }>
   >`
