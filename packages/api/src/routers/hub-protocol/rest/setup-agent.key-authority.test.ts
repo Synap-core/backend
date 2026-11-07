@@ -46,6 +46,14 @@ const attachGrantsOrRevoke = vi.fn();
 const revokeApiKeys = vi.fn();
 const usersFindMany = vi.fn();
 
+// The engine set is a data read (installed agent templates over the
+// built-in floor); this suite's stub db has no templates: the floor.
+vi.mock("../../../services/agent-templates/installed.js", async () => {
+  const { SURFACE_HARNESS_SLUGS } = await import("@synap-core/types/agents");
+  return {
+    loadEngineAgentTypes: async () => new Set<string>(SURFACE_HARNESS_SLUGS),
+  };
+});
 vi.mock("../../../utils/workspace-role.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isPodAdmin: vi.fn(async (userId: string) => h.podAdmins.has(userId)),

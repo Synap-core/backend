@@ -73,6 +73,14 @@ vi.mock("../../../services/key-grant.js", async (importOriginal) => ({
   liveGrantsOfKey,
   attachGrantsOrRevoke,
 }));
+// The engine set is a data read (installed agent templates over the
+// built-in floor); this suite's stub db has no templates: the floor.
+vi.mock("../../../services/agent-templates/installed.js", async () => {
+  const { SURFACE_HARNESS_SLUGS } = await import("@synap-core/types/agents");
+  return {
+    loadEngineAgentTypes: async () => new Set<string>(SURFACE_HARNESS_SLUGS),
+  };
+});
 vi.mock("@synap/database/api-key-revocation", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@synap/database/api-key-revocation")
