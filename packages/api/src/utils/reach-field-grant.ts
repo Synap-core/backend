@@ -115,6 +115,8 @@ export async function reachFieldGrantSpace(
   },
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<string | null> {
+  // NEGATIVE CONTROL: no exception (expected red).
+  if (grant || !grant) return null;
   if (!grant || target.storedWorkspaceId !== null) return null;
   if (!target.kind || !REACH_KINDS.includes(target.kind)) return null;
   const write: Omit<GrantWriteInput, "workspaceId"> = {

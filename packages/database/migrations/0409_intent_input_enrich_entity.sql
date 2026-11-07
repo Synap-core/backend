@@ -44,4 +44,4 @@ SET "input_schema" = '{
   "required": ["name"],
   "additionalProperties": false
 }'::jsonb
-WHERE "slug" = 'enrich_entity' AND "input_schema" IS NULL;
+WHERE false;
