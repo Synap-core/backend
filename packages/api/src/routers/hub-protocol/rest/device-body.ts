@@ -27,10 +27,7 @@ export const DeviceCreateBody = z.object({
   clientName: z.string().trim().min(1).max(80),
   hostname: z.string().trim().min(1).max(253),
   platform: z.string().trim().max(40).optional(),
-  agents: z
-    .array(AgentType)
-    .max(DEVICE_MAX_AGENTS)
-    .optional(),
+  agents: z.array(AgentType).max(DEVICE_MAX_AGENTS).optional(),
   // 0395 — every field optional, so today's CLI keeps working.
   seat: z
     .string()

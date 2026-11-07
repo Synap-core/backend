@@ -328,7 +328,11 @@ describe("59c75aab: an installed agent template's type is an engine, like codex"
     app().request("/setup/device", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ clientName: "synap-cli", hostname: "ct112", agents }),
+      body: JSON.stringify({
+        clientName: "synap-cli",
+        hostname: "ct112",
+        agents,
+      }),
     });
   const hermesAgents = () =>
     q<{ id: string }>(
