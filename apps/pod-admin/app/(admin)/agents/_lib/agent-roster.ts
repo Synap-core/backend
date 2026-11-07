@@ -381,11 +381,13 @@ export function agentWakeView(
   };
 }
 
-/** "Claude Code · Can't wake: No computer" — `null` when nothing is known. */
+/**
+ * "Claude Code · Can't wake: No computer" — `null` when nothing is known. An
+ * agent with no template names none (the pod's own agents need none); when
+ * that is why it can't wake, the reason says so.
+ */
 export function agentWakeLine(view: AgentWakeView): string | null {
   if (view.kind !== "known") return null;
-  const template = view.template ?? "No agent template";
-  return view.why
-    ? `${template} · ${view.state}: ${view.why}`
-    : `${template} · ${view.state}`;
+  const state = view.why ? `${view.state}: ${view.why}` : view.state;
+  return view.template ? `${view.template} · ${state}` : state;
 }

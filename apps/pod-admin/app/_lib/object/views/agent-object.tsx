@@ -230,7 +230,8 @@ function wakeFacts(wake: AgentWakeView): Fact[] {
       },
     ];
   return [
-    { label: "Template", value: wake.template ?? "No agent template" },
+    // The pod's own agents need no template: name one only when there is.
+    ...(wake.template ? [{ label: "Template", value: wake.template }] : []),
     {
       label: "Wake",
       value: wake.cantWake ? (

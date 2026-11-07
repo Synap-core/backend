@@ -341,9 +341,7 @@ describe("agentWakeView — the pod's wake read, in words, with the fix's door",
       row({}),
       read([{ agentUserId: "a1", template: null, wake: cant("no_template") }])
     );
-    expect(agentWakeLine(v)).toBe(
-      "No agent template · Can't wake: No agent template"
-    );
+    expect(agentWakeLine(v)).toBe("Can't wake: No agent template");
     expect(v.kind === "known" && v.fix).toMatch(/Marketplace/);
   });
 
@@ -366,6 +364,20 @@ describe("agentWakeView — the pod's wake read, in words, with the fix's door",
       command: null,
     });
     expect(agentWakeLine(v)).toBe("Claude Code · Awake");
+  });
+
+  it("a pod's own agent with no template reads its state only, never 'No agent template'", () => {
+    const v = agentWakeView(
+      row({}),
+      read([
+        {
+          agentUserId: "a1",
+          template: null,
+          wake: { state: "awake", how: "built_in", why: null },
+        },
+      ])
+    );
+    expect(agentWakeLine(v)).toBe("Awake");
   });
 
   it("a failed read is unavailable, never can't wake; loading or unlisted is unknown", () => {
