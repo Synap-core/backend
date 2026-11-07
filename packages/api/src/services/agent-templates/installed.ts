@@ -8,7 +8,10 @@
 import { db } from "@synap/database";
 import { agentTemplates } from "@synap/database/schema";
 import { readMarketSource } from "../capabilities/market-source.js";
-import type { AgentTemplateWake } from "@synap-core/types/agents";
+import {
+  SURFACE_HARNESS_SLUGS,
+  type AgentTemplateWake,
+} from "@synap-core/types/agents";
 
 export interface InstalledAgentTemplate {
   slug: string;
@@ -48,4 +51,25 @@ export async function loadInstalledAgentTemplates(): Promise<
     wake: r.wake ?? null,
     version: readMarketSource(r.metadata)?.packageVersion ?? null,
   }));
+}
+
+/**
+ * The agent types that are an AI PROGRAM ON A COMPUTER (an engine): what a
+ * computer's key may connect by itself, one agent per computer, like Claude
+ * Code (decision 59c75aab; founder, 2026-11-07: "a type an installed agent
+ * template names always takes the per-computer engine path"). It is the
+ * `harness` of every INSTALLED agent template, over the built-in harness
+ * registry's surface rows, which stay the floor for a pod whose catalog has
+ * not installed its templates yet. Any other type (a custom name) is asked
+ * for as the person (`asPerson`). A failed read throws: "not an engine" and
+ * "could not tell" are different answers.
+ */
+export async function loadEngineAgentTypes(): Promise<ReadonlySet<string>> {
+  const rows = await db
+    .select({ harness: agentTemplates.harness })
+    .from(agentTemplates);
+  return new Set<string>([
+    ...SURFACE_HARNESS_SLUGS,
+    ...rows.map((r) => r.harness),
+  ]);
 }

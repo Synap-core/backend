@@ -63,4 +63,14 @@ describe("the device request body", () => {
         .success
     ).toBe(false);
   });
+
+  it("an agent type is shaped here, not listed: a template's engine parses, a non-slug does not", () => {
+    const base = { clientName: "synap-cli", hostname: "ct112" };
+    expect(
+      DeviceCreateBody.safeParse({ ...base, agents: ["hermes"] }).success
+    ).toBe(true);
+    expect(
+      DeviceCreateBody.safeParse({ ...base, agents: ["Hermes Agent"] }).success
+    ).toBe(false);
+  });
 });

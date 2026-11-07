@@ -18,7 +18,12 @@
  *   - Q-D1: an AI's own key cannot register another AI (403, nothing minted);
  *   - Q-D2: a computer-less agent is adopted onto its person's ONLY
  *     computer, once; with two computers a fresh agent is made instead;
- *   - `/users/me` names the key's holder and its computer.
+ *   - `/users/me` names the key's holder and its computer;
+ *   - 59c75aab: an INSTALLED agent template's type (hermes) is an engine like
+ *     codex: a computer's key connects it with no `asPerson`, one agent per
+ *     computer, its grant clipped to the computer's even when `asPerson` was
+ *     asked; without the template it is refused, and the device door the
+ *     same.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
@@ -28,6 +33,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  connects: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -61,7 +67,10 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => ({
 }));
 vi.mock("../../../services/agent-connect.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  fileAgentConnectProposal: async () => ({ proposalId: "prop-1" }),
+  fileAgentConnectProposal: async (args: Record<string, unknown>) => {
+    h.connects.push(args);
+    return { proposalId: "prop-1" };
+  },
 }));
 
 import { is } from "drizzle-orm";
@@ -77,6 +86,7 @@ import {
 } from "../../../services/machine-connect.js";
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
+import { registerDeviceRoutes } from "./device.js";
 import { registerSetupRoutes } from "./setup.js";
 import { registerUsersRoutes } from "./users.js";
 
@@ -150,6 +160,7 @@ function app() {
   a.use("*", hubAuthMiddleware as never);
   registerSetupRoutes(a as never);
   registerUsersRoutes(a as never);
+  registerDeviceRoutes(a as never);
   return a;
 }
 
@@ -299,5 +310,121 @@ describe("GET /users/me names the key's holder (D1)", () => {
       kind: "machine",
       hostUserId: box.computer.id,
     });
+  });
+});
+
+describe("59c75aab: an installed agent template's type is an engine, like codex", () => {
+  const THREE = "human-hermes-computers";
+  const ask = (bearer: string, body: Record<string, unknown>) =>
+    app().request("/setup/agent", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const askDevice = (agents: string[]) =>
+    app().request("/setup/device", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        clientName: "synap-cli",
+        hostname: "ct112",
+        agents,
+      }),
+    });
+  const hermesAgents = () =>
+    q<{ id: string }>(
+      `select id from users where agent_type = 'hermes' and created_by_user_id = $1`,
+      [THREE]
+    );
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, email, user_type, email_verified, timezone, locale, is_personal_agent)
+       values ($1, $1 || '@x', 'human', true, 'UTC', 'en', false)`,
+      [THREE]
+    );
+  });
+
+  it("not installed: a computer's key is refused hermes (no asPerson), nothing made; the device door too", async () => {
+    const box = await connectComputer(THREE, "ct112-before");
+    const res = await ask(box.computer.apiKey, {
+      agentType: "hermes",
+      instanceId: "inst-ct112",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as {
+      code: string;
+      allowedSurfaceTypes: string[];
+    };
+    expect(body.code).toBe("SURFACE_AGENT_TYPE_REQUIRED");
+    expect(body.allowedSurfaceTypes).toContain("codex");
+    expect(body.allowedSurfaceTypes).not.toContain("hermes");
+    expect(await hermesAgents()).toEqual([]);
+
+    const device = await askDevice(["hermes"]);
+    expect(device.status).toBe(400);
+    expect(
+      ((await device.json()) as { error_description: string }).error_description
+    ).toMatch(/hermes is no AI program this pod knows/);
+  });
+
+  it("installed: each computer gets its OWN Hermes on the plain connect path, asPerson ignored, neither key touches the other", async () => {
+    await q(
+      `insert into agent_templates (slug, name, harness, aliases, worker, tried, practices, metadata)
+       values ('hermes', 'Hermes Agent', 'hermes', '[]'::jsonb, true, true, '{"skills":[]}'::jsonb, '{}'::jsonb)`
+    );
+    const mac = await connectComputer(THREE, "mac");
+    const ct112 = await connectComputer(THREE, "ct112");
+
+    h.connects.length = 0;
+    const onMac = await ask(mac.computer.apiKey, {
+      agentType: "hermes",
+      instanceId: "inst-mac",
+    });
+    expect(onMac.status).toBe(200);
+    const macAgent = ((await onMac.json()) as { agentUserId: string })
+      .agentUserId;
+
+    // What the CLI's custom path sends today (#98): asPerson. An engine type
+    // takes the per-computer path anyway.
+    const onServer = await ask(ct112.computer.apiKey, {
+      agentType: "hermes",
+      instanceId: "inst-ct112",
+      asPerson: true,
+    });
+    expect(onServer.status).toBe(200);
+    const serverAgent = ((await onServer.json()) as { agentUserId: string })
+      .agentUserId;
+
+    expect(serverAgent).not.toBe(macAgent);
+    expect((await userRow(macAgent))!.host_user_id).toBe(mac.computer.id);
+    expect((await userRow(serverAgent))!.host_user_id).toBe(ct112.computer.id);
+    // The plain connect approval, never the presence-gated one.
+    expect(h.connects.map((c) => c.asPerson)).toEqual([null, null]);
+    expect(await liveKeysOf(macAgent)).toHaveLength(1);
+    expect(await liveKeysOf(serverAgent)).toHaveLength(1);
+
+    // The device door connects it with the computer, like codex.
+    expect((await askDevice(["hermes", "codex"])).status).toBe(200);
+  });
+
+  it("a type no template names still needs asPerson from a computer's key", async () => {
+    const box = await connectComputer(THREE, "custom-box");
+    const plain = await ask(box.computer.apiKey, {
+      agentType: "researcher",
+      instanceId: "inst-r",
+    });
+    expect(plain.status).toBe(400);
+    h.connects.length = 0;
+    const asked = await ask(box.computer.apiKey, {
+      agentType: "researcher",
+      instanceId: "inst-r",
+      asPerson: true,
+    });
+    expect(asked.status).toBe(200);
+    expect(h.connects[0]?.asPerson).not.toBeNull();
   });
 });

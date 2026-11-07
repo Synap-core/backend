@@ -73,6 +73,14 @@ vi.mock("../../../services/key-grant.js", async (importOriginal) => ({
   liveGrantsOfKey,
   attachGrantsOrRevoke,
 }));
+// The engine set is a data read (installed agent templates over the
+// built-in floor); this suite's stub db has no templates: the floor.
+vi.mock("../../../services/agent-templates/installed.js", async () => {
+  const { SURFACE_HARNESS_SLUGS } = await import("@synap-core/types/agents");
+  return {
+    loadEngineAgentTypes: async () => new Set<string>(SURFACE_HARNESS_SLUGS),
+  };
+});
 vi.mock("@synap/database/api-key-revocation", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@synap/database/api-key-revocation")
@@ -311,7 +319,10 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
       instanceId: "inst-1",
       instanceLabel: "Antoine's MacBook",
     });
+    // A type no template names: the as-person request (an engine type
+    // never takes it, see below).
     const res = await connect({
+      agentType: "researcher",
       asPerson: true,
       instanceLabel: "Someone else's PC",
     });
@@ -320,6 +331,24 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
       expect.objectContaining({
         asPerson: { instanceLabel: "Antoine's MacBook" },
       })
+    );
+  });
+
+  it("59c75aab: an engine type asked as the person takes the per-computer path anyway", async () => {
+    callerKey(true);
+    validateApiKey.mockResolvedValue({
+      id: "caller-key",
+      userId: AGENT,
+      linkedUserId: HUMAN,
+      isActive: true,
+      scope: ["hub-protocol.read", "hub-protocol.write"],
+      instanceId: "inst-1",
+      instanceLabel: "Antoine's MacBook",
+    });
+    const res = await connect({ asPerson: true });
+    expect(res.status).toBe(200);
+    expect(fileAgentConnectProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ agentType: "claude-code", asPerson: null })
     );
   });
 
