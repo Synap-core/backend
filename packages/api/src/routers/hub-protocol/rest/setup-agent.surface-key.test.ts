@@ -319,7 +319,10 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
       instanceId: "inst-1",
       instanceLabel: "Antoine's MacBook",
     });
+    // A type no template names: the as-person request (an engine type
+    // never takes it, see below).
     const res = await connect({
+      agentType: "researcher",
       asPerson: true,
       instanceLabel: "Someone else's PC",
     });
@@ -328,6 +331,24 @@ describe("POST /setup/agent — the computer comes from the calling key (D1)", (
       expect.objectContaining({
         asPerson: { instanceLabel: "Antoine's MacBook" },
       })
+    );
+  });
+
+  it("59c75aab: an engine type asked as the person takes the per-computer path anyway", async () => {
+    callerKey(true);
+    validateApiKey.mockResolvedValue({
+      id: "caller-key",
+      userId: AGENT,
+      linkedUserId: HUMAN,
+      isActive: true,
+      scope: ["hub-protocol.read", "hub-protocol.write"],
+      instanceId: "inst-1",
+      instanceLabel: "Antoine's MacBook",
+    });
+    const res = await connect({ asPerson: true });
+    expect(res.status).toBe(200);
+    expect(fileAgentConnectProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ agentType: "claude-code", asPerson: null })
     );
   });
 
