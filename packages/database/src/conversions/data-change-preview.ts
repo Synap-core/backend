@@ -34,6 +34,7 @@ import type {
   RenamePropertyKeyOp,
 } from "./manifest.js";
 import type { OpCounts } from "./engine.js";
+import { renameTemplateRows } from "./engine.js";
 import { resolvePropertyLabel } from "../utils/property-presentation.js";
 import { readStoredEnumOptions } from "../utils/property-enum.js";
 
@@ -412,17 +413,24 @@ async function translateValuesPreview(
   };
 }
 
-/** renameProfile: every thing of the kind; the new name is the op's, else the slug's. */
+/** renameProfile: every thing of the kind (of one template's rows with `fromTemplate`); the new name is the op's, else the slug's. */
 async function renameKindPreview(
   sql: Sql,
   op: RenameProfileOp,
   affected: number,
   w: DataChangeWords
 ): Promise<DataChangePreview> {
+  // A `fromTemplate` rename samples only the rows it renames.
+  const ids = op.fromTemplate
+    ? (await renameTemplateRows(sql, { ...op, fromTemplate: op.fromTemplate }))
+        .filter((r) => !r.twin)
+        .map((r) => r.id)
+    : null;
   const titles = await sql<Array<{ title: string | null }>>`
     SELECT ${TITLE(sql)} AS title FROM entities e
     JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
     WHERE e.deleted_at IS NULL
+      AND (${ids === null} OR p.id = ANY(${ids ?? []}::uuid[]))
     ORDER BY 1 NULLS LAST LIMIT ${DATA_CHANGE_SAMPLE_CAP}
   `;
   const named = text(op.displayName);
