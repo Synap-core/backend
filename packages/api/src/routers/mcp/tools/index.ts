@@ -583,7 +583,7 @@ const SESSION_OUTCOMES_PROPERTY = {
       },
       ref: {
         description:
-          "WHERE it lives (evidence for a claimed deliverable): {kind, id} of something you can see, or {url}.",
+          'WHERE it lives (evidence for a claimed deliverable): {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} of something you can see, or {"url":"https://..."}.',
         oneOf: [
           {
             type: "object",

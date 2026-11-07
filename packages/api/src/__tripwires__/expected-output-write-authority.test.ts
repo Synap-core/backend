@@ -464,7 +464,10 @@ describe("tripwire: the MCP door advertises no server-stamped field", () => {
     for (const tool of list) {
       const schema = tool.inputSchema as
         { properties?: Record<string, unknown> } | undefined;
-      const outputs = schema?.properties?.expectedOutputs as
+      // `outcomes` is the declaration an agent is told to use; the deprecated
+      // `expectedOutputs` alias is advertised loose on the session doors.
+      const outputs = (schema?.properties?.outcomes ??
+        schema?.properties?.expectedOutputs) as
         { items?: { properties?: Record<string, unknown> } } | undefined;
       const props = outputs?.items?.properties;
       if (!props) continue;
