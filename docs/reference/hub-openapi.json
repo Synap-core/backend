@@ -42719,6 +42719,116 @@
         }
       }
     },
+    "/flow": {
+      "get": {
+        "tags": ["Lifecycle"],
+        "summary": "The flow of a kind or role: states, owning stages, things",
+        "description": "`flow.of` — one read to draw a kind's or role's work in a space: `states` in declared order, each with the flow stage(s) that own it (`owners`), its count and its `cards` (who works each one, its `next` step and the stage that owns it, `blocker` reserved); `unclassified` things; `flows` (the active playbooks working it: stages with the status each owns, gate, executor, workers, open runs and those on an older version); the space's `primaryOutput`; `withheld` names the parts a key's grant does not reach. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1 },
+            "required": true,
+            "name": "profileSlug",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 366 },
+            "required": false,
+            "name": "windowDays",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "maximum": 50
+            },
+            "required": false,
+            "name": "firstN",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["true", "false"] },
+            "required": false,
+            "name": "properties",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown kind / track",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kind declares no lifecycle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/lifecycle/throughput": {
       "get": {
         "tags": ["Lifecycle"],
