@@ -177,6 +177,8 @@ const _LEFT_ALONE_COUNTERS = [
   // for the target kind's template (dry run only).
   "entitiesKeptByRule",
   "entitiesKeptNoTarget",
+  // renameProfile (fromTemplate): a row whose new-slug twin already exists.
+  "profilesKeptTwin",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 type _CountersClassified =
@@ -264,7 +266,9 @@ export function describeConversionOp(
         .map((t) => `"${kind(t.role)}"`)
         .join(" or ")} instead.`;
     case "renameProfile":
-      return `Rename the kind "${kind(op.slug)}" to "${op.displayName ?? kind(op.toSlug)}".`;
+      return op.fromTemplate
+        ? `Rename the kind "${kind(op.slug)}" to "${op.displayName ?? kind(op.toSlug)}" in the spaces made from ${op.fromTemplate}.`
+        : `Rename the kind "${kind(op.slug)}" to "${op.displayName ?? kind(op.toSlug)}".`;
     case "projectLifecycleColumns":
       return "Fill in each thing's lifecycle status from the value it already holds.";
     case "foldBookingDealIntoLead":

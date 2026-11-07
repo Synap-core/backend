@@ -33,6 +33,8 @@ import {
 } from "@synap-core/types/presence";
 
 const SRC = join(__dirname, "..");
+/** The server app: the account-recovery doors (`apps/api/src/routers`). */
+const APP_API_SRC = join(__dirname, "../../../../apps/api/src");
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -232,7 +234,13 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
   });
 
   it("every request kind is gated by a door, and the skip hooks are held by their one door each", () => {
-    const all = FILES.map((f) => f.src).join("\n");
+    // The account-recovery doors (new recovery codes) live in the server app.
+    const appDoors = walk(APP_API_SRC);
+    expect(appDoors.length).toBeGreaterThan(20); // non-vacuity: the app was read
+    const all = [
+      ...FILES.map((f) => f.src),
+      ...appDoors.map((f) => readFileSync(f, "utf8")),
+    ].join("\n");
     for (const kind of Object.keys(PRESENCE_REQUEST_KINDS)) {
       expect(all, `no door gates "${kind}"`).toMatch(
         new RegExp(`kind: "${kind}"`)

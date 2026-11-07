@@ -375,9 +375,19 @@ function widenedTables(node: ts.Node): string[] {
             ts.isObjectLiteralExpression(setArg) &&
             setArg.properties.every((p) => {
               const key = nameOf(p);
+              // `{ usedAt }`: the spend stamp, from a variable (never null).
+              if (key === "usedAt" && ts.isShorthandPropertyAssignment(p)) {
+                return true;
+              }
               if (!key || !ts.isPropertyAssignment(p)) return false;
               if (key === "isActive") {
                 return p.initializer.kind === ts.SyntaxKind.FalseKeyword;
+              }
+              // A single-use credential SPENT (a recovery code used as a
+              // proof of presence): it ends the row's authority. Un-spending
+              // it (`usedAt: null`) gives it back, so that one widens.
+              if (key === "usedAt") {
+                return p.initializer.kind !== ts.SyntaxKind.NullKeyword;
               }
               return NARROWING_COLUMNS.has(key);
             }));
@@ -1362,6 +1372,13 @@ describe("credential doors refuse a Synap app's device session", () => {
           export async function revokeEverything(id) {
             await db.update(apiKeys).set({ isActive: false, revokedAt: new Date() });
           }
+          export async function spendCode(id, usedAt) {
+            await db.update(accountRecoveryCodes).set({ usedAt });
+            await db.update(accountRecoveryCodes).set({ usedAt: new Date() });
+          }
+          export async function unspendCode(id) {
+            await db.update(accountRecoveryCodes).set({ usedAt: null });
+          }
         `,
       },
       {
@@ -1369,6 +1386,8 @@ describe("credential doors refuse a Synap app's device session", () => {
         code: `
           export const sampleRouter = router({
             narrowOnly: protectedProcedure.mutation(() => revokeEverything("k")),
+            spend: protectedProcedure.mutation(() => spendCode("c")),
+            unspend: protectedProcedure.mutation(() => unspendCode("c")),
             mint: protectedProcedure.mutation(({ ctx }) =>
               apiKeyService.generateApiKey(ctx.userId, "x", [])),
             fine: credentialProcedure.mutation(({ ctx }) =>
@@ -1397,6 +1416,7 @@ describe("credential doors refuse a Synap app's device session", () => {
       "packages/api/src/routers/__sample__.ts mint",
       "packages/api/src/routers/__sample__.ts reveal",
       "packages/api/src/routers/__sample__.ts send",
+      "packages/api/src/routers/__sample__.ts unspend",
     ]);
   });
 

@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   readPasskeys: vi.fn(),
+  counts: vi.fn(),
   issue: vi.fn(),
 }));
 
@@ -25,6 +26,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 vi.mock("../services/presence/proof.js", () => ({
   readPasskeys: (userId: string) => h.readPasskeys(userId),
+  presenceFactorCounts: (userId: string) => h.counts(userId),
   issuePresenceChallenge: (args: unknown) => h.issue(args),
   verifyDeviceSignature: vi.fn(),
   passkeyRpId: () => "pod.example.test",
@@ -53,6 +55,13 @@ const KEY_REQUEST = { request: { kind: "key_request" as const, id: "kr-1" } };
 
 beforeEach(() => {
   h.readPasskeys.mockReset();
+  h.counts.mockReset();
+  h.counts.mockResolvedValue({
+    passkeys: 0,
+    deviceKeys: 0,
+    totp: false,
+    recoveryCodes: 0,
+  });
   h.issue.mockReset();
   h.issue.mockResolvedValue({
     challengeId: "22222222-2222-4222-8222-222222222222",
@@ -78,7 +87,41 @@ describe("presence.challenge — a failed passkey read is not 'no passkey'", () 
     const res = await caller().challenge(KEY_REQUEST);
     expect(res.subject).toBe("key_request:kr-1");
     expect(res.passkey).toBeNull();
+    expect(res.typed).toEqual({ totp: false, recoveryCode: false });
     expect(h.issue).toHaveBeenCalledTimes(1);
+  });
+
+  it("a person with a 2FA app and recovery codes may type either, in a browser session", async () => {
+    h.readPasskeys.mockResolvedValue([]);
+    h.counts.mockResolvedValue({
+      passkeys: 0,
+      deviceKeys: 0,
+      totp: true,
+      recoveryCodes: 3,
+    });
+    const res = await caller().challenge(KEY_REQUEST);
+    expect(res.typed).toEqual({ totp: true, recoveryCode: true });
+  });
+
+  it("GUARDRAIL: a Synap app's device session is never offered a typed code", async () => {
+    h.readPasskeys.mockResolvedValue([]);
+    h.counts.mockResolvedValue({
+      passkeys: 0,
+      deviceKeys: 1,
+      totp: true,
+      recoveryCodes: 3,
+    });
+    const device = presenceRouter.createCaller({
+      authenticated: true,
+      userId: PERSON,
+      sessionKind: "person_device",
+      session: {
+        identity: { id: PERSON },
+        device: { id: "dev-1", authTime: new Date() },
+      },
+    } as never);
+    const res = await device.challenge(KEY_REQUEST);
+    expect(res.typed).toEqual({ totp: false, recoveryCode: false });
   });
 });
 

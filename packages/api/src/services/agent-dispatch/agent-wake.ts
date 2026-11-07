@@ -64,6 +64,7 @@ export function resolveAgentTemplate(
     label: t.name,
     version: t.version,
     wakes: t.wakes,
+    wake: t.wake,
   });
   if (agent.templateSlug) {
     const linked = installed.find((t) => t.slug === agent.templateSlug);
@@ -80,6 +81,8 @@ export function resolveAgentTemplate(
     label: harness.label,
     version: null,
     wakes: WAKEABLE_HARNESSES.has(harness.slug as AgentHarnessSlug),
+    // Built in: the pod holds no wake block to serve (a runner falls back to its own catalog copy).
+    wake: null,
   };
 }
 

@@ -2837,6 +2837,16 @@ const PACKAGE_FIELD_LABELS: Readonly<Record<string, string>> = {
   query: "Query",
   executionMode: "Run mode",
   timeoutSeconds: "Time limit",
+  // An agent template's fields (`agent_templates`, catalog kind `agent`).
+  harness: "Agent type",
+  aliases: "Other agent types",
+  worker: "Takes handed work",
+  tried: "Tried on a computer",
+  detect: "How it is found on a computer",
+  wake: "How a computer starts it",
+  practices: "Skills its agents get",
+  toolProfile: "Tools its agents start with",
+  toolGroups: "Tool groups its agents start with",
 };
 
 export function resolvePackageFieldLabel(key: string): string {

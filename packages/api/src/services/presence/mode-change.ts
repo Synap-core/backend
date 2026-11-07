@@ -6,8 +6,11 @@
 import { createLogger } from "@synap-core/core";
 import { POD_ADMIN_SYSTEM_SLUG } from "@synap-core/types/console";
 import {
+  PRESENCE_ENFORCE_MIN_WAYS,
+  PRESENCE_NEEDS_TWO_WAYS,
   PRESENCE_REQUIRED,
   presenceRequestSubject,
+  presenceWaysIn,
   type PresenceProof,
 } from "@synap-core/types/presence";
 import { and, db, eq, inArray, isNull } from "@synap/database";
@@ -16,6 +19,7 @@ import { TRPCError } from "@trpc/server";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertPresenceForRequest, presenceRequiredMessage } from "./gate.js";
+import { presenceFactorCounts } from "./proof.js";
 import {
   readPresenceMode,
   recordModeChange,
@@ -82,10 +86,18 @@ export async function notifyAdminsPresenceOff(byUserId: string): Promise<void> {
   });
 }
 
+/** The refusal of turning `enforce` on with fewer than two ways in. */
+export const PRESENCE_ENFORCE_NEEDS_TWO_WAYS_MESSAGE =
+  "Add a second way to confirm it is you first (a 2FA app or recovery codes), so losing your passkey never locks you out.";
+
 /**
  * The one door that changes the mode (`presence.setMode`; the caller has
- * checked the pod admin and the signed-in person). ON (`enforce`) is free: it
- * only takes power away. OFF (`report`) needs a proof of presence for
+ * checked the pod admin and the signed-in person). ON (`enforce`) needs no
+ * proof (it only takes power away), but turning it on from `report` needs
+ * two ways in for the admin who does it (the recovery ladder, founder, 6 Nov
+ * 2026): one lost passkey must not lock them out. Choosing `enforce` while it
+ * is already in force (the default) changes nothing and is never refused.
+ * OFF (`report`) needs a proof of presence for
  * `presence_mode:report` in EVERY mode, is recorded (`presence.mode_changed`)
  * and announced to every pod admin. An operator env floor cannot be switched
  * off here.
@@ -96,6 +108,16 @@ export async function changePresenceMode(args: {
   proof?: PresenceProof | null;
 }): Promise<PresenceModeState> {
   const current = await readPresenceMode();
+  if (args.mode === "enforce" && current.mode === "report") {
+    const counts = await presenceFactorCounts(args.userId);
+    if (presenceWaysIn(counts) < PRESENCE_ENFORCE_MIN_WAYS) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: PRESENCE_ENFORCE_NEEDS_TWO_WAYS_MESSAGE,
+        cause: { reasonCode: PRESENCE_NEEDS_TWO_WAYS },
+      });
+    }
+  }
   if (args.mode === "report") {
     if (current.source === "env") {
       throw new TRPCError({

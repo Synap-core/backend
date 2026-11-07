@@ -546,6 +546,17 @@ export interface FoldRoleIntoStatusOp extends BaseOp {
  * rewritten: the template that declares the new slug is the fix for those.
  * Idempotent: after a run no row carries `slug`. Not destructive-tail; its
  * boot severity is fatal (identity), so mark it `deferAtBoot`.
+ *
+ * `fromTemplate` narrows the rename to the rows ONE template installed, for a
+ * slug two templates both declare with different meanings (research-base's
+ * `finding` beside the pod-wide problem-report `finding`). A row is that
+ * template's when its `workspace_id` names a space installed from it
+ * (`package_slug`, else the older `settings.packageSlug` stamp); a row with no
+ * space is never matched. Filtered, a matched row that already has a `toSlug`
+ * twin at its scope + workspace is LEFT (counted `profilesKeptTwin`) instead
+ * of refusing the run: a filtered rename runs at boot, before the template
+ * that declares `toSlug` reaches the pod, and a pod where the template got
+ * there first needs a `mergeInto` (a person's call), never a boot that aborts.
  */
 export interface RenameProfileOp extends BaseOp {
   op: "renameProfile";
@@ -553,6 +564,8 @@ export interface RenameProfileOp extends BaseOp {
   slug: string;
   toSlug: string;
   displayName?: string;
+  /** Rename only the rows of spaces installed from this template slug. */
+  fromTemplate?: string;
 }
 
 /**
@@ -2132,6 +2145,23 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       },
       skipWhenSet: ["publish-date", "post-series", "post-campaign"],
     },
+    // Plan b38e5e64 decision 5 (founder, 7 Nov 2026: "Convert first, then
+    // land"): Builder now ships the pod-wide problem-report kind `finding`, so
+    // research-base's own `finding` (a validated fact: claim, confidence,
+    // validated · provisional · retracted) becomes `research-finding`. Only the
+    // rows research-base installed move (`fromTemplate`); the problem findings
+    // keep their slug. NOT deferAtBoot, on purpose: the catalog commit that
+    // declares `research-finding` lands after this, and the boot reconcile
+    // would create an empty `research-finding` beside the old row if the
+    // rename waited for an operator. It is a noop on a pod with no research-base
+    // space, and rows keep their ids (property defs, views, links follow).
+    {
+      op: "renameProfile",
+      opKey: "research.finding-kind-to-research-finding",
+      slug: "finding",
+      toSlug: "research-finding",
+      fromTemplate: "research-base",
+    },
   ],
 };
 
@@ -2452,6 +2482,8 @@ export function validateManifest(manifest: ConversionManifest): void {
       case "renameProfile":
         requireSlug(op.opKey, op.slug);
         requireSlug(op.opKey, op.toSlug, "toSlug");
+        if (op.fromTemplate !== undefined)
+          requireSlug(op.opKey, op.fromTemplate, "fromTemplate");
         if (op.slug === op.toSlug) {
           throw new Error(
             `Conversion manifest: renameProfile '${op.opKey}' cannot rename '${op.slug}' to itself`

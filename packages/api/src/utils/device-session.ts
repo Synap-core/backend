@@ -70,6 +70,25 @@ export interface SessionKindCarrier {
 
 const deviceScope = new AsyncLocalStorage<DeviceSessionFacts>();
 
+/**
+ * A request a PERSON makes in their browser with a Kratos session (pod
+ * admin), opened by the tRPC base procedure for `sessionKind: "kratos"` and by
+ * the account-recovery door for a cookie session. A typed presence code (2FA
+ * app, recovery code) is accepted ONLY inside this scope: an allowlist, so a
+ * door that forgets to say "key caller" (Hub REST, an executor) can never
+ * take one (the recovery ladder, 6 Nov 2026).
+ */
+const browserPersonScope = new AsyncLocalStorage<true>();
+
+export function runAsBrowserPerson<T>(fn: () => T): T {
+  return browserPersonScope.run(true, fn);
+}
+
+/** Is this request a person's browser session (and not a Synap app's device)? */
+export function isBrowserPersonSession(): boolean {
+  return browserPersonScope.getStore() === true && !deviceScope.getStore();
+}
+
 /** Run `fn` as a request made with a Synap app's device token. */
 export function runAsDeviceSession<T>(
   device: DeviceSessionFacts,

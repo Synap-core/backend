@@ -307,6 +307,7 @@ export async function readAgentsForHandoff(
           slug: resolved.slug,
           label: resolved.label,
           version: resolved.version,
+          wake: resolved.wake,
         }
       : null;
     const paused = r.pausedAt != null;

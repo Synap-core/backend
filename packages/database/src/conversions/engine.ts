@@ -164,6 +164,8 @@ export interface OpCounts {
   lifecycleUncategorized?: number;
   /** renameProfile: entities whose `type` was rewritten to the new slug. */
   entitiesRetyped?: number;
+  /** renameProfile (`fromTemplate`): rows left because a `toSlug` twin already sits beside them. */
+  profilesKeptTwin?: number;
   /** renamePropertyKey: entities whose sourceKey was renamed/stripped. */
   entitiesKeyRenamed?: number;
   /** renamePropertyKey: of those, entities that carried BOTH keys — the losing value was discarded per onConflict. */
@@ -2586,6 +2588,11 @@ export async function applyRenameProfile(
   op: RenameProfileOp
 ): Promise<OpCounts> {
   assertProfileSlugNotReserved(op.toSlug);
+  if (op.fromTemplate !== undefined)
+    return applyRenameTemplateRows(tx, {
+      ...op,
+      fromTemplate: op.fromTemplate,
+    });
   const clash = await tx<
     Array<{ scope: string | null; workspace_id: string | null }>
   >`
@@ -2625,6 +2632,60 @@ export async function applyRenameProfile(
         WHERE id = ANY(${ids}::uuid[])
       `;
   const counts: OpCounts = {};
+  if (prof.count) counts.profilesUpdated = prof.count;
+  if (ents.count) counts.entitiesRetyped = ents.count;
+  return counts;
+}
+
+/**
+ * The profile rows a `fromTemplate` rename targets: rows of `op.slug` whose
+ * space was installed from that template (the promoted `package_slug`, else the
+ * older `settings.packageSlug` stamp — the same template identity the boot
+ * reconcile reads). `twin` = an active `toSlug` row at the same scope + space.
+ */
+export function renameTemplateRows(
+  sql: Sql,
+  op: RenameProfileOp & { fromTemplate: string }
+) {
+  return sql<Array<{ id: string; twin: boolean }>>`
+    SELECT p.id, EXISTS (
+      SELECT 1 FROM profiles k
+      WHERE k.slug = ${op.toSlug} AND k.is_active = true
+        AND k.scope IS NOT DISTINCT FROM p.scope
+        AND k.workspace_id IS NOT DISTINCT FROM p.workspace_id
+    ) AS twin
+    FROM profiles p
+    JOIN workspaces w ON w.id = p.workspace_id
+    WHERE p.slug = ${op.slug}
+      AND coalesce(w.package_slug, w.settings->>'packageSlug') = ${op.fromTemplate}
+  `;
+}
+
+/** renameProfile narrowed to one template's rows. See RenameProfileOp. */
+async function applyRenameTemplateRows(
+  tx: Sql,
+  op: RenameProfileOp & { fromTemplate: string }
+): Promise<OpCounts> {
+  assertProfileSlugNotReserved(op.toSlug);
+  const rows = await renameTemplateRows(tx, op);
+  const ids = rows.filter((r) => !r.twin).map((r) => r.id);
+  const kept = rows.length - ids.length;
+  const counts: OpCounts = {};
+  if (kept) counts.profilesKeptTwin = kept;
+  if (ids.length === 0) return counts;
+  const ents = await tx`
+    UPDATE entities SET type = ${op.toSlug}, updated_at = now()
+    WHERE profile_id = ANY(${ids}::uuid[]) AND type IS DISTINCT FROM ${op.toSlug}
+  `;
+  const prof = op.displayName
+    ? await tx`
+        UPDATE profiles SET slug = ${op.toSlug}, display_name = ${op.displayName}, updated_at = now()
+        WHERE id = ANY(${ids}::uuid[])
+      `
+    : await tx`
+        UPDATE profiles SET slug = ${op.toSlug}, updated_at = now()
+        WHERE id = ANY(${ids}::uuid[])
+      `;
   if (prof.count) counts.profilesUpdated = prof.count;
   if (ents.count) counts.entitiesRetyped = ents.count;
   return counts;

@@ -33,6 +33,15 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         workspaces: { findFirst: async () => ({ ownerId: "someone-else" }) },
       },
+      // The pod-wide rung's person read (`personOfOwner`): "someone-else" is
+      // a human, so the person behind the row is its owner, never the caller.
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ userType: "human", createdByUserId: null }],
+          }),
+        }),
+      }),
       update: () => ({
         set: () => ({
           where: (...a: unknown[]) => {

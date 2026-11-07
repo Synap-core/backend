@@ -1,15 +1,22 @@
 /**
- * A person's proof factors (W3 slice 3, founder decision 2, 4 Nov): the
- * passkeys Kratos holds and the device keys Relay enrolled.
+ * A person's proof factors (W3 slice 3, founder decision 2, 4 Nov; the
+ * recovery ladder, 6 Nov): the passkeys Kratos holds, the device keys Relay
+ * and the desktop app enrolled, their 2FA app (`totp.ts`) and their unused
+ * recovery codes.
  *
  * Adding one when the person already has one needs a proof from an EXISTING
  * one: a stolen session alone never adds a factor it controls. Every factor
  * added or removed tells the person on all their devices
- * (`security.factor_changed`, in-app and push). Losing them all goes through
- * account recovery.
+ * (`security.factor_changed`, in-app and push). Under `enforce`, a removal
+ * never leaves fewer than two ways in (`assertKeepsTwoWaysIn`). Losing them
+ * all goes through "I lost my passkey" (`recovery.ts`).
  */
 import { createLogger } from "@synap-core/core";
 import {
+  PRESENCE_ENFORCE_MIN_WAYS,
+  PRESENCE_NEEDS_TWO_WAYS,
+  presenceWaysIn,
+  type PresenceFactorCounts,
   enrollmentSubject,
   PRESENCE_EXPIRED,
   PRESENCE_INVALID,
@@ -20,6 +27,7 @@ import {
   presenceRequestSubject,
   type PresenceProof,
 } from "@synap-core/types/presence";
+import { TRPCError } from "@trpc/server";
 import {
   and,
   db,
@@ -40,13 +48,18 @@ import { readPresenceMode } from "./mode.js";
 import {
   hasProofFactor,
   PresenceError,
+  presenceFactorCounts,
   presencePodOrigin,
   verifyDeviceSignature,
 } from "./proof.js";
 
 const logger = createLogger({ module: "presence-factors" });
 
-export { hasProofFactor };
+/** The kinds of factor a `security.factor_changed` notice names. */
+export type PresenceFactorKind =
+  "passkey" | "device_key" | "totp" | "recovery_codes";
+
+export { hasProofFactor, presenceFactorCounts };
 
 /**
  * Enrol a device key (step 2 of `presence.devices.enroll`): the new key's
@@ -184,11 +197,11 @@ export async function enrollDeviceKey(args: {
  */
 export function factorChangedData(args: {
   change: "added" | "removed" | "changed";
-  factor: "passkey" | "device_key";
+  factor: PresenceFactorKind;
   label: string | null;
 }): {
   change: "added" | "removed" | "changed";
-  factor: "passkey" | "device_key";
+  factor: PresenceFactorKind;
   named: "yes" | "no";
   label: string | null;
 } {
@@ -209,7 +222,7 @@ export function factorChangedData(args: {
 export async function notifyFactorChanged(args: {
   userId: string;
   change: "added" | "removed" | "changed";
-  factor: "passkey" | "device_key";
+  factor: PresenceFactorKind;
   label: string | null;
   id: string;
 }): Promise<void> {
@@ -227,4 +240,31 @@ export async function notifyFactorChanged(args: {
       "a proof factor changed, but the person could not be notified"
     );
   }
+}
+
+/** The refusal of a removal that would leave fewer than two ways in under `enforce`. */
+export const PRESENCE_NEEDS_TWO_WAYS_MESSAGE =
+  "Approvals need you in person on this pod, so keep two ways to confirm it is you. Add another one first (a 2FA app or recovery codes), or, if you lost it, use “I lost my passkey”.";
+
+/**
+ * "Two ways in" (the recovery ladder, founder, 6 Nov 2026): under `enforce`,
+ * a removal that would leave the person fewer than
+ * `PRESENCE_ENFORCE_MIN_WAYS` ways to prove presence is refused. It guards
+ * the person against locking themselves out, not against a thief: a removal
+ * takes power away. In `report` nothing is refused. A failed read throws.
+ */
+export async function assertKeepsTwoWaysIn(args: {
+  userId: string;
+  /** What the person holds once the removal landed. */
+  after: (now: PresenceFactorCounts) => PresenceFactorCounts;
+}): Promise<void> {
+  const { mode } = await readPresenceMode();
+  if (mode !== "enforce") return;
+  const now = await presenceFactorCounts(args.userId);
+  if (presenceWaysIn(args.after(now)) >= PRESENCE_ENFORCE_MIN_WAYS) return;
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: PRESENCE_NEEDS_TWO_WAYS_MESSAGE,
+    cause: { reasonCode: PRESENCE_NEEDS_TWO_WAYS },
+  });
 }

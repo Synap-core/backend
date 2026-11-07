@@ -26,6 +26,8 @@ const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
 const FILE = "0404_agent_templates.sql";
 const M0404 = read(FILE);
+// The later columns of the same table (0407): the chain a pod runs.
+const M0407 = read("0407_agent_template_tool_surface.sql");
 const BASELINE = read("0000_baseline_schema.sql");
 
 const PRE_0404 = `CREATE TABLE users (id text PRIMARY KEY, agent_type text);`;
@@ -36,6 +38,7 @@ beforeAll(async () => {
   await pg.exec(PRE_0404);
   await pg.exec(M0404);
   await pg.exec(M0404);
+  await pg.exec(M0407);
 }, 60_000);
 afterAll(async () => {
   await pg.close();

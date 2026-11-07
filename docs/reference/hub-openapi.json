@@ -8020,7 +8020,8 @@
                               "capability",
                               "view",
                               "skill",
-                              "automation"
+                              "automation",
+                              "agent"
                             ]
                           },
                           "name": { "type": "string" },
@@ -8107,7 +8108,7 @@
                         "properties": {
                           "rowKind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "rowId": { "type": "string" },
                           "name": { "type": "string" },
@@ -8291,7 +8292,12 @@
                                 "properties": {
                                   "rowKind": {
                                     "type": "string",
-                                    "enum": ["view", "skill", "automation"]
+                                    "enum": [
+                                      "view",
+                                      "skill",
+                                      "automation",
+                                      "agent"
+                                    ]
                                   },
                                   "rowId": { "type": "string" },
                                   "field": { "type": "string" },
@@ -13588,6 +13594,31 @@
                           }
                         },
                         "required": ["kind", "challengeId", "credential"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["totp"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": { "type": "string", "pattern": "^\\d{6}$" }
+                        },
+                        "required": ["kind", "challengeId", "code"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["recovery_code"]
+                          },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          }
+                        },
+                        "required": ["kind", "challengeId", "code"]
                       }
                     ]
                   }
@@ -14409,6 +14440,31 @@
                           }
                         },
                         "required": ["kind", "challengeId", "credential"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "enum": ["totp"] },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": { "type": "string", "pattern": "^\\d{6}$" }
+                        },
+                        "required": ["kind", "challengeId", "code"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": ["recovery_code"]
+                          },
+                          "challengeId": { "type": "string", "format": "uuid" },
+                          "code": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          }
+                        },
+                        "required": ["kind", "challengeId", "code"]
                       }
                     ]
                   }
@@ -17738,7 +17794,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17755,7 +17811,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17772,7 +17828,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17789,7 +17845,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17845,7 +17901,7 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "enum": ["view", "skill", "automation"]
+                    "enum": ["view", "skill", "automation", "agent"]
                   },
                   "id": { "type": "string", "format": "uuid" }
                 },
@@ -17865,7 +17921,7 @@
                     "detached": { "type": "boolean" },
                     "kind": {
                       "type": "string",
-                      "enum": ["view", "skill", "automation"]
+                      "enum": ["view", "skill", "automation", "agent"]
                     },
                     "id": { "type": "string" },
                     "outcome": {

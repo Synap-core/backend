@@ -17,6 +17,7 @@ import { z } from "zod";
 import {
   applyPackageUpdateInputSchema,
   INSTALLED_PACKAGE_KINDS,
+  PACKAGE_UPDATE_ROW_KINDS,
   PACKAGE_FIELD_STATES,
   PACKAGE_UPDATE_COMPARED_BY,
   PACKAGE_UPDATE_NEEDS,
@@ -128,7 +129,7 @@ const PlanResponseSchema = z.object({
   latestVersion: z.string().nullable(),
   rows: z.array(
     z.object({
-      rowKind: z.enum(["view", "skill", "automation"]),
+      rowKind: z.enum(PACKAGE_UPDATE_ROW_KINDS),
       rowId: z.string(),
       name: z.string(),
       fields: z.array(FieldSchema),
@@ -162,7 +163,7 @@ const ApplyResponseSchema = z.union([
         source: z.enum(["person", "automatic"]),
         changes: z.array(
           z.object({
-            rowKind: z.enum(["view", "skill", "automation"]),
+            rowKind: z.enum(PACKAGE_UPDATE_ROW_KINDS),
             rowId: z.string(),
             field: z.string(),
             before: z.unknown(),

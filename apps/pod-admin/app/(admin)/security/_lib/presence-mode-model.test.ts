@@ -11,6 +11,7 @@ import {
   MISSING_CAP,
   presenceModeView,
   turningOnAsks,
+  warnsTwoWays,
   type PresenceModeRead,
 } from "./presence-mode-model";
 import { readPresenceMissingLens } from "../../audit/_lib/presence-missing-link";
@@ -138,21 +139,57 @@ describe("presenceModeView", () => {
   });
 });
 
-describe("turningOnAsks: ask first only when there is no factor to turn it off with", () => {
-  it("a passkey or a Relay key: it turns on at once", () => {
-    expect(
-      turningOnAsks({ isError: false, data: { passkeys: 1, deviceKeys: 0 } })
-    ).toBe(false);
-    expect(
-      turningOnAsks({ isError: false, data: { passkeys: 0, deviceKeys: 1 } })
-    ).toBe(false);
+describe("turningOnAsks: ask first unless the person already has two ways in", () => {
+  const f = (
+    passkeys: number,
+    deviceKeys: number,
+    totp = false,
+    recoveryCodes = 0
+  ) => ({
+    passkeys,
+    deviceKeys,
+    totp,
+    recoveryCodes,
+    waysIn:
+      (passkeys > 0 ? 1 : 0) +
+      deviceKeys +
+      (totp ? 1 : 0) +
+      (recoveryCodes > 0 ? 1 : 0),
   });
 
-  it("no factor, or factors unread: it asks first", () => {
-    expect(
-      turningOnAsks({ isError: false, data: { passkeys: 0, deviceKeys: 0 } })
-    ).toBe(true);
+  it("two ways in: it turns on at once", () => {
+    expect(turningOnAsks({ isError: false, data: f(1, 0, true) })).toBe(false);
+    expect(turningOnAsks({ isError: false, data: f(1, 1) })).toBe(false);
+    expect(turningOnAsks({ isError: false, data: f(0, 0, true, 10) })).toBe(
+      false
+    );
+  });
+
+  it("one way (every passkey counts as one), none, or unread: it asks first", () => {
+    expect(turningOnAsks({ isError: false, data: f(3, 0) })).toBe(true);
+    expect(turningOnAsks({ isError: false, data: f(0, 1) })).toBe(true);
+    expect(turningOnAsks({ isError: false, data: f(0, 0) })).toBe(true);
     expect(turningOnAsks({ isError: true, data: undefined })).toBe(true);
     expect(turningOnAsks({ isError: false, data: undefined })).toBe(true);
+  });
+});
+
+describe("warnsTwoWays: the card warns only on a READ count below two, while ON", () => {
+  const one = {
+    passkeys: 1,
+    deviceKeys: 0,
+    totp: false,
+    recoveryCodes: 0,
+    waysIn: 1,
+  };
+  const two = { ...one, totp: true, waysIn: 2 };
+  it("ON with one way: warns", () => {
+    expect(warnsTwoWays(true, { isError: false, data: one })).toBe(true);
+  });
+  it("ON with two, OFF, or unread: says nothing", () => {
+    expect(warnsTwoWays(true, { isError: false, data: two })).toBe(false);
+    expect(warnsTwoWays(false, { isError: false, data: one })).toBe(false);
+    expect(warnsTwoWays(true, { isError: true, data: undefined })).toBe(false);
+    expect(warnsTwoWays(true, { isError: false, data: undefined })).toBe(false);
   });
 });

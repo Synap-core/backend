@@ -1,6 +1,7 @@
 /**
- * The row reads/writes the `capability/capability.update` approve executor
- * (`routers/proposals/executors/package-update.ts`) needs, kept OUT of
+ * The row reads/writes the package-update approve executors
+ * (`capability/capability.update`, `agentTemplate/update`,
+ * `routers/proposals/executors/package-update.ts`) need, kept OUT of
  * `routers/**` (the access-layer lint forbids raw scoped-table access there,
  * and its allowlist may only shrink). The executor stays the decision; these
  * are its row touches — the same split as
@@ -17,7 +18,7 @@ import {
 } from "@synap/database";
 
 /** Has this proposal already been approved (a retried / double approval)? */
-export async function isCapabilityUpdateProposalApproved(
+export async function isPackageUpdateProposalApproved(
   proposalId: string
 ): Promise<boolean> {
   const [row] = await db
@@ -27,8 +28,8 @@ export async function isCapabilityUpdateProposalApproved(
   return row?.status === ProposalStatus.APPROVED;
 }
 
-/** Marks a still-PENDING capability-update proposal APPROVED by `userId`. */
-export async function markCapabilityUpdateProposalApproved(
+/** Marks a still-PENDING package-update proposal APPROVED by `userId`. */
+export async function markPackageUpdateProposalApproved(
   proposalId: string,
   userId: string
 ): Promise<void> {
