@@ -10,6 +10,9 @@
  * An allowlist, never a passthrough:
  *   - `{ action: "intent", slug, source }` → `onboarding.recordStartStep`
  *     `{ step: "intent", patch: { slug, source } }` (S1 Continue);
+ *   - `{ action: "access" }` → `onboarding.recordStartStep`
+ *     `{ step: "access", patch: {} }` (the secure-access step's Continue or
+ *     Skip for now: each way in was added through its own door);
  *   - `{ action: "defaults" }` → `onboarding.recordStartStep`
  *     `{ step: "defaults", patch: {} }` (the defaults step's Continue: each
  *     switch already wrote through its own setting's door);
@@ -49,6 +52,9 @@ export async function POST(req: Request) {
     }
     procedure = "onboarding.recordStartStep";
     input = { step: "intent", patch: { slug: body.slug, source: body.source } };
+  } else if (body?.action === "access") {
+    procedure = "onboarding.recordStartStep";
+    input = { step: "access", patch: {} };
   } else if (body?.action === "defaults") {
     procedure = "onboarding.recordStartStep";
     input = { step: "defaults", patch: {} };
@@ -57,7 +63,7 @@ export async function POST(req: Request) {
     input = { lens: POD_LENS };
   } else {
     return Response.json(
-      { error: "action must be intent, defaults or skip" },
+      { error: "action must be intent, access, defaults or skip" },
       { status: 400 }
     );
   }

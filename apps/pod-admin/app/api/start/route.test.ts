@@ -63,6 +63,17 @@ describe("POST /api/start", () => {
     ]);
   });
 
+  it("access → recordStartStep with an empty patch: no factor rides along", async () => {
+    const res = await post({ action: "access", passkeys: 2 });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([
+      {
+        path: "onboarding.recordStartStep",
+        input: { step: "access", patch: {} },
+      },
+    ]);
+  });
+
   it("skip → dismissJourney on the pod lens", async () => {
     expect((await post({ action: "skip" })).status).toBe(200);
     expect(calls).toEqual([

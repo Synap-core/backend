@@ -1,6 +1,7 @@
 /**
  * `presence.factors`: the caller's passkeys, device keys, 2FA app and
- * recovery codes, counted, and the ways in they make (`presenceWaysIn`), for
+ * recovery codes, counted, the ways in they make (`presenceWaysIn`), and
+ * whether the pod is in `enforce`, for
  * pod admin to say "No passkey yet" or "keep two ways in" before the person
  * relies on approvals in person. A failed read fails the call: it is never
  * read as "no factor".
@@ -12,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   readPasskeys: vi.fn(),
   counts: vi.fn(),
+  mode: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -34,6 +36,11 @@ vi.mock("../services/presence/proof.js", () => ({
   presencePodOrigin: () => "https://pod.example.test",
   PresenceError: class PresenceError extends Error {},
 }));
+vi.mock("../services/presence/mode.js", () => ({
+  readPresenceMode: () => h.mode(),
+  readPresenceSensitivity: vi.fn(),
+  missingSince: vi.fn(),
+}));
 vi.mock("../services/agent-connect.js", () => ({
   openAgentConnectProposal: vi.fn(async () => null),
 }));
@@ -54,6 +61,8 @@ const caller = () =>
 
 beforeEach(() => {
   h.counts.mockReset();
+  h.mode.mockReset();
+  h.mode.mockResolvedValue({ mode: "enforce", source: "default" });
 });
 
 describe("presence.factors", () => {
@@ -65,6 +74,7 @@ describe("presence.factors", () => {
       recoveryCodes: 0,
     });
     await expect(caller().factors()).resolves.toEqual({
+      enforce: true,
       passkeys: 2,
       deviceKeys: 1,
       totp: true,
@@ -88,6 +98,31 @@ describe("presence.factors", () => {
       deviceKeys: 0,
       waysIn: 0,
     });
+  });
+
+  it("says whether approvals need the person in person, for every member", async () => {
+    h.counts.mockResolvedValue({
+      passkeys: 1,
+      deviceKeys: 0,
+      totp: false,
+      recoveryCodes: 0,
+    });
+    h.mode.mockResolvedValue({ mode: "report", source: "setting" });
+    await expect(caller().factors()).resolves.toMatchObject({
+      enforce: false,
+      waysIn: 1,
+    });
+  });
+
+  it("a failed mode read fails the call, never 'report'", async () => {
+    h.counts.mockResolvedValue({
+      passkeys: 1,
+      deviceKeys: 0,
+      totp: false,
+      recoveryCodes: 0,
+    });
+    h.mode.mockRejectedValue(new Error("db down"));
+    await expect(caller().factors()).rejects.toThrow();
   });
 
   it("a failed read fails the call, never 'no factor'", async () => {

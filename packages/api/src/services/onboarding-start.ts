@@ -16,26 +16,21 @@
 import { z } from "zod";
 import {
   and,
-  apiKeys,
-  desc,
   drizzleSql,
-  eq,
   getDb,
-  inArray,
   isNull,
   podCpAuthHeaders,
-  proposals,
   readControlPlaneLink,
   workspaces,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { listWorkspaceTemplates } from "@synap-core/workspace-templates";
-import { resolveAgentConnection } from "@synap-core/types/agents";
+import { presenceWaysIn } from "@synap-core/types/presence";
 import type {
   StartFacts,
   StartValues,
 } from "@synap-core/types/onboarding/start";
-import { loadAgentPresence } from "./agent-presence.js";
+import { presenceFactorCounts } from "./presence/proof.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
 const logger = createLogger({ module: "onboarding-start" });
@@ -246,95 +241,18 @@ export async function gatherStartFacts(input: {
   values: StartValues | null;
   journeyStatus: string | null;
 }): Promise<StartFacts> {
-  const db = await getDb();
-  const { userId, values } = input;
-
-  const slug = values?.intent?.slug;
-  const startViewCount = slug
-    ? (listBundledStarts().find((s) => s.slug === slug)?.views.length ?? null)
-    : null;
-
-  let setupProposal: StartFacts["setupProposal"] = null;
-  const proposalId = values?.setup?.proposalId;
-  if (proposalId) {
-    const [row] = await db
-      .select({
-        status: proposals.status,
-        reviewedAt: proposals.reviewedAt,
-        data: proposals.data,
-      })
-      .from(proposals)
-      .where(eq(proposals.id, proposalId))
-      .limit(1);
-    if (row) {
-      const spaceId = (row.data as { materializedWorkspaceId?: unknown } | null)
-        ?.materializedWorkspaceId;
-      let activeSpaceCount = 0;
-      if (typeof spaceId === "string") {
-        const [ws] = await db
-          .select({ n: drizzleSql<number>`count(*)::int` })
-          .from(workspaces)
-          .where(
-            and(eq(workspaces.id, spaceId), isNull(workspaces.archivedAt))
-          );
-        activeSpaceCount = ws?.n ?? 0;
-      }
-      setupProposal = {
-        status: row.status,
-        activeSpaceCount,
-        approvedAt: row.reviewedAt?.toISOString() ?? null,
-      };
-    }
+  // The secure-access step is done once the owner holds two ways in. A
+  // failed count is null, never 0 and never "two": the step stays open and
+  // its page shows the failure.
+  let waysIn: number | null = null;
+  try {
+    waysIn = presenceWaysIn(await presenceFactorCounts(input.userId));
+  } catch (err) {
+    logger.warn({ err }, "could not count the owner's ways in");
   }
-
-  // The agents the viewer operates: an unrevoked hub key acting as them.
-  const keys = await db
-    .selectDistinct({ userId: apiKeys.userId })
-    .from(apiKeys)
-    .where(
-      and(
-        eq(apiKeys.keyType, "hub_inbound"),
-        eq(apiKeys.linkedUserId, userId),
-        isNull(apiKeys.revokedAt)
-      )
-    );
-  const agentIds = keys.map((k) => k.userId);
-  const presence = await loadAgentPresence(agentIds);
-  const roster = agentIds.map((id) => ({
-    id,
-    name: null,
-    lastSeenAt: presence.get(id)?.lastSeenAt ?? null,
-  }));
-  const connection = resolveAgentConnection(roster);
-  const agentConnection: StartFacts["agentConnection"] =
-    connection.kind === "seen"
-      ? "seen"
-      : [...presence.values()].some((p) => p.pendingKeys > 0)
-        ? "pending"
-        : "none";
-
-  let externalAgentApprovalReviewedAt: string | null = null;
-  if (agentIds.length > 0) {
-    const [latest] = await db
-      .select({ reviewedAt: proposals.reviewedAt })
-      .from(proposals)
-      .where(
-        and(
-          inArray(proposals.agentUserId, agentIds),
-          eq(proposals.status, "approved")
-        )
-      )
-      .orderBy(desc(proposals.reviewedAt))
-      .limit(1);
-    externalAgentApprovalReviewedAt = latest?.reviewedAt?.toISOString() ?? null;
-  }
-
   return {
-    values,
-    startViewCount,
-    setupProposal,
-    agentConnection,
-    externalAgentApprovalReviewedAt,
+    values: input.values,
+    waysIn,
     journeyStatus: input.journeyStatus,
   };
 }
