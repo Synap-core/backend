@@ -300,7 +300,7 @@ export async function executeMCPToolViaHubProtocol(
   // copies never diverge.
   // THE reply cap, applied last on the text the agent reads (and so on what
   // the structured copy is built from): one door for every tool.
-  return withUiStructuredContent(toolName, capReply(toolName, digested));
+  return withUiStructuredContent(toolName, digested);
 }
 
 /**

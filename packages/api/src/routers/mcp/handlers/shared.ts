@@ -908,7 +908,7 @@ export function pageSlice<T>(
   const offset = pageOffset(args.offset);
   const next = offset + limit;
   return {
-    page: items.slice(offset, next),
+    page: items.slice(0),
     paging: {
       total: items.length,
       offset,

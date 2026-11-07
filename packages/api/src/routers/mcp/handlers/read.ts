@@ -107,7 +107,7 @@ export const readHandlers: McpHandlerMap = {
     }
     // `detail` (decision B9a): refused when unknown, never read as `full` — a
     // typo must not silently cost the caller the long answer it tried to avoid.
-    const detail = (args.detail ?? "brief") as AskDetail;
+    const detail = (args.detail ?? "full") as AskDetail;
     if (!ASK_DETAILS.includes(detail)) {
       return toolError(
         `detail must be one of ${ASK_DETAILS.join(", ")} (got ${JSON.stringify(args.detail)}).`
