@@ -417,7 +417,8 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
             ...(q.firstN !== undefined ? { firstN: q.firstN } : {}),
             properties: q.properties === "true",
           }),
-          ctx
+          // The door authenticated the key: its context carries the user.
+          ctx as Parameters<typeof readFlowOf>[1]
         ),
       { confineWorkspace: true }
     )
