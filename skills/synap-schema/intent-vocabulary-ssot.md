@@ -18,12 +18,14 @@ TypeScript union:
 SELECT slug, effect, statement FROM capability_intents ORDER BY slug;
 ```
 
-| Column      | Meaning                                                   |
-| ----------- | --------------------------------------------------------- |
-| `slug`      | the seat. `^[a-z][a-z0-9_]{0,63}$` (a CHECK constraint)   |
-| `effect`    | CLOSED axis a rule may key on: `read` \| `write` \| `act` |
-| `statement` | the human sentence                                        |
-| `synonyms`  | for FINDING a row, never for identity                     |
+| Column         | Meaning                                                          |
+| -------------- | ---------------------------------------------------------------- |
+| `slug`         | the seat. `^[a-z][a-z0-9_]{0,63}$` (a CHECK constraint)          |
+| `effect`       | CLOSED axis a rule may key on: `read` \| `write` \| `act`        |
+| `statement`    | the human sentence                                               |
+| `synonyms`     | for FINDING a row, never for identity                            |
+| `input_schema` | the ONE input an app sends (0368); also the `create` op's input  |
+| `contract`     | NULL for a one-shot intent; else ops, output, constraints (0398) |
 
 This is why every code-side copy is a **mirror** and not the source. A slug that fits
 none of the existing rows leaves `intent` UNSET; the vocabulary is deliberately not
@@ -88,9 +90,10 @@ a package that consumes nothing would go stale in the one direction that is invi
    Post-seed rows today: `publish_post` (0284, write), `delegate_agent_task`
    (0314, act — every verb of an external-agent binding, `tools.config.agentBinding`:
    start / send / status / cancel), `read_webpage` (0329, read), `search_web`
-   (0360, read) and `edit_video` (0370, act — sends the person's video to an
+   (0360, read), `edit_video` (0370, act — sends the person's video to an
    outside service; its one input, `{ video }`, is seeded on `input_schema` in
-   the same file).
+   the same file), and from 0398 `expose_http`, `open_tunnel`, `dns_record`,
+   `host_service` (act) and `render_video` (write), each with a contract.
 3. **Add it to mirror 2** — the same two lists in the control plane's
    `capability-intent-vocabulary.ts`.
 4. **Update the arity floors** — `SEED_SLUG_ARITY` / `EXTRA_SLUG_ARITY` in
@@ -112,3 +115,38 @@ from the migration SQL, so it is a red build — never a divergence nobody notic
   extended — so extending it is part of step 1, not a follow-up.
 - **`@synap-core/types` is published.** Mirror 2 ships to npm; changing it without a
   version bump leaves consumers on the old vocabulary.
+
+### Intents with a lifecycle: the contract (0398)
+
+Most intents are one-shot: one input, one run. An intent whose result LIVES
+(a URL, a DNS record, a certificate) carries a **contract** on its row,
+`capability_intents.contract`:
+
+```json
+{
+  "version": 1,
+  "output": { "...": "the JSON Schema every op returns" },
+  "ops": {
+    "create": { "required": true },
+    "status": { "required": true, "input": {} },
+    "renew": { "required": false, "requiredWhen": "expiresAt", "input": {} },
+    "revoke": { "required": true, "input": {} }
+  },
+  "constraints": ["auth", "source", "hostname"]
+}
+```
+
+- **The ops are closed**: `create`, `status`, `renew`, `revoke`
+  (`INTENT_OPS` in `@synap-core/types/capability-intents`). `create`'s input is
+  the row's `input_schema`, never a second copy.
+- **A verb says which op it implements** with `skills.intent_op` (the catalog
+  skill's `intentOp`). NULL = the intent's single default op, so a verb written
+  before contracts keeps working.
+- **A provider qualifies** when its verbs cover every required op
+  (`missingIntentOps`) and it declares an `offers` entry for the intent. No
+  vendor name is checked anywhere.
+- `intentContractProblems(value)` checks a contract's frame; a contract
+  written by a migration is tested against it
+  (`packages/api/src/services/capabilities/intent-contracts.test.ts`).
+- A new contract, or a change to one, is a migration, like a new slug (F1:
+  "new intents by migration only" in Stages 1–2).
