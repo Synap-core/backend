@@ -6267,6 +6267,68 @@
         },
         "required": ["userId", "name", "code"]
       },
+      "ComputerWakes": {
+        "type": "object",
+        "properties": {
+          "computer": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": ["string", "null"] }
+            },
+            "required": ["id", "name"]
+          },
+          "wakesAgents": { "type": "boolean" },
+          "leaseMs": { "type": "integer" },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agentUserId": { "type": "string" },
+                "name": { "type": ["string", "null"] },
+                "agentType": { "type": ["string", "null"] },
+                "template": {},
+                "wake": {
+                  "type": "object",
+                  "properties": {
+                    "state": { "type": "string", "enum": ["can_wake"] }
+                  },
+                  "required": ["state"],
+                  "additionalProperties": {}
+                },
+                "sessions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "resume": { "type": "boolean", "enum": [true] }
+                    },
+                    "required": ["id"]
+                  }
+                }
+              },
+              "required": [
+                "agentUserId",
+                "name",
+                "agentType",
+                "wake",
+                "sessions"
+              ]
+            }
+          },
+          "unreadable": { "type": "array", "items": { "type": "string" } },
+          "why": { "type": "string" }
+        },
+        "required": [
+          "computer",
+          "wakesAgents",
+          "leaseMs",
+          "agents",
+          "unreadable"
+        ]
+      },
       "ResolveResponse": {
         "type": "object",
         "properties": {
@@ -46028,10 +46090,38 @@
         "description": "A connected computer's own key only (the device-flow key). Each call is the waker's poll and stamps its lease. Answers the agents on this computer that can wake and have work handed to them; an empty list with `wakesAgents: false` while the person's \"Wakes agents\" switch is off.",
         "security": [{ "bearerAuth": [] }],
         "responses": {
-          "200": { "description": "Success" },
-          "401": { "description": "Unauthorized" },
-          "403": { "description": "Forbidden — missing scope" },
-          "500": { "description": "Internal error" }
+          "200": {
+            "description": "The agents to start",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ComputerWakes" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not this computer's own key, or no hub-protocol.read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "503": {
+            "description": "The agents could not be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
         }
       }
     },
