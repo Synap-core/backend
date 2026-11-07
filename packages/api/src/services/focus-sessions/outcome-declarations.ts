@@ -75,6 +75,9 @@ export const outcomeDeclarationSchema = z
     unblocks: expectedOutputWireSchema.shape.unblocks,
     ref: expectedOutputWireSchema.shape.ref,
     ask: expectedOutputWireSchema.shape.ask,
+    blocks: expectedOutputWireSchema.shape.blocks,
+    blockerKey: expectedOutputWireSchema.shape.blockerKey,
+    clearedBy: expectedOutputWireSchema.shape.clearedBy,
   })
   .strict();
 
@@ -122,6 +125,9 @@ function slotOf(o: OutcomeDeclaration): ExpectedOutput {
     ...(o.unblocks ? { unblocks: o.unblocks } : {}),
     ...(o.ref ? { ref: o.ref } : {}),
     ...(o.ask ? { ask: o.ask } : {}),
+    ...(o.blocks ? { blocks: o.blocks } : {}),
+    ...(o.blockerKey ? { blockerKey: o.blockerKey } : {}),
+    ...(o.clearedBy ? { clearedBy: o.clearedBy } : {}),
   };
 }
 

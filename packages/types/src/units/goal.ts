@@ -32,6 +32,10 @@ import type {
   PullRequestState,
 } from "../events/pr-state.js";
 import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
+import type {
+  ThingBlockerBlocks,
+  ThingBlockerClearedBy,
+} from "./thing-blocker.js";
 import {
   WAIT_BALLS,
   WAIT_KIND_BALL,
@@ -839,6 +843,18 @@ export type WaitingOnSource = (
       kind: "owed_slot";
       /** The slot's blocked reason; absent = a question, a param, an ask. */
       blockedReason?: string | null;
+      /**
+       * Whose slot: absent or `human` = owed to a person (a need-you card);
+       * `agent` = an agent's runnable blocker, which counts only because it
+       * declared `blocks` (plan e7f753db §9). Its ball is the agent's.
+       */
+      owner?: "human" | "agent";
+      /** The thing and status it holds up, as declared (`SlotBlocks`). */
+      blocks?: ThingBlockerBlocks | null;
+      /** The blocker's domain name (`not_connected`), as declared. */
+      blockerKey?: string | null;
+      /** What clears it, as declared (`SlotClearedBy`). */
+      clearedBy?: ThingBlockerClearedBy | null;
     }
   | { kind: "pending_proposal" }
   | { kind: "blocked_by" }
@@ -880,6 +896,8 @@ export function waitingOnReasonOf(
     case "work_unit":
       return pullRequestWaitingOn(source);
     case "owed_slot": {
+      // An agent's runnable blocker: other work holds the thing, not a person.
+      if (source.owner === "agent") return "another_work";
       const r = source.blockedReason?.trim().toLowerCase();
       return r && Object.hasOwn(BLOCKED_REASON_WAITING_ON, r)
         ? BLOCKED_REASON_WAITING_ON[r as keyof typeof BLOCKED_REASON_WAITING_ON]
@@ -920,6 +938,7 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
         ? WAIT_KIND_FROM.hold[source.on]
         : WAIT_KIND_FROM.hold.unspecified;
     case "owed_slot": {
+      if (source.owner === "agent") return WAIT_KIND_FROM.source.agent_blocker;
       const r = source.blockedReason?.trim().toLowerCase();
       return r && r !== "none" && Object.hasOwn(WAIT_KIND_FROM.blockedReason, r)
         ? WAIT_KIND_FROM.blockedReason[

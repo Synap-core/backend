@@ -296,6 +296,45 @@ export const OUTPUT_RETIRED_REASONS = [
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 
 /**
+ * WHICH THING a slot holds up, and the status it holds it out of (plan
+ * e7f753db §9, "blockers, not steps"). Both halves are optional and default
+ * when read (`deriveThingBlocker`, `@synap-core/types/units`): `entityId` to
+ * the declaring session's subject, `to` to the thing's next main-path status.
+ * A slot blocks a thing; it never moves it — the thing stays in its column,
+ * marked blocked, and moves only through the governed status door.
+ */
+export interface SlotBlocks {
+  /** The thing held up. Absent ⇒ the session's subject. Floored at write. */
+  entityId?: string;
+  /** The status it cannot reach yet (a declared option key). Absent ⇒ next. */
+  to?: string;
+}
+
+/**
+ * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
+ * intent (`request_connection`), a playbook the pod runs, or a capability.
+ * The closed `blockedReason` list stays "what to build"; this says what to RUN.
+ */
+export type SlotClearedBy =
+  | { answer: true }
+  | { intent: string }
+  | { playbookId: string }
+  | { capability: string };
+
+/**
+ * A blocker cleared by AGENT work (an intent, a playbook, a capability) still
+ * holds the thing after the person answers: the answer hands the slot back to
+ * the agent, which now owes the run. Only a blocker the answer itself clears
+ * (`{answer: true}`, or none declared) ends with the hand-back
+ * (`stampUnblocked`, api `block-output.ts`). Pure.
+ */
+export function blockerOutlivesHandBack(
+  clearedBy: SlotClearedBy | null | undefined
+): boolean {
+  return !!clearedBy && !("answer" in clearedBy);
+}
+
+/**
  * The object kinds a declared output may POINT AT.
  *
  * MIRRORS `SESSION_ARTIFACT_KINDS` (api `services/focus-sessions/record-session-artifact.ts`,
@@ -692,6 +731,26 @@ export interface ExpectedOutput {
    * a missing relation type must never un-deliver a deliverable.
    */
   subjectEdge?: SlotSubjectEdge;
+  /**
+   * The THING this slot holds up and the status it holds it out of — see
+   * {@link SlotBlocks}. DECLARED by the agent, like `unblocks` (whose prose
+   * it makes exact), never stamped. A person-owned slot with it is a
+   * need-you card naming the thing; an agent-owned slot with it is a
+   * runnable blocker — and an agent-owned slot holds a thing up ONLY when it
+   * declares this (api `listBlockingSlots`).
+   *
+   * Cleared with the ownership fields on the hand-back unless an agent's run
+   * still clears it ({@link blockerOutlivesHandBack}).
+   */
+  blocks?: SlotBlocks;
+  /**
+   * The blocker's short DOMAIN name (`not_connected`), lowercase snake. The
+   * closed `blockedReason` stays "what to build"; this is what the recurrence
+   * scanner groups repeats by. DECLARED, like `blocks`.
+   */
+  blockerKey?: string;
+  /** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
+  clearedBy?: SlotClearedBy;
 }
 
 /** See {@link ExpectedOutput.subjectEdge}. */

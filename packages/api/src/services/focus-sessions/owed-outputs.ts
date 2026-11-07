@@ -54,6 +54,8 @@
 import {
   db,
   focusSessions,
+  links,
+  WORKER_TARGET_LINK_ROLE,
   and,
   or,
   eq,
@@ -72,7 +74,11 @@ import {
   type NeedsYouSlotClass,
 } from "@synap-core/types/needs-you/rule";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import { deliverableOwedBy } from "@synap-core/types/units";
+import {
+  deliverableOwedBy,
+  isDeliverableOutstanding,
+} from "@synap-core/types/units";
+import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import {
   askEndsWithSession,
@@ -86,8 +92,11 @@ import type {
   ExpectedOutput,
   OutputRef,
   SlotAsk,
+  SlotBlocks,
+  SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
+import type { NeedsYouBlocks } from "@synap-core/types/needs-you";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -293,6 +302,24 @@ export interface OwedSlot {
    * surface hands the whole row to the card adapter (`askCardSlotOf`).
    */
   paramName?: string;
+  /**
+   * The blocker as DECLARED (`ExpectedOutput.blocks` / `blockerKey` /
+   * `clearedBy`, plan e7f753db §9): which thing and status it holds up, its
+   * domain name, what clears it. Read by THE waiting-on collector; the
+   * need-you card reads {@link blockedThing}, the same blocker resolved.
+   */
+  blocks?: SlotBlocks;
+  blockerKey?: string;
+  clearedBy?: SlotClearedBy;
+  /**
+   * The thing this ask holds up, RESOLVED for a need-you card: the declared
+   * `blocks.entityId`, else the session's subject; its name, the status it
+   * stands on and the status it cannot reach yet (`blocks.to`, else its next
+   * main-path status). Resolved by the needs-you read only
+   * (`withBlockedThings`), under the READER's entity floor: a thing the
+   * reader may not read is not named. Absent when the ask names no thing.
+   */
+  blockedThing?: NeedsYouBlocks;
 }
 
 export interface ListOwedSlotsParams {
@@ -339,6 +366,12 @@ export interface ListOwedSlotsParams {
    * states once, in `readOpenWorkUnits`, under the caller's lens.
    */
   withoutOpenPrFact?: boolean;
+  /**
+   * The caller never shows a need-you card (the waiting-on collector): skip
+   * resolving the thing each ask holds up (`blockedThing`), which only the
+   * card reads. The needs-you lens resolves it by default.
+   */
+  withoutBlockedThings?: boolean;
   /**
    * CONTAINER lenses below the project: only this session's slots, or only
    * slots of sessions in this track. In SQL, like the workspace/project lens —
@@ -491,9 +524,27 @@ export function projectOwedSlots(
       ...(slot.keptOwedAt ? { keptOwedAt: slot.keptOwedAt } : {}),
       ...(slot.laterUntil ? { laterUntil: slot.laterUntil } : {}),
       ...(slot.paramName ? { paramName: slot.paramName } : {}),
+      ...blockerOf(slot),
     });
   }
   return owed;
+}
+
+/** The declared blocker trio, carried as stored (absent fields stay absent). */
+function blockerOf(
+  slot: ExpectedOutput
+): Pick<OwedSlot, "blocks" | "blockerKey" | "clearedBy"> {
+  return {
+    ...(isPlainObject(slot.blocks) ? { blocks: slot.blocks } : {}),
+    ...(typeof slot.blockerKey === "string" && slot.blockerKey
+      ? { blockerKey: slot.blockerKey }
+      : {}),
+    ...(isPlainObject(slot.clearedBy) ? { clearedBy: slot.clearedBy } : {}),
+  };
+}
+
+function isPlainObject<T>(v: T | null | undefined): v is T {
+  return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
 function unblocksOf(slot: ExpectedOutput): { unblocks?: string } {
@@ -636,14 +687,192 @@ export async function listOwedSlots(
       a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
     )
     .slice(0, limit);
+  // The thing each ask holds up, for the need-you card (plan e7f753db §9):
+  // one entity read for the page, under THIS reader's floor. Loaded lazily,
+  // like the names below, and only on the needs-you read.
+  const placed =
+    params.needsYouLens && !params.withoutBlockedThings
+      ? await (
+          await import("./blocked-things.js")
+        ).withBlockedThings(userId, slots)
+      : slots;
   // "What I looked at": names resolved through THIS reader's access floor.
   // Loaded lazily, and only when some slot carries provenance, so the access
   // registry stays out of this read's import graph on the common path (and out
   // of every suite that mocks `@synap/database` around it).
-  const named = await withAskerNames(slots);
+  const named = await withAskerNames(placed);
   if (!named.some((s) => s.ask?.lookedAt?.length)) return named;
   const { resolveLookedAtForReader } = await import("./looked-at.js");
   return resolveLookedAtForReader(userId, named);
+}
+
+/** One slot that holds up one or more of the asked things (plan e7f753db §9). */
+export interface BlockingSlot {
+  sessionId: string;
+  /** The DECLARED label — the slot door's key; the ref's label. */
+  label: string;
+  /** `human`: owed to the person (a need-you card); `agent`: a runnable blocker. */
+  owner: "human" | "agent";
+  blockedReason?: ExpectedOutput["blockedReason"];
+  blocks?: SlotBlocks;
+  blockerKey?: string;
+  clearedBy?: SlotClearedBy;
+  /** The ASKED things it holds up (its `blocks.entityId`, else what its session is on). */
+  thingIds: string[];
+}
+
+/**
+ * SQL superset of "this session holds an agent slot that declares the thing
+ * it blocks": any slot whose `blocks` is an object. A PREFILTER, like
+ * {@link owedSlotPrefilter}; {@link isAgentBlockingSlot} decides per slot.
+ */
+function agentBlockerPrefilter(): SQL {
+  return drizzleSql`${focusSessions.expectedOutputs} @> '[{"blocks": {}}]'::jsonb`;
+}
+
+/** SQL: some slot of the session names one of `ids` in `blocks.entityId`. */
+function slotBlocksAnyWhere(ids: readonly string[]): SQL {
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${focusSessions.expectedOutputs}) = 'array'
+           THEN ${focusSessions.expectedOutputs}
+           ELSE '[]'::jsonb END
+    ) AS slot
+    WHERE slot->'blocks'->>'entityId' IN (${drizzleSql.join(
+      ids.map((id) => drizzleSql`${id}`),
+      drizzleSql`, `
+    )})
+  )`;
+}
+
+/**
+ * An AGENT's slot holds a thing up only when it DECLARES what it blocks
+ * (`blocks`), is still outstanding (the one deliverable floor), and its
+ * session is open and accepted: an agent that stopped, or a draft nobody
+ * accepted, runs nothing, so its slot blocks nothing. Pure.
+ */
+export function isAgentBlockingSlot(
+  slot: ExpectedOutput,
+  session: { status: string; isDraft: boolean }
+): boolean {
+  return (
+    slot.owner !== "human" &&
+    isPlainObject(slot.blocks) &&
+    isDeliverableOutstanding(slot) &&
+    !session.isDraft &&
+    (OPEN_SESSION_STATUSES as readonly string[]).includes(session.status)
+  );
+}
+
+/**
+ * THE BATCHED BLOCKER READ (plan e7f753db §9): every slot that holds up one
+ * of `thingIds`, in ONE query for the whole set — a board's cards, statusOf's
+ * things, the watcher's chunk — each tagged with the asked things it blocks.
+ *
+ * A slot holds a thing up when it names it (`blocks.entityId`), or names none
+ * and its session is ON the thing (`sessionSubjectWhere`: its subject, or a
+ * worker session targeting it). Which slots:
+ *   · a person's owed slot, under THE needs-you lens (a draft's ask-less slot
+ *     waits on nobody) — the same population the waiting-on counted before;
+ *   · an agent's slot only when it declares `blocks` ({@link isAgentBlockingSlot}).
+ *
+ * Floored like the owed read: the sessions the reader may read
+ * (`sessionReadableWhere`, owner-only). Bounded by the ids, never paged: a
+ * thing's blockers are all its blockers. THROWS on a failed read.
+ */
+export async function listBlockingSlots(params: {
+  userId: string;
+  thingIds: readonly string[];
+}): Promise<BlockingSlot[]> {
+  const asked = [...new Set(params.thingIds.filter(Boolean))];
+  if (asked.length === 0) return [];
+  const askedSet = new Set(asked);
+  const idList = drizzleSql.join(
+    asked.map((id) => drizzleSql`${id}`),
+    drizzleSql`, `
+  );
+  const rows = await db
+    .select({
+      id: focusSessions.id,
+      status: focusSessions.status,
+      expectedOutputs: focusSessions.expectedOutputs,
+      isDraft: drizzleSql<boolean>`(${triagePendingWhere()})`,
+      // The asked things the session is ON (its subject, the things it
+      // targets as a worker) — what a slot naming no thing blocks.
+      onThings: drizzleSql<string[]>`ARRAY(
+        SELECT x FROM unnest(ARRAY[${idList}]::text[]) AS x
+        WHERE x = ${focusSessions.subjectEntityId}::text
+           OR EXISTS (
+             SELECT 1 FROM ${links} bl
+             WHERE bl.from_type = 'session'
+               AND bl.from_id = ${focusSessions.id}::text
+               AND bl.to_type = 'entity'
+               AND bl.link_type = 'targets'
+               AND bl.metadata->>'role' = ${WORKER_TARGET_LINK_ROLE}
+               AND bl.to_id = x))`,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        sessionReadableWhere({ userId: params.userId }),
+        or(
+          sessionSubjectWhere({ kind: "entities", entityIds: asked }),
+          slotBlocksAnyWhere(asked)
+        ),
+        or(
+          and(
+            owedSlotPrefilter(),
+            owedSlotWhere(),
+            or(
+              notTriagePendingWhere(),
+              and(triagePendingWhere(), draftAskPrefilter())
+            )
+          ),
+          and(
+            agentBlockerPrefilter(),
+            inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+            notTriagePendingWhere()
+          )
+        )
+      )
+    );
+
+  const out: BlockingSlot[] = [];
+  for (const row of rows) {
+    const outputs: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
+      ? (row.expectedOutputs as ExpectedOutput[])
+      : [];
+    const isDraft = row.isDraft === true;
+    const onThings = (Array.isArray(row.onThings) ? row.onThings : []).filter(
+      (id) => askedSet.has(id)
+    );
+    for (const slot of outputs) {
+      if (!isPlainObject(slot)) continue;
+      const human =
+        isOwedSlot(slot) && (!isDraft || effectiveSlotAsk(slot) != null);
+      const agent =
+        !human && isAgentBlockingSlot(slot, { status: row.status, isDraft });
+      if (!human && !agent) continue;
+      const named = isPlainObject(slot.blocks) ? slot.blocks.entityId : undefined;
+      const thingIds = named
+        ? askedSet.has(named)
+          ? [named]
+          : []
+        : onThings;
+      if (thingIds.length === 0) continue;
+      out.push({
+        sessionId: row.id,
+        label: slot.label,
+        owner: human ? "human" : "agent",
+        ...(slot.blockedReason !== undefined
+          ? { blockedReason: slot.blockedReason }
+          : {}),
+        ...blockerOf(slot),
+        thingIds,
+      });
+    }
+  }
+  return out;
 }
 
 /**

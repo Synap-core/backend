@@ -168,6 +168,30 @@ export function stepsFromTrackStages(
   });
 }
 
+/**
+ * THE NEXT MAIN-PATH STEP of a thing standing on `currentKey` — what a move
+ * forward targets. ONE derivation, read by a thing's next move
+ * (`deriveThingNextMove`, api) and by what its blocker unlocks
+ * (`deriveThingBlocker`, `../units/thing-blocker.ts`), so the two can never
+ * name two different "next" statuses.
+ *
+ * `found: false` when the thing does not stand on a main-path step its
+ * lifecycle declares (an undeclared status, or an off-path one: paused,
+ * lost); `next: null` when its path has no step left.
+ */
+export function nextMainPathStep(
+  decl: { readonly options: readonly LifecycleOption[] } | null | undefined,
+  currentKey: string | null | undefined
+): { found: false } | { found: true; next: StepMark | null } {
+  const steps = stepsFromLifecycle(decl, currentKey);
+  const at = steps.findIndex((s) => s.position === "current");
+  if (at < 0) return { found: false };
+  return {
+    found: true,
+    next: steps.slice(at + 1).find((s) => s.position === "ahead") ?? null,
+  };
+}
+
 /** The step the thing stands on (`current` or `off`), or null. */
 export function currentStep(steps: readonly StepMark[]): StepMark | null {
   return (
