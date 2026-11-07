@@ -4,21 +4,31 @@
  * wire contract is tested without the database. Every 0395 field is optional:
  * today's CLI sends none and still pairs; zod strips unknown keys, so an older
  * pod ignores them.
+ *
+ * An agent type here is only SHAPED (a kebab slug): whether it is an engine
+ * this pod knows (an installed agent template's harness, or the built-in
+ * floor) is a data read the route makes (`loadEngineAgentTypes`), so a
+ * template the catalog installs is connectable without a code change.
  */
 import { z } from "zod";
 import {
-  SURFACE_HARNESS_SLUGS,
+  AGENT_TEMPLATE_SLUG,
   isAgentRoleSlug,
   isValidSeat,
 } from "@synap-core/types/agents";
 import { DEVICE_MAX_AGENTS } from "@synap-core/types/device";
+
+/** A shaped agent type; the route checks it is an engine this pod knows. */
+const AgentType = z
+  .string()
+  .regex(AGENT_TEMPLATE_SLUG, "an agent type: a-z, 0-9 and dashes");
 
 export const DeviceCreateBody = z.object({
   clientName: z.string().trim().min(1).max(80),
   hostname: z.string().trim().min(1).max(253),
   platform: z.string().trim().max(40).optional(),
   agents: z
-    .array(z.enum(SURFACE_HARNESS_SLUGS))
+    .array(AgentType)
     .max(DEVICE_MAX_AGENTS)
     .optional(),
   // 0395 — every field optional, so today's CLI keeps working.
@@ -34,7 +44,7 @@ export const DeviceCreateBody = z.object({
   rows: z
     .array(
       z.object({
-        agentType: z.enum(SURFACE_HARNESS_SLUGS),
+        agentType: AgentType,
         role: z
           .string()
           .refine(isAgentRoleSlug, "a job slug: a-z, 0-9 and dashes")
