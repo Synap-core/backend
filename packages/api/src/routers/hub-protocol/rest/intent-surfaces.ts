@@ -9,6 +9,8 @@
  *   GET /lifecycle/throughput  → `lifecycle.throughput` (the goal line)
  *   GET /lifecycle/home        → `lifecycle.home`       (what each space makes)
  *   GET /lifecycle/moving      → `lifecycle.moving`     (things being worked)
+ *   GET /flow                  → `flow.of`              (states, owning stages,
+ *                                things by state, flows — `readFlowOf`)
  *   GET /attention/needs-you   → `signals.list({ lens: "needs-you" })`
  *   GET /attention/lens-page   → `signals.list({ lens: "page" })` (a lens page, whole)
  *   GET /attention/count       → `signals.count`
@@ -37,10 +39,11 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import type { Context as HonoContext } from "hono";
-import { TRPCError } from "@trpc/server";
-import { getRequestGrant } from "@synap/database";
-import { isFencedGrant } from "../../../access/grant-door-fence.js";
-import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+import { readProfileUnderGrant } from "../../../services/lifecycle/fenced-profile-read.js";
+import {
+  flowOfInput,
+  readFlowOf,
+} from "../../../services/lifecycle/flow-read.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { lifecycleRouter } from "../../lifecycle.js";
 import { signalsRouter } from "../../signals.js";
@@ -68,6 +71,14 @@ const boardQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   /** `true` projects `workedBy` on every item. */
   workedBy: z.enum(["true", "false"]).optional(),
+});
+
+const flowQuery = z.object({
+  ...lensQuery,
+  windowDays: z.coerce.number().int().min(1).max(366).optional(),
+  firstN: z.coerce.number().int().min(0).max(50).optional(),
+  /** `true` carries each card's properties. */
+  properties: z.enum(["true", "false"]).optional(),
 });
 
 const throughputQuery = z.object({
@@ -231,6 +242,19 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
   });
   registerOpenApi(app, {
     method: "get",
+    path: "/flow",
+    tags: ["Lifecycle"],
+    summary: "The flow of a kind or role: states, owning stages, things",
+    description:
+      "`flow.of` — one read to draw a kind's or role's work in a space: `states` in declared order, each with the flow stage(s) that own it (`owners`), its count and its `cards` (who works each one, its `next` step and the stage that owns it, `blocker` reserved); `unclassified` things; `flows` (the active playbooks working it: stages with the status each owns, gate, executor, workers, open runs and those on an older version); the space's `primaryOutput`; `withheld` names the parts a key's grant does not reach. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+    request: { query: flowQuery },
+    responses: {
+      200: { description: "Flow", schema: z.object({}).passthrough() },
+      ...errors,
+    },
+  });
+  registerOpenApi(app, {
+    method: "get",
     path: "/lifecycle/throughput",
     tags: ["Lifecycle"],
     summary: "Things into done / lost per bucket",
@@ -347,49 +371,18 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     readDoor(
       "lifecycle.get",
       declaredQuery,
-      async (ctx, q) => {
-        // A fenced key reads a kind's stages only where its grant reads that
-        // kind (`entity.<kind>.read`) or that role (`facet.read`): the
-        // permission it needs for the rows themselves.
-        const fenced = isFencedGrant(getRequestGrant());
-        const { workspaceId } = q;
-        if (fenced && !workspaceId)
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "A key bounded by a grant must name `workspaceId`.",
-          });
-        const denial = (subjectType: "entity" | "facet") =>
-          grantWriteDenial({
-            subjectType,
-            action: "read",
-            workspaceId,
-            data: { profileSlug: q.profileSlug },
-          });
-        let stages;
-        try {
-          stages = await lifecycleRouter.createCaller(ctx).get({
-            profileSlug: q.profileSlug,
-            ...(workspaceId ? { workspaceId } : {}),
-          });
-        } catch (err) {
-          // A failed read (unknown slug, no lifecycle) tells a fenced key
-          // nothing about a kind it may not read: it gets the 403.
-          if (fenced) {
-            const denied = await denial("entity");
-            if (denied && (await denial("facet")))
-              throw new TRPCError({ code: "FORBIDDEN", message: denied });
-          }
-          throw err;
-        }
-        if (fenced) {
-          const denied = await denial(
-            stages.profileKind === "role" ? "facet" : "entity"
-          );
-          if (denied)
-            throw new TRPCError({ code: "FORBIDDEN", message: denied });
-        }
-        return stages;
-      },
+      // A fenced key reads a kind's stages only where its grant reads that
+      // kind or role (`readProfileUnderGrant`, shared with `GET /flow`).
+      (ctx, q) =>
+        readProfileUnderGrant(
+          q,
+          () =>
+            lifecycleRouter.createCaller(ctx).get({
+              profileSlug: q.profileSlug,
+              ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),
+            }),
+          (stages) => stages.profileKind
+        ),
       { confineWorkspace: true }
     )
   );
@@ -408,6 +401,24 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
           ...(q.limit ? { limit: q.limit } : {}),
           workedBy: q.workedBy === "true",
         }),
+      { confineWorkspace: true }
+    )
+  );
+  app.get(
+    "/flow",
+    readDoor(
+      "flow.of",
+      flowQuery,
+      (ctx, q) =>
+        readFlowOf(
+          flowOfInput.parse({
+            ...lensOf(q),
+            ...(q.windowDays ? { window: { days: q.windowDays } } : {}),
+            ...(q.firstN !== undefined ? { firstN: q.firstN } : {}),
+            properties: q.properties === "true",
+          }),
+          ctx
+        ),
       { confineWorkspace: true }
     )
   );
