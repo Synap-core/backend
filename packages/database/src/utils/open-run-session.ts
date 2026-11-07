@@ -3,7 +3,7 @@ import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { recordSessionSpawn } from "./session-spawn.js";
 import { resolveSessionProjectPlacement } from "./resolve-session-project.js";
-import { insertFocusSessionRow } from "./insert-focus-session.js";
+import { stampProbeMarker } from "./request-write-context.js";
 import { isUniqueViolation } from "./pg-errors.js";
 import { startedByAgentPatch } from "./session-started-by.js";
 
@@ -14,9 +14,9 @@ export interface OpenRunSessionInput {
   goal: string;
   /**
    * The session's display NAME (`focus_sessions.title`), built by the caller
-   * with `buildDerivedSessionTitle`; absent, the row writer derives one from
-   * the goal. Written only on CREATE — a reused channel session keeps its own
-   * name. `goal` is unaffected.
+   * with `buildDerivedSessionTitle` (`@synap-core/types/focus-sessions`, which
+   * this package does not depend on). Written only on CREATE — a reused
+   * channel session keeps its own name. `goal` is unaffected.
    */
   title?: string | null;
   /**
@@ -181,8 +181,9 @@ export async function openRunSession(
     subjectEntityId: input.subjectEntityId ?? null,
   });
 
-  // The probe marker (D8) is the row writer's: stamped on every birth.
-  const metadata: Record<string, unknown> = {
+  // D8: a test-key request's session is a probe (no-op outside that scope —
+  // an automation run in jobs has no request context).
+  const metadata: Record<string, unknown> = stampProbeMarker({
     source: input.source,
     ...(input.automationId ? { automationId: input.automationId } : {}),
     ...(input.automationRunId
@@ -192,37 +193,36 @@ export async function openRunSession(
     ...(input.title ? { titleSource: input.titleSource ?? "derived" } : {}),
     // The agent authoring the run started it (orient's `handedToYou` leaves it out).
     ...startedByAgentPatch(input.agentUserId),
-  };
+  });
 
-  // THE ONE row writer (`insert-focus-session.ts`): a run session is born by
-  // the same rules as every other session.
-  const insert = async (channelId: string | null) => {
-    const session = await insertFocusSessionRow(database, {
-      userId: input.userId,
-      title: input.title ?? null,
-      goal: input.goal,
-      workspaceId: input.workspaceId ?? null,
-      channelId,
-      projectId: placement.projectId,
-      // A goal only with ITS project: a placement that did not keep the
-      // caller's project never carries a goal of another one.
-      trackId:
-        input.trackId &&
-        input.projectId &&
-        placement.projectId === input.projectId
-          ? input.trackId
-          : null,
-      subjectEntityId: input.subjectEntityId ?? null,
-      // The template that spawned this session — the automation itself.
-      templateId: input.automationId ?? null,
-      origin,
-      agentIds: input.agentUserId ? [input.agentUserId] : [],
-      expectedOutputs: input.expectedOutputs ?? [],
-      metadata,
-    });
-    // No conflict mode: a fresh id either lands or throws.
-    return session!;
-  };
+  const insert = (channelId: string | null) =>
+    database
+      .insert(focusSessions)
+      .values({
+        userId: input.userId,
+        ...(input.title ? { title: input.title } : {}),
+        goal: input.goal,
+        status: "active",
+        workspaceId: input.workspaceId ?? null,
+        channelId,
+        projectId: placement.projectId,
+        // A goal only with ITS project: a placement that did not keep the
+        // caller's project never carries a goal of another one.
+        trackId:
+          input.trackId &&
+          input.projectId &&
+          placement.projectId === input.projectId
+            ? input.trackId
+            : null,
+        subjectEntityId: input.subjectEntityId ?? null,
+        // The template that spawned this session — the automation itself.
+        templateId: input.automationId ?? null,
+        origin,
+        agentIds: input.agentUserId ? [input.agentUserId] : [],
+        expectedOutputs: (input.expectedOutputs ?? []) as never[],
+        metadata,
+      })
+      .returning({ id: focusSessions.id });
 
   // Best-effort by CONTRACT: this runs AFTER the session row is committed and
   // inside the jobs layer, where a throw fails the whole run. A bad parent
@@ -246,7 +246,7 @@ export async function openRunSession(
   };
 
   try {
-    const session = await insert(input.channelId ?? null);
+    const [session] = await insert(input.channelId ?? null);
     await linkSpawn(session.id);
     return { sessionId: session.id, reused: false };
   } catch (err) {
@@ -259,7 +259,7 @@ export async function openRunSession(
 
     const racedId = await findReusableRunSession();
     if (racedId) return { sessionId: racedId, reused: true };
-    const session = await insert(null);
+    const [session] = await insert(null);
     await linkSpawn(session.id);
     return { sessionId: session.id, reused: false };
   }
