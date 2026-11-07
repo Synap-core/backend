@@ -400,6 +400,40 @@ describe("the start-up pass", () => {
     expect(rows[0]).toEqual({ tool_profile: "entry", tool_groups: ["read"] });
   });
 
+  it("applying the surface to the template writes no key: existing agents' keys list what they listed (d812debd)", async () => {
+    const hermesAgent = randomUUID();
+    await q(
+      `insert into users (id, email, agent_type) values ($1, $2, 'hermes')`,
+      [hermesAgent, `${hermesAgent}@x.test`]
+    );
+    await q(
+      `insert into api_keys (id, user_id, key_type, tool_profile, tool_groups)
+       values ($1, $2, 'hub_inbound', 'entry', '{}'), ($3, $2, 'hub_inbound', null, '{}')`,
+      [randomUUID(), hermesAgent, randomUUID()]
+    );
+    const keys = () =>
+      q(`select * from api_keys order by id`).then((r) => r.rows);
+    const before = await keys();
+    expect(before.length).toBeGreaterThanOrEqual(2);
+
+    h.catalogs = {
+      ...h.catalogs,
+      hermes: catalog(
+        "h-2",
+        hermes({ toolProfile: "entry", toolGroups: ["read"] })
+      ),
+    };
+    const report = await reconcileStandaloneConfigsToTemplates({
+      packageSlugs: ["hermes"],
+    });
+    // The template row did change…
+    expect(report.updated.map((e) => e.reason)).toEqual([
+      "updated: [toolGroups,toolProfile]",
+    ]);
+    // …and not one key did.
+    expect(await keys()).toEqual(before);
+  });
+
   it("a template installed before 0407: its baseline lacks the surface; 0407 fills it, and the same update applies", async () => {
     // The row as an earlier build installed it: no surface in the baseline.
     await q(
