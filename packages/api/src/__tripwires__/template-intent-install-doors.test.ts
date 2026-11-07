@@ -138,6 +138,8 @@ describe("template intent — every install door carries it", () => {
     expect(projectTemplateIntent(body.intent)).toEqual({
       label: "Sales",
       produces: ["lead", "client", "deal", "campaign", "outreach-touch"],
+      // The catalog's primary output (One model, decision 3) arrives too.
+      primary: "deal",
       source: "template",
     });
   });
@@ -152,6 +154,7 @@ describe("template intent — every install door carries it", () => {
     expect(projectTemplateIntent(parsed.definition.intent)).toEqual({
       label: "Product",
       produces: ["devplane_feature", "devplane_story", "ui-design"],
+      primary: "devplane_feature",
       source: "template",
     });
   });
