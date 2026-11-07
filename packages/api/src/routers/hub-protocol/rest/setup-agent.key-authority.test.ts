@@ -52,6 +52,8 @@ vi.mock("../../../services/agent-templates/installed.js", async () => {
   const { SURFACE_HARNESS_SLUGS } = await import("@synap-core/types/agents");
   return {
     loadEngineAgentTypes: async () => new Set<string>(SURFACE_HARNESS_SLUGS),
+    // No installed template names a starting tool surface here.
+    loadTemplateToolSurface: async () => null,
   };
 });
 vi.mock("../../../utils/workspace-role.js", async (importOriginal) => ({
