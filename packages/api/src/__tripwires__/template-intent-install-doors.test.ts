@@ -58,6 +58,8 @@ const WS = "00000000-0000-4000-8000-000000000001";
 const INTENT = {
   label: "Sales",
   produces: [{ profile: "lead" }, { profile: "deal" }],
+  // The primary output (One model, decision 3) rides every door too.
+  primary: "deal",
 };
 
 type Parser = { parse: (v: unknown) => unknown };
