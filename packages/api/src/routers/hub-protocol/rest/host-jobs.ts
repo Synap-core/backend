@@ -113,13 +113,21 @@ async function resolveHostRunner(c: {
       error: "Unauthorized",
     };
   }
-  const [machine] = agentUserId
+  const [caller] = agentUserId
+    ? await db
+        .select({ host: users.hostUserId })
+        .from(users)
+        .where(eq(users.id, agentUserId))
+        .limit(1)
+    : [];
+  const actingAs = caller?.host ?? agentUserId;
+  const [machine] = actingAs
     ? await db
         .select({ id: users.id, owner: users.createdByUserId })
         .from(users)
         .where(
           and(
-            eq(users.id, agentUserId),
+            eq(users.id, actingAs),
             eq(users.agentType, MACHINE_AGENT_TYPE)
           )
         )

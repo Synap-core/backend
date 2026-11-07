@@ -279,7 +279,7 @@ export async function leaseHostJob(
     // From installed or failed it is a repair at the approved version.
     await moveInstallation(
       job.installationId,
-      ["planned", "installed", "failed"],
+      ["planned"],
       "installing"
     );
   } else if (job.kind === "update") {
@@ -427,7 +427,7 @@ function storedVerify(
     ok: verify.ok,
     exitCode: verify.exitCode,
     ...(verify.excerpt !== undefined
-      ? { excerpt: redactSecrets(verify.excerpt) }
+      ? { excerpt: verify.excerpt }
       : {}),
     ...(verify.outputSha256 ? { outputSha256: verify.outputSha256 } : {}),
     ...(verify.smoke
