@@ -1,5 +1,5 @@
 {
-  "entryChars": 93171,
+  "entryChars": 93347,
   "tools": {
     "synap_add_track_stage": 1495,
     "synap_advance_track": 1779,
@@ -94,7 +94,7 @@
     "synap_set_track_participant": 2673,
     "synap_set_track_status": 4581,
     "synap_set_workspace_focus": 1439,
-    "synap_start_session": 13875,
+    "synap_start_session": 13963,
     "synap_start_stage_session": 1718,
     "synap_start_track": 6760,
     "synap_store_file": 2207,
@@ -107,7 +107,7 @@
     "synap_update_playbook": 15079,
     "synap_update_project": 1946,
     "synap_update_rule": 7116,
-    "synap_update_session": 17026,
+    "synap_update_session": 17114,
     "synap_update_skill": 2490,
     "synap_update_space_brief": 1296,
     "synap_update_track": 5196,

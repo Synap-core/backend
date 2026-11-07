@@ -1741,7 +1741,7 @@
                   "description": "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning."
                 },
                 "ref": {
-                  "description": "WHERE it lives (evidence for a claimed deliverable): {kind, id} of something you can see, or {url}.",
+                  "description": "WHERE it lives (evidence for a claimed deliverable): {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} of something you can see, or {\"url\":\"https://...\"}.",
                   "oneOf": [
                     {
                       "type": "object",
@@ -2070,7 +2070,7 @@
                   "description": "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning."
                 },
                 "ref": {
-                  "description": "WHERE it lives (evidence for a claimed deliverable): {kind, id} of something you can see, or {url}.",
+                  "description": "WHERE it lives (evidence for a claimed deliverable): {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} of something you can see, or {\"url\":\"https://...\"}.",
                   "oneOf": [
                     {
                       "type": "object",
