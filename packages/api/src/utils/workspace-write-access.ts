@@ -14,7 +14,11 @@
  *     2026-10-26). A member row is the authority when there is one: an owner
  *     demoted to viewer does not write.
  *   - pod-wide row (workspaceId === null) with a known owner → caller must be
- *     the owner (pass `ownerId`).
+ *     the owner (pass `ownerId`), or, when the owner is an agent user, the
+ *     person that agent works for (`users.createdByUserId`): an agent's work
+ *     belongs to its person (finding 50fd3e65). Not the other way round: an
+ *     agent never writes its person's row through this rung, and one agent
+ *     never writes another agent's row.
  *   - pod-wide row with no owner → system-managed; denied here (use an
  *     admin-scoped path).
  *
@@ -26,7 +30,12 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { eq, getWorkspaceMembership, workspaces } from "@synap/database";
+import {
+  eq,
+  getWorkspaceMembership,
+  personOfOwner,
+  workspaces,
+} from "@synap/database";
 import type { SQL } from "drizzle-orm";
 // The write floor's role set is SHARED with the clients' space pickers
 // (`@synap-core/types/workspaces`) — one rule, never a mirror (FX-F3).
@@ -62,9 +71,14 @@ export async function assertWorkspaceWrite(
     return;
   }
 
-  // Pod-wide row (no workspace): allow only the owner, if there is one.
+  // Pod-wide row (no workspace): allow only the owner, if there is one. An
+  // agent's row belongs to the person it works for (`personOfOwner`): the
+  // person behind the owning agent writes it too.
   if (row.ownerId !== undefined) {
-    if (row.ownerId !== userId) {
+    if (
+      row.ownerId !== userId &&
+      !(row.ownerId && (await personOfOwner(db, row.ownerId)) === userId)
+    ) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "Only the owner can modify this pod-wide resource.",
