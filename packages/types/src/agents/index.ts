@@ -1086,5 +1086,6 @@ export * from "./session-post.js";
 export * from "./wake.js";
 // The catalog kind `agent`: the pod's reading of `definition.agent` (D8).
 export * from "./agent-template.js";
+export * from "./tool-surface.js";
 // Who runs a playbook for a person: asked once, remembered (slice 5a).
 export * from "./run-choice.js";

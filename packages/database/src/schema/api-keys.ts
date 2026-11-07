@@ -19,6 +19,10 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import {
+  MCP_TOOL_PROFILES,
+  type McpToolProfile,
+} from "@synap-core/types/agents";
 
 /**
  * API Keys Table
@@ -206,9 +210,12 @@ export const apiKeys = pgTable(
  */
 export const APP_PERSON_KEY_TYPE = "app_person" as const;
 
-/** The MCP tool profiles a key can carry (`api_keys.tool_profile`, 0280). */
-export const API_KEY_TOOL_PROFILES = ["entry", "builder"] as const;
-export type ApiKeyToolProfile = (typeof API_KEY_TOOL_PROFILES)[number];
+/**
+ * The MCP tool profiles a key can carry (`api_keys.tool_profile`, 0280). The
+ * one list lives in `@synap-core/types/agents` (an agent template names one).
+ */
+export const API_KEY_TOOL_PROFILES = MCP_TOOL_PROFILES;
+export type ApiKeyToolProfile = McpToolProfile;
 
 /**
  * TypeScript type for API Key record

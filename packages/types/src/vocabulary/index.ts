@@ -2845,6 +2845,8 @@ const PACKAGE_FIELD_LABELS: Readonly<Record<string, string>> = {
   detect: "How it is found on a computer",
   wake: "How a computer starts it",
   practices: "Skills its agents get",
+  toolProfile: "Tools its agents start with",
+  toolGroups: "Tool groups its agents start with",
 };
 
 export function resolvePackageFieldLabel(key: string): string {

@@ -28,6 +28,7 @@
  */
 
 import type { ApiKeyToolProfile } from "@synap/database/schema";
+import type { McpToolGroupName } from "@synap-core/types/agents";
 
 /**
  * The entry surface — what an agent needs for the V1 loop, nothing more.
@@ -190,7 +191,9 @@ export const TOOL_GROUPS = {
     "synap_trigger_automation",
     "synap_create_automation",
   ],
-} as const satisfies Record<string, readonly string[]>;
+  // Keyed by the ONE group list (`@synap-core/types/agents`): a group added or
+  // dropped here and not there (or there and not here) does not compile.
+} as const satisfies Record<McpToolGroupName, readonly string[]>;
 
 export type ToolGroup = keyof typeof TOOL_GROUPS;
 export const TOOL_GROUP_NAMES = Object.keys(TOOL_GROUPS) as ToolGroup[];

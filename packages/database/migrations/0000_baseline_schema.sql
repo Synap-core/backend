@@ -2518,6 +2518,7 @@ CREATE INDEX IF NOT EXISTS idx_users_agent_template
 
 -- ─── 33b. agent_templates (0404) ─────────────────────────────────────────────
 -- One row per AI program, installed pod-wide by the catalog kind `agent`.
+-- `tool_profile` + `tool_groups`: 0407.
 
 CREATE TABLE IF NOT EXISTS "agent_templates" (
   "id"           uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2530,6 +2531,8 @@ CREATE TABLE IF NOT EXISTS "agent_templates" (
   "detect"       jsonb,
   "wake"         jsonb,
   "practices"    jsonb   NOT NULL DEFAULT '{"skills":[]}',
+  "tool_profile" text,
+  "tool_groups"  jsonb   NOT NULL DEFAULT '[]',
   "metadata"     jsonb   NOT NULL DEFAULT '{}',
   "created_at"   timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"   timestamp with time zone NOT NULL DEFAULT now()

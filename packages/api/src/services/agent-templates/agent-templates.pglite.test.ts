@@ -219,6 +219,9 @@ describe("D8 — the catalog installs every official agent template on the pod",
       detect: { bins: ["claude"] },
       wake: claude!.wake,
       practices: { skills: ["synap"] },
+      // No starting tool surface named: the pod's default (d812debd).
+      toolProfile: null,
+      toolGroups: [],
     });
   });
 
