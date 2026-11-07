@@ -1211,6 +1211,12 @@ export interface AgentMetadata {
 	 * (`push-decision.ts` rule 4b).
 	 */
 	pushDailyLimit?: number;
+	/**
+	 * COMPUTER principals only (0409): the person turned on "Installs from the pod" —
+	 * the computer's key carries `host.runner` and leases the host jobs of the
+	 * installations on itself. Kept here for the same reason as `runsScripts`.
+	 */
+	hostsServices?: boolean;
 }
 /**
  * Shared provenance vocabulary for the uniform `created_by_kind` column added
@@ -21880,6 +21886,8 @@ export interface MachineView {
 	accessName: string | null;
 	/** "Runs scripts" is on: the computer leases its person's box runs. */
 	runsScripts: boolean;
+	/** "Installs from the pod" is on: the computer installs software on itself. */
+	hostsServices: boolean;
 	/** Whose computer it is (0388). Null only on a row written before it. */
 	belongsTo: ComputerBelongsTo | null;
 	agents: HostedAgentView[];
@@ -43625,6 +43633,22 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "updated";
 			};
 		}>;
+		setHostsServices: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				machineId: string;
+			};
+			meta: object;
+			output: {
+				hostsServices?: undefined;
+				proposalId: string;
+				status: "proposed";
+			} | {
+				hostsServices: boolean;
+				proposalId?: undefined;
+				status: "updated";
+			};
+		}>;
 		setKeyTtl: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				keyTtlDays: number | null;
@@ -55989,7 +56013,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		adminRegister: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "host.runner" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				displayName: string;
 				issuerUrl: string;
 				presence?: {
@@ -56042,7 +56066,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "host.runner" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				expectedStatus?: "approved" | "pending" | "rejected" | "revoked" | undefined;
 				id: string;
 				presence?: {

@@ -36,6 +36,7 @@ import {
 } from "@synap/database";
 import {
   BOX_RUNNER_SCOPE,
+  HOST_RUNNER_SCOPE,
   apiKeys,
   grants,
   users,
@@ -131,6 +132,8 @@ export interface MachineView {
   accessName: string | null;
   /** "Runs scripts" is on: the computer leases its person's box runs. */
   runsScripts: boolean;
+  /** "Installs from the pod" is on: the computer installs software on itself. */
+  hostsServices: boolean;
   /** Whose computer it is (0388). Null only on a row written before it. */
   belongsTo: ComputerBelongsTo | null;
   agents: HostedAgentView[];
@@ -350,6 +353,7 @@ async function loadMachineViews(
         maxKeyTtlDays: MACHINE_KEY_TTL_MAX_DAYS,
         accessName: labels.length > 0 ? [...new Set(labels)].join(", ") : null,
         runsScripts: meta.runsScripts === true,
+        hostsServices: meta.hostsServices === true,
         belongsTo: m.belongsTo ?? null,
         agents: hosted
           .filter((a) => a.hostUserId === m.id)
@@ -506,6 +510,41 @@ export async function setMachineRunsScripts(
       scope: enabled
         ? drizzleSql`array_append(array_remove(${apiKeys.scope}, ${BOX_RUNNER_SCOPE}), ${BOX_RUNNER_SCOPE})`
         : drizzleSql`array_remove(${apiKeys.scope}, ${BOX_RUNNER_SCOPE})`,
+    })
+    .where(and(eq(apiKeys.userId, machineUserId), isNull(apiKeys.revokedAt)))
+    .returning({ id: apiKeys.id });
+  return { keysUpdated: updated.length };
+}
+
+/**
+ * "Installs from the pod" (installations, 0409): the computer may lease the host
+ * jobs of the installations on itself. Recorded on the computer
+ * (`agentMetadata.hostsServices`, so a reconnect mints the key with the
+ * scope) AND applied to its live keys' `host.runner` scope now — the
+ * host-job routes read the scope, never the flag. The sibling of
+ * {@link setMachineRunsScripts}, written the same way.
+ */
+export async function setMachineHostsServices(
+  machineUserId: string,
+  enabled: boolean
+): Promise<{ keysUpdated: number }> {
+  await db
+    .update(users)
+    .set({
+      agentMetadata: enabled
+        ? drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) || '{"hostsServices": true}'::jsonb`
+        : drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) - 'hostsServices'`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(eq(users.id, machineUserId), eq(users.agentType, MACHINE_AGENT_TYPE))
+    );
+  const updated = await db
+    .update(apiKeys)
+    .set({
+      scope: enabled
+        ? drizzleSql`array_append(array_remove(${apiKeys.scope}, ${HOST_RUNNER_SCOPE}), ${HOST_RUNNER_SCOPE})`
+        : drizzleSql`array_remove(${apiKeys.scope}, ${HOST_RUNNER_SCOPE})`,
     })
     .where(and(eq(apiKeys.userId, machineUserId), isNull(apiKeys.revokedAt)))
     .returning({ id: apiKeys.id });
