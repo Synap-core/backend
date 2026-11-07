@@ -48,6 +48,8 @@ import {
 } from "@synap-core/types/agents";
 import { readEffectiveAgentWriteMode } from "@synap/database/agent-governance";
 import type { ComputerBelongsTo } from "@synap-core/types/computers";
+import { computerWakerOf, wakesAgentsOf } from "./computer-waker.js";
+import type { ComputerWaker } from "./agent-dispatch/agent-wake.js";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import {
   agentTypeName,
@@ -75,6 +77,8 @@ interface KeyRow {
   expiresAt: Date | null;
   revokedAt: Date | null;
   lastUsedAt: Date | null;
+  /** On a COMPUTER's key: its waker's last poll (the wake lease, `computer-waker.ts`). */
+  workerServedAt: Date | null;
   createdAt: Date;
 }
 
@@ -131,6 +135,13 @@ export interface MachineView {
   accessName: string | null;
   /** "Runs scripts" is on: the computer leases its person's box runs. */
   runsScripts: boolean;
+  /** "Wakes agents" is on: the pod may count on this computer's waker. */
+  wakesAgents: boolean;
+  /**
+   * Its waker, as THE wake rule reads it (`computerWakerOf`): `null` = no
+   * waker ever ran on it; `online` = it polled within the wake lease.
+   */
+  waker: ComputerWaker | null;
   /** Whose computer it is (0388). Null only on a row written before it. */
   belongsTo: ComputerBelongsTo | null;
   agents: HostedAgentView[];
@@ -304,6 +315,7 @@ async function loadMachineViews(
       expiresAt: apiKeys.expiresAt,
       revokedAt: apiKeys.revokedAt,
       lastUsedAt: apiKeys.lastUsedAt,
+      workerServedAt: apiKeys.workerServedAt,
       createdAt: apiKeys.createdAt,
     })
     .from(apiKeys)
@@ -350,6 +362,14 @@ async function loadMachineViews(
         maxKeyTtlDays: MACHINE_KEY_TTL_MAX_DAYS,
         accessName: labels.length > 0 ? [...new Set(labels)].join(", ") : null,
         runsScripts: meta.runsScripts === true,
+        wakesAgents: wakesAgentsOf(meta),
+        waker: computerWakerOf(
+          {
+            wakerSeenAt: newest(own.map((k) => k.workerServedAt)),
+            wakesAgents: wakesAgentsOf(meta),
+          },
+          new Date(now)
+        ),
         belongsTo: m.belongsTo ?? null,
         agents: hosted
           .filter((a) => a.hostUserId === m.id)
@@ -472,6 +492,29 @@ export async function setMachineOwnKeyTtlDays(
           : drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) || ${JSON.stringify(
               { keyTtlDays }
             )}::jsonb`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(eq(users.id, machineUserId), eq(users.agentType, MACHINE_AGENT_TYPE))
+    );
+}
+
+/**
+ * "Wakes agents" (plan v2 slice 4): the pod may count on this computer's waker
+ * to start its agents when work is handed to them. Recorded on the computer
+ * (`agentMetadata.wakesAgents`); the roster (`readAgentsForHandoff`) and the
+ * waker's work list read the flag. A switch only: no key changes.
+ */
+export async function setMachineWakesAgents(
+  machineUserId: string,
+  enabled: boolean
+): Promise<void> {
+  await db
+    .update(users)
+    .set({
+      agentMetadata: enabled
+        ? drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) || '{"wakesAgents": true}'::jsonb`
+        : drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) - 'wakesAgents'`,
       updatedAt: new Date(),
     })
     .where(

@@ -71,6 +71,10 @@ export interface ComputerLike {
   accessName: string | null;
   /** "Runs scripts" is on: it leases its person's box runs. */
   runsScripts?: boolean;
+  /** "Wakes agents" is on: the pod may count on its waker to start its agents. */
+  wakesAgents?: boolean;
+  /** Its waker as the wake rule reads it: null = none ever ran; online = within the lease. */
+  waker?: { online: boolean; wakesAgents: boolean } | null;
   /** Whose computer it is (0388): the person's own, an agent's, or shared. */
   belongsTo?: ComputerBelongsTo | null;
   agents: ComputerAgentLike[];
@@ -406,6 +410,10 @@ export function activityLine(
       return typeof data.keyTtlDays === "number"
         ? `Key lifetime set to ${days(data.keyTtlDays)}`
         : "Key lifetime back to the pod default";
+    case "machine_wakes_agents":
+      return data.enabled === true
+        ? "Set to wake its agents"
+        : "Stopped waking its agents";
     case "machine_runs_scripts":
       return data.enabled === true
         ? `Set to run ${whose} scripts`

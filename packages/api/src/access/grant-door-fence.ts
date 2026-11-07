@@ -685,6 +685,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
   // every 5xx on the pod, whoever met it. Pod owner or admin only, like
   // `/usage`; no grant can narrow it, so a scoped key is refused.
+  // A computer's waker poll (`rest/computer-wakes.ts`): only the computer's
+  // own device-flow key, which no grant scopes. The poll stamps that key's
+  // lease, so no grant can make a scoped key a computer's waker.
+  [
+    /^\/computers\/me\/wakes\/?$/,
+    REFUSED("A computer's own waker poll: only that computer's key."),
+  ],
   [
     /^\/errors\/[^/]+\/?$/,
     REFUSED("Pod internals: the cause of every server error on the pod."),

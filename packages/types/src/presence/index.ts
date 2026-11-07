@@ -554,6 +554,7 @@ export const SENSITIVE_ACTIONS = {
   // A computer's key: how long it lives, whether it runs scripts, whose it is.
   "machines.setKeyTtl": "setup",
   "machines.setRunsScripts": "setup",
+  "machines.setWakesAgents": "setup",
   "machines.setBelongsTo": "setup",
   // A secret's value, shown to the session.
   "secretsVault.reveal": "setup",
@@ -626,6 +627,7 @@ export const SENSITIVE_ACTION_TOKENS = {
   },
   "machines.setKeyTtl": { action: "update", objectKind: "machine" },
   "machines.setRunsScripts": { action: "update", objectKind: "machine" },
+  "machines.setWakesAgents": { action: "update", objectKind: "machine" },
   "machines.setBelongsTo": { action: "update", objectKind: "machine" },
   "secretsVault.reveal": { action: "see", objectKind: "secret" },
   "agentUsers.create": { action: "create", objectKind: "agent" },

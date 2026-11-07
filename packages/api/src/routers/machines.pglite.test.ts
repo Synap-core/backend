@@ -314,6 +314,50 @@ describe("machines.setRunsScripts", () => {
   });
 });
 
+describe("machines.setWakesAgents", () => {
+  const meta = async () =>
+    (
+      await q<{ agent_metadata: Record<string, unknown> | null }>(
+        `select agent_metadata from users where id = $1`,
+        [computerId]
+      )
+    )[0]?.agent_metadata ?? {};
+
+  it("records the switch on the computer and shows it; off removes it", async () => {
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      wakesAgents: false,
+      waker: null,
+    });
+    await expect(
+      caller(HUMAN).setWakesAgents({ machineId: computerId, enabled: true })
+    ).resolves.toMatchObject({ status: "updated", wakesAgents: true });
+    expect((await meta()).wakesAgents).toBe(true);
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      wakesAgents: true,
+    });
+    await caller(HUMAN).setWakesAgents({
+      machineId: computerId,
+      enabled: false,
+    });
+    expect("wakesAgents" in (await meta())).toBe(false);
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      wakesAgents: false,
+    });
+  });
+
+  it("a stranger gets NOT_FOUND; a key is refused", async () => {
+    await expect(
+      caller(STRANGER).setWakesAgents({ machineId: computerId, enabled: true })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller(HUMAN, false).setWakesAgents({
+        machineId: computerId,
+        enabled: true,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
 describe("machines.revoke", () => {
   it("a stranger and a key cannot revoke", async () => {
     await expect(

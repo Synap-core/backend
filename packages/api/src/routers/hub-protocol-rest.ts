@@ -121,6 +121,7 @@ import {
   registerArtifactsRoutes,
   registerRunsRoutes,
   registerBoxRunsRoutes,
+  registerComputerWakesRoutes,
   registerDiagnoseRoutes,
   registerWorkflowsRoutes,
   registerResolveRoutes,
@@ -397,6 +398,7 @@ registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
 registerBoxRunsRoutes(app); // /box-runs/lease (static first), /box-runs/:id/{heartbeat,uploads,finish} — computer + box.runner
+registerComputerWakesRoutes(app); // /computers/me/wakes — a computer's waker: its lease + which agents to wake
 registerDiagnoseRoutes(app); // /diagnose — the THIRD door (mode from payload shape)
 registerWorkflowsRoutes(app); // /workflows/:kind/:id/place + /feed (workflow place)
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver
