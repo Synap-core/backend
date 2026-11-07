@@ -1396,18 +1396,7 @@ export function fileableExpectedOutputs(
   if (violations.length > 0) {
     return { ok: false, reason: serverStampedWriteError(violations).message };
   }
-  const { twinOf } = storedTwins(current);
-  return {
-    ok: true,
-    expectedOutputs: incoming.map((item) => {
-      if (!twinOf(item)) return item;
-      const out: OutputItem = { ...item };
-      for (const field of SERVER_STAMPED_OUTPUT_FIELDS) {
-        if (field !== "key") delete out[field];
-      }
-      return out;
-    }),
-  };
+  return { ok: true, expectedOutputs: incoming }; // NEGCTL: no strip
 }
 
 /**
