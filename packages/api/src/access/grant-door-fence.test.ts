@@ -1111,3 +1111,87 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
     expect(restDoorAllowed("GET", "/skills", COMPUTER)).toBe(false);
   });
 });
+
+describe("Raycast's REST twins of MCP read tools: one rule per reader", () => {
+  // The live shape of the keys Raycast calls with: a computer's key and the
+  // Raycast agent's key are both one unpinned scope, the AI permissions.
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  const PINNED = key({
+    permissions: aiDefaultCapabilities(),
+    workspaceIds: ["w1"],
+  });
+  const DENY_ALL = key({ permissions: [] });
+  /** Each Hub route and the MCP tool that calls the same reader. */
+  const TWINS: ReadonlyArray<readonly [string, string, boolean]> = [
+    ["/orient", "synap_orient", true],
+    ["/profiles", "synap_list_profiles", true],
+    ["/automations", "synap_list_automations", true],
+    [`/threads/${U}/context`, "synap_get_thread_context", true],
+    // GET-or-create, classified with the MCP write tools.
+    ["/channels/personal", "synap_get_channel", false],
+  ];
+
+  it.each(TWINS)("GET %s is open to a computer's or agent's key", (path) => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", `${path}/`, COMPUTER)).toBe(true);
+  });
+
+  it.each(TWINS)(
+    "GET %s answers every key as MCP %s does",
+    (path, tool, readOnly) => {
+      for (const g of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY, AI])
+        expect(restDoorAllowed("GET", path, g)).toBe(
+          mcpToolAllowed(tool, readOnly, g)
+        );
+    }
+  );
+
+  it.each(TWINS)(
+    "GET %s stays refused to a pinned, deny-all or partial key",
+    (path) => {
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+    }
+  );
+
+  it("each door needs the subjects IT reads", () => {
+    // The lens map reads sessions and goals too, not only records.
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/orient",
+        key({ permissions: ["entity.read", "project.read", "proposal.read"] })
+      )
+    ).toBe(false);
+    // One kind of record is not every kind.
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/profiles",
+        key({ permissions: ["entity.task.read"] })
+      )
+    ).toBe(false);
+    // A thread's context names the records and documents it links.
+    expect(
+      restDoorAllowed(
+        "GET",
+        `/threads/${U}/context`,
+        key({ permissions: ["channel.read"] })
+      )
+    ).toBe(false);
+  });
+
+  it("opens these routes only, never their siblings", () => {
+    for (const path of [
+      `/automations/${U}`,
+      "/automations/schema",
+      "/profiles/task/renderers",
+      "/threads/not-a-uuid/context",
+      "/property-defs",
+      "/briefs",
+    ])
+      expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
+  });
+});
