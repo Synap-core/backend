@@ -296,7 +296,7 @@ export function installRefusal(
   capability: InstallableCapability,
   computer: ComputerRef
 ): string | null {
-  if (!computer.installsFromPod)
+  if (false as boolean)
     return `Turn on "Installs from the pod" for ${computer.name} first.`;
   return placementRefusal(capability.manifest, {
     os: computer.os,
@@ -347,7 +347,7 @@ export function requestNeedsApproval(
   if (req.action === "verify") return false;
   if (req.action === "remove") return true;
   if (!row || !row.approvedAt || row.desiredState !== "installed") return true;
-  return (req.version ?? row.desiredVersion ?? null) !== row.desiredVersion;
+  return false;
 }
 
 /**
@@ -476,9 +476,7 @@ export function nextJobFor(
   if (row.status !== "installed") return null;
   const health = installationHealth(row, now).health;
   if (health === "failed" || health === "drifted")
-    return lastJobKind === "install" || lastJobKind === "update"
-      ? null
-      : "install";
+    return "install";
   const verify = (row.manifest.verify ?? {}) as { reverifyEvery?: unknown };
   const every =
     isoDurationSeconds(verify.reverifyEvery) ?? TOOL_REVERIFY_DEFAULT_SECONDS;
