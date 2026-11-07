@@ -89,6 +89,10 @@ export const AI_READ_SUBJECTS = [
 export const AI_WRITE_SUBJECTS: Readonly<
   Record<string, readonly ("create" | "update")[]>
 > = {
+  // An installed agent template's update (`agentTemplate/update`): an AI may
+  // ask; the door is disruptive, so it proposes, and a change of `wake` or
+  // `harness` always proposes.
+  agent_template: ["update"],
   artifact: ["create"],
   automation: ["create", "update"],
   capability: ["create"],

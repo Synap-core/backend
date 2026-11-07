@@ -13,7 +13,8 @@
  *  - the plan reads `both` for that body, offers the merge (no overlap) and
  *    recommends the catalog's text, which equals the merge;
  *  - PARITY: a field the plan calls `updates` is exactly a field the
- *    reconcile's dry run would update (one comparator);
+ *    reconcile's dry run would update (one comparator), or a manual field it
+ *    holds for a person (an agent template's `wake`);
  *  - a person's apply lands through the door, advances the baseline and the
  *    version, and writes one receipt; Undo restores the text, after which the
  *    field reads as the pod's own;
@@ -96,7 +97,10 @@ vi.mock(
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { db } from "@synap/database";
-import { reconcileStandaloneConfigsToTemplates } from "../capabilities/reconcile-standalone-configs-to-templates.js";
+import {
+  HELD_FOR_A_PERSON,
+  reconcileStandaloneConfigsToTemplates,
+} from "../capabilities/reconcile-standalone-configs-to-templates.js";
 import { readMarketSource } from "../capabilities/market-source.js";
 import type { Context } from "../../types/context.js";
 import { getPackageUpdatePlan, listPackageUpdates } from "./plan.js";
@@ -114,6 +118,7 @@ const AGENT = randomUUID();
 const FACE = randomUUID(); // facecam-edit: both changed
 const SAME = randomUUID(); // facecam-copy: the pod already took the catalog's text
 const UPD = randomUUID(); // notes-skill: body updates, description stays yours
+const AGT = randomUUID(); // hermes (agent template): tried updates, wake held
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -195,7 +200,9 @@ beforeAll(async () => {
 }, 120_000);
 
 beforeEach(async () => {
-  await h.client!.exec(`delete from skills; delete from events;`);
+  await h.client!.exec(
+    `delete from skills; delete from events; delete from agent_templates;`
+  );
   const installed = (body: string, description = "Cuts face-camera takes") => ({
     packageVersion: "h-7ee4a9",
     installedAt: "2026-10-13T00:00:00.000Z",
@@ -227,6 +234,43 @@ beforeEach(async () => {
     installedAt: "2026-10-13T00:00:00.000Z",
     baseline: { body: "old notes", description: "catalog words" },
   });
+  const wake = (args: string[]) => ({
+    program: "hermes",
+    args,
+    params: { prompt: { type: "text", required: true } },
+  });
+  const hermesFields = {
+    name: "Hermes Agent",
+    harness: "hermes",
+    aliases: [],
+    worker: true,
+    tried: true,
+    detect: null,
+    wake: wake(["chat", "-q", "{prompt}"]),
+    practices: { skills: [] },
+  };
+  await q(
+    `insert into agent_templates (id, slug, name, harness, aliases, worker, tried, detect, wake, practices, metadata)
+     values ($1,'hermes',$2,$3,$4::jsonb,$5,$6,null,$7::jsonb,$8::jsonb,$9::jsonb)`,
+    [
+      AGT,
+      hermesFields.name,
+      hermesFields.harness,
+      JSON.stringify(hermesFields.aliases),
+      hermesFields.worker,
+      hermesFields.tried,
+      JSON.stringify(hermesFields.wake),
+      JSON.stringify(hermesFields.practices),
+      JSON.stringify({
+        marketSource: {
+          packageSlug: "hermes",
+          packageVersion: "h-1",
+          installedAt: "2026-11-01T00:00:00.000Z",
+          baseline: hermesFields,
+        },
+      }),
+    ]
+  );
   const facecam = {
     source: "https://cp.example",
     version: "h-587c06",
@@ -242,6 +286,20 @@ beforeEach(async () => {
   h.catalogs = {
     "facecam-edit": facecam,
     "facecam-copy": facecam,
+    hermes: {
+      source: "https://cp.example",
+      version: "h-2",
+      name: "Hermes Agent",
+      definition: {
+        name: "Hermes Agent",
+        agent: {
+          harness: "hermes",
+          worker: true,
+          tried: false,
+          wake: wake(["chat", "-Q", "{prompt}"]),
+        },
+      },
+    },
     "notes-skill": {
       source: "https://cp.example",
       version: "h-2",
@@ -306,7 +364,7 @@ describe("the update plan", () => {
     expect(list.unreadable.map((u) => u.slug)).toEqual(["notes-skill"]);
   });
 
-  it("PARITY: `updates` in the plan ⇔ updated by the reconcile's dry run", async () => {
+  it("PARITY: `updates` in the plan ⇔ updated by the reconcile's dry run, or held for a person", async () => {
     const report = await reconcileStandaloneConfigsToTemplates({
       dryRun: true,
     });
@@ -315,8 +373,21 @@ describe("the update plan", () => {
       const m = /would update: \[(.*)\]/.exec(e.reason);
       for (const f of m![1]!.split(",")) reconciled.add(`${e.id}:${f}`);
     }
+    // A manual field the pass never applies on its own still waits in the
+    // plan, for a person's apply.
+    const held = new Set<string>();
+    for (const e of report.skipped) {
+      if (!e.reason.startsWith(`${HELD_FOR_A_PERSON}: [`)) continue;
+      const m = /\[(.*)\]$/.exec(e.reason);
+      for (const f of m![1]!.split(",")) held.add(`${e.id}:${f}`);
+    }
     const planned = new Set<string>();
-    for (const slug of ["facecam-edit", "facecam-copy", "notes-skill"]) {
+    for (const slug of [
+      "facecam-edit",
+      "facecam-copy",
+      "notes-skill",
+      "hermes",
+    ]) {
       for (const row of (await getPackageUpdatePlan(slug)).rows) {
         for (const f of row.fields) {
           if (f.state === "updates") planned.add(`${row.rowId}:${f.key}`);
@@ -324,7 +395,9 @@ describe("the update plan", () => {
       }
     }
     expect(planned.size).toBeGreaterThan(0); // non-vacuity
-    expect([...planned].sort()).toEqual([...reconciled].sort());
+    expect([...reconciled]).toContain(`${AGT}:tried`);
+    expect([...held]).toEqual([`${AGT}:wake`]);
+    expect([...planned].sort()).toEqual([...reconciled, ...held].sort());
   });
 });
 

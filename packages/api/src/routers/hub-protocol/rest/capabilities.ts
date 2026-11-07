@@ -19,6 +19,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { PACKAGE_UPDATE_ROW_KINDS } from "@synap-core/types/package-updates";
 
 import { loadCapabilityTemplate } from "../../../services/capabilities/create-from-definition.js";
 import {
@@ -367,13 +368,13 @@ const ReconcileCapabilitiesResponseSchema = z.object({
   conflicts: z.array(CapabilityReconcileEntrySchema),
 });
 
-const StandaloneKindSchema = z.enum(["view", "skill", "automation"]);
+const StandaloneKindSchema = z.enum(PACKAGE_UPDATE_ROW_KINDS);
 
 const ReconcileConfigsRequestSchema = z.object({
   dryRun: z.boolean().optional(),
   /** Only the rows installed from these packages. */
   packageSlugs: z.array(z.string().min(1)).optional(),
-  /** Only these view / skill / automation rows. */
+  /** Only these view / skill / automation / agent template rows. */
   ids: z.array(z.string().uuid()).optional(),
 });
 
