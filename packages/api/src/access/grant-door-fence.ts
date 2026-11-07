@@ -524,6 +524,10 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // space holds, so it is a PERSON door: the app asks for `agent.read` and the
   // person ticks it. `agent` is the subject `agent_configs` reads under.
   [/^\/agent-users\/?$/, PERSON("agent")],
+  // What is installed on the person's computers (installations, 0409): the
+  // person's own rows, which no space holds, read through the access layer's
+  // owner floor. Read under `installation`, the subject a grant names.
+  [/^\/installations\/?$/, PERSON("installation")],
   // Which of those agents the person assigned to one target (a playbook, a
   // kind, a project, a space): the person's own `assigned_to` row on a target
   // they can see (`readAgentAssignment`), the read half of
@@ -893,6 +897,9 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_playbooks: READS("playbook"),
   synap_match_playbooks: READS("playbook"),
   synap_list_capabilities: READS("tool", "command", "playbook", "automation"),
+  // What is installed on the person's computers (`listInstallations`, the
+  // owner floor), as `GET /installations`.
+  synap_list_installations: PERSON("installation"),
   synap_list_automations: LIST_AUTOMATIONS,
   // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
   // worker rules and their automation runs, and the approvals they wait on.
