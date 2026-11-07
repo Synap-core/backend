@@ -48,11 +48,20 @@ import { tools } from "./index.js";
 import { DOOR_TOOL_NAMES } from "../door-tool-names.generated.js";
 import { renderSkillForDoor } from "../../../services/capability-briefs/door-tool-render.js";
 
-/** A pod tool this door does NOT carry — DERIVED, never a hand-picked name. */
+/**
+ * A pod tool this door does NOT carry — DERIVED, never a hand-picked name.
+ * Only a tool whose bare stem is snake_case: the renderer reads a bare token as
+ * a tool only when it is tool-shaped (`TOKEN_RE`), so a one-word stem
+ * (`synap_flow` → `flow`) stays prose and is never daggered by its stem.
+ */
 function absentFrom(door: "cp-connector"): string | undefined {
   return Object.keys(DOOR_TOOL_NAMES)
     .sort()
-    .find((tool) => DOOR_TOOL_NAMES[tool]![door] === null);
+    .find(
+      (tool) =>
+        DOOR_TOOL_NAMES[tool]![door] === null &&
+        tool.replace(/^synap_/, "").includes("_")
+    );
 }
 
 const load = async (agentUserId?: string) => {
