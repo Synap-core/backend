@@ -14,7 +14,7 @@
 import { addToast, Button, Checkbox } from "@heroui/react";
 import { Building2, Database, Globe, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { PageFallback, PageShell } from "../components/page-header";

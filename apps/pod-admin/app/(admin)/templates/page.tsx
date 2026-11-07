@@ -163,7 +163,6 @@ function TemplatesInner() {
         ]);
       setToArchive(null);
     } catch (err) {
-      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Couldn’t archive the template",
         description: err instanceof Error ? err.message : undefined,
