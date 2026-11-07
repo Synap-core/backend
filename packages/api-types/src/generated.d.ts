@@ -10795,14 +10795,20 @@ declare const PACKAGE_UPDATE_NEEDS: readonly [
 export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
 /** How many fields of a package are in each state. */
 export type PackageFieldCounts = Record<PackageFieldState, number>;
-/** The kinds of installed row a plan compares field by field. */
-export type PackageUpdateRowKind = "automation" | "skill" | "view";
+declare const PACKAGE_UPDATE_ROW_KINDS: readonly [
+	"view",
+	"skill",
+	"automation",
+	"agent"
+];
+export type PackageUpdateRowKind = (typeof PACKAGE_UPDATE_ROW_KINDS)[number];
 declare const INSTALLED_PACKAGE_KINDS: readonly [
 	"workspace",
 	"capability",
 	"view",
 	"skill",
-	"automation"
+	"automation",
+	"agent"
 ];
 export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
 declare const PACKAGE_UPDATE_COMPARED_BY: readonly [
@@ -26098,7 +26104,7 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 		network: boolean;
 	};
 }
-export type StandaloneKind = "automation" | "skill" | "view";
+export type StandaloneKind = "agent" | "automation" | "skill" | "view";
 export interface DetachResult {
 	detached: boolean;
 	kind: StandaloneKind;
@@ -45695,7 +45701,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		detach: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
-				kind: "automation" | "skill" | "view";
+				kind: "agent" | "automation" | "skill" | "view";
 			};
 			meta: object;
 			output: DetachResult;

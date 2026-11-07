@@ -2352,6 +2352,7 @@ export function nonWidenableFloorFor(eventKey: string): string | null {
 export const REVERSIBILITY_DOOR_CLASS = {
   "a2ai/join": "disruptive", // scope: an agent joins a room
   "agent/updateCapabilities": "disruptive", // scope (ADMIN)
+  "agentTemplate/update": "disruptive", // effect: what a computer runs, which skills agents get
   "aiProvider/create": "disruptive", // scope (ADMIN)
   "aiProvider/delete": "disruptive", // destroy / ADMIN
   "aiProvider/update": "disruptive", // scope (ADMIN)
@@ -2610,6 +2611,11 @@ export type GovernedWriteCreator =
 export const GATE_WRITE_DOORS = {
   "a2ai/join": "gate",
   "agent/updateCapabilities": "gate",
+  // An installed agent template's fields (`agent_templates`), written by a
+  // package update (`services/agent-templates/update.ts`). Its `wake` and
+  // `harness` are a person's: an agent's change of either always proposes.
+  // Approved by `routers/proposals/executors/package-update.ts`.
+  "agentTemplate/update": "gate",
   // AI provider config. Writing one sets the baseUrl the IS sends every prompt
   // to, so these are credential-shaped writes in the same class as apiKey/*.
   "aiProvider/create": "gate",

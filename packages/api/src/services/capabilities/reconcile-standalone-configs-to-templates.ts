@@ -2,9 +2,9 @@
  * reconcileStandaloneConfigsToTemplates
  * =====================================
  *
- * Boot-time (+ on-demand) convergence for the three LIGHTER config kinds a pod
- * can install standalone from a marketplace package — VIEWS, SKILLS and
- * AUTOMATIONS. This is the standalone-config counterpart to
+ * Boot-time (+ on-demand) convergence for the LIGHTER config kinds a pod can
+ * install standalone from a marketplace package — VIEWS, SKILLS, AUTOMATIONS
+ * and AGENT TEMPLATES. This is the standalone-config counterpart to
  * `reconcileCapabilitiesToTemplates` (capability CONTAINERS) and
  * `reconcileWorkspacesToTemplates` (whole workspaces): same shape, same
  * "reported, never forced" guarantee, applied to a single installed row that
@@ -31,10 +31,12 @@
  * `market-source.ts` is the one door.
  *
  * Idempotent + additive + non-fatal, exactly like the capability reconcile:
- *  - The row is written ONLY through the GOVERNED per-kind router `.update`
- *    caller (`viewsRouter` / `skillsRouter` / `automationsRouter`) — never a raw
- *    SQL UPDATE — so governance, audit, side-effects and re-approval are
- *    identical to a manual edit.
+ *  - The row is written ONLY through the GOVERNED per-kind door
+ *    (`viewsRouter` / `skillsRouter` / `automationsRouter` `.update`,
+ *    `updateAgentTemplate`) — never a raw SQL UPDATE — so governance, audit,
+ *    side-effects and re-approval are identical to a manual edit.
+ *  - A kind's `manualFields` never change on their own: this pass leaves them
+ *    as they are and reports them; a person applies them (the update plan).
  *  - A cache MISS for the source package (e.g. a PRIVATE package that never
  *    entered the public `cp_catalog_cache`) SKIPS that row (reported), never an
  *    error — private packages reconcile via the user-surface path, out of scope
@@ -51,8 +53,14 @@
 
 import { createLogger } from "@synap-core/core";
 import { db, inArray } from "@synap/database";
-import { views, skills, automations } from "@synap/database/schema";
+import {
+  views,
+  skills,
+  automations,
+  agentTemplates,
+} from "@synap/database/schema";
 import type { CatalogKind } from "@synap/jobs";
+import { parseAgentTemplateSpec } from "@synap-core/types/agents";
 
 import {
   readMarketSource,
@@ -61,10 +69,13 @@ import {
   deepEqual,
   MARKET_SOURCE_COMPARATOR_VERSION,
   type MarketSource,
+  type ThreeWayMergeResult,
 } from "./market-source.js";
 import { lookupCatalogEntry } from "./marketplace-install.js";
 import { admitOfficialDefinition } from "./official-catalog-trust.js";
 import { skillElementOf } from "./package-element.js";
+import { resolvePodOwnerUserId } from "./pod-owner.js";
+import { agentTemplateElementOf } from "../agent-templates/install.js";
 import type { Context } from "../../types/context.js";
 import {
   recordPackageUpdateReceipt,
@@ -75,7 +86,7 @@ const logger = createLogger({
   module: "reconcile-standalone-configs-to-templates",
 });
 
-export type StandaloneKind = "view" | "skill" | "automation";
+export type StandaloneKind = "view" | "skill" | "automation" | "agent";
 
 export interface StandaloneReconcileEntry {
   kind: StandaloneKind;
@@ -103,6 +114,9 @@ export interface StandaloneReconcileReport {
 }
 
 const FETCH_TIMEOUT_MS = 8000;
+
+/** The report line of a row whose manual fields wait for a person. */
+export const HELD_FOR_A_PERSON = "held for a person to apply";
 
 /**
  * Fetch ONE package's full install payload from its catalog source. Mirrors
@@ -165,7 +179,12 @@ export interface KindAdapter {
   /** All installed rows (optionally narrowed to `ids`). */
   loadRows(ids?: string[]): Promise<Record<string, unknown>[]>;
   /** The row's creator user-id — attribution for the governed write. */
-  creatorOf(row: Record<string, unknown>): string;
+  creatorOf(row: Record<string, unknown>): string | Promise<string>;
+  /**
+   * Fields this pass never changes on its own, even untouched since install:
+   * they stay waiting in the update plan until a person applies them.
+   */
+  manualFields?: readonly string[];
   /** Find the row's element within a fetched package definition (by name). */
   findElement(
     def: Record<string, unknown>,
@@ -315,7 +334,73 @@ const ADAPTERS: KindAdapter[] = [
       return writeOutcomeOf(res);
     },
   },
+  {
+    kind: "agent",
+    catalogKind: "agent",
+    // What a computer runs on handed work is a person's to change.
+    manualFields: ["wake"],
+    async loadRows(ids) {
+      const q = db.select().from(agentTemplates);
+      return (ids && ids.length > 0
+        ? await q.where(inArray(agentTemplates.id, ids))
+        : await q) as unknown as Record<string, unknown>[];
+    },
+    // A pod-wide row with no author: its updates are filed under the owner.
+    async creatorOf() {
+      const owner = await resolvePodOwnerUserId();
+      if (!owner) {
+        throw new Error(
+          "this pod has no owner yet: an agent template update is filed under the owner"
+        );
+      }
+      return owner;
+    },
+    findElement(def) {
+      const el = agentTemplateElementOf(def);
+      if (!el || typeof el !== "object") return null;
+      // The parsed spec, as install wrote it, so the diff compares like with
+      // like. An element the pod refuses is compared as published; the write
+      // refuses it (`updateAgentTemplate`).
+      const parsed = parseAgentTemplateSpec(el);
+      return {
+        ...(parsed.ok ? parsed.spec : (el as Record<string, unknown>)),
+        // The name is the definition's own, as install reads it.
+        ...(typeof def.name === "string" && def.name ? { name: def.name } : {}),
+      } as Record<string, unknown>;
+    },
+    async applyUpdate({ ctx, id, merged, metadata }) {
+      const { updateAgentTemplate } =
+        await import("../agent-templates/update.js");
+      return updateAgentTemplate(ctx, { id, fields: merged, metadata });
+    },
+  },
 ];
+
+/**
+ * Hold back the `manual` fields the merge would advance on its own: the row
+ * keeps its value and their baseline stays, so the plan still offers the
+ * change for a person to apply. `held` names them.
+ */
+export function holdManualFields(
+  r: ThreeWayMergeResult,
+  manual: readonly string[] | undefined,
+  live: Record<string, unknown>,
+  base: Record<string, unknown>
+): { r: ThreeWayMergeResult; held: string[] } {
+  const held = r.applied.filter((k) => manual?.includes(k));
+  if (held.length === 0) return { r, held };
+  const merged = { ...r.merged };
+  const nextBaseline = { ...r.nextBaseline };
+  for (const k of held) {
+    merged[k] = live[k];
+    nextBaseline[k] = base[k];
+  }
+  const applied = r.applied.filter((k) => !held.includes(k));
+  return {
+    r: { ...r, merged, nextBaseline, applied, changed: applied.length > 0 },
+    held,
+  };
+}
 
 /** Governed-write acting context — attribute to the row's own creator, scoped
  *  to its own workspace (null = pod-wide). Mirrors the capability reconcile's
@@ -441,7 +526,7 @@ export async function resolveInstalledRow(
 }
 
 /**
- * Every installed view/skill/automation row carrying a source-link, narrowed
+ * Every installed view/skill/automation/agent-template row carrying a source-link, narrowed
  * like the reconcile (`ids`, `packageSlugs`; an empty list = none). Unlike the
  * reconcile's per-kind load, a failed read THROWS: a reader must never show
  * "no updates" for a list it could not load.
@@ -579,7 +664,12 @@ export async function reconcileStandaloneConfigsToTemplates(
         const { live, desired, catalogVersion, catalogName } =
           resolution.resolved;
 
-        const r = threeWayMergeFields(live, source.baseline, desired);
+        const { r, held } = holdManualFields(
+          threeWayMergeFields(live, source.baseline, desired),
+          adapter.manualFields,
+          live,
+          source.baseline
+        );
 
         // A user-edited field is reported (never overwritten) whether or not any
         // OTHER field advanced.
@@ -589,6 +679,14 @@ export async function reconcileStandaloneConfigsToTemplates(
             reason: ownerOwnedReason(r.ownerOwned, r.conflicted),
           });
         }
+        // A held field waits for a person: reported, never "up to date".
+        if (held.length > 0) {
+          report.skipped.push({
+            ...base,
+            reason: `${HELD_FOR_A_PERSON}: [${held.join(",")}]`,
+          });
+        }
+        const quiet = r.ownerOwned.length === 0 && held.length === 0;
 
         // The stamp is earned: the row is at the catalog's version once this
         // pass leaves no field CONFLICTED — every managed field applied, already
@@ -596,9 +694,10 @@ export async function reconcileStandaloneConfigsToTemplates(
         // change. Without it a row whose fields already matched kept its
         // install version, and a version-comparing list read "content changed"
         // forever while this pass answered "no drift". A conflicted field keeps
-        // the old version, so the list and this pass both still flag the row.
+        // the old version, so the list and this pass both still flag the row;
+        // so does a held field, which still waits for a person.
         const version =
-          r.conflicted.length === 0
+          r.conflicted.length === 0 && held.length === 0
             ? (catalogVersion ?? source.packageVersion)
             : source.packageVersion;
         const baselineMoved = !deepEqual(r.nextBaseline, source.baseline);
@@ -606,8 +705,8 @@ export async function reconcileStandaloneConfigsToTemplates(
 
         if (!baselineMoved && !stampStale) {
           // Nothing advanced. Only record a plain "no drift" skip when there was
-          // also no owner-owned divergence (already reported above).
-          if (r.ownerOwned.length === 0) {
+          // also no owner-owned divergence or held field (reported above).
+          if (quiet) {
             report.skipped.push({ ...base, reason: "up to date (no drift)" });
           }
           continue;
@@ -623,7 +722,7 @@ export async function reconcileStandaloneConfigsToTemplates(
               ...base,
               reason: `would update: [${r.applied.join(",")}]`,
             });
-          } else if (r.ownerOwned.length === 0) {
+          } else if (quiet) {
             report.skipped.push({
               ...base,
               reason: `up to date (no drift); would record ${bookkeeping}`,
@@ -649,8 +748,9 @@ export async function reconcileStandaloneConfigsToTemplates(
             baseline: r.nextBaseline,
           },
         };
+        const creator = await adapter.creatorOf(row);
         const ctx = buildRowCtx(
-          adapter.creatorOf(row),
+          creator,
           (row.workspaceId as string | null) ?? null
         );
         const outcome = await adapter.applyUpdate({
@@ -668,7 +768,7 @@ export async function reconcileStandaloneConfigsToTemplates(
             name: catalogName,
             fromVersion: source.packageVersion,
             toVersion: catalogVersion,
-            userId: opts.receipt?.userId ?? adapter.creatorOf(row),
+            userId: opts.receipt?.userId ?? creator,
             changes: [],
           };
           for (const k of r.applied) {
@@ -695,7 +795,7 @@ export async function reconcileStandaloneConfigsToTemplates(
             ...base,
             reason: `updated: [${r.applied.join(",")}]`,
           });
-        } else if (r.ownerOwned.length === 0) {
+        } else if (quiet) {
           report.skipped.push({
             ...base,
             reason: `up to date (no drift); recorded ${bookkeeping}`,

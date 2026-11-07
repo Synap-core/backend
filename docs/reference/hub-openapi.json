@@ -8020,7 +8020,8 @@
                               "capability",
                               "view",
                               "skill",
-                              "automation"
+                              "automation",
+                              "agent"
                             ]
                           },
                           "name": { "type": "string" },
@@ -8107,7 +8108,7 @@
                         "properties": {
                           "rowKind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "rowId": { "type": "string" },
                           "name": { "type": "string" },
@@ -8291,7 +8292,12 @@
                                 "properties": {
                                   "rowKind": {
                                     "type": "string",
-                                    "enum": ["view", "skill", "automation"]
+                                    "enum": [
+                                      "view",
+                                      "skill",
+                                      "automation",
+                                      "agent"
+                                    ]
                                   },
                                   "rowId": { "type": "string" },
                                   "field": { "type": "string" },
@@ -17788,7 +17794,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17805,7 +17811,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17822,7 +17828,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17839,7 +17845,7 @@
                         "properties": {
                           "kind": {
                             "type": "string",
-                            "enum": ["view", "skill", "automation"]
+                            "enum": ["view", "skill", "automation", "agent"]
                           },
                           "id": { "type": "string" },
                           "name": { "type": "string" },
@@ -17895,7 +17901,7 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "enum": ["view", "skill", "automation"]
+                    "enum": ["view", "skill", "automation", "agent"]
                   },
                   "id": { "type": "string", "format": "uuid" }
                 },
@@ -17915,7 +17921,7 @@
                     "detached": { "type": "boolean" },
                     "kind": {
                       "type": "string",
-                      "enum": ["view", "skill", "automation"]
+                      "enum": ["view", "skill", "automation", "agent"]
                     },
                     "id": { "type": "string" },
                     "outcome": {
