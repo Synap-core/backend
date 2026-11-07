@@ -1675,7 +1675,7 @@
           "outcomes": {
             "type": "array",
             "maxItems": 40,
-            "description": "What this session must YIELD — one list, each outcome verifiable. A deliverable (`kind`: document, report, code, decision…) is checked by EVIDENCE by default: when you finish it, call `completeOutput` with its key (your CLAIM) and make sure the evidence is there — the object produced inside this session, or its `ref` — and the pod marks it met; with no evidence the claim waits for review. Use `kind: 'fact'` for an outcome whose thing is a fact (e.g. 'Typecheck passes'), checked by `verify` (default judge) through synap_evaluate_session. `owner: 'human'` (+ `blockedReason`, `why`, an `ask`) declares one only the person can yield — it shows as an INPUT the work needs. On update_session outcomes UPSERT by key (nothing unnamed is removed). Replaces `expectedOutputs` + `criteria` (still accepted, deprecated).",
+            "description": "What this session must YIELD, each outcome verifiable. A deliverable (`kind`: document, report, code, decision…) is checked by EVIDENCE: when done, call `completeOutput` with its key (your claim) with the evidence in place (an object produced in this session, or its `ref`); with none the claim waits for review. `kind: 'fact'` = a checked statement (e.g. 'Typecheck passes'), judged by `verify` via synap_evaluate_session. `owner: 'human'` (+ `blockedReason`, `why`, an `ask`) = only the person can yield it. On update_session outcomes UPSERT by key. Replaces `expectedOutputs` + `criteria` (deprecated, still accepted). Ask shapes: system/synap/asks.",
             "items": {
               "type": "object",
               "properties": {
@@ -2004,7 +2004,7 @@
           "outcomes": {
             "type": "array",
             "maxItems": 40,
-            "description": "What this session must YIELD — one list, each outcome verifiable. A deliverable (`kind`: document, report, code, decision…) is checked by EVIDENCE by default: when you finish it, call `completeOutput` with its key (your CLAIM) and make sure the evidence is there — the object produced inside this session, or its `ref` — and the pod marks it met; with no evidence the claim waits for review. Use `kind: 'fact'` for an outcome whose thing is a fact (e.g. 'Typecheck passes'), checked by `verify` (default judge) through synap_evaluate_session. `owner: 'human'` (+ `blockedReason`, `why`, an `ask`) declares one only the person can yield — it shows as an INPUT the work needs. On update_session outcomes UPSERT by key (nothing unnamed is removed). Replaces `expectedOutputs` + `criteria` (still accepted, deprecated).",
+            "description": "What this session must YIELD, each outcome verifiable. A deliverable (`kind`: document, report, code, decision…) is checked by EVIDENCE: when done, call `completeOutput` with its key (your claim) with the evidence in place (an object produced in this session, or its `ref`); with none the claim waits for review. `kind: 'fact'` = a checked statement (e.g. 'Typecheck passes'), judged by `verify` via synap_evaluate_session. `owner: 'human'` (+ `blockedReason`, `why`, an `ask`) = only the person can yield it. On update_session outcomes UPSERT by key. Replaces `expectedOutputs` + `criteria` (deprecated, still accepted). Ask shapes: system/synap/asks.",
             "items": {
               "type": "object",
               "properties": {
