@@ -70,7 +70,17 @@ export interface IsDelegationGrant {
   runId?: string | null;
   /** A refresh keeps the original bound; omitted = now + 2 h. */
   maxExpiresAt?: number;
+  /**
+   * An APP's grant bounding this turn (`app_grant` claim): the serialized
+   * grant (`{ scopes, clientId }`). Present = the hub bounds every call of the
+   * turn by it instead of the full-access delegation grant. Minted only from
+   * a grant the pod already checked; the hub validates its shape again.
+   */
+  appGrant?: Record<string, unknown> | null;
 }
+
+/** The biggest `app_grant` claim a delegation may carry (bytes of JSON). */
+export const IS_DELEGATION_APP_GRANT_MAX_BYTES = 8 * 1024;
 
 export interface VerifiedIsDelegation {
   operatorUserId: string;
@@ -78,6 +88,8 @@ export interface VerifiedIsDelegation {
   channelId: string | null;
   runId: string | null;
   scopes: string[];
+  /** The `app_grant` claim, or null for a delegation with no app grant. */
+  appGrant: Record<string, unknown> | null;
   /** The IS origin the token was minted for. */
   audience: string;
   jti: string;
@@ -121,9 +133,20 @@ export function mintIsDelegationToken(
       "This delegation has reached its maximum lifetime."
     );
   }
+  let appGrantClaim: Record<string, unknown> | undefined;
+  if (grant.appGrant) {
+    const json = JSON.stringify(grant.appGrant);
+    if (Buffer.byteLength(json, "utf8") > IS_DELEGATION_APP_GRANT_MAX_BYTES)
+      throw new PodIdentityError(
+        "POD_JWT_BAD_REQUEST",
+        "This app's grant is too large to delegate."
+      );
+    appGrantClaim = { app_grant: grant.appGrant };
+  }
   return signPodJwt(
     { audience, purpose: IS_DELEGATION_PURPOSE },
     {
+      ...(appGrantClaim ?? {}),
       sub: grant.operatorUserId,
       ...(grant.agentUserId ? { act: { sub: grant.agentUserId } } : {}),
       ...(grant.channelId ? { channel_id: grant.channelId } : {}),
@@ -239,12 +262,29 @@ export async function verifyIsDelegationToken(
     throw invalid("carries an invalid channel or run");
   }
 
+  // FAIL CLOSED: a present app grant that is not an object of the bounded
+  // size is a refused token, never a fallback to the full-access grant.
+  let appGrant: Record<string, unknown> | null = null;
+  if (payload.app_grant !== undefined) {
+    const raw = payload.app_grant;
+    if (
+      raw === null ||
+      typeof raw !== "object" ||
+      Array.isArray(raw) ||
+      Buffer.byteLength(JSON.stringify(raw), "utf8") >
+        IS_DELEGATION_APP_GRANT_MAX_BYTES
+    )
+      throw invalid("carries an invalid app grant");
+    appGrant = raw as Record<string, unknown>;
+  }
+
   return {
     operatorUserId: sub,
     agentUserId,
     channelId,
     runId,
     scopes,
+    appGrant,
     audience,
     jti: payload.jti as string,
     expiresAt: exp,
@@ -291,6 +331,7 @@ export async function refreshIsDelegationToken(
       channelId: previous.channelId,
       runId: previous.runId,
       maxExpiresAt: previous.maxExpiresAt,
+      appGrant: previous.appGrant,
     },
     now
   );

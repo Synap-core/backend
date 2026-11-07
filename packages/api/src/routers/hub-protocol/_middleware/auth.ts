@@ -55,6 +55,10 @@ import {
 } from "@synap/database";
 import { APP_PERSON_KEY_TYPE } from "@synap/database/schema";
 import {
+  AppGrantClaimError,
+  parseAppGrantClaim,
+} from "../../../services/app-grant-claim.js";
+import {
   isPersonDeviceToken,
   resolvePersonDeviceSession,
 } from "@synap/database/person-devices";
@@ -239,6 +243,40 @@ async function authenticateIsDelegation(
   c.set("keyWorkspaceId", null);
   const refused = await refuseGuestPrincipal(c);
   if (refused) return refused;
+  // The turn's grant: an APP's grant when the token carries one (`app_grant`,
+  // narrowing only), else the full-access delegation grant as before. FAIL
+  // CLOSED: a claim that does not parse is refused, never widened to `*`.
+  let grant;
+  if (delegation.appGrant) {
+    try {
+      grant = parseAppGrantClaim(delegation.appGrant);
+    } catch (err) {
+      if (!(err instanceof AppGrantClaimError)) throw err;
+      logger.warn(
+        { jti: delegation.jti },
+        "IS delegation refused: bad app grant"
+      );
+      return authErrorResponse(c, "key_revoked", {
+        message: "This delegation's app grant is malformed.",
+      });
+    }
+    // The same door fence an API key's grant meets (see the key path above).
+    const rel = hubRelativePath(c.req.path);
+    if (isFencedGrant(grant) && !restDoorAllowed(c.req.method, rel, grant)) {
+      return c.json(
+        { error: GRANT_DOOR_UNSUPPORTED, code: "GRANT_DOOR_UNSUPPORTED" },
+        403
+      );
+    }
+    if (!ownerWideDoorAllowed(rel, grant, c.req.method)) {
+      return c.json(
+        { error: GRANT_OWNER_WIDE_UNSUPPORTED, code: "GRANT_DOOR_UNSUPPORTED" },
+        403
+      );
+    }
+  } else {
+    grant = IS_DELEGATION_GRANT;
+  }
   // W-A4: a non-channel IS run names itself (`is:<runId>`); the same resolver
   // as the stored key's, the AI service (the token's audience) as the client.
   return runWithClientKey(
@@ -246,7 +284,7 @@ async function authenticateIsDelegation(
       { id: delegation.audience, keyType: "is_internal" },
       requestConversationId(c.req.header(CONVERSATION_HEADER))
     ),
-    () => runWithGrant(IS_DELEGATION_GRANT, () => next())
+    () => runWithGrant(grant, () => next())
   );
 }
 

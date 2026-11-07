@@ -297,3 +297,107 @@ describe("hub auth: the legacy is_internal key + header (transition)", () => {
     expect(status).toBe(401);
   });
 });
+
+// ── The app grant claim (`app_grant`): the turn runs under the app's grant ──
+
+const appGrantOf = (
+  permissions: string[],
+  workspaceIds: string[] | null = null
+) => ({
+  scopes: [{ permissions, workspaceIds, projectIds: null, entityIds: null }],
+  clientId: "app_public_test",
+});
+
+async function callAt(
+  method: string,
+  path: string,
+  headers: Record<string, string>
+) {
+  const app = new Hono();
+  app.use("/api/hub/*", hubAuthMiddleware as never);
+  app.all("/api/hub/*", (c) =>
+    c.json({
+      ok: true,
+      fullGrant:
+        getRequestGrant()?.scopes.every((s) => s.permissions.includes("*")) ??
+        null,
+    })
+  );
+  const res = await app.request(path, { method, headers });
+  return {
+    status: res.status,
+    body: (await res.json().catch(() => ({}))) as Record<string, unknown>,
+  };
+}
+
+describe("IS delegation with an app grant (app_grant claim)", () => {
+  it("(a) a claim's grant refuses a read door outside it (403), and admits one inside it", async () => {
+    const readOnlyEntities = delegation({
+      appGrant: appGrantOf(["entity.read"]),
+    });
+    const outside = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${readOnlyEntities}`,
+    });
+    expect(outside.status).toBe(403);
+    expect(outside.body).toMatchObject({ code: "GRANT_DOOR_UNSUPPORTED" });
+
+    const inside = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${delegation({ appGrant: appGrantOf(["messaging.read"]) })}`,
+    });
+    expect(inside.status).not.toBe(403);
+  });
+
+  it("(a2) the grant is what the turn runs under: not the full-access grant", async () => {
+    const r = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${delegation({ appGrant: appGrantOf(["messaging.read"]) })}`,
+    });
+    expect(r.status).not.toBe(403);
+    const probe = await callAt("POST", "/api/hub/anything-unlisted", {
+      authorization: `Bearer ${delegation({ appGrant: appGrantOf(["messaging.read"]) })}`,
+    });
+    expect(probe.body.fullGrant).not.toBe(true);
+  });
+
+  it.each([
+    ["a claim that is not an object", "not-an-object"],
+    ["a claim with no scopes", { scopes: [], clientId: null }],
+    [
+      "a claim whose permission does not parse",
+      { scopes: [{ permissions: ["entity..read"] }], clientId: null },
+    ],
+  ])("(b) %s is 401, never a fallback to '*'", async (_name, claim) => {
+    const token = delegation({ appGrant: claim as never });
+    const r = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${token}`,
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("(c) a delegation with NO claim keeps the full-access grant", async () => {
+    const r = await callAt("GET", "/api/hub/anything-unlisted", {
+      authorization: `Bearer ${delegation()}`,
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.fullGrant).toBe(true);
+  });
+
+  it("(f) a refresh keeps the app grant (a refresh never widens it to '*')", async () => {
+    const { refreshIsDelegationToken, verifyIsDelegationToken } =
+      await import("@synap/database");
+    const token = delegation({ appGrant: appGrantOf(["messaging.read"]) });
+    const refreshed = await refreshIsDelegationToken(token, {
+      isKnownAudience: (a) => a === IS,
+    });
+    const verified = await verifyIsDelegationToken(refreshed.token, {
+      isKnownAudience: (a) => a === IS,
+    });
+    expect(verified.appGrant).toEqual(appGrantOf(["messaging.read"]));
+  });
+
+  it("(g) a claim too large to sign is refused at the mint, not sent", () => {
+    const huge = appGrantOf(
+      Array.from({ length: 400 }, (_, i) => `chat.${"x".repeat(40)}${i}.read`)
+    );
+    expect(() => delegation({ appGrant: huge })).toThrow();
+  });
+});
