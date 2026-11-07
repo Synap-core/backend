@@ -195,6 +195,23 @@ export const TOOL_GROUPS = {
 export type ToolGroup = keyof typeof TOOL_GROUPS;
 export const TOOL_GROUP_NAMES = Object.keys(TOOL_GROUPS) as ToolGroup[];
 
+/**
+ * What each group is FOR, in a few words — the line a model reads to pick one
+ * (`synap_load_skill`'s description, `synap_orient`'s `yourTools`). Typed on
+ * {@link ToolGroup}, so a new group cannot ship without its line.
+ */
+export const TOOL_GROUP_PURPOSES: Readonly<Record<ToolGroup, string>> = {
+  read: "look things up beyond ask",
+  data: "precise writes beyond capture",
+  sessions: "the rest of the session lifecycle",
+  governance: "proposals and trust rules",
+  schema: "kinds, roles and who may see them",
+  spaces: "spaces, projects and focus",
+  tracks: "goals (tracks): multi-stage work over time",
+  build: "views, cells, playbooks and skills",
+  capabilities: "connected services, verbs and automations",
+};
+
 /** The namespace of a tool-group ref: `load_skill('tools:<group>')`. */
 export const TOOL_GROUP_REF_PREFIX = "tools:";
 
