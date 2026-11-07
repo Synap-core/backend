@@ -84,6 +84,12 @@ function makePgliteSql(db: PGlite): Sql {
 }
 
 const SCHEMA = `
+-- research.finding-kind-to-research-finding reads a space's template stamp.
+CREATE TABLE workspaces (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  package_slug text,
+  settings jsonb DEFAULT '{}'
+);
 CREATE TABLE profiles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug text NOT NULL,
