@@ -7,9 +7,10 @@
  * computer's runner then leases and runs it. Re-approving does nothing.
  *
  * Approval needs a fresh sign-in (installing on a person's machine is a
- * commitment; the default the reconciliation names, overridable): the
- * approve door's `assertFreshAuthentication` runs for this key, as for the
- * other commitment doors.
+ * commitment: the default the reconciliation §3.4 names, overridable):
+ * `widensCredential` makes the dispatch refuse a Synap app's device session
+ * (`assertFreshAuthentication`), so it is approved on the console. It mints
+ * no key today; a `service` installation will (plan 64072312 U6).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -38,6 +39,7 @@ function cannotApply(message: string) {
 export function registerInstallationExecutors(): void {
   registerProposalExecutor({
     key: "installation/request",
+    widensCredential: true,
     async execute({ proposal, payload, userId, input, deps }) {
       const [current] = await db
         .select({ status: proposals.status })

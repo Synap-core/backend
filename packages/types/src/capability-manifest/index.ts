@@ -26,7 +26,6 @@ import {
   COMPUTER_CAPABILITY_FIELDS,
   computerOses,
   computerPlacementProblems,
-  installKind,
   installSchema,
   licenceSchema,
   permissionsSchema,
@@ -35,7 +34,6 @@ import {
   uninstallSchema,
   verifySchema,
   type ComputerOs,
-  type InstallKind,
 } from "./computer.js";
 import { recipeSchema } from "./recipe.js";
 
@@ -104,27 +102,27 @@ export interface ComputerFacts {
 
 /**
  * Can this capability be installed on this computer? A reason in plain words
- * when it cannot, null when it can. Reads `placement` only: the capability
- * must run on a computer, be a `tool` or a `service`, and list the computer's
- * OS (and arch, when the platform names arches). A computer whose OS is not
+ * when it cannot, null when it can. The capability must run on a computer,
+ * be valid by the one rule (which makes it a `tool` or a `service`), and its
+ * `placement` must list the computer's OS (and arch, when the platform names
+ * arches). A computer whose OS is not
  * known is not refused here: its runner checks again before any step runs.
  */
 export function placementRefusal(
   spec: Record<string, unknown>,
   computer: ComputerFacts
 ): string | null {
+  const runsOn = (spec.placement as { runsOn?: unknown } | undefined)?.runsOn;
+  if (!Array.isArray(runsOn) || !runsOn.includes("computer"))
+    return "It runs on the pod, not on a computer.";
   const parsed = CapabilityComputerSpecSchema.safeParse(spec);
   if (!parsed.success) return "Its install steps are not valid.";
   const s = parsed.data;
-  if (!s.placement?.runsOn.includes("computer"))
-    return "It runs on the pod, not on a computer.";
-  const kind: InstallKind | null = installKind(s);
-  if (!kind) return "It has nothing to install on a computer.";
   if (!computer.os) return null;
   const oses: ComputerOs[] = computerOses(s);
   if (!(oses as string[]).includes(computer.os))
     return `It does not run on this computer's system (${computer.os}).`;
-  const platform = s.placement.platforms?.find((p) => p.os === computer.os);
+  const platform = s.placement?.platforms?.find((p) => p.os === computer.os);
   const arches: readonly string[] | undefined = platform?.arch;
   if (computer.arch && arches?.length && !arches.includes(computer.arch))
     return `It does not run on this computer's processor (${computer.arch}).`;
