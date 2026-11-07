@@ -18,6 +18,7 @@
 import { and, db, drizzleSql, eq, isNull } from "@synap/database";
 import { agentTemplates, users } from "@synap/database/schema";
 import { AGENT_TEMPLATE_SLUG } from "@synap-core/types/agents";
+import { attachTemplatePractices } from "./practices.js";
 
 /**
  * Check the template a connect names against the agent's type. A slug that is
@@ -52,21 +53,29 @@ export async function checkConnectTemplate(
  * written. A slug that is not installed links nothing: a link never dangles,
  * so a connect that named a template the pod does not have yet leaves the
  * agent to the self-healing pass, which links it once the catalog installs it.
+ *
+ * The same transaction attaches the template's practices to the agent
+ * (`attachTemplatePractices`, D4), so every link door gives them and a link
+ * is never written without them.
  */
 export async function linkAgentToTemplate(
   agentUserId: string,
   templateSlug: string
 ): Promise<boolean> {
-  const written = await db
-    .update(users)
-    .set({ agentTemplateSlug: templateSlug })
-    .where(
-      and(
-        eq(users.id, agentUserId),
-        isNull(users.agentTemplateSlug),
-        drizzleSql`EXISTS (SELECT 1 FROM ${agentTemplates} WHERE ${agentTemplates.slug} = ${templateSlug})`
+  return db.transaction(async (tx) => {
+    const written = await tx
+      .update(users)
+      .set({ agentTemplateSlug: templateSlug })
+      .where(
+        and(
+          eq(users.id, agentUserId),
+          isNull(users.agentTemplateSlug),
+          drizzleSql`EXISTS (SELECT 1 FROM ${agentTemplates} WHERE ${agentTemplates.slug} = ${templateSlug})`
+        )
       )
-    )
-    .returning({ id: users.id });
-  return written.length > 0;
+      .returning({ id: users.id });
+    if (written.length === 0) return false;
+    await attachTemplatePractices(tx, agentUserId, templateSlug);
+    return true;
+  });
 }

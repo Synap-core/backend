@@ -56,7 +56,12 @@ vi.mock("../capabilities/official-catalog-trust.js", async (importOriginal) => {
 
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
-import { agentTemplates, cpCatalogCache, users } from "@synap/database/schema";
+import {
+  agentConfigs,
+  agentTemplates,
+  cpCatalogCache,
+  users,
+} from "@synap/database/schema";
 import { officialMarketSource } from "../capabilities/market-sources.js";
 import { installOfficialAgentTemplates } from "./official.js";
 import { installAgentTemplate } from "./install.js";
@@ -164,16 +169,20 @@ const rows = async () =>
   ).rows;
 
 beforeAll(async () => {
-  for (const t of [agentTemplates, cpCatalogCache, users])
+  for (const t of [agentConfigs, agentTemplates, cpCatalogCache, users])
     if (is(t, PgTable)) await h.client!.exec(ddlFor(t));
   await h.client!.exec(
     `create unique index if not exists agent_templates_slug_unique on agent_templates (slug)`
+  );
+  // The preset upsert's conflict target (0390): the practices attach needs it.
+  await h.client!.exec(
+    `create unique index if not exists agent_configs_user_preset_unique on agent_configs (user_id, preset_key) where preset_key is not null`
   );
 }, 120_000);
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from agent_templates; delete from cp_catalog_cache; delete from users;`
+    `delete from agent_configs; delete from agent_templates; delete from cp_catalog_cache; delete from users;`
   );
   h.refuse.clear();
 });
@@ -357,5 +366,69 @@ describe("D9 — the connect door's template check, and the link", () => {
       [id]
     );
     expect(r[0]!.agent_template_slug).toBe("claude-code");
+  });
+});
+
+describe("D4 — linking an agent attaches its template's practices", () => {
+  const templatePresets = async (id: string) =>
+    (
+      await q<{ preset_label: string; skill_slugs: string[] }>(
+        `select preset_label, skill_slugs from agent_configs where user_id = $1 and preset_key = 'template'`,
+        [id]
+      )
+    ).rows;
+  const agent = async (agentType: string) => {
+    const id = randomUUID();
+    await q(
+      `insert into users (id, email, user_type, agent_type) values ($1, $2, 'agent', $3)`,
+      [id, `${id}@x`, agentType]
+    );
+    return id;
+  };
+  const installClaude = () =>
+    installAgentTemplate({
+      slug: "claude-code",
+      packageSlug: "claude-code",
+      packageVersion: null,
+      name: "Claude Code",
+      definition: {
+        ...CLAUDE_CODE,
+        agent: {
+          ...CLAUDE_CODE.agent,
+          practices: { skills: ["synap", "system/synap/capture", "synap"] },
+        },
+      },
+    });
+
+  it("the link writes ONE `template` preset with the template's skills, in the same transaction", async () => {
+    await installClaude();
+    const id = await agent("claude-code");
+    expect(await linkAgentToTemplate(id, "claude-code")).toBe(true);
+    expect(await templatePresets(id)).toEqual([
+      {
+        preset_label: "From the Claude Code template",
+        skill_slugs: ["synap", "system/synap/capture"],
+      },
+    ]);
+  });
+
+  it("a second link pass writes nothing; a person's edit of the preset is kept", async () => {
+    await installClaude();
+    const id = await agent("claude-code");
+    await q(
+      `insert into agent_configs (user_id, agent_type, preset_key, preset_label, skill_slugs) values ($1, 'claude-code', 'template', 'Mine', '["my-skill"]'::jsonb)`,
+      [id]
+    );
+    expect(await linkAgentToTemplate(id, "claude-code")).toBe(true);
+    expect(await linkAgentToTemplate(id, "claude-code")).toBe(false);
+    expect(await templatePresets(id)).toEqual([
+      { preset_label: "Mine", skill_slugs: ["my-skill"] },
+    ]);
+  });
+
+  it("no link, no preset: a template not installed attaches nothing", async () => {
+    const id = await agent("claude-code");
+    expect(await linkAgentToTemplate(id, "claude-code")).toBe(false);
+    expect(await templatePresets(id)).toEqual([]);
   });
 });

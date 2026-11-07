@@ -90,6 +90,7 @@ vi.mock("../focus-sessions/notify-needs-you.js", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import {
+  agentConfigs,
   agentTemplates,
   apiKeys,
   apps,
@@ -210,20 +211,41 @@ const DEF = (harness: string, worker = false) => ({
 });
 
 beforeAll(async () => {
-  for (const t of [agentTemplates, apiKeys, apps, focusSessions, links, users])
+  for (const t of [
+    agentConfigs,
+    agentTemplates,
+    apiKeys,
+    apps,
+    focusSessions,
+    links,
+    users,
+  ])
     if (is(t, PgTable)) await h.client!.exec(ddlFor(t));
   await h.client!.exec(
     `create unique index if not exists agent_templates_slug_unique on agent_templates (slug)`
+  );
+  // The preset upsert's conflict target (0390): the practices attach needs it.
+  await h.client!.exec(
+    `create unique index if not exists agent_configs_user_preset_unique on agent_configs (user_id, preset_key) where preset_key is not null`
   );
 }, 120_000);
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from agent_templates; delete from api_keys; delete from focus_sessions; delete from users;`
+    `delete from agent_configs; delete from agent_templates; delete from api_keys; delete from focus_sessions; delete from users;`
   );
   h.createdSessions.length = 0;
   h.notified.length = 0;
 });
+
+/** The label of the agent's `template` preset (D4), or null. */
+async function templatePresetOf(id: string): Promise<string | null> {
+  const { rows } = await h.client!.query<{ preset_label: string }>(
+    `select preset_label from agent_configs where user_id = $1 and preset_key = 'template'`,
+    [id]
+  );
+  return rows[0]?.preset_label ?? null;
+}
 
 async function installOfficial() {
   for (const [slug, name, worker] of [
@@ -263,6 +285,15 @@ describe("D10 — clear matches link, the rest is asked ONCE", () => {
     });
     expect(await linkOf(devbox)).toBe("claude-code");
     expect(await linkOf(linked)).toBe("codex");
+    // D4: the pass's links carry their template's practices; the agent
+    // linked before the pass is the migration's (0406), not the pass's.
+    expect(await templatePresetOf(devbox)).toBe(
+      "From the Claude Code template"
+    );
+    expect(await templatePresetOf(hermes)).toBe(
+      "From the Hermes Agent template"
+    );
+    expect(await templatePresetOf(linked)).toBeNull();
     expect(h.createdSessions).toHaveLength(1);
     expect(h.createdSessions[0]).toMatchObject({ userId: OWNER });
     expect(await openCardFields()).toEqual([[eve, coder].sort()]);
@@ -344,6 +375,8 @@ describe("D10 — the answer", () => {
     });
     expect(out).toEqual({ linked: [eve], none: [coder], ignored: [theirs] });
     expect(await linkOf(eve)).toBe("hermes");
+    expect(await templatePresetOf(eve)).toBe("From the Hermes Agent template");
+    expect(await templatePresetOf(coder)).toBeNull();
     expect(await linkOf(coder)).toBeNull();
     expect(await linkOf(theirs)).toBeNull();
 
