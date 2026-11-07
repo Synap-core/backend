@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
@@ -135,7 +136,7 @@ function parseSlotInputs(
     }
   } catch (err) {
     return {
-      error: `Invalid output slot: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Invalid output slot: ${err instanceof Error ? err.message : String(err)}${/\bask\b/.test(err instanceof Error ? err.message : String(err)) ? ASK_SKILL_HINT : ""}`,
     };
   }
   return out;
@@ -172,7 +173,7 @@ async function parseOutcomesArg(raw: unknown): Promise<
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     return {
-      error: `Invalid outcomes: ${issue ? `${issue.path.join(".") || "outcomes"}: ${issue.message}` : "malformed"}. Nothing was changed.`,
+      error: `Invalid outcomes: ${issue ? `${issue.path.join(".") || "outcomes"}: ${issue.message}` : "malformed"}. Nothing was changed.${issue?.path.includes("ask") ? ASK_SKILL_HINT : ""}`,
     };
   }
   return { list: parsed.data };

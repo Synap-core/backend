@@ -47,8 +47,8 @@ describe("MCP advertises `ref` on the declare doors", () => {
   });
 
   it.each([
-    ["synap_update_session", "expectedOutputs"],
-    ["synap_start_session", "expectedOutputs"],
+    ["synap_update_session", "outcomes"],
+    ["synap_start_session", "outcomes"],
   ])("%s.%s items declare ref with both arms", (name, prop) => {
     const items = tool(name).inputSchema.properties[prop].items;
     expect(items.properties.ref, `${name}.${prop}[].ref`).toBeDefined();
@@ -60,21 +60,22 @@ describe("MCP advertises `ref` on the declare doors", () => {
     expect(arms.every((a) => a.additionalProperties === false)).toBe(true);
   });
 
-  it("synap_update_session.addOutput declares ref too", () => {
-    // Without it, "block this slot on the human AND point them at the page"
-    // needs a second, wholesale patch — the field would be advertised on the
-    // array door and unreachable on the one-call door beside it.
-    const addOutput = tool("synap_update_session").inputSchema.properties
-      .addOutput;
-    expect(addOutput.properties.ref).toBeDefined();
-    expect(addOutput.properties.ref.oneOf).toHaveLength(2);
+  it("the deprecated aliases stay DECLARED (loose on the wire, strict on the parse)", () => {
+    // Advertised as plain arrays/objects so the definition stays small; the
+    // handler still parses them with `expectedOutputWireSchema` (below).
+    const props = tool("synap_update_session").inputSchema.properties;
+    expect(props.expectedOutputs.type).toBe("array");
+    expect(props.addOutput.type).toBe("object");
+    expect(
+      tool("synap_start_session").inputSchema.properties.expectedOutputs.type
+    ).toBe("array");
   });
 
   it("every kind the manifest advertises is one the wire ACCEPTS", () => {
     // The reachability half. A kind a model is told to send and the parse then
     // refuses is an advertised dead end.
-    const arms = tool("synap_update_session").inputSchema.properties
-      .expectedOutputs.items.properties.ref.oneOf as Array<Record<string, any>>;
+    const arms = tool("synap_update_session").inputSchema.properties.outcomes
+      .items.properties.ref.oneOf as Array<Record<string, any>>;
     const kinds = arms[0].properties.kind.enum as string[];
     expect(kinds.length).toBeGreaterThanOrEqual(6);
     for (const kind of kinds) {

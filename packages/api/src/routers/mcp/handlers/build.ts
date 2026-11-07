@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
@@ -856,7 +857,7 @@ export const buildHandlers: McpHandlerMap = {
       const parsedAsk = AskSchema.safeParse(args.ask);
       if (!parsedAsk.success) {
         return toolError(
-          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.`
+          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.${ASK_SKILL_HINT}`
         );
       }
       ask = parsedAsk.data as SlotAsk;
