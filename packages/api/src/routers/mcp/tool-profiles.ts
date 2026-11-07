@@ -79,7 +79,7 @@ export const TOOL_GROUPS = {
     "synap_get_channel",
     "synap_diagnose",
     "synap_template_health",
-    "synap_flow",
+    "synap_get_flow",
   ],
   /** Precise writes beyond `capture`. */
   data: [

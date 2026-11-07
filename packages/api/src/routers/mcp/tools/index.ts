@@ -3200,7 +3200,7 @@ export const tools = {
         },
       },
       {
-        name: "synap_flow",
+        name: "synap_get_flow",
         annotations: {
           title: "Get the flow of a kind or role",
           readOnlyHint: true,
