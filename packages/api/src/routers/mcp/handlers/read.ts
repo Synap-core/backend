@@ -485,6 +485,51 @@ export const readHandlers: McpHandlerMap = {
    * call `signals.needsYou`, so an agent and an outside reader see the same
    * rows by fold and the same count.
    */
+  synap_flow: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const profileSlug =
+      typeof args.profileSlug === "string" ? args.profileSlug.trim() : "";
+    if (!profileSlug)
+      return ok({
+        error: "profileSlug is required: a kind or role (synap_list_profiles).",
+      });
+    const projectId =
+      typeof args.projectId === "string" && args.projectId
+        ? args.projectId
+        : "";
+    if (projectId && !isUuid(projectId))
+      return ok({ error: `projectId is not a valid id: ${projectId}` });
+    const firstN =
+      typeof args.firstN === "number" && Number.isFinite(args.firstN)
+        ? Math.min(50, Math.max(0, Math.floor(args.firstN)))
+        : undefined;
+    const callerCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      undefined,
+      undefined,
+      undefined,
+      agentUserId
+    );
+    // The SAME function as tRPC `flow.of` and Hub `GET /flow`; the space is
+    // the confined lens (`adapter.ts`): a bound key reads its own space.
+    const { flowOfInput, readFlowOf } =
+      await import("../../../services/lifecycle/flow-read.js");
+    return ok(
+      await readFlowOf(
+        flowOfInput.parse({
+          profileSlug,
+          ...(ctx.confinedWorkspaceId
+            ? { workspaceId: ctx.confinedWorkspaceId }
+            : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(firstN !== undefined ? { firstN } : {}),
+        }),
+        callerCtx as Parameters<typeof readFlowOf>[1]
+      )
+    );
+  },
   synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
