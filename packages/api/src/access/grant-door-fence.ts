@@ -111,6 +111,14 @@ const REFUSED = (reason: string): FencedReadDoor => ({
 });
 
 /**
+ * The flow read (`flow.of`): Hub `GET /flow` and MCP `synap_flow` call the
+ * same `readFlowOf`, which narrows a fenced key itself
+ * (`readProfileUnderGrant`), so they share this one declaration. Admitted
+ * when one live scope grants `entity.<some kind>.read`, as `/lifecycle`.
+ */
+const FLOW_OF = NARROWED("entity", []);
+
+/**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
  * visibility floor (`assertProposalVisibleTo`, no grant clause) with the names
  * of the objects it touches. MCP `synap_get_proposal` and Hub
@@ -177,7 +185,7 @@ function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
  * Does one live scope grant `<subject>.<action>`, whatever it is pinned to?
  * For a qualified subject, on at least one qualifier (an intent, a kind).
  */
-function grantHoldsAction(
+export function grantHoldsAction(
   grant: KeyGrant,
   subject: string,
   action: string
@@ -624,6 +632,15 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // the kinds it may already read, never another kind's. Admitted when one live
   // scope grants `entity.<some kind>.read`.
   [/^\/lifecycle\/?$/, NARROWED("entity", [])],
+  // THE FLOW READ (`readFlowOf`, services/lifecycle/flow-read.ts): a kind's
+  // or role's states, the stages owning them, its things by state and the
+  // flows working it. The read narrows itself through the SAME check as
+  // `/lifecycle` (`readProfileUnderGrant`): a fenced key names `workspaceId`
+  // and holds `entity.<profileSlug>.read` (`facet.read` for a role) there.
+  // Its rows go through the seams (things: `accessScopeWhere`; flows and
+  // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
+  // and the workers (no seam) come back `withheld`. Same as MCP `synap_flow`.
+  [/^\/flow\/?$/, FLOW_OF],
   // `readWorkRelease` (services/dev-loop/work-release.ts), narrowed by the
   // read itself (`workReleaseReach`): a key reading every subject unbounded
   // gets it whole; one pinned to spaces gets the snapshots and sessions its
@@ -844,6 +861,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_get_project: SEAMED,
   synap_list_projects: SEAMED,
   synap_list_views: SEAMED,
+  // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
+  synap_flow: FLOW_OF,
   // Aggregate doors: the subjects they read.
   synap_ask: READS(
     "entity",
