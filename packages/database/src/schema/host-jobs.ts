@@ -1,9 +1,10 @@
 /**
- * Host Jobs Schema (0399)
+ * Host Jobs Schema (0409)
  *
- * ONE job for the host runner on a computer (`synap host serve`): install,
- * remove or update an installation, run a provider's computer-side op, or run
- * a hosted verb. The pod holds the queue, the lease and the evidence; the
+ * ONE job for the host runner on a computer (`synap worker`): install,
+ * remove, update or verify an installation, run a provider's computer-side op,
+ * or run a hosted verb. At most ONE open job per installation (the pod-side
+ * reconciler queues the next once this one settles). The pod holds the queue, the lease and the evidence; the
  * computer pulls (`/host-jobs/lease`, key scope `host.runner`), heartbeats,
  * reports and finishes. The pod never opens a connection to the computer.
  *
@@ -27,7 +28,9 @@ import {
   jsonb,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { installations } from "./installations.js";
 import { installationBindings } from "./installation-bindings.js";
 import { skills } from "./skills.js";
@@ -37,6 +40,7 @@ export const HOST_JOB_KINDS = [
   "install",
   "remove",
   "update",
+  "verify",
   "provider_op",
   "verb",
 ] as const;
@@ -166,6 +170,12 @@ export const hostJobs = pgTable(
       table.installationId,
       table.queuedAt
     ),
+    /** At most ONE open job per installation. */
+    oneOpenPerInstallation: uniqueIndex(
+      "uq_host_jobs_one_open_per_installation"
+    )
+      .on(table.installationId)
+      .where(sql`${table.status} IN ('queued', 'leased', 'running')`),
     userQueuedIdx: index("idx_host_jobs_user_queued").on(
       table.userId,
       table.queuedAt

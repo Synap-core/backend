@@ -1,17 +1,23 @@
--- 0399: installations — capabilities installed on the person's own computers
+-- 0409: installations — capabilities installed on the person's own computers
 -- (Stage 1 of "capabilities that install on your computers": design ccd509f8,
--- addendum 000e75ff §6, build plan 64072312 unit U4).
+-- addendum 000e75ff §6, build plan 64072312 unit U4; widened by the
+-- installer reconciliation f75fbb48 §3.1, founder 2026-11-07).
 --
 -- Four tables:
---   installations          one capability on one computer: the manifest as
---                          approved, its image digests, the computer, the
---                          owner, its key, its status. Never deleted: a
---                          removed installation stays as history.
+--   installations          one capability on one computer, of one kind:
+--                          `service` (Docker compose services) or `tool` (a
+--                          CLI binary from per-OS install steps). What was
+--                          ASKED (desired state and version, approval) is
+--                          kept apart from what was OBSERVED (version, os,
+--                          arch, last verify). One live row per (computer,
+--                          capability); never deleted: a removed or
+--                          reinstalled installation stays as history.
 --   installation_bindings  one need of an installation served by one provider
 --                          capability, resolved by intent (url, handle, the
 --                          auth mode the provider enforces, public or not).
 --   host_jobs              one job for the host runner on a computer (install,
---                          remove, update, provider_op, verb). The lease shape
+--                          remove, update, verify, provider_op, verb); at most
+--                          ONE open job per installation. The lease shape
 --                          is box_runs' (0356): lease_id minted at each lease,
 --                          heartbeat/report/finish must present it; a running
 --                          job whose lease expired is READ as stalled.
@@ -23,8 +29,10 @@
 -- vocabulary is open (capability_intents), and the Stage 1 slugs wait on the
 -- founder's naming decision (F1).
 --
--- Stored statuses only. `stalled` (a job) and "degraded by a missed
--- heartbeat" (an installation) are READ verdicts, never stored.
+-- Stored statuses only. An installation stores its LIFECYCLE (planned …
+-- removed); its health (ok, degraded, drifted, stale, unknown, failed) is a
+-- READ verdict over `health`, `verified_at` and `last_report_at`, as a job's
+-- `stalled` is. Neither is ever stored.
 --
 -- Read floor: the owner (`user_id`) within the workspace lens, as box_runs;
 -- intent_defaults is the person's alone (access/registry.ts). The computer
@@ -34,6 +42,7 @@ CREATE TABLE IF NOT EXISTS "installations" (
   "id"                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"            text        NOT NULL,
   "workspace_id"       uuid,
+  "kind"               text        NOT NULL,
   "capability_id"      uuid        REFERENCES "capabilities"("id") ON DELETE SET NULL,
   "capability_key"     text        NOT NULL,
   "capability_version" text,
@@ -44,9 +53,17 @@ CREATE TABLE IF NOT EXISTS "installations" (
   "proposal_id"        uuid,
   "manifest"           jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "digests"            jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "desired_state"      text        NOT NULL DEFAULT 'installed',
+  "desired_version"    text,
+  "approved_at"        timestamptz,
+  "approved_by"        text,
   "status"             text        NOT NULL DEFAULT 'planned',
   "status_detail"      text,
+  "observed_version"   text,
+  "observed_os"        text,
+  "observed_arch"      text,
   "health"             jsonb,
+  "verified_at"        timestamptz,
   "last_report_at"     timestamptz,
   "installed_at"       timestamptz,
   "removed_at"         timestamptz,
@@ -60,16 +77,30 @@ BEGIN
     SELECT 1 FROM pg_constraint WHERE conname = 'installations_status_check'
   ) THEN
     ALTER TABLE "installations" ADD CONSTRAINT "installations_status_check"
-      CHECK ("status" IN ('planned', 'installing', 'healthy', 'degraded', 'updating', 'failed', 'removing', 'removed'));
+      CHECK ("status" IN ('planned', 'installing', 'installed', 'updating', 'removing', 'removed', 'failed'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installations_kind_check'
+  ) THEN
+    ALTER TABLE "installations" ADD CONSTRAINT "installations_kind_check"
+      CHECK ("kind" IN ('service', 'tool'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installations_desired_state_check'
+  ) THEN
+    ALTER TABLE "installations" ADD CONSTRAINT "installations_desired_state_check"
+      CHECK ("desired_state" IN ('installed', 'removed'));
   END IF;
 END $$;
 
 CREATE INDEX IF NOT EXISTS "idx_installations_user"
   ON "installations" ("user_id", "created_at" DESC);
 
--- What runs on a computer (Installed here, revokeMachine's cascade).
-CREATE INDEX IF NOT EXISTS "idx_installations_machine"
-  ON "installations" ("machine_user_id")
+-- ONE live installation per (computer, capability): a reinstall writes a new
+-- row once the old one is removed, so history is kept. Also serves "what runs
+-- on this computer" (Installed here, revokeMachine's cascade).
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_installations_live_per_machine"
+  ON "installations" ("machine_user_id", "capability_key")
   WHERE "status" <> 'removed';
 
 CREATE INDEX IF NOT EXISTS "idx_installations_capability"
@@ -159,7 +190,7 @@ BEGIN
     SELECT 1 FROM pg_constraint WHERE conname = 'host_jobs_kind_check'
   ) THEN
     ALTER TABLE "host_jobs" ADD CONSTRAINT "host_jobs_kind_check"
-      CHECK ("kind" IN ('install', 'remove', 'update', 'provider_op', 'verb'));
+      CHECK ("kind" IN ('install', 'remove', 'update', 'verify', 'provider_op', 'verb'));
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'host_jobs_status_check'
@@ -177,6 +208,13 @@ CREATE INDEX IF NOT EXISTS "idx_host_jobs_queue"
 
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_installation"
   ON "host_jobs" ("installation_id", "queued_at" DESC);
+
+-- At most ONE open job per installation (the pod-side reconciler queues the
+-- next one only once this one settles): a sleeping laptop holds one queued
+-- job, never a pile.
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_host_jobs_one_open_per_installation"
+  ON "host_jobs" ("installation_id")
+  WHERE "status" IN ('queued', 'leased', 'running');
 
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_user_queued"
   ON "host_jobs" ("user_id", "queued_at" DESC);

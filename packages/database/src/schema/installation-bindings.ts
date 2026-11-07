@@ -1,5 +1,5 @@
 /**
- * Installation Bindings Schema (0399)
+ * Installation Bindings Schema (0409)
  *
  * ONE need of an installation, served by ONE provider capability, resolved by
  * intent (addendum 000e75ff §4-§6): HyperFrames' `studio_url` need

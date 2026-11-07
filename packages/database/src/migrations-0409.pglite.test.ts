@@ -1,9 +1,11 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0399 — installations. The
+ * REAL-POSTGRES (PGlite) test for migration 0409 — installations. The
  * migration and the baseline create `installations`, `installation_bindings`,
  * `host_jobs` and `intent_defaults` with EVERY column, index and unique the
  * drizzle schema declares; re-running is a no-op; each CHECK stores only the
- * declared states (`stalled` is a READ verdict, never stored); `public` can
+ * declared states (`stalled` and an installation's health are READ verdicts,
+ * never stored); one live installation per (computer, capability) and one
+ * open job per installation (reconciliation f75fbb48 §3.1–§3.2); `public` can
  * never be a remembered provider choice; a deleted provider takes its
  * remembered default with it while an installation keeps its history; and
  * schema-coherence names every table.
@@ -18,6 +20,8 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   installations,
   INSTALLATION_STATUSES,
+  INSTALLATION_KINDS,
+  INSTALLATION_DESIRED_STATES,
 } from "./schema/installations.js";
 import {
   installationBindings,
@@ -32,8 +36,8 @@ import { intentDefaults } from "./schema/intent-defaults.js";
 import { REQUIRED_COLUMNS } from "./utils/schema-coherence.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const M0399 = readFileSync(
-  resolve(HERE, "../migrations/0399_installations.sql"),
+const M0409 = readFileSync(
+  resolve(HERE, "../migrations/0409_installations.sql"),
   "utf8"
 );
 const BASELINE = readFileSync(
@@ -48,7 +52,7 @@ const STUBS = `
 `;
 
 const TABLES: Array<{ table: PgTable; columns: number }> = [
-  { table: installations, columns: 21 },
+  { table: installations, columns: 30 },
   { table: installationBindings, columns: 21 },
   { table: hostJobs, columns: 31 },
   { table: intentDefaults, columns: 9 },
@@ -57,25 +61,29 @@ const TABLES: Array<{ table: PgTable; columns: number }> = [
 async function fresh(): Promise<PGlite> {
   const pg = new PGlite();
   await pg.exec(STUBS);
-  await pg.exec(M0399);
+  await pg.exec(M0409);
   return pg;
 }
 
-async function newInstallation(pg: PGlite, capabilityId?: string) {
+async function newInstallation(
+  pg: PGlite,
+  capabilityId?: string,
+  key = "hyperframes"
+) {
   const r = await pg.query<{ id: string }>(
-    `INSERT INTO installations (user_id, capability_id, capability_key, machine_user_id)
-     VALUES ('u', $1, 'hyperframes', 'm') RETURNING id`,
-    [capabilityId ?? null]
+    `INSERT INTO installations (user_id, kind, capability_id, capability_key, machine_user_id)
+     VALUES ('u', 'service', $1, $2, 'm') RETURNING id`,
+    [capabilityId ?? null, key]
   );
   return r.rows[0]!.id;
 }
 
-describe("migration 0399 — installations", () => {
+describe("migration 0409 — installations", () => {
   it("creates every declared column, index and unique, idempotently", async () => {
     const pg = new PGlite();
     await pg.exec(STUBS);
-    await pg.exec(M0399);
-    await pg.exec(M0399);
+    await pg.exec(M0409);
+    await pg.exec(M0409);
     for (const { table, columns } of TABLES) {
       const cfg = getTableConfig(table);
       const declared = cfg.columns.map((c) => c.name);
@@ -104,19 +112,52 @@ describe("migration 0399 — installations", () => {
 
   it("stores only the declared states and kinds; stalled is never stored", async () => {
     const pg = await fresh();
+    // One computer per status: a live row per (computer, capability) is unique.
     for (const status of INSTALLATION_STATUSES) {
-      await pg.query(
-        `INSERT INTO installations (user_id, capability_key, machine_user_id, status)
-         VALUES ('u', 'k', 'm', $1)`,
-        [status]
-      );
+      for (const kind of INSTALLATION_KINDS) {
+        for (const desired of INSTALLATION_DESIRED_STATES) {
+          await pg.query(
+            `INSERT INTO installations (user_id, kind, capability_key, machine_user_id, status, desired_state)
+             VALUES ('u', $1, 'k', $2, $3, $4)`,
+            [kind, `m-${status}-${kind}-${desired}`, status, desired]
+          );
+        }
+      }
+    }
+    // Health words are read verdicts, never a stored status.
+    for (const verdict of [
+      "stalled",
+      "healthy",
+      "degraded",
+      "drifted",
+      "stale",
+    ]) {
+      await expect(
+        pg.query(
+          `INSERT INTO installations (user_id, kind, capability_key, machine_user_id, status)
+           VALUES ('u', 'tool', 'k', 'm-x', $1)`,
+          [verdict]
+        )
+      ).rejects.toThrow(/installations_status_check/);
     }
     await expect(
       pg.query(
-        `INSERT INTO installations (user_id, capability_key, machine_user_id, status)
-         VALUES ('u', 'k', 'm', 'stalled')`
+        `INSERT INTO installations (user_id, kind, capability_key, machine_user_id)
+         VALUES ('u', 'binary', 'k', 'm-x')`
       )
-    ).rejects.toThrow(/installations_status_check/);
+    ).rejects.toThrow(/installations_kind_check/);
+    await expect(
+      pg.query(
+        `INSERT INTO installations (user_id, capability_key, machine_user_id)
+         VALUES ('u', 'k', 'm-x')`
+      )
+    ).rejects.toThrow(/kind/);
+    await expect(
+      pg.query(
+        `INSERT INTO installations (user_id, kind, capability_key, machine_user_id, desired_state)
+         VALUES ('u', 'tool', 'k', 'm-x', 'upgraded')`
+      )
+    ).rejects.toThrow(/installations_desired_state_check/);
 
     const inst = await newInstallation(pg);
     for (const state of INSTALLATION_BINDING_STATES) {
@@ -134,14 +175,26 @@ describe("migration 0399 — installations", () => {
       )
     ).rejects.toThrow(/installation_bindings_state_check/);
 
+    // Every kind in every SETTLED status (one open job per installation is
+    // asserted on its own below).
+    const OPEN = ["queued", "leased", "running"];
     for (const kind of HOST_JOB_KINDS) {
-      for (const status of HOST_JOB_STATUSES) {
+      for (const status of HOST_JOB_STATUSES.filter((s) => !OPEN.includes(s))) {
         await pg.query(
           `INSERT INTO host_jobs (kind, installation_id, user_id, machine_user_id, spec, status)
            VALUES ($1, $2, 'u', 'm', '{}'::jsonb, $3)`,
           [kind, inst, status]
         );
       }
+    }
+    expect(HOST_JOB_KINDS).toContain("verify");
+    for (const status of OPEN) {
+      const other = await newInstallation(pg, undefined, `k-${status}`);
+      await pg.query(
+        `INSERT INTO host_jobs (kind, installation_id, user_id, machine_user_id, spec, status)
+         VALUES ('verify', $1, 'u', 'm', '{}'::jsonb, $2)`,
+        [other, status]
+      );
     }
     await expect(
       pg.query(
@@ -157,6 +210,63 @@ describe("migration 0399 — installations", () => {
         [inst]
       )
     ).rejects.toThrow(/host_jobs_kind_check/);
+    await pg.close();
+  }, 60_000);
+
+  it("one live installation per (computer, capability); a reinstall is a new row", async () => {
+    const pg = await fresh();
+    const first = await newInstallation(pg, undefined, "media-ffmpeg");
+    await expect(
+      newInstallation(pg, undefined, "media-ffmpeg")
+    ).rejects.toThrow(/uq_installations_live_per_machine/);
+    // Another capability, or the same one on another computer: accepted.
+    await newInstallation(pg, undefined, "media-download");
+    await pg.query(
+      `INSERT INTO installations (user_id, kind, capability_key, machine_user_id)
+       VALUES ('u', 'tool', 'media-ffmpeg', 'm2')`
+    );
+    // Once removed it stays as history, and a reinstall writes a new row.
+    await pg.query(
+      `UPDATE installations SET status = 'removed' WHERE id = $1`,
+      [first]
+    );
+    await newInstallation(pg, undefined, "media-ffmpeg");
+    const n = await pg.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM installations
+       WHERE machine_user_id = 'm' AND capability_key = 'media-ffmpeg'`
+    );
+    expect(n.rows[0]!.n).toBe(2);
+    await pg.close();
+  }, 60_000);
+
+  it("at most one open job per installation; a settled one makes room", async () => {
+    const pg = await fresh();
+    const inst = await newInstallation(pg);
+    const queue = (kind: string) =>
+      pg.query<{ id: string }>(
+        `INSERT INTO host_jobs (kind, installation_id, user_id, machine_user_id, spec)
+         VALUES ($1, $2, 'u', 'm', '{}'::jsonb) RETURNING id`,
+        [kind, inst]
+      );
+    const job = (await queue("install")).rows[0]!.id;
+    for (const status of ["queued", "leased", "running"]) {
+      await pg.query(`UPDATE host_jobs SET status = $1 WHERE id = $2`, [
+        status,
+        job,
+      ]);
+      await expect(queue("verify")).rejects.toThrow(
+        /uq_host_jobs_one_open_per_installation/
+      );
+    }
+    await pg.query(`UPDATE host_jobs SET status = 'done' WHERE id = $1`, [job]);
+    await queue("verify");
+    // Another installation's queue is its own.
+    const other = await newInstallation(pg, undefined, "media-ffmpeg");
+    await pg.query(
+      `INSERT INTO host_jobs (kind, installation_id, user_id, machine_user_id, spec)
+       VALUES ('install', $1, 'u', 'm', '{}'::jsonb)`,
+      [other]
+    );
     await pg.close();
   }, 60_000);
 
@@ -241,9 +351,9 @@ describe("migration 0399 — installations", () => {
     for (const { table } of TABLES) {
       const name = getTableConfig(table).name;
       const head = `CREATE TABLE IF NOT EXISTS "${name}" (`;
-      const start = M0399.indexOf(head);
+      const start = M0409.indexOf(head);
       expect(start, name).toBeGreaterThanOrEqual(0);
-      const create = M0399.slice(start, M0399.indexOf(");", start) + 2);
+      const create = M0409.slice(start, M0409.indexOf(");", start) + 2);
       expect(create.length, name).toBeGreaterThan(200);
       expect(BASELINE, name).toContain(create.trim());
       for (const i of getTableConfig(table).indexes) {
@@ -256,12 +366,14 @@ describe("migration 0399 — installations", () => {
     }
     for (const check of [
       "installations_status_check",
+      "installations_kind_check",
+      "installations_desired_state_check",
       "installation_bindings_state_check",
       "host_jobs_kind_check",
       "host_jobs_status_check",
       "intent_defaults_never_public_check",
     ]) {
-      expect(M0399).toContain(`"${check}"`);
+      expect(M0409).toContain(`"${check}"`);
       expect(BASELINE).toContain(`"${check}"`);
     }
   });

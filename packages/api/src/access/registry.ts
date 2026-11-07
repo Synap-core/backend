@@ -604,7 +604,7 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
-// An installation (0399) is its OWNER's: what runs on their computer, its
+// An installation (0409) is its OWNER's: what runs on their computer, its
 // bindings (the URLs it is reachable at) and its host jobs, within the
 // workspace lens; a NULL workspace stays owner-private, as a box run. The
 // computer never reads through here: the host-job routes floor on the
@@ -639,7 +639,7 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
-// A remembered provider choice (0399) is a PREFERENCE: the person's alone,
+// A remembered provider choice (0409) is a PREFERENCE: the person's alone,
 // whatever space it was made for.
 registerVisibility({
   table: intentDefaults,

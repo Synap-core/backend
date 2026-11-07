@@ -230,7 +230,7 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   // A box run (0356) is a run of a box skill: a grant on SKILLS reads them,
   // as an automation's runs follow the automation.
   [boxRuns, spec("skill", boxRuns)],
-  // An installation (0399): a grant on INSTALLATIONS reads it, its bindings
+  // An installation (0409): a grant on INSTALLATIONS reads it, its bindings
   // and its host jobs (a binding or a job follows its installation, as an
   // automation's runs follow the automation). No AI preset names the subject
   // yet (presets.ts), so an agent key reads none until it is granted.
