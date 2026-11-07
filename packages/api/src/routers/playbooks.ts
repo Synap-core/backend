@@ -335,13 +335,7 @@ export const createInputSchema = playbookDefinitionSchema.extend({
    */
   proposedPlaybookId: z.string().uuid().optional(),
   executor: executorRefSchema.default("is-agent"),
-  /**
-   * NO schema default: an unstated status must stay unstated in a PROPOSAL's
-   * stored data, so approval can tell "the author asked for draft" (kept) from
-   * "the author said nothing" (an approval IS the activation, `playbook/create`
-   * executor). A direct, ungated create still lands `draft` (insert below).
-   */
-  status: playbookStatusSchema.optional(),
+  status: playbookStatusSchema.default("draft"),
   /**
    * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
    * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
@@ -2175,7 +2169,7 @@ export const playbooksRouter = router({
             schedule: input.schedule ?? null,
             metadata: input.metadata ?? {},
             executor: input.executor,
-            status: input.status ?? "draft",
+            status: input.status,
             // NULL, not a defaulted 'session': the column's documented reading
             // is "NULL means session", and writing the default eagerly would
             // make an unstated scope indistinguishable from a chosen one.
