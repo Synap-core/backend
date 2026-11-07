@@ -7308,6 +7308,29 @@
       }
     },
     {
+      "name": "synap_list_installations",
+      "annotations": {
+        "title": "List installations",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, the person or the computer asks through POST /api/hub/installations/request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "computerId": {
+            "type": "string",
+            "description": "One computer's id (its users id)."
+          },
+          "capabilityKey": {
+            "type": "string",
+            "description": "A capability's catalog slug, e.g. media-transcribe: which computers have it."
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "synap_run_capability",
       "annotations": {
         "title": "Run tool",
