@@ -70,6 +70,9 @@ import {
   type McpHandlerMap,
   pageLimit,
   pageOffset,
+  pageSlice,
+  LIST_PAGE_DEFAULT,
+  LIST_PAGE_MAX,
   SESSIONS_PAGE_MAX,
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
@@ -1137,9 +1140,16 @@ export const sessionHandlers: McpHandlerMap = {
     // The roster for the PERSON the key acts for: whose work it is decides
     // which agents may take it (the route's floor). The calling agent decides
     // only `handOff` — what ITS hand-off would do (direct / asks you).
-    return ok(
-      await readAgentsForHandoff(userId, { callerAgentUserId: agentUserId })
+    const roster = await readAgentsForHandoff(userId, {
+      callerAgentUserId: agentUserId,
+    });
+    const { page, paging } = pageSlice(
+      roster.agents,
+      ctx.args,
+      LIST_PAGE_DEFAULT,
+      LIST_PAGE_MAX
     );
+    return ok({ ...roster, agents: page, ...paging });
   },
   synap_list_sessions: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
