@@ -53,7 +53,7 @@ import {
   matchRecoveryCode,
   newBatchSalt,
   type CandidateCode,
-} from "../account-recovery/codes.js";
+} from "@synap/api";
 import {
   decideCredentialChange,
   sessionMarks,
@@ -69,6 +69,17 @@ import {
 } from "../account-recovery/rate-limit.js";
 import type { PodAdminConfigResult } from "../pod-admin-config.js";
 import { clientIp } from "../middleware/rate-limit-classes.js";
+
+/** The caller's session, as the new-codes door judges it. */
+export type NewCodesSession = KratosSessionLike & DeviceSessionLike;
+
+/** Why new recovery codes were refused, and the words to show. */
+export interface NewCodesRefusal {
+  /** `reauth_required`: a first factor needs a recent sign-in AT the pod. */
+  error: "presence_required" | "reauth_required";
+  reasonCode: string;
+  message: string;
+}
 
 export interface RecoveryLogger {
   info(obj: Record<string, unknown>, msg?: string): void;
@@ -137,6 +148,19 @@ export interface AccountRecoveryDeps {
    */
   countCloudOnlyOwners(): Promise<number>;
 
+  /**
+   * New recovery codes are a new proof factor (recovery codes prove
+   * presence): a person who already holds a factor proves presence for
+   * `recovery_codes:<user id>` (the presence gate, every mode rule
+   * included). null = go on; else the refusal's reason code and words.
+   * Throws on a failed read.
+   */
+  presenceForNewCodes(
+    userId: string,
+    proof: unknown,
+    session: NewCodesSession
+  ): Promise<NewCodesRefusal | null>;
+
   /** Best-effort audit append. Never receives a code. */
   audit(entry: {
     userId: string;
@@ -173,6 +197,8 @@ const MESSAGES: Record<AccountRecoveryErrorCode, string> = {
   forbidden: "Only the pod owner can change this.",
   owner_needs_pod_sign_in:
     "An owner signs in to this pod only with Synap Cloud. Turning Synap Cloud sign-in off would lock them out: each owner needs a password or a passkey on this pod first.",
+  presence_required:
+    "Confirm it is you: new recovery codes need your passkey, Face ID, your 2FA app or one of your current recovery codes.",
 };
 
 function fail(
@@ -485,6 +511,23 @@ export function createAccountRecoveryRouter(
       if (!caller) return fail(c, "unauthorized", 401);
       const refused = await guardCredentialChange(c, caller);
       if (refused) return refused;
+      const input = (await c.req.json().catch(() => null)) as {
+        presence?: unknown;
+      } | null;
+      const presence = await deps.presenceForNewCodes(
+        caller.account.userId,
+        input?.presence ?? null,
+        caller.session
+      );
+      if (presence) {
+        const answer: AccountRecoveryError = {
+          ok: false,
+          error: presence.error,
+          message: presence.message,
+          reasonCode: presence.reasonCode,
+        };
+        return c.json(answer, 403);
+      }
 
       const codes = generateRecoveryCodes();
       const salt = newBatchSalt();

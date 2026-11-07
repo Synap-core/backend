@@ -156,13 +156,37 @@ describe("proactiveInput", () => {
 });
 
 describe("factorNote: what the presence row says about the person's factors", () => {
-  it("a new owner with no passkey and no Relay key is invited to add one", () => {
-    expect(factorNote(ready({ passkeys: 0, deviceKeys: 0 }))).toBe("none");
+  const f = (
+    passkeys: number,
+    deviceKeys: number,
+    totp = false,
+    recoveryCodes = 0
+  ) => ({
+    passkeys,
+    deviceKeys,
+    totp,
+    recoveryCodes,
+    waysIn:
+      (passkeys > 0 ? 1 : 0) +
+      deviceKeys +
+      (totp ? 1 : 0) +
+      (recoveryCodes > 0 ? 1 : 0),
   });
 
-  it("a passkey or a Relay key is enough: nothing more to say", () => {
-    expect(factorNote(ready({ passkeys: 1, deviceKeys: 0 }))).toBeNull();
-    expect(factorNote(ready({ passkeys: 0, deviceKeys: 2 }))).toBeNull();
+  it("a new owner with no passkey and no Relay key is invited to add one", () => {
+    expect(factorNote(ready(f(0, 0)))).toBe("none");
+  });
+
+  it("one way in (all passkeys are one way) is invited to add a second", () => {
+    expect(factorNote(ready(f(1, 0)))).toBe("one");
+    expect(factorNote(ready(f(3, 0)))).toBe("one");
+    expect(factorNote(ready(f(0, 1)))).toBe("one");
+  });
+
+  it("two ways in: nothing more to say", () => {
+    expect(factorNote(ready(f(1, 0, true)))).toBeNull();
+    expect(factorNote(ready(f(1, 0, false, 10)))).toBeNull();
+    expect(factorNote(ready(f(0, 2)))).toBeNull();
   });
 
   it("GUARDRAIL: a failed read is said, never read as 'no passkey' or as fine", () => {

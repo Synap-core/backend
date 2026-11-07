@@ -15872,6 +15872,14 @@ export interface PresenceSensitivityChoice {
 	/** Paths of `SENSITIVE_ACTIONS` switched off. */
 	actionsOff: readonly string[];
 }
+/**
+ * The ONE recovery door is a pod admin page, `CONSOLE_PAGES.presenceRecovery`
+ * (`@synap-core/types/console`). Every presence dialog (pod admin, Relay, the
+ * desktop app, the web app) links to it with
+ * `consoleHref(origin, { page: "presenceRecovery" })`; no surface runs its own.
+ */
+/** The state of a person's recovery request, as every surface reads it. */
+export type PresenceRecoveryStatus = "cancelled" | "completed" | "pending";
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
@@ -21893,6 +21901,14 @@ export interface PresenceSensitivityState extends PresenceSensitivityChoice {
 	changedBy: string | null;
 	changedAt: string | null;
 }
+export interface PresenceRecoveryRequest {
+	id: string;
+	status: PresenceRecoveryStatus;
+	requestedAt: Date;
+	maturesAt: Date;
+	cancelledAt: Date | null;
+	completedAt: Date | null;
+}
 type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
 export interface NextRungProjection {
 	proposalId: string;
@@ -26448,6 +26464,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				role?: "admin" | "editor" | "viewer" | undefined;
 				template?: "assistant" | "custom" | "twin" | undefined;
@@ -26645,6 +26669,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -26697,6 +26729,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				role?: "admin" | "editor" | "viewer" | undefined;
 				workspaceId: string;
@@ -27195,6 +27235,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				scope?: string[] | undefined;
 				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
@@ -27292,6 +27340,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				scopes?: string[] | undefined;
 			};
@@ -27333,6 +27389,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				redirectUri?: string | undefined;
 				strategy?: "create_new" | "replace_existing" | undefined;
@@ -27388,6 +27452,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				scope?: string[] | undefined;
 				templateId?: string | undefined;
@@ -27447,6 +27519,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				scopes?: string[] | undefined;
 				templateId?: string | undefined;
@@ -27503,6 +27583,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				scope?: string[] | undefined;
 				uses?: ("chat" | "hub" | "mcp" | "n8n" | "n8n-analyze" | "realtime" | "skills")[] | undefined;
@@ -27552,6 +27640,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				requestId: string;
 				reuseComputerId?: string | null | undefined;
@@ -27599,6 +27695,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				requestId: string;
 			};
@@ -27641,6 +27745,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				prompt?: string | undefined;
 				redirectUri: string;
@@ -27878,6 +27990,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				workspaceId?: string | undefined;
 			};
@@ -27930,6 +28050,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -27980,6 +28108,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -28045,6 +28181,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				requestId: string;
 			};
@@ -28516,6 +28660,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				publicId: string;
 			};
@@ -28703,6 +28855,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				publicId: string;
 				redirectUris: string[];
@@ -28765,6 +28925,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				publicId: string;
 			};
@@ -28826,6 +28994,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				publicId: string;
 			};
@@ -30470,6 +30646,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				skillId: string;
 			};
@@ -34283,6 +34467,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -39620,6 +39812,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				principalKind?: "agent" | "any" | undefined;
 				scopeKind?: "pod" | "workspace" | undefined;
@@ -39830,6 +40030,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				principalClass?: "machine" | undefined;
 				principalKind: "agent" | "any" | "class";
@@ -40047,6 +40255,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -40141,6 +40357,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -40170,6 +40394,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -40200,6 +40432,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				profileSlug: string | null;
 				workspaceId: string | null;
@@ -42201,6 +42441,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -42406,6 +42654,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				serviceId: string;
 			};
@@ -42547,6 +42803,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				pricing?: "custom" | "enterprise" | "free" | "premium" | undefined;
 				providerType?: "anthropic" | "custom" | "openai" | "self-hosted" | undefined;
@@ -42615,6 +42879,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -42682,6 +42954,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				status?: "active" | "inactive" | "suspended" | undefined;
 				version?: string | undefined;
@@ -43320,6 +43600,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -43360,6 +43648,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -43392,6 +43688,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -43599,6 +43903,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "public-key";
 						};
 						kind: "passkey";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "totp";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "recovery_code";
 					} | undefined;
 				};
 				meta: object;
@@ -43835,6 +44147,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -47804,6 +48124,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				};
 			};
 			meta: object;
@@ -47820,7 +48148,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				request: {
 					id: string;
-					kind: "app_connection_request" | "device_enroll" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "skill" | "tool" | "trusted_issuer";
+					kind: "app_connection_request" | "device_enroll" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
 				};
 			} | {
 				action: {
@@ -47859,6 +48187,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				proposalId: string;
 				subject: string;
+				typed: {
+					recoveryCode: boolean;
+					totp: boolean;
+				};
 			};
 		}>;
 		devices: import("@trpc/server").TRPCBuiltRouter<{
@@ -47916,6 +48248,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							type: "public-key";
 						};
 						kind: "passkey";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "totp";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "recovery_code";
 					} | undefined;
 					publicKey: string;
 					signature: string;
@@ -47960,6 +48300,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				deviceKeys: number;
 				passkeys: number;
+				recoveryCodes: number;
+				totp: boolean;
+				waysIn: number;
 			};
 		}>;
 		mode: import("@trpc/server").TRPCQueryProcedure<{
@@ -47979,6 +48322,64 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source: "default" | "env" | "setting";
 			};
 		}>;
+		recovery: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			errorShape: {
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: {
+					candidates?: {
+						id: string;
+						title: string | null;
+						type: string;
+					}[] | undefined;
+					captureQuestionStatus?: string | undefined;
+					causeUrl?: string | undefined;
+					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
+					httpStatus: number;
+					opRef?: string | undefined;
+					path?: string;
+					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
+					reasonCode?: string;
+					stack?: string;
+				};
+				message: string;
+			};
+			meta: object;
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			cancel: import("@trpc/server").TRPCMutationProcedure<{
+				input: void;
+				meta: object;
+				output: PresenceRecoveryRequest;
+			}>;
+			complete: import("@trpc/server").TRPCMutationProcedure<{
+				input: void;
+				meta: object;
+				output: PresenceRecoveryRequest & {
+					cleared: Record<string, number>;
+					signedOut: {
+						ended: number;
+						failed: number;
+						listed: boolean;
+					};
+				};
+			}>;
+			request: import("@trpc/server").TRPCMutationProcedure<{
+				input: void;
+				meta: object;
+				output: PresenceRecoveryRequest;
+			}>;
+			status: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				meta: object;
+				output: PresenceRecoveryRequest | null;
+			}>;
+		}>>;
 		sensitivity: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
@@ -48014,6 +48415,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -48044,11 +48453,117 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
 			output: PresenceSensitivityState;
 		}>;
+		totp: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			errorShape: {
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: {
+					candidates?: {
+						id: string;
+						title: string | null;
+						type: string;
+					}[] | undefined;
+					captureQuestionStatus?: string | undefined;
+					causeUrl?: string | undefined;
+					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
+					httpStatus: number;
+					opRef?: string | undefined;
+					path?: string;
+					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
+					reasonCode?: string;
+					stack?: string;
+				};
+				message: string;
+			};
+			meta: object;
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			begin: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					label: string;
+				};
+				meta: object;
+				output: {
+					id: string;
+					otpauthUri: string;
+					secret: string;
+				};
+			}>;
+			confirm: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					code: string;
+					id: string;
+					presence?: {
+						challengeId: string;
+						keyId: string;
+						kind: "device_key";
+						signature: string;
+					} | {
+						challengeId: string;
+						credential: {
+							authenticatorAttachment?: string | null | undefined;
+							clientExtensionResults?: Record<string, unknown> | undefined;
+							id: string;
+							rawId: string;
+							response: {
+								authenticatorData: string;
+								clientDataJSON: string;
+								signature: string;
+								userHandle?: string | null | undefined;
+							};
+							type: "public-key";
+						};
+						kind: "passkey";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "totp";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "recovery_code";
+					} | undefined;
+				};
+				meta: object;
+				output: {
+					id: string;
+				};
+			}>;
+			get: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				meta: object;
+				output: {
+					createdAt: Date;
+					id: string;
+					label: string;
+				} | null;
+			}>;
+			remove: import("@trpc/server").TRPCMutationProcedure<{
+				input: void;
+				meta: object;
+				output: {
+					removed: boolean;
+				};
+			}>;
+		}>>;
 	}>>;
 	proactive: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -49850,6 +50365,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				propertyDecisions?: Record<string, {
 					action: "keep";
@@ -49924,6 +50447,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				}> | undefined;
 				proposalIds: string[];
 				resolutions?: Record<string, {
@@ -51530,6 +52061,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				proposalId: string;
 				scope?: "once" | "permanent" | "session" | undefined;
@@ -51636,6 +52175,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -52638,6 +53185,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 				providerSpec?: Record<string, unknown> | undefined;
 				requiredToolIds?: string[] | undefined;
@@ -52934,6 +53489,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -55003,6 +55566,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -55439,6 +56010,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;
@@ -55484,6 +56063,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						type: "public-key";
 					};
 					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
 				} | undefined;
 			};
 			meta: object;

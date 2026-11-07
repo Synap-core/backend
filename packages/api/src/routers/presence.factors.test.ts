@@ -1,8 +1,9 @@
 /**
- * `presence.factors`: the caller's passkeys and Relay device keys, counted,
- * for pod admin to say "No passkey yet · Add one" before the person relies on
- * approvals in person. A failed passkey read fails the call: it is never read
- * as "no passkey".
+ * `presence.factors`: the caller's passkeys, device keys, 2FA app and
+ * recovery codes, counted, and the ways in they make (`presenceWaysIn`), for
+ * pod admin to say "No passkey yet" or "keep two ways in" before the person
+ * relies on approvals in person. A failed read fails the call: it is never
+ * read as "no factor".
  *
  * No live Postgres or Kratos: the proof service and `db` are mocked.
  */
@@ -10,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   readPasskeys: vi.fn(),
-  deviceRows: [] as Array<{ n: number }>,
+  counts: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -18,13 +19,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
-      select: () => ({ from: () => ({ where: async () => h.deviceRows }) }),
+      select: () => ({ from: () => ({ where: async () => [] }) }),
     },
   };
 });
 
 vi.mock("../services/presence/proof.js", () => ({
   readPasskeys: (userId: string) => h.readPasskeys(userId),
+  presenceFactorCounts: (userId: string) => h.counts(userId),
   issuePresenceChallenge: vi.fn(),
   verifyDeviceSignature: vi.fn(),
   passkeyRpId: () => "pod.example.test",
@@ -51,32 +53,45 @@ const caller = () =>
   } as never);
 
 beforeEach(() => {
-  h.readPasskeys.mockReset();
-  h.deviceRows = [];
+  h.counts.mockReset();
 });
 
 describe("presence.factors", () => {
-  it("counts the caller's passkeys and device keys", async () => {
-    h.readPasskeys.mockResolvedValue([{ id: "a" }, { id: "b" }]);
-    h.deviceRows = [{ n: 1 }];
+  it("counts the caller's factors, and how many ways in they make", async () => {
+    h.counts.mockResolvedValue({
+      passkeys: 2,
+      deviceKeys: 1,
+      totp: true,
+      recoveryCodes: 0,
+    });
     await expect(caller().factors()).resolves.toEqual({
       passkeys: 2,
       deviceKeys: 1,
+      totp: true,
+      recoveryCodes: 0,
+      // Every passkey is one way (they are lost together), each device key
+      // one, the 2FA app one.
+      waysIn: 3,
     });
-    expect(h.readPasskeys).toHaveBeenCalledWith(PERSON);
+    expect(h.counts).toHaveBeenCalledWith(PERSON);
   });
 
-  it("a new owner with neither reads zero and zero", async () => {
-    h.readPasskeys.mockResolvedValue([]);
-    h.deviceRows = [{ n: 0 }];
-    await expect(caller().factors()).resolves.toEqual({
+  it("a new owner with nothing reads zero ways in", async () => {
+    h.counts.mockResolvedValue({
       passkeys: 0,
       deviceKeys: 0,
+      totp: false,
+      recoveryCodes: 0,
+    });
+    await expect(caller().factors()).resolves.toMatchObject({
+      passkeys: 0,
+      deviceKeys: 0,
+      waysIn: 0,
     });
   });
 
-  it("a failed passkey read fails the call, never 'no passkey'", async () => {
-    h.readPasskeys.mockRejectedValue(new Error("kratos: 503"));
+  it("a failed read fails the call, never 'no factor'", async () => {
+    h.counts.mockRejectedValue(new Error("kratos: 503"));
     await expect(caller().factors()).rejects.toMatchObject({
       code: "INTERNAL_SERVER_ERROR",
       message: expect.stringMatching(/passkeys/),

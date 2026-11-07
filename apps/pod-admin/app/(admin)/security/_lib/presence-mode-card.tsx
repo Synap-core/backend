@@ -7,9 +7,11 @@
  *  - The read is `presence.mode`: the mode, where it comes from, and what
  *    `report` let through in the last 30 days, each kind a door to the audit
  *    log. A failed read is its own state with Try again, never a calm OFF.
- *  - Turning it ON is free on the pod. It asks first only when the person
- *    holds no factor (`presence.factors`) to turn it off again with, and then
- *    offers the door to add a passkey.
+ *  - Turning it ON needs no proof, but the pod turns it on only for a person
+ *    with two ways in (the recovery ladder, founder, 6 Nov 2026). It asks
+ *    first when they hold fewer (`presence.factors`), and offers the second
+ *    way (a 2FA app or recovery codes, on Security). While it is ON with
+ *    fewer than two, the card says so and offers the same door.
  *  - Turning it OFF asks for the person's proof (`presence_mode:report`,
  *    through `app/_lib/presence`), and the confirm says every pod admin is
  *    told.
@@ -32,12 +34,23 @@ import {
   presenceRefusal,
 } from "../../../_lib/presence/presence-model";
 import { useSetPresenceMode } from "../../../_lib/presence/use-factor-doors";
-import { PASSKEYS_PATH } from "../../../settings/security/passkeys-path";
+import { PRESENCE_NEEDS_TWO_WAYS } from "@synap-core/types/presence";
+import { SECOND_WAY_HREF } from "../../../settings/security/two-factor-path";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
 import { StatusPill } from "../../components/status-pill";
 import { en, fr } from "./copy";
-import { presenceModeView, turningOnAsks } from "./presence-mode-model";
+import {
+  presenceModeView,
+  turningOnAsks,
+  warnsTwoWays,
+} from "./presence-mode-model";
+
+/** The pod refused it for fewer than two ways in. */
+function isTwoWaysRefusal(err: unknown): boolean {
+  const data = (err as { data?: { reasonCode?: unknown } | null } | null)?.data;
+  return data?.reasonCode === PRESENCE_NEEDS_TWO_WAYS;
+}
 
 const CATALOGS = { en, fr };
 
@@ -53,6 +66,7 @@ export function PresenceModeCard() {
   const [refused, setRefused] = useState<{
     mode: Mode;
     presence: boolean;
+    twoWays: boolean;
   } | null>(null);
   const setMode = useSetPresenceMode({
     onSuccess: () => {
@@ -61,7 +75,11 @@ export function PresenceModeCard() {
     },
     onError: (err, input) => {
       if (err instanceof PresenceDeclined) return;
-      setRefused({ mode: input.mode, presence: presenceRefusal(err) !== null });
+      setRefused({
+        mode: input.mode,
+        presence: presenceRefusal(err) !== null,
+        twoWays: isTwoWaysRefusal(err),
+      });
     },
   });
 
@@ -134,7 +152,38 @@ export function PresenceModeCard() {
             />
           </div>
 
-          {refused && (
+          {view.on && warnsTwoWays(view.on, factors) && (
+            <div className="flex flex-col items-start gap-1 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
+              <p className="text-[12.5px] text-foreground/85">
+                {t("presence.twoWays")}
+              </p>
+              <Link
+                href={SECOND_WAY_HREF}
+                className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+              >
+                {t("presence.addSecond")}
+              </Link>
+            </div>
+          )}
+
+          {refused?.twoWays && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <p role="alert" className="text-[12.5px] text-status-down">
+                {t("presence.twoWays.refused")}
+              </p>
+              <Button
+                as={Link}
+                href={SECOND_WAY_HREF}
+                size="sm"
+                variant="flat"
+                radius="md"
+              >
+                {t("presence.addSecond")}
+              </Button>
+            </div>
+          )}
+
+          {refused && !refused.twoWays && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <p role="alert" className="text-[12.5px] text-status-down">
                 {t(
@@ -212,10 +261,10 @@ export function PresenceModeCard() {
           <>
             {t("presence.on.consequence")}{" "}
             <Link
-              href={PASSKEYS_PATH}
+              href={SECOND_WAY_HREF}
               className="font-medium text-primary underline-offset-2 hover:underline"
             >
-              {t("presence.on.addPasskey")}
+              {t("presence.addSecond")}
             </Link>
           </>
         }

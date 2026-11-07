@@ -66,6 +66,10 @@ import { publicPodUrl } from "../../../lib/public-pod-url";
 import { initialFieldValues, KratosFields } from "../../_lib/kratos-fields";
 import { PasskeysCard } from "../../_lib/passkeys/passkeys-card";
 import { CopyButton, errorDetail } from "../../_lib/copy-button";
+import { trpc } from "../../../lib/trpc";
+import { PresenceDeclined } from "../../_lib/presence/presence-model";
+import { useGenerateRecoveryCodes } from "../../_lib/presence/use-factor-doors";
+import { TwoFactorCard } from "./two-factor-card";
 
 const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/security")}`;
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
@@ -179,6 +183,7 @@ export function SecurityView({
           )
         )}
         <PasskeysCard returnTo="/settings/security#passkeys" />
+        <TwoFactorCard />
         {s && s.cloud.available && s.cloud.trust !== "off" ? (
           <LinkCloudCard />
         ) : null}
@@ -245,6 +250,8 @@ function refusalSentence(error: string): string {
       return "A Synap Cloud sign-in can't change this. Sign in with your pod password.";
     case "forbidden":
       return "Only the pod owner can change this.";
+    case "presence_required":
+      return "Not changed: new recovery codes need you to confirm it is you, with your passkey, Face ID, your 2FA app or one of your current recovery codes.";
     case "owner_needs_pod_sign_in":
       return "An owner signs in only with Synap Cloud. Each owner needs a password or passkey on this pod before Synap Cloud sign-in can be turned off.";
     default:
@@ -307,12 +314,29 @@ function RecoveryCodesCard({
   const [refusal, setRefusal] = useState<RefusalView | null>(null);
   const [fresh, setFresh] = useState<GeneratedRecoveryCodes | null>(null);
 
+  const generateCodes = useGenerateRecoveryCodes();
+  const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const generate = async () => {
+    const userId = me.data?.id;
+    if (!userId) return;
     setBusy(true);
     setRefusal(null);
-    const r = await recoveryApi.generateCodes();
-    setBusy(false);
+    // The confirm closes first: the proof dialog never opens over it.
     setConfirm(false);
+    let r: Awaited<ReturnType<typeof recoveryApi.generateCodes>>;
+    try {
+      r = await generateCodes(userId);
+    } catch (err) {
+      setBusy(false);
+      // Declining the proof changes nothing and says nothing more.
+      if (err instanceof PresenceDeclined) return;
+      setRefusal({
+        error: "presence_required",
+        detail: errorDetail(err),
+      });
+      return;
+    }
+    setBusy(false);
     if (r.ok) {
       setFresh(r.data);
       // The top bar's ⚠ and the Overview nudge read a cached status.

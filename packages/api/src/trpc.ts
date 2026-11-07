@@ -11,7 +11,10 @@
 
 import { TRPCError } from "@trpc/server";
 import { t } from "./init-trpc.js";
-import { assertFreshAuthentication } from "./utils/device-session.js";
+import {
+  assertFreshAuthentication,
+  runAsBrowserPerson,
+} from "./utils/device-session.js";
 import {
   presenceProofSchema,
   sensitiveActionReason,
@@ -151,6 +154,18 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
 });
 
 /**
+ * A person's Kratos session (pod admin in a browser) runs in the scope that
+ * lets a typed presence code count (`runAsBrowserPerson`). Only
+ * `createContext` sets `sessionKind: "kratos"`; a Hub caller, a key or a
+ * device token never does.
+ */
+const browserPersonMiddleware = t.middleware((opts) =>
+  opts.ctx.authenticated && opts.ctx.sessionKind === "kratos"
+    ? runAsBrowserPerson(() => opts.next())
+    : opts.next()
+);
+
+/**
  * Public procedure (no auth required)
  * Base error-catching middleware applied to all procedures, then guest
  * containment: every procedure is built from this one, so a signed-in guest's
@@ -159,7 +174,8 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
  */
 export const publicProcedure = t.procedure
   .use(errorCatchingMiddleware)
-  .use(guestContainmentMiddleware);
+  .use(guestContainmentMiddleware)
+  .use(browserPersonMiddleware);
 
 /**
  * Protected procedure (auth required)

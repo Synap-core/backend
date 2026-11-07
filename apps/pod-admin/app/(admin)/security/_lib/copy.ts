@@ -28,8 +28,10 @@ const cardEn = {
   "presence.missing.showAll": "Show all {n}",
   "presence.on.title": "Turn on approvals in person?",
   "presence.on.consequence":
-    "You have no passkey or Relay Face ID yet. Turning it off again needs one, so add a passkey first.",
-  "presence.on.addPasskey": "Add a passkey",
+    "You have fewer than two ways to confirm it’s you. The pod turns it on only with two, so losing one never locks you out.",
+  "presence.addSecond": "Add a 2FA app or recovery codes",
+  "presence.twoWays.refused":
+    "Not turned on: add a second way to confirm it’s you first.",
   "presence.on.confirm": "Turn on",
   "presence.off.title": "Turn off approvals in person?",
   "presence.off.consequence":
@@ -83,8 +85,11 @@ const cardFr: Catalog<typeof cardEn> = {
   "presence.missing.showAll": "Tout afficher ({n})",
   "presence.on.title": "Activer les approbations en personne ?",
   "presence.on.consequence":
-    "Vous n’avez pas encore de clé d’accès ni Face ID dans Relay. Pour désactiver ensuite, il en faudra une : ajoutez d’abord une clé d’accès.",
-  "presence.on.addPasskey": "Ajouter une clé d’accès",
+    "Vous avez moins de deux moyens de confirmer que c’est vous. Le pod ne l’active qu’avec deux, pour qu’en perdre un ne vous bloque jamais.",
+  "presence.addSecond":
+    "Ajouter une app de double authentification ou des codes de récupération",
+  "presence.twoWays.refused":
+    "Pas activé : ajoutez d’abord un deuxième moyen de confirmer que c’est vous.",
   "presence.on.confirm": "Activer",
   "presence.off.title": "Désactiver les approbations en personne ?",
   "presence.off.consequence":

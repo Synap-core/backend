@@ -311,14 +311,18 @@ export function enrollmentSubject(challengeId: string): string {
 /** How the audit names the approver: "Antoine (approved with Face ID on iPhone, requested from MacBook-Pro)". */
 export function presenceActorLabel(parts: {
   person: string;
-  method: "passkey" | "device_key";
+  method: PresenceProofKind;
   deviceLabel?: string | null;
   requestedFrom?: string | null;
 }): string {
   const how =
     parts.method === "passkey"
       ? "approved with a passkey"
-      : `approved with Face ID or the passcode on ${parts.deviceLabel ?? "a device"}`;
+      : parts.method === "totp"
+        ? "approved with a code from a 2FA app"
+        : parts.method === "recovery_code"
+          ? "approved with a recovery code"
+          : `approved with Face ID or the passcode on ${parts.deviceLabel ?? "a device"}`;
   const from = parts.requestedFrom
     ? `, requested from ${parts.requestedFrom}`
     : "";
@@ -356,7 +360,43 @@ export const presenceProofSchema = z.discriminatedUnion("kind", [
       authenticatorAttachment: z.string().nullish(),
     }),
   }),
+  // A code the person TYPES (recovery ladder, founder, 6 Nov 2026): only in
+  // pod admin's presence dialog, a person's browser session. The pod refuses
+  // it from a key or a Synap app's device session.
+  z.object({
+    kind: z.literal("totp"),
+    challengeId: z.string().uuid(),
+    code: z.string().regex(/^\d{6}$/, "six digits"),
+  }),
+  z.object({
+    kind: z.literal("recovery_code"),
+    challengeId: z.string().uuid(),
+    code: z.string().min(1).max(64),
+  }),
 ]);
+
+/** Every kind of proof. */
+export type PresenceProofKind = PresenceProof["kind"];
+
+/**
+ * The proofs a person TYPES instead of signing (a 2FA app code, a recovery
+ * code). Accepted only from a person's browser session (pod admin's dialog),
+ * never from a key or a Synap app's device session, and limited to
+ * `PRESENCE_TYPED_FAILURES_MAX` wrong codes per person in
+ * `PRESENCE_TYPED_FAILURE_WINDOW_SECONDS`.
+ */
+export const PRESENCE_TYPED_PROOF_KINDS = ["totp", "recovery_code"] as const;
+export type PresenceTypedProofKind =
+  (typeof PRESENCE_TYPED_PROOF_KINDS)[number];
+
+export function isTypedPresenceProof(
+  kind: PresenceProofKind
+): kind is PresenceTypedProofKind {
+  return (PRESENCE_TYPED_PROOF_KINDS as readonly string[]).includes(kind);
+}
+
+export const PRESENCE_TYPED_FAILURES_MAX = 5;
+export const PRESENCE_TYPED_FAILURE_WINDOW_SECONDS = 15 * 60;
 
 /**
  * What an approval carries to prove the person is there: the wire schema's
@@ -420,6 +460,18 @@ export const PRESENCE_REQUEST_KINDS = {
    * new choice.
    */
   presence_sensitivity: "governance",
+  /**
+   * presence.totp.confirm when the person already has a factor (recovery
+   * ladder): an existing factor approves the new 2FA app. The id is the
+   * pending factor's id.
+   */
+  totp_enroll: "setup",
+  /**
+   * New recovery codes (`POST /api/account-recovery/codes`) when the person
+   * already has a factor: recovery codes prove presence, so a new batch is a
+   * new factor. The id is the person's own user id.
+   */
+  recovery_codes: "setup",
 } as const satisfies Record<string, SensitiveReason>;
 
 export type PresenceRequestKind = keyof typeof PRESENCE_REQUEST_KINDS;
@@ -620,6 +672,59 @@ export function sensitiveActionTitle(
 }
 
 /**
+ * The ways a person can prove presence, counted for the "two ways in" rule
+ * (recovery ladder, founder, 6 Nov 2026): a pod in `enforce` must not rest on
+ * ONE thing the person can lose. What counts as one way is what is lost
+ * together:
+ *  - every passkey together (they sync in one password manager, and a lost
+ *    manager loses them all: the 6 Nov lockout);
+ *  - each device key on its own (it never leaves its device);
+ *  - the 2FA app;
+ *  - the recovery codes, while one is unused.
+ */
+export interface PresenceFactorCounts {
+  passkeys: number;
+  deviceKeys: number;
+  totp: boolean;
+  recoveryCodes: number;
+}
+
+export function presenceWaysIn(f: PresenceFactorCounts): number {
+  return (
+    (f.passkeys > 0 ? 1 : 0) +
+    f.deviceKeys +
+    (f.totp ? 1 : 0) +
+    (f.recoveryCodes > 0 ? 1 : 0)
+  );
+}
+
+/** How many ways in `enforce` needs: to turn it on, and to stay in it when one is removed. */
+export const PRESENCE_ENFORCE_MIN_WAYS = 2;
+
+/** The refusal code of a change that would leave fewer than two ways in under `enforce`. */
+export const PRESENCE_NEEDS_TWO_WAYS = "PRESENCE_NEEDS_TWO_WAYS" as const;
+
+/**
+ * "I lost my passkey" (recovery ladder): a request to clear the person's
+ * proof factors. Every device of theirs is told; any of their signed-in
+ * sessions can cancel it for this long; after it, the person (signed in AT the
+ * pod within `PRESENCE_ENROLL_FRESH_SECONDS`) finishes it and enrols a first
+ * factor again. An email is never a proof: a mailbox an AI reads only starts
+ * this wait.
+ */
+export const PRESENCE_RECOVERY_DELAY_SECONDS = 24 * 3600;
+
+/**
+ * The ONE recovery door is a pod admin page, `CONSOLE_PAGES.presenceRecovery`
+ * (`@synap-core/types/console`). Every presence dialog (pod admin, Relay, the
+ * desktop app, the web app) links to it with
+ * `consoleHref(origin, { page: "presenceRecovery" })`; no surface runs its own.
+ */
+
+/** The state of a person's recovery request, as every surface reads it. */
+export type PresenceRecoveryStatus = "pending" | "cancelled" | "completed";
+
+/**
  * The ONE wording of proof of presence that every client shows (pod admin,
  * Relay, the desktop app), as a catalog of the i18n door: English is the
  * source and the type.
@@ -640,6 +745,10 @@ export const presenceWordsEn = {
     "Connecting an AI or an app, changing keys and rules, deploys and deletions",
   "presence.where":
     "You approve in pod admin with a passkey, in Relay with Face ID, or in the desktop app with Touch ID.",
+  "presence.lost": "I lost my passkey",
+  "presence.useCode": "Use a code instead",
+  "presence.twoWays":
+    "Keep two ways in, so losing one never locks you out: a passkey and a 2FA app, or a passkey and recovery codes.",
 } as const;
 
 export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
@@ -651,6 +760,10 @@ export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
     "Connecter une IA ou une app, modifier des clés et des règles, les déploiements et les suppressions",
   "presence.where":
     "Vous approuvez dans l’administration du pod avec une clé d’accès, dans Relay avec Face ID, ou dans l’app de bureau avec Touch ID.",
+  "presence.lost": "J’ai perdu ma clé d’accès",
+  "presence.useCode": "Utiliser un code",
+  "presence.twoWays":
+    "Gardez deux moyens d’accès, pour qu’en perdre un ne vous bloque jamais : une clé d’accès et une app de double authentification, ou une clé d’accès et des codes de récupération.",
 };
 
 /** The shared presence words, per catalog language (`useT` / `createT`). */

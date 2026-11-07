@@ -235,6 +235,28 @@ export {
   notifyFactorChanged,
 } from "./services/presence/factors.js";
 export { redeemPasskeyChangeGrant } from "./services/presence/passkey-change.js";
+// New recovery codes (`/api/account-recovery/codes`) are a new proof factor:
+// a person who holds one proves presence through the same gate.
+export { assertPresenceForRequest } from "./services/presence/gate.js";
+// The account-recovery door judges a first factor like presence.totp.begin
+// (a credential presented AT the pod, recently), and lets a typed code count
+// only in a person's browser session.
+export {
+  kratosCredentialTime,
+  runAsBrowserPerson,
+} from "./utils/device-session.js";
+
+// Recovery codes: generated, hashed and matched in ONE place, for the account
+// recovery doors (apps/api) and the presence proof (a recovery code proves
+// presence, the recovery ladder).
+export {
+  generateRecoveryCode,
+  generateRecoveryCodes,
+  hashRecoveryCode,
+  matchRecoveryCode,
+  newBatchSalt,
+  type CandidateCode,
+} from "./services/account-recovery/codes.js";
 
 // Export vault resolver utilities (used by ssh-proxy and other server-side consumers)
 export {

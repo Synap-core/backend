@@ -20,6 +20,7 @@
  */
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
+import { PRESENCE_ENFORCE_MIN_WAYS } from "@synap-core/types/presence";
 import {
   dialState,
   type DialQuery,
@@ -161,12 +162,15 @@ export function enabledSave(save: {
  * What the presence row says under its switch about the person's own
  * factors: an INVITE to add a passkey when they hold none (a new owner has
  * neither a passkey nor Relay's Face ID, and turning approvals in person off
- * again needs one), a failed read with Try again, or nothing.
+ * again needs one); with ONE way in, an invite to add a second (the recovery
+ * ladder, founder, 6 Nov 2026: losing one must never lock them out); a
+ * failed read with Try again; or nothing once they have two.
  */
-export type FactorNote = "none" | "failed" | null;
+export type FactorNote = "none" | "one" | "failed" | null;
 
 export function factorNote(read: QueryLike<PresenceFactorsData>): FactorNote {
   if (read.error != null) return "failed";
   if (read.isLoading || !read.data) return null;
-  return read.data.passkeys + read.data.deviceKeys === 0 ? "none" : null;
+  if (read.data.waysIn === 0) return "none";
+  return read.data.waysIn < PRESENCE_ENFORCE_MIN_WAYS ? "one" : null;
 }

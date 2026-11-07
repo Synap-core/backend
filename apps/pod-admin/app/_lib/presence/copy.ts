@@ -10,8 +10,12 @@ import {
   createT,
   type Catalog,
 } from "@synap-core/types/i18n";
+import { presenceWordsEn, presenceWordsFr } from "@synap-core/types/presence";
 
 export const en = {
+  // The shared presence words ("I lost my passkey", "Use a code instead"):
+  // one wording on every surface.
+  ...presenceWordsEn,
   title: "Confirm it’s you",
   "title.progress": "Confirm it’s you ({index} of {total})",
   action: "To approve “{action}”, confirm with your passkey.",
@@ -81,9 +85,19 @@ export const en = {
   "doing.sensitivityOff": "Stop asking for a passkey there",
   "passkeyChange.needsProof":
     "A passkey change needs a confirmation from your passkey.",
+  "doing.recoveryCodes": "Create new recovery codes",
+  "doing.totpAdd": "Add a 2FA app",
+  confirmCode: "Confirm with this code",
+  "code.label": "Code",
+  "code.help":
+    "The 6 digits your 2FA app shows, or one of your recovery codes. A recovery code works once.",
+  "again.code":
+    "That code didn’t confirm it’s you, or it was already used. Type the code your app shows now, or another recovery code.",
+  usePasskey: "Use your passkey instead",
 };
 
 const fr: Catalog<typeof en> = {
+  ...presenceWordsFr,
   title: "Confirmez que c’est vous",
   "title.progress": "Confirmez que c’est vous ({index} sur {total})",
   action: "Pour approuver « {action} », confirmez avec votre clé d’accès.",
@@ -152,6 +166,15 @@ const fr: Catalog<typeof en> = {
   "doing.sensitivityOff": "Ne plus demander de clé d’accès à cet endroit",
   "passkeyChange.needsProof":
     "Modifier une clé d’accès demande une confirmation avec votre clé d’accès.",
+  "doing.recoveryCodes": "Créer de nouveaux codes de récupération",
+  "doing.totpAdd": "Ajouter une app de double authentification",
+  confirmCode: "Confirmer avec ce code",
+  "code.label": "Code",
+  "code.help":
+    "Les 6 chiffres affichés par votre app de double authentification, ou l’un de vos codes de récupération. Un code de récupération ne sert qu’une fois.",
+  "again.code":
+    "Ce code n’a pas confirmé que c’est vous, ou il a déjà servi. Saisissez le code affiché maintenant par votre app, ou un autre code de récupération.",
+  usePasskey: "Utiliser plutôt votre clé d’accès",
 };
 
 /** The presence dialog's translator, in the ambient catalog locale. */

@@ -311,6 +311,8 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "security.factor_changed": "work-broke",
   "security.presence_mode_changed": "work-broke",
   "security.presence_sensitivity_changed": "work-broke",
+  // "I lost my passkey": every device hears it, so it is cancelled in time.
+  "security.presence_recovery": "work-broke",
   // Not a 10-second decision: in-app / Home only.
   "connector.sync.failed": null,
   "inbox.mention": null,

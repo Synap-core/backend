@@ -10,7 +10,17 @@
  *    biometric or the device passcode (Relay: Secure Enclave / Keystore). Only
  *    the PUBLIC key is stored. Listed and revocable by the person.
  */
-import { pgTable, uuid, text, timestamp, index } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  index,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const presenceChallenges = pgTable(
   "presence_challenges",
@@ -62,6 +72,96 @@ export const presenceDeviceKeys = pgTable(
   },
   (t) => ({
     userIdx: index("presence_device_keys_user_idx").on(t.userId),
+  })
+);
+
+/**
+ * A person's 2FA app (0405, the recovery ladder). `secret` is an encrypted
+ * field (`presence_totp_factors.secret` in `ENCRYPTED_COLUMNS`): the base32
+ * TOTP secret. Unconfirmed until a first code proved the app holds it;
+ * `last_used_step` is the last 30 s step a code was accepted for.
+ */
+export const presenceTotpFactors = pgTable(
+  "presence_totp_factors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    label: text("label").notNull(),
+    secret: text("secret").notNull(),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    lastUsedStep: bigint("last_used_step", { mode: "number" }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("presence_totp_factors_user_idx").on(t.userId),
+  })
+);
+
+/** One wrong typed code (2FA app, recovery code), for the per-person limit (0405). */
+export const presenceProofFailures = pgTable(
+  "presence_proof_failures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    method: text("method").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("presence_proof_failures_user_idx").on(
+      t.userId,
+      t.createdAt
+    ),
+  })
+);
+
+/**
+ * "I lost my passkey" (0405): pending until `matures_at` (24 h), cancellable
+ * from any of the person's sessions, then finished by the person. One pending
+ * request per person.
+ */
+export const presenceRecoveryRequests = pgTable(
+  "presence_recovery_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    /** `pending` | `cancelled` | `completed` (CHECK in 0405). */
+    status: text("status").notNull().default("pending"),
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    maturesAt: timestamp("matures_at", { withTimezone: true }).notNull(),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => ({
+    onePending: uniqueIndex("presence_recovery_requests_one_pending")
+      .on(t.userId)
+      .where(sql`${t.status} = 'pending'`),
+  })
+);
+
+/**
+ * The passkeys a finished recovery cleared (0405): Kratos v1.3.1 cannot
+ * remove a passkey through its admin API, so the pod stops accepting them as a
+ * proof. `credential_id` is the base64url credential id.
+ */
+export const presenceDisownedPasskeys = pgTable(
+  "presence_disowned_passkeys",
+  {
+    userId: text("user_id").notNull(),
+    credentialId: text("credential_id").notNull(),
+    recoveryRequestId: uuid("recovery_request_id").notNull(),
+    disownedAt: timestamp("disowned_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.credentialId] }),
   })
 );
 

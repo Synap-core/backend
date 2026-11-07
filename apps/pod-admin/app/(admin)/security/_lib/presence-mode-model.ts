@@ -7,11 +7,13 @@
  *  - what `report` let through in the last 30 days (`presence.missing`), by
  *    kind, capped, each row a door to the audit log filtered to that kind,
  *    and "Show all N" to all of them;
- *  - whether turning it ON asks first: only when the person has no factor to
- *    turn it off again with (or their factors could not be read).
+ *  - whether turning it ON asks first, and whether the card warns: under
+ *    `enforce` a person keeps two ways in (the recovery ladder, founder,
+ *    6 Nov 2026; `presenceWaysIn`), so a lost passkey never locks them out.
  */
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
+import { PRESENCE_ENFORCE_MIN_WAYS } from "@synap-core/types/presence";
 import {
   presenceKindWords,
   presenceMissingHref,
@@ -101,15 +103,32 @@ export function presenceModeView(read: PresenceModeRead): PresenceModeView {
 }
 
 /**
- * Does turning it ON ask first? Turning it OFF again needs a proof, so the
- * person is asked only when they hold no factor to give one (a passkey, a
- * Relay device key), or when that could not be read: never a needless
- * dialog for someone who can already prove.
+ * Does turning it ON ask first? The pod turns it on only for a person with
+ * two ways in (`PRESENCE_ENFORCE_MIN_WAYS`), so the person is asked first,
+ * and offered the second way, when they hold fewer or when that could not be
+ * read: never a needless dialog for someone who already has two.
  */
 export function turningOnAsks(factors: {
   isError: boolean;
   data?: PresenceFactors | undefined;
 }): boolean {
   if (factors.isError || !factors.data) return true;
-  return factors.data.passkeys + factors.data.deviceKeys === 0;
+  return factors.data.waysIn < PRESENCE_ENFORCE_MIN_WAYS;
+}
+
+/**
+ * Does the card warn "keep two ways in"? Only while it is ON and the person's
+ * factors were READ and are fewer than two (an unread count is not a warning:
+ * the card says nothing it does not know).
+ */
+export function warnsTwoWays(
+  on: boolean,
+  factors: { isError: boolean; data?: PresenceFactors | undefined }
+): boolean {
+  return (
+    on &&
+    !factors.isError &&
+    factors.data !== undefined &&
+    factors.data.waysIn < PRESENCE_ENFORCE_MIN_WAYS
+  );
 }

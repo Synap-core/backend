@@ -30,8 +30,10 @@ import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import {
+  PRESENCE_INVALID,
   PRESENCE_REQUEST_KINDS,
   PRESENCE_REQUIRED,
+  isTypedPresenceProof,
   presenceActorLabel,
   presenceActionDigest,
   presenceActionSubject,
@@ -228,6 +230,17 @@ async function checkPresence(args: {
     }
     await recordMissing({ userId, subject, what, reason, door });
     return null;
+  }
+
+  // A typed code (2FA app, recovery code) is the person's, typed in pod
+  // admin's dialog: a key never carries one, whatever it claims to relay.
+  if (args.keyCaller && isTypedPresenceProof(proof.kind)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "A code is typed in pod admin, signed in in your browser. A key can't send one.",
+      cause: { reasonCode: PRESENCE_INVALID, proposalId: subject },
+    });
   }
 
   let verdict: PresenceVerdict;

@@ -122,6 +122,41 @@ describe("presenceDialogView", () => {
       ).toBeNull();
     }
   });
+
+  it("GUARDRAIL (recovery ladder): with a 2FA app or recovery codes, every ready state offers a code; code mode makes it primary", () => {
+    const withPasskey = presenceDialogView({
+      phase: ready(),
+      passkeySupported: true,
+      typed: true,
+    });
+    expect(withPasskey.primary).toBe("confirm");
+    expect(withPasskey.useCode).toBe(true);
+    expect(withPasskey.codeField).toBe(false);
+    const coding = presenceDialogView({
+      phase: ready(),
+      passkeySupported: true,
+      typed: true,
+      codeMode: true,
+    });
+    expect(coding.primary).toBe("confirmCode");
+    expect(coding.codeField).toBe(true);
+    expect(coding.notice).toBeNull();
+    // No passkey but a code: straight to the code, no "add a passkey" first.
+    const noPasskey = presenceDialogView({
+      phase: ready({ passkey: false }),
+      passkeySupported: true,
+      typed: true,
+    });
+    expect(noPasskey.primary).toBe("confirmCode");
+    expect(noPasskey.notice).toBeNull();
+    // Without a code to type, nothing changes.
+    const none = presenceDialogView({
+      phase: ready(),
+      passkeySupported: true,
+    });
+    expect(none.useCode).toBe(false);
+    expect(none.codeField).toBe(false);
+  });
 });
 
 describe("a prompt that did not sign, past a password-manager extension", () => {

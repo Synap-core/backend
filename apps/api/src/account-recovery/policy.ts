@@ -147,3 +147,26 @@ export function decideOwnerSecretRead(input: {
   }
   return { allow: false, reason: "cloud_session_not_allowed" };
 }
+
+/**
+ * Did the person present a credential AT this pod within `seconds` (the
+ * recovery ladder: what a FIRST proof factor rests on, like
+ * presence.totp.begin)? A Synap app's device answers with its step-up clock
+ * (set only by a real pod sign-in); a Kratos session with `credentialTime`
+ * (`kratosCredentialTime`: never a federated Synap Cloud sign-in, whose
+ * `authenticated_at` a silent re-login moves).
+ */
+export function signedInAtPodWithin(
+  session: KratosSessionLike & DeviceSessionLike,
+  credentialTime: (session: KratosSessionLike) => Date | null,
+  now: Date,
+  seconds: number
+): boolean {
+  const at = session.device
+    ? session.device.authTime
+      ? new Date(session.device.authTime)
+      : null
+    : credentialTime(session);
+  if (!at || Number.isNaN(at.getTime())) return false;
+  return now.getTime() - at.getTime() <= seconds * 1000;
+}

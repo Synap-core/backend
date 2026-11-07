@@ -79,6 +79,14 @@ export const ENCRYPTED_COLUMNS = [
     storage: { kind: "text" },
   },
   {
+    // A person's 2FA app secret (proof of presence, 0405).
+    table: "presence_totp_factors",
+    column: "secret",
+    idColumn: "id",
+    legacy: "service-key",
+    storage: { kind: "text" },
+  },
+  {
     // The CP-pushed OIDC client secret (`pod_settings.settings`
     // `.federationOidcClient.clientSecret`).
     table: "pod_settings",
