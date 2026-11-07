@@ -131,7 +131,7 @@ export function sessionDefinitionColumns(
     // contract); a stageless playbook leaves it NULL.
     currentStage: firstStageKey(playbook?.stages),
     // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
-    expectedOutputs: stampSlotKeys([...(expectedOutputs ?? [])]) as never[],
+    expectedOutputs: [...(expectedOutputs ?? [])] as never[],
   };
 }
 
