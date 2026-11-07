@@ -23,8 +23,8 @@
  * because the poll stamps the key (`apiKeys.workerServedAt`), refuses a
  * stale device session like every Hub door that writes a key row. A scoped
  * (grant) key is refused by the fence (`grant-door-fence.ts`): no grant makes
- * a key a computer's waker. In the OpenAPI reference as a stub: a machine
- * protocol, not an agent-facing tool.
+ * a key a computer's waker. Described in the OpenAPI reference
+ * ({@link ComputerWakesSchema}): a machine protocol, not an agent-facing tool.
  */
 
 import { and, db, eq } from "@synap/database";
@@ -36,7 +36,9 @@ import {
   refuseStaleDeviceSession,
   type HubHono,
 } from "./_shared.js";
-import { registerStub } from "./_codecs/_register.js";
+import { z } from "@hono/zod-openapi";
+import { registerOpenApi } from "./_codecs/_register.js";
+import { ErrorSchema } from "./_codecs/_openapi.js";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import { readHandedToYou } from "../../../services/discover/start-here.js";
 import {
@@ -50,14 +52,46 @@ import {
   workerRunnerVersion,
 } from "../../../services/worker-served.js";
 
+/** What `GET /computers/me/wakes` answers (200). */
+const ComputerWakesSchema = z
+  .object({
+    computer: z.object({ id: z.string(), name: z.string().nullable() }),
+    wakesAgents: z.boolean(),
+    leaseMs: z.number().int(),
+    agents: z.array(
+      z.object({
+        agentUserId: z.string(),
+        name: z.string().nullable(),
+        agentType: z.string().nullable(),
+        template: z.unknown().nullable(),
+        wake: z.object({ state: z.literal("can_wake") }).passthrough(),
+        sessions: z.array(
+          z.object({ id: z.string(), resume: z.literal(true).optional() })
+        ),
+      })
+    ),
+    unreadable: z.array(z.string()),
+    why: z.string().optional(),
+  })
+  .openapi("ComputerWakes");
+
 export function registerComputerWakesRoutes(app: HubHono): void {
-  registerStub(app, {
+  registerOpenApi(app, {
     method: "get",
     path: "/computers/me/wakes",
     tags: ["Computers"],
     summary: "Which agents this computer's waker starts now",
     description:
       "A connected computer's own key only (the device-flow key). Each call is the waker's poll and stamps its lease. Answers the agents on this computer that can wake and have work handed to them; an empty list with `wakesAgents: false` while the person's \"Wakes agents\" switch is off.",
+    responses: {
+      200: { description: "The agents to start", schema: ComputerWakesSchema },
+      401: { description: "Unauthorized", schema: ErrorSchema },
+      403: {
+        description: "Not this computer's own key, or no hub-protocol.read",
+        schema: ErrorSchema,
+      },
+      503: { description: "The agents could not be read", schema: ErrorSchema },
+    },
   });
   app.get("/computers/me/wakes", async (c) => {
     const stale = refuseStaleDeviceSession(c);
