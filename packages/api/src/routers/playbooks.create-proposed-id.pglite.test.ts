@@ -265,3 +265,52 @@ describe("an approved playbook create keeps its proposal's id", () => {
     expect(await playbookIdsNamed("Their list")).toEqual([theirs]);
   });
 });
+
+// ── An approval IS the activation (founder, 2026-11-07) ─────────────────────
+// Measured defect: six dev playbooks were approved on 2026-11-06 and still read
+// `draft`, because `playbooks.create` defaulted `status` to "draft" BEFORE its
+// gate stored the proposal's data — an author who said nothing looked identical
+// to one who asked for draft. Now an unstated status stays unstated in the
+// proposal, and the approval executor lands `active`.
+describe("approving a playbook create activates it unless the author asked for draft", () => {
+  const { status: _omit, ...unstated } = definition("x");
+  const statusOf = async (name: string) =>
+    (
+      (await q(`select status from playbooks where name = $1`, [name]))
+        .rows as Array<{ status: string }>
+    )[0]?.status;
+
+  it("an agent create that states no status is filed WITHOUT one, and lands active", async () => {
+    await caller().create({
+      ...unstated,
+      name: "Approved unstated",
+      agentUserId: AGENT,
+    } as never);
+    const gated = h.gate.mock.calls[0]![0] as {
+      data: { id: string; status?: unknown };
+    };
+    expect(gated.data.status).toBeUndefined();
+    await fileAndApprove(gated.data.id, gated.data);
+    expect(await statusOf("Approved unstated")).toBe("active");
+  });
+
+  it("an explicit draft is kept through approval", async () => {
+    await caller().create({
+      ...unstated,
+      name: "Approved explicit draft",
+      status: "draft",
+      agentUserId: AGENT,
+    } as never);
+    const gated = h.gate.mock.calls[0]![0] as {
+      data: { id: string; status?: unknown };
+    };
+    expect(gated.data.status).toBe("draft");
+    await fileAndApprove(gated.data.id, gated.data);
+    expect(await statusOf("Approved explicit draft")).toBe("draft");
+  });
+
+  it("an ungated direct create with no status still lands draft", async () => {
+    await caller().create({ ...unstated, name: "Direct unstated" } as never);
+    expect(await statusOf("Direct unstated")).toBe("draft");
+  });
+});

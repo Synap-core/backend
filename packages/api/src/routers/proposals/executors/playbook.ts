@@ -174,7 +174,12 @@ export function registerPlaybookExecutors(): void {
         // when a human approves it.
         metadata: innerData.metadata as Record<string, unknown> | undefined,
         executor: innerData.executor,
-        status: innerData.status,
+        // An approval IS the activation: the approver saw this playbook and said
+        // yes, so an author who did not state a status gets `active`. An author
+        // who asked for `draft` (or paused) keeps exactly that — the proposal's
+        // stored data holds a status only when the author stated one
+        // (`playbooks.create` has no schema default).
+        status: innerData.status ?? "active",
         // 0240: a project-scoped BLUEPRINT approved without its scope would
         // materialize as a session template — the one field that decides what
         // the template even is.
