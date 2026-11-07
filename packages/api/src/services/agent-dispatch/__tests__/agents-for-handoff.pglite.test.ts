@@ -498,15 +498,18 @@ describe("readAgentsForHandoff — what YOUR hand-off would do", () => {
 
 describe("readAgentsForHandoff — its template and whether it can be woken", () => {
   it("the template is the agent type's, built in (no catalog version yet)", () => {
+    // Built in: the pod holds no wake block to serve.
     expect(row(ON_DEVBOX).template).toEqual({
       slug: "claude-code",
       label: "Claude Code",
       version: null,
+      wake: null,
     });
     expect(row(ON_LABEL_DEVBOX).template).toEqual({
       slug: "codex",
       label: "Codex",
       version: null,
+      wake: null,
     });
     // A type that names no template: none, never a guess.
     for (const id of [HOUSE, BOUND, NEVER]) expect(row(id).template).toBeNull();

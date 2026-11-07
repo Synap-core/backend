@@ -8,6 +8,7 @@
  * `…RefusalLabel`). No client derives a wake state.
  */
 
+import type { AgentTemplateWake } from "./agent-template.js";
 import type {
   AGENT_WAKE_HOW_LABELS,
   AGENT_WAKE_REFUSAL_LABELS,
@@ -57,6 +58,13 @@ export interface AgentTemplateRef {
   slug: string;
   label: string;
   version: string | null;
+  /**
+   * How a computer starts it on handed work, as the INSTALLED template holds
+   * it (`agent_templates.wake`): the pod is the one source a runner reads.
+   * `null` = the installed template carries none, or the template is built in
+   * (the pod holds no wake block for it).
+   */
+  wake: AgentTemplateWake | null;
 }
 
 // Coverage floors: a state, path or reason without its words fails the build,
