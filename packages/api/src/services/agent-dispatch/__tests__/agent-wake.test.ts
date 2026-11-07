@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AGENT_WAKE_REFUSALS,
+  type AgentTemplateWake,
   type AgentWake,
   type AgentWakeRefusal,
 } from "@synap-core/types/agents";
@@ -22,6 +23,17 @@ import {
 import type { InstalledAgentTemplate } from "../../agent-templates/installed.js";
 
 const CLAUDE = resolveAgentTemplate({ agentType: "claude-code" })!;
+const CLAUDE_WAKE: AgentTemplateWake = {
+  program: "claude",
+  args: ["-p", "{prompt}", "--output-format", "stream-json", "--verbose"],
+  params: { prompt: { type: "text", required: true } },
+  env: { strip: ["ANTHROPIC_API_KEY"] },
+};
+const HERMES_WAKE: AgentTemplateWake = {
+  program: "hermes",
+  args: ["chat", "-q", "{prompt}"],
+  params: { prompt: { type: "text", required: true } },
+};
 const CURSOR = resolveAgentTemplate({ agentType: "cursor" })!;
 
 /** A pull agent on a computer whose runner can start it: `can_wake`. */
@@ -44,6 +56,8 @@ describe("resolveAgentTemplate — the one template seam", () => {
       label: "Claude Code",
       version: null,
       wakes: true,
+      // Built in: the pod holds no wake block to serve a runner.
+      wake: null,
     });
     expect(resolveAgentTemplate({ agentType: "codex" })).toMatchObject({
       label: "Codex",
@@ -65,6 +79,7 @@ describe("resolveAgentTemplate — the one template seam", () => {
         aliases: [],
         worker: true,
         wakes: true,
+        wake: CLAUDE_WAKE,
         version: "h-0123456789ab",
       },
       {
@@ -74,6 +89,7 @@ describe("resolveAgentTemplate — the one template seam", () => {
         aliases: [],
         worker: true,
         wakes: true,
+        wake: HERMES_WAKE,
         version: "h-ba9876543210",
       },
     ];
@@ -84,11 +100,16 @@ describe("resolveAgentTemplate — the one template seam", () => {
       label: "Claude Code (catalog)",
       version: "h-0123456789ab",
       wakes: true,
+      wake: CLAUDE_WAKE,
     });
     // A type the built-in registry never had: only the catalog names it.
     expect(resolveAgentTemplate({ agentType: "hermes" })).toBeNull();
     expect(resolveAgentTemplate({ agentType: "hermes" }, installed)?.slug).toBe(
       "hermes"
+    );
+    // The wake block a runner starts the agent with is the installed one, as installed.
+    expect(resolveAgentTemplate({ agentType: "hermes" }, installed)?.wake).toEqual(
+      HERMES_WAKE
     );
   });
 
@@ -101,6 +122,7 @@ describe("resolveAgentTemplate — the one template seam", () => {
         aliases: [],
         worker: true,
         wakes: true,
+        wake: CLAUDE_WAKE,
         version: "h-0123456789ab",
       },
     ];

@@ -869,6 +869,24 @@ export interface SessionPostRef {
 	/** For `slot`: the slot's declared label. */
 	label?: string;
 }
+declare const AGENT_WAKE_PARAM_TYPES: readonly [
+	"text",
+	"model",
+	"path"
+];
+export type AgentWakeParamType = (typeof AGENT_WAKE_PARAM_TYPES)[number];
+/** How a computer starts the program on handed work: data, never a shell line. */
+export interface AgentTemplateWake {
+	program: string;
+	args: string[];
+	params?: Record<string, {
+		type: AgentWakeParamType;
+		required?: boolean;
+	}>;
+	env?: {
+		strip?: string[];
+	};
+}
 declare const AGENT_WAKE_STATES: readonly [
 	"awake",
 	"can_wake",
@@ -908,6 +926,13 @@ export interface AgentTemplateRef {
 	slug: string;
 	label: string;
 	version: string | null;
+	/**
+	 * How a computer starts it on handed work, as the INSTALLED template holds
+	 * it (`agent_templates.wake`): the pod is the one source a runner reads.
+	 * `null` = the installed template carries none, or the template is built in
+	 * (the pod holds no wake block for it).
+	 */
+	wake: AgentTemplateWake | null;
 }
 /** What a person can choose: Synap AI, or one of their agents. */
 export type RunChoice = {

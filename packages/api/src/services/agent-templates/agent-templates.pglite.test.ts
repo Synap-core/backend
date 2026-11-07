@@ -285,6 +285,7 @@ describe("the roster's seam reads the installed template", () => {
   it("version from the source link, wake from the row; a link wins over the type", async () => {
     await list("claude-code", CLAUDE_CODE, { version: "h-bbbbbbbbbbbb" });
     await list("cursor", CURSOR);
+    await list("hermes", HERMES);
     await installOfficialAgentTemplates();
     const installed = await loadInstalledAgentTemplates();
 
@@ -295,10 +296,23 @@ describe("the roster's seam reads the installed template", () => {
       label: "Claude Code",
       version: "h-bbbbbbbbbbbb",
       wakes: true,
+      wake: expect.objectContaining({
+        program: "claude",
+        args: ["-p", "{prompt}"],
+      }),
+    });
+    // The block a runner reads to start the agent is the INSTALLED row's,
+    // served as it was installed (the pod is the one source).
+    expect(
+      resolveAgentTemplate({ agentType: "hermes" }, installed)?.wake
+    ).toMatchObject({
+      program: "hermes",
+      args: ["chat", "-q", "{prompt}"],
+      params: { prompt: { type: "text", required: true } },
     });
     expect(
-      resolveAgentTemplate({ agentType: "cursor" }, installed)?.wakes
-    ).toBe(false);
+      resolveAgentTemplate({ agentType: "cursor" }, installed)
+    ).toMatchObject({ wakes: false, wake: null });
     expect(
       resolveAgentTemplate(
         { agentType: "claude-code-devbox", templateSlug: "claude-code" },

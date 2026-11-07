@@ -8,6 +8,7 @@
 import { db } from "@synap/database";
 import { agentTemplates } from "@synap/database/schema";
 import { readMarketSource } from "../capabilities/market-source.js";
+import type { AgentTemplateWake } from "@synap-core/types/agents";
 
 export interface InstalledAgentTemplate {
   slug: string;
@@ -17,6 +18,8 @@ export interface InstalledAgentTemplate {
   worker: boolean;
   /** The template carries a `wake` block: a runner could start its agents. */
   wakes: boolean;
+  /** That block, as installed: what the roster serves a runner. */
+  wake: AgentTemplateWake | null;
   /** The catalog version it was installed (or last converged) at. */
   version: string | null;
 }
@@ -42,6 +45,7 @@ export async function loadInstalledAgentTemplates(): Promise<
     aliases: Array.isArray(r.aliases) ? r.aliases : [],
     worker: r.worker,
     wakes: r.wake != null,
+    wake: r.wake ?? null,
     version: readMarketSource(r.metadata)?.packageVersion ?? null,
   }));
 }
