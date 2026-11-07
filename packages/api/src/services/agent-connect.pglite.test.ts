@@ -229,6 +229,11 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // `ddlFor` writes columns only. Linking an agent to its template writes the
+  // template preset with ON CONFLICT on this index (0390), so the table needs it.
+  await h.client!.exec(
+    `create unique index if not exists "agent_configs_user_preset_unique" on "agent_configs" ("user_id", "preset_key") where "preset_key" is not null`
+  );
   // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
   // setting enforces, services/presence/mode.ts), so its sensitive approvals
   // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
