@@ -880,8 +880,8 @@ export interface AgentTemplateWake {
 	program: string;
 	args: string[];
 	params?: Record<string, {
-		type: AgentWakeParamType;
 		required?: boolean;
+		type: AgentWakeParamType;
 	}>;
 	env?: {
 		strip?: string[];
