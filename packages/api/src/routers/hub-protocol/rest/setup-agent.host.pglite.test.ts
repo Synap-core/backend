@@ -517,4 +517,37 @@ describe("d812debd: a template's tool surface is its agents' first key's", () =>
     expect(key.tool_profile).toBe("entry");
     expect(groups(key.tool_groups) ?? []).toEqual([]);
   });
+
+  it("an agent that already holds a key keeps that key's surface when its template later names one (never widened by the template)", async () => {
+    await q(
+      `insert into agent_templates (slug, name, harness, aliases, worker, tried, practices, tool_profile, tool_groups, metadata)
+       values ('grow-agent', 'Grow Agent', 'grow-agent', '[]'::jsonb, false, true, '{"skills":[]}'::jsonb, null, '[]'::jsonb, '{}'::jsonb)`
+    );
+    const box = await connectComputer(FOUR, "ts-5");
+    const body = { agentType: "grow-agent", instanceId: "inst-ts-5" };
+    const first = await ask(box.computer.apiKey, body);
+    expect(first.status).toBe(200);
+    const agent = ((await first.json()) as { agentUserId: string }).agentUserId;
+
+    // The catalog update now gives this program entry + read.
+    await q(
+      `update agent_templates set tool_profile = 'entry', tool_groups = '["read"]'::jsonb where slug = 'grow-agent'`
+    );
+    const again = await ask(box.computer.apiKey, body);
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { agentUserId: string }).agentUserId).toBe(
+      agent
+    );
+
+    const keys = await q<{ tool_profile: string | null; tool_groups: unknown }>(
+      `select tool_profile, tool_groups from api_keys where user_id = $1 order by created_at`,
+      [agent]
+    );
+    // A second key WAS minted, and it lists what the first did.
+    expect(keys).toHaveLength(2);
+    for (const k of keys) {
+      expect(k.tool_profile).toBe("entry");
+      expect(groups(k.tool_groups) ?? []).toEqual([]);
+    }
+  });
 });
