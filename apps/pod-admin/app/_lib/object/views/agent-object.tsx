@@ -78,7 +78,10 @@ import {
   originLine,
   reachErrorSentence,
   viaSynapAccount,
+  agentWakeSource,
+  agentWakeView,
   type AgentRowView,
+  type AgentWakeView,
 } from "../../../(admin)/agents/_lib/agent-roster";
 import { FactsGrid, type Fact } from "../facts-grid";
 import { couldNotLoad, loadFailure, notFound } from "../load-failure";
@@ -132,7 +135,9 @@ export function agentFacts(
   /** The Keys list narrowed to this agent, for a viewer who may open Keys. */
   keysHref: string | null = null,
   /** Where its owner opens, for a frame that has a page for people. */
-  ownerHref?: (userId: string) => string
+  ownerHref?: (userId: string) => string,
+  /** Its template and whether it can be woken (`agentUsers.roster`). */
+  wake: AgentWakeView = { kind: "unknown" }
 ): Fact[] {
   const row = view.row;
   const reach = resolveAgentReachMark(row);
@@ -202,6 +207,55 @@ export function agentFacts(
     ...(row.operatedByViewer
       ? [{ label: "Acts for", value: "You — it can see and pick up your work" }]
       : []),
+    ...wakeFacts(wake),
+  ];
+}
+
+/**
+ * Its template, and whether the pod can get it working. When it can't, the
+ * reason and the fix in plain words, with the door the fix names: the
+ * command to run (with its name), or its computer's page.
+ */
+function wakeFacts(wake: AgentWakeView): Fact[] {
+  if (wake.kind === "unknown") return [];
+  if (wake.kind === "unavailable")
+    return [
+      {
+        label: "Wake",
+        value: (
+          <span className="text-status-down">
+            Couldn&apos;t load whether it can be woken.
+          </span>
+        ),
+      },
+    ];
+  return [
+    // The pod's own agents need no template: name one only when there is.
+    ...(wake.template ? [{ label: "Template", value: wake.template }] : []),
+    {
+      label: "Wake",
+      value: wake.cantWake ? (
+        <span className="flex flex-col gap-1">
+          <span className="text-status-down">
+            {wake.state}
+            {wake.why ? `: ${wake.why}` : ""}
+          </span>
+          {wake.fix && <span>{wake.fix}</span>}
+          {wake.command && (
+            <code className="w-fit rounded bg-content2 px-1.5 py-0.5 font-mono text-[11.5px]">
+              {wake.command}
+            </code>
+          )}
+          {wake.fixHref && (
+            <Link href={wake.fixHref} className={FACT_LINK}>
+              Open its computer
+            </Link>
+          )}
+        </span>
+      ) : (
+        wake.state
+      ),
+    },
   ];
 }
 
@@ -798,6 +852,9 @@ export function AgentObject({
   ownerHref?: (userId: string) => string;
 }) {
   const list = trpc.agentUsers.list.useQuery({}, { staleTime: 30_000 });
+  const rosterRead = trpc.agentUsers.roster.useQuery(undefined, {
+    staleTime: 30_000,
+  });
   const { viewerId, ownerName } = useAgentPeople();
   const roster = useMemo(
     () =>
@@ -892,7 +949,8 @@ export function AgentObject({
       view,
       ownerName,
       viewerIsPodAdmin && row.name ? keysOfHolderHref(row.name) : null,
-      ownerHref
+      ownerHref,
+      agentWakeView(row, agentWakeSource(rosterRead))
     ),
     children: (
       <div className="flex flex-col gap-5">
