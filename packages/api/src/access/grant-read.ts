@@ -50,6 +50,10 @@ import {
   automationRuns,
   automations,
   boxRuns,
+  hostJobs,
+  installationBindings,
+  installations,
+  intentDefaults,
   cellInstances,
   channels,
   documents,
@@ -226,6 +230,23 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   // A box run (0356) is a run of a box skill: a grant on SKILLS reads them,
   // as an automation's runs follow the automation.
   [boxRuns, spec("skill", boxRuns)],
+  // An installation (0409): a grant on INSTALLATIONS reads it, its bindings
+  // and its host jobs (a binding or a job follows its installation, as an
+  // automation's runs follow the automation). No AI preset names the subject
+  // yet (presets.ts), so an agent key reads none until it is granted.
+  [installations, spec("installation", installations)],
+  [
+    installationBindings,
+    spec("installation", installationBindings, {
+      idColumn: installationBindings.installationId,
+    }),
+  ],
+  [
+    hostJobs,
+    spec("installation", hostJobs, { idColumn: hostJobs.installationId }),
+  ],
+  // A remembered provider choice is a preference: no id/workspace qualifier.
+  [intentDefaults, spec("preference", {})],
   [links, spec("link", links)],
   [tools, spec("tool", tools)],
   [mcpServers, spec("tool", mcpServers)],
