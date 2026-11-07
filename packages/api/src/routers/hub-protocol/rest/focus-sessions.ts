@@ -173,6 +173,7 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  fileableExpectedOutputs,
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
@@ -2201,6 +2202,25 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         !criteriaDiffer(existing.criteria, patch.criteria as SessionCriterion[])
       ) {
         delete patch.criteria;
+      }
+
+      // Step 2a: AUTHORITY FLOOR on the slots, before the membrane — the rule
+      // `updateFocusSession` applies, through the same `fileableExpectedOutputs`:
+      // a changed server stamp is refused to the caller, never filed as a
+      // proposal that only fails when the person approves it; a round-tripped
+      // one (every slot the `outcomes` upsert above copied from the row) is
+      // dropped, so a slot that moves on before approval cannot refuse it
+      // (finding 68a89ded).
+      if (patch.expectedOutputs !== undefined) {
+        const fileable = fileableExpectedOutputs(
+          Array.isArray(existing.expectedOutputs)
+            ? (existing.expectedOutputs as ExpectedOutput[])
+            : [],
+          patch.expectedOutputs
+        );
+        if (!fileable.ok) return c.json({ error: fileable.reason }, 400);
+        patch.expectedOutputs =
+          fileable.expectedOutputs as typeof patch.expectedOutputs;
       }
 
       // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane

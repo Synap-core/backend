@@ -1365,6 +1365,52 @@ export function serverStampedWriteError(
 }
 
 /**
+ * The `expectedOutputs` a door may FILE — in a proposal, or a direct write —
+ * against the row it loaded: refused when the list changes a server-stamped
+ * field ({@link detectServerStampedWrites}), else the list with every
+ * ROUND-TRIPPED stamp removed. Every door that files a session update calls
+ * this before the membrane (`updateFocusSession`, Hub REST `PATCH`), so the
+ * caller gets the refusal and the person never gets a proposal that cannot
+ * apply.
+ *
+ * WHY ROUND-TRIPS ARE STRIPPED, not just allowed (finding 68a89ded, proposal
+ * a6a39fcd). A stamp equal to the stored one is a round-trip TODAY; frozen
+ * into a proposal, it is compared again at approval, against the row as it is
+ * THEN. Once the person answers the slot, its `owedSince` / `askedBy` are gone
+ * and the frozen copy reads as an agent authoring them: the approval is
+ * refused, every time. An `outcomes` update freezes the WHOLE stored list this
+ * way (`upsertOutcomes` onto the loaded row). A round-tripped stamp carries no
+ * information — the merge always carries a stamp from storage — so dropping it
+ * changes nothing the merge would write now, and nothing can go stale later.
+ *
+ * `key` is kept: it is not a receipt but the slot's identity, how the merge
+ * finds the stored twin of a slot whose label changed meanwhile. A slot with
+ * no stored twin is left as sent: the merge drops its stamps (a new slot has
+ * no receipts).
+ */
+export function fileableExpectedOutputs(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): { ok: true; expectedOutputs: OutputItem[] } | { ok: false; reason: string } {
+  const violations = detectServerStampedWrites(current, incoming);
+  if (violations.length > 0) {
+    return { ok: false, reason: serverStampedWriteError(violations).message };
+  }
+  const { twinOf } = storedTwins(current);
+  return {
+    ok: true,
+    expectedOutputs: incoming.map((item) => {
+      if (!twinOf(item)) return item;
+      const out: OutputItem = { ...item };
+      for (const field of SERVER_STAMPED_OUTPUT_FIELDS) {
+        if (field !== "key") delete out[field];
+      }
+      return out;
+    }),
+  };
+}
+
+/**
  * THE `owedSince` INVARIANT, in one place: the stamp is present IFF the slot is
  * owned by the human.
  *
@@ -1994,24 +2040,24 @@ export async function updateFocusSession(
   // refusal goes back to the caller that tried it, as the `denied` this result
   // type already carries.
   //
-  // Not a second derivation: `detectServerStampedWrites` is the derivation, and
-  // both call sites pass it the stored array. This one races (the load is
+  // Not a second derivation: `fileableExpectedOutputs` runs the one detector,
+  // and both call sites pass it the stored array. This one races (the load is
   // unlocked) — harmlessly, because the merge inside the row lock is the one
-  // that decides; this only spares the human a poisoned proposal.
+  // that decides; this only spares the human a poisoned proposal. What travels
+  // on is the list WITHOUT its round-tripped stamps, so a slot that moves on
+  // before approval cannot turn an echo into a refusal (finding 68a89ded).
   if (params.expectedOutputs !== undefined) {
     const storedOutputs: OutputItem[] = Array.isArray(existing.expectedOutputs)
       ? (existing.expectedOutputs as OutputItem[])
       : [];
-    const violations = detectServerStampedWrites(
+    const fileable = fileableExpectedOutputs(
       storedOutputs,
       params.expectedOutputs
     );
-    if (violations.length > 0) {
-      return {
-        status: "denied",
-        reason: serverStampedWriteError(violations).message,
-      };
+    if (!fileable.ok) {
+      return { status: "denied", reason: fileable.reason };
     }
+    params = { ...params, expectedOutputs: fileable.expectedOutputs };
     // Same floor, same reason: an agent taking back the person's turn is
     // refused to the agent, never proposed to the person it was taken from.
     if (agentUserId) {

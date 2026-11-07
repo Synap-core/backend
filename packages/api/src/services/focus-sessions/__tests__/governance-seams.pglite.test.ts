@@ -566,6 +566,95 @@ describe("M5: an agent's outputs proposal is applied against the row as it is at
 
     expect((await outputsOf(sessionId)).map((o) => o.key)).toEqual(["a", "b"]);
   });
+
+  // M5b (finding 68a89ded, proposal a6a39fcd): the list AS SENT may itself
+  // echo a slot's stamps — an `outcomes` update copies the whole stored list.
+  // Equal at filing, they were frozen into the proposal and refused the
+  // approval once the slot moved on. The door files the list without them.
+  const OWED = {
+    key: "approve",
+    kind: "decision",
+    label: "Approve onEnd",
+    status: "pending",
+    owner: "human",
+    blockedReason: "permission",
+    why: "Approve it on the proposal page",
+    owedSince: "2026-11-06T15:01:52.792Z",
+    askedBy: AGENT,
+  };
+  async function seedOwed(): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions
+         (id, user_id, title, goal, status, origin, project_id, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
+       values ($1, $2, 'Specs', 'Ship both specs', 'active', 'agent', null,
+               $3::jsonb, '[]'::jsonb, '{}'::jsonb, '{}', now(), now(), now())`,
+      [id, USER, JSON.stringify([A, OWED])]
+    );
+    return id;
+  }
+
+  it("M5b: an echo of a slot's stamps is filed without them, and applies after the slot moved on", async () => {
+    const sessionId = await seedOwed();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      expectedOutputs: JSON.parse(JSON.stringify([OWED, B])),
+      criteria: CHANGED as never,
+    });
+    expect(res.status).toBe("proposed");
+    const [row] = (await proposalsFor(sessionId)).filter(
+      (r) => r.status === "pending"
+    );
+    const filed = (payloadOf(row!).expectedOutputs as Array<
+      Record<string, unknown>
+    >)!.find((o) => o.key === "approve")!;
+    expect(filed).not.toHaveProperty("owedSince");
+    expect(filed).not.toHaveProperty("askedBy");
+    expect(filed).toMatchObject({ owner: "human", why: OWED.why });
+
+    // The person settles the slot before approving: its ask stamps go.
+    const { owedSince: _o, askedBy: _a, ...settled } = OWED;
+    await setOutputs(sessionId, [
+      A,
+      {
+        ...settled,
+        status: "done",
+        attestedBy: USER,
+        attestedAt: "2026-11-06T17:52:57.434Z",
+      },
+    ]);
+
+    await approveRow(row!, sessionId);
+
+    const after = await outputsOf(sessionId);
+    expect(after.map((o) => o.key)).toEqual(["a", "approve", "b"]);
+    expect(after.find((o) => o.key === "approve")).toMatchObject({
+      status: "done",
+      attestedBy: USER,
+    });
+  });
+
+  it("M5b: a list that CHANGES a stamp is refused to the agent at filing, and no proposal is filed", async () => {
+    const sessionId = await seedOwed();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      expectedOutputs: [
+        { ...OWED, owedSince: "2026-11-07T09:00:00.000Z", askedBy: USER },
+      ] as never,
+      criteria: CHANGED as never,
+    });
+    expect(res).toMatchObject({
+      status: "denied",
+      reason: expect.stringMatching(
+        /"Approve onEnd"\.owedSince, "Approve onEnd"\.askedBy — these are server-stamped receipts/
+      ),
+    });
+    expect(await proposalsFor(sessionId)).toEqual([]);
+  });
 });
 
 describe("M8: a person's edit through their own doors counts as 'touched by a person'", () => {
