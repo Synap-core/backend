@@ -1276,7 +1276,7 @@ describe("a pod-wide lead's LinkedIn profile: proposed in the role's space, neve
     const before = await coreOf(REACH_P);
     const res = await patch("crm", REACH_P, { metadata: PROFILE });
     const body = await json(res);
-    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(res.status, JSON.stringify(body)).toBe(202);
     expect(body.status).toBe("proposed");
     proposed.push(String(body.proposalId));
     expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
@@ -1290,7 +1290,7 @@ describe("a pod-wide lead's LinkedIn profile: proposed in the role's space, neve
         metadata: { linkedinUrl: PROFILE.linkedinUrl },
       });
       const body = await json(res);
-      expect(res.status, JSON.stringify(body)).toBe(200);
+      expect(res.status, JSON.stringify(body)).toBe(202);
       expect(body.status).toBe("proposed");
       expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
       expect(await coreOf(id)).toEqual(before);
@@ -1321,12 +1321,12 @@ describe("a pod-wide lead's LinkedIn profile: proposed in the role's space, neve
     });
   });
 
-  it("a pod-wide record with no role in CRM, or a role only in another space: refused, nothing filed", async () => {
+  it("a pod-wide record with no role in CRM, or a role only in another space: 404 (not in the app's reach), nothing filed", async () => {
     for (const id of [REACH_NONE, REACH_OTHER]) {
       const before = await coreOf(id);
       const count = await proposalCount();
       const res = await patch("crm", id, { metadata: PROFILE });
-      expect(res.status, id).toBe(403);
+      expect(res.status, id).toBe(404);
       expect(await proposalCount()).toBe(count);
       expect(await coreOf(id)).toEqual(before);
     }
