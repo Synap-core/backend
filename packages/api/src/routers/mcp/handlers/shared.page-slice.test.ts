@@ -7,6 +7,8 @@
 import { describe, it, expect } from "vitest";
 import { pageSlice, LIST_PAGE_DEFAULT, LIST_PAGE_MAX } from "./shared.js";
 
+type Paging = { total: number; offset: number; nextOffset?: number };
+
 const rows = Array.from({ length: 120 }, (_, i) => i);
 
 describe("pageSlice", () => {
@@ -24,18 +26,19 @@ describe("pageSlice", () => {
   it("walks every page: whole list once, last page has no nextOffset", () => {
     const seen: number[] = [];
     let offset: number | undefined = 0;
-    let last:
-      { total: number; offset: number; nextOffset?: number } | undefined;
+    let last: Paging | undefined;
     while (offset !== undefined) {
-      const { page, paging } = pageSlice(
+      // Annotated: the loop feeds `paging.nextOffset` back into the call's
+      // own argument, which inference reads as a circular initializer (TS7022).
+      const res: { page: number[]; paging: Paging } = pageSlice(
         rows,
         { limit: 40, offset },
         LIST_PAGE_DEFAULT,
         LIST_PAGE_MAX
       );
-      seen.push(...page);
-      last = paging;
-      offset = paging.nextOffset;
+      seen.push(...res.page);
+      last = res.paging;
+      offset = res.paging.nextOffset;
     }
     expect(seen).toEqual(rows);
     expect(last).not.toHaveProperty("nextOffset");
