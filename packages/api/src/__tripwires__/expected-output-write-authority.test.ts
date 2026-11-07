@@ -472,7 +472,11 @@ describe("tripwire: the MCP door advertises no server-stamped field", () => {
       const props = outputs?.items?.properties;
       if (!props) continue;
       inspected += 1;
-      const advertised = Object.keys(props).filter((k) => stamped.has(k));
+      // `key` is stamped on a legacy expectedOutputs slot, but on an `outcomes`
+      // declaration it is the stable id the agent names (completeOutput).
+      const advertised = Object.keys(props).filter(
+        (k) => stamped.has(k) && !(k === "key" && schema?.properties?.outcomes)
+      );
       expect(
         advertised,
         `${tool.name} advertises a server-stamped field`
