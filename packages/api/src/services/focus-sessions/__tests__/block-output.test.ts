@@ -184,6 +184,51 @@ describe("stampUnblocked — the agent takes it back", () => {
   });
 });
 
+describe("stampUnblocked — the blocker on the hand-back (plan e7f753db §9)", () => {
+  const THING = "33333333-3333-4333-8333-333333333333";
+  const withBlocker = (clearedBy: ExpectedOutput["clearedBy"]) =>
+    stampBlocked(
+      [
+        {
+          kind: "decision",
+          label: "Send the invite?",
+          blocks: { entityId: THING, to: "contacted" },
+          blockerKey: "not_connected",
+          ...(clearedBy ? { clearedBy } : {}),
+        },
+      ],
+      "Send the invite?",
+      "decision",
+      "Ada is not a LinkedIn contact yet",
+      AT
+    );
+
+  it("a blocker the answer clears goes with the ownership", () => {
+    for (const clearedBy of [{ answer: true as const }, undefined]) {
+      const [back] = stampUnblocked(withBlocker(clearedBy), "Send the invite?");
+      expect(back).not.toHaveProperty("blocks");
+      expect(back).not.toHaveProperty("blockerKey");
+      expect(back).not.toHaveProperty("clearedBy");
+    }
+  });
+
+  it("a blocker an agent's run clears STAYS: the thing is still blocked until the run delivers", () => {
+    for (const clearedBy of [
+      { intent: "request_connection" },
+      { playbookId: "11111111-1111-4111-8111-111111111111" },
+      { capability: "linkedin.invite" },
+    ]) {
+      const [back] = stampUnblocked(withBlocker(clearedBy), "Send the invite?");
+      expect(back).not.toHaveProperty("owner");
+      expect(back).toMatchObject({
+        blocks: { entityId: THING, to: "contacted" },
+        blockerKey: "not_connected",
+        clearedBy,
+      });
+    }
+  });
+});
+
 describe("completeOutput — the agent may not close the human's slot", () => {
   it("refuses to mark a human-owned slot done", () => {
     const stored = stampBlocked(slots(), "Signed NDA", "physical", "sign", AT);

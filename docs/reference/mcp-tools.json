@@ -3289,6 +3289,51 @@
                     }
                   },
                   "required": ["mode"]
+                },
+                "blocks": {
+                  "type": "object",
+                  "description": "The THING this holds up and the status it cannot reach yet: entityId (default: the session's subject) and to (a status key; default: its next status). The thing stays in its column, marked blocked.",
+                  "properties": {
+                    "entityId": { "type": "string", "format": "uuid" },
+                    "to": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                },
+                "blockerKey": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                  "description": "The blocker's short snake_case name (not_connected), so repeats can be counted."
+                },
+                "clearedBy": {
+                  "description": "What clears it, ONE of: {\"answer\":true} (the person's answer), {\"intent\":\"request_connection\"}, {\"playbookId\":\"<uuid>\"}, {\"capability\":\"<id>\"}.",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": { "answer": { "const": true } },
+                      "required": ["answer"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": { "intent": { "type": "string" } },
+                      "required": ["intent"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "playbookId": { "type": "string", "format": "uuid" }
+                      },
+                      "required": ["playbookId"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": { "capability": { "type": "string" } },
+                      "required": ["capability"],
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               },
               "required": ["label"]
@@ -3748,6 +3793,51 @@
                     }
                   },
                   "required": ["mode"]
+                },
+                "blocks": {
+                  "type": "object",
+                  "description": "The THING this holds up and the status it cannot reach yet: entityId (default: the session's subject) and to (a status key; default: its next status). The thing stays in its column, marked blocked.",
+                  "properties": {
+                    "entityId": { "type": "string", "format": "uuid" },
+                    "to": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                },
+                "blockerKey": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                  "description": "The blocker's short snake_case name (not_connected), so repeats can be counted."
+                },
+                "clearedBy": {
+                  "description": "What clears it, ONE of: {\"answer\":true} (the person's answer), {\"intent\":\"request_connection\"}, {\"playbookId\":\"<uuid>\"}, {\"capability\":\"<id>\"}.",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": { "answer": { "const": true } },
+                      "required": ["answer"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": { "intent": { "type": "string" } },
+                      "required": ["intent"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "playbookId": { "type": "string", "format": "uuid" }
+                      },
+                      "required": ["playbookId"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": { "capability": { "type": "string" } },
+                      "required": ["capability"],
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               },
               "required": ["label"]

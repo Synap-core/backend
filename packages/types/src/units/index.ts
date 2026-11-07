@@ -8,6 +8,7 @@ export * from "./phases.js";
 export * from "./session.js";
 export * from "./track.js";
 export * from "./goal.js";
+export * from "./thing-blocker.js";
 export * from "./waiting-on-party.js";
 export * from "./goal-loop.js";
 export * from "./goal-entry.js";

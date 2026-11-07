@@ -45,6 +45,10 @@ export interface WaitEpisodeSeen extends WaitEpisodeSubject {
   ref: Record<string, unknown> | null;
   /** `waitEpisodeRefKey(ref)` (`@synap-core/types/units`). */
   refKey: string;
+  /** The status the subject stands on now (written when the episode opens). */
+  status?: string | null;
+  /** An owed slot's declared blocker name, else null. */
+  blockerKey?: string | null;
 }
 
 const BATCH = 500;
@@ -89,6 +93,8 @@ export async function syncWaitEpisodes(
           reason: e.reason,
           ref: e.ref,
           refKey: e.refKey,
+          status: e.status ?? null,
+          blockerKey: e.blockerKey ?? null,
           openedAt: input.now,
         }))
       )
@@ -209,6 +215,8 @@ export async function readWaitEpisodes(
       on: r.on as WaitEpisode["on"],
       reason: r.reason as WaitEpisode["reason"],
       ref: (r.ref ?? null) as unknown as WaitEpisode["ref"],
+      status: r.status ?? null,
+      blockerKey: r.blockerKey ?? null,
       openedAt: r.openedAt.toISOString(),
       closedAt: r.closedAt ? r.closedAt.toISOString() : null,
     }));

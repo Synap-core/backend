@@ -34019,6 +34019,69 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "blocks": {
+                          "type": "object",
+                          "properties": {
+                            "entityId": { "type": "string", "format": "uuid" },
+                            "to": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "blockerKey": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                        },
+                        "clearedBy": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "answer": { "type": "boolean", "enum": [true] }
+                              },
+                              "required": ["answer"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "intent": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["intent"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                }
+                              },
+                              "required": ["playbookId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "capability": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["capability"],
+                              "additionalProperties": false
+                            }
+                          ]
                         }
                       },
                       "required": ["label"],
@@ -36267,6 +36330,69 @@
                             "at": { "type": "string" }
                           },
                           "required": ["status", "relationType", "at"]
+                        },
+                        "blocks": {
+                          "type": "object",
+                          "properties": {
+                            "entityId": { "type": "string", "format": "uuid" },
+                            "to": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "blockerKey": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                        },
+                        "clearedBy": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "answer": { "type": "boolean", "enum": [true] }
+                              },
+                              "required": ["answer"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "intent": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["intent"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                }
+                              },
+                              "required": ["playbookId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "capability": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["capability"],
+                              "additionalProperties": false
+                            }
+                          ]
                         }
                       },
                       "required": ["kind", "label"]
@@ -37865,6 +37991,69 @@
                             },
                             { "type": "null" }
                           ]
+                        },
+                        "blocks": {
+                          "type": "object",
+                          "properties": {
+                            "entityId": { "type": "string", "format": "uuid" },
+                            "to": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "blockerKey": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                        },
+                        "clearedBy": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "answer": { "type": "boolean", "enum": [true] }
+                              },
+                              "required": ["answer"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "intent": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["intent"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                }
+                              },
+                              "required": ["playbookId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "capability": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["capability"],
+                              "additionalProperties": false
+                            }
+                          ]
                         }
                       },
                       "required": ["label"],
@@ -40113,6 +40302,69 @@
                             "at": { "type": "string" }
                           },
                           "required": ["status", "relationType", "at"]
+                        },
+                        "blocks": {
+                          "type": "object",
+                          "properties": {
+                            "entityId": { "type": "string", "format": "uuid" },
+                            "to": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "blockerKey": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                        },
+                        "clearedBy": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "answer": { "type": "boolean", "enum": [true] }
+                              },
+                              "required": ["answer"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "intent": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["intent"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": {
+                                  "type": "string",
+                                  "format": "uuid"
+                                }
+                              },
+                              "required": ["playbookId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "capability": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120
+                                }
+                              },
+                              "required": ["capability"],
+                              "additionalProperties": false
+                            }
+                          ]
                         }
                       },
                       "required": ["kind", "label"]
