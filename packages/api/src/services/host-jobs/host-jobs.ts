@@ -1,7 +1,9 @@
 /**
  * Host jobs — the queue, the lease and the evidence of the host runner's work
- * on a computer (0399, plan 64072312 U7). The ONE writer of `host_jobs`, and
- * of the installation status the runner's lease, reports and finishes move.
+ * on a computer (0409, plan 64072312 U7; one model with two kinds, installer
+ * reconciliation f75fbb48 §3.2). The ONE writer of `host_jobs`, and of the
+ * installation status and observed state the runner's lease, reports and
+ * finishes move.
  *
  *   lease     ← the computer (Hub `POST /host-jobs/lease`, scope
  *               `host.runner`), FIFO by `queued_at`, one winner per row
@@ -19,13 +21,17 @@
  * started containers); past {@link HOST_STALL_GRACE_SECONDS} the next lease
  * call fails it with an INFRA verdict.
  *
- * Installation status moves only from the state the job expects
- * (compare-and-set): an install lease turns `planned` into `installing`, its
- * finish turns `installing` into `healthy` or `failed`; an update goes
- * `updating` → `healthy` (a failed update keeps the previous version, so it is
- * `healthy` again with the reason); a remove goes `removing` → `removed`.
- * "Degraded because the computer stopped reporting" is a READ verdict
- * ({@link installationReadStatus}), never stored.
+ * Installation status is the LIFECYCLE only and moves only from the state
+ * the job expects (compare-and-set): an install lease turns `planned`,
+ * `installed` or `failed` into `installing` (from `installed`/`failed` it is a
+ * repair at the approved version), its finish turns `installing` into
+ * `installed` or `failed`; an update goes `installed` → `updating` →
+ * `installed` (a failed update keeps the previous version, so it is
+ * `installed` again with the reason); a remove goes `removing` → `removed`; a
+ * verify moves nothing. Reports and finishes store what the runner OBSERVED
+ * (health, verify, version, os, arch). Health (ok, degraded, drifted, stale,
+ * unknown, failed) is a READ verdict ({@link installationHealth}), never
+ * stored.
  */
 
 import { randomUUID } from "node:crypto";
@@ -52,7 +58,11 @@ import {
   type InstallationRow,
   type InstallationStatus,
 } from "@synap/database/schema";
-import type { HostLog, LeasedHostJob } from "@synap-core/types/host-jobs";
+import type {
+  HostLog,
+  HostVerify,
+  LeasedHostJob,
+} from "@synap-core/types/host-jobs";
 import { boxStatusForVerdict, capLog } from "../box-runs/box-runs.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
 
@@ -65,10 +75,15 @@ export const HOST_STALL_GRACE_SECONDS = 2 * HOST_LEASE_TTL_SECONDS;
 /** A job whose runner never started it is leased at most this many times. */
 export const HOST_MAX_LEASE_ATTEMPTS = 3;
 /**
- * The heartbeat window: a healthy installation whose computer has not
- * reported for this long READS as degraded ("devbox not seen since 14:02").
+ * The heartbeat window: an installed SERVICE whose computer has not reported
+ * for this long READS as unknown ("devbox not seen since 14:02").
  */
 export const INSTALLATION_REPORT_WINDOW_SECONDS = 5 * 60;
+/**
+ * A TOOL's verify is due again after this long unless its manifest says
+ * otherwise (`verify.reverifyEvery`); past it, the tool READS as stale.
+ */
+export const TOOL_REVERIFY_DEFAULT_SECONDS = 7 * 24 * 60 * 60;
 
 const ttl = () =>
   sql.raw(`now() + interval '${HOST_LEASE_TTL_SECONDS} seconds'`);
@@ -197,7 +212,15 @@ async function moveInstallation(
   extra: Partial<
     Pick<
       InstallationRow,
-      "statusDetail" | "installedAt" | "removedAt" | "health" | "lastReportAt"
+      | "statusDetail"
+      | "installedAt"
+      | "removedAt"
+      | "health"
+      | "lastReportAt"
+      | "observedVersion"
+      | "observedOs"
+      | "observedArch"
+      | "verifiedAt"
     >
   > = {}
 ): Promise<InstallationStatus | null> {
@@ -253,17 +276,18 @@ export async function leaseHostJob(
   if (!job) return null;
 
   if (job.kind === "install") {
-    await moveInstallation(job.installationId, ["planned"], "installing");
-  } else if (job.kind === "update") {
+    // From installed or failed it is a repair at the approved version.
     await moveInstallation(
       job.installationId,
-      ["healthy", "degraded"],
-      "updating"
+      ["planned", "installed", "failed"],
+      "installing"
     );
+  } else if (job.kind === "update") {
+    await moveInstallation(job.installationId, ["installed"], "updating");
   } else if (job.kind === "remove") {
     await moveInstallation(
       job.installationId,
-      ["planned", "installing", "healthy", "degraded", "updating", "failed"],
+      ["planned", "installing", "installed", "updating", "failed"],
       "removing"
     );
   }
@@ -283,9 +307,11 @@ export async function leaseHostJob(
     queuedAt: job.queuedAt.toISOString(),
     installation: {
       id: job.installationId,
+      kind: inst?.kind ?? "service",
       capabilityKey: inst?.capabilityKey ?? "",
       capabilityVersion: inst?.capabilityVersion ?? null,
       upstreamVersion: inst?.upstreamVersion ?? null,
+      desiredVersion: inst?.desiredVersion ?? null,
       manifest: inst?.manifest ?? {},
       digests: inst?.digests ?? {},
     },
@@ -385,18 +411,97 @@ function logsOwed(row: {
   );
 }
 
+/** What the runner observed, as the wire sends it (a tool's verify, …). */
+export interface HostObserved {
+  observedVersion?: string | null;
+  os?: string;
+  arch?: string;
+  verify?: HostVerify;
+}
+
+/** The verify excerpt as stored: masked again, whatever the runner did. */
+function storedVerify(
+  verify: HostVerify
+): NonNullable<InstallationHealth["verify"]> {
+  return {
+    ok: verify.ok,
+    exitCode: verify.exitCode,
+    ...(verify.excerpt !== undefined
+      ? { excerpt: redactSecrets(verify.excerpt) }
+      : {}),
+    ...(verify.outputSha256 ? { outputSha256: verify.outputSha256 } : {}),
+    ...(verify.smoke
+      ? {
+          smoke: {
+            ok: verify.smoke.ok,
+            ...(verify.smoke.exitCode !== undefined
+              ? { exitCode: verify.smoke.exitCode }
+              : {}),
+            ...(verify.smoke.excerpt !== undefined
+              ? { excerpt: redactSecrets(verify.smoke.excerpt) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 /**
- * Health (versions, ports, disk) and, when asked for, the masked log. Health
- * moves a running installation between healthy and degraded; it never moves
- * one that is installing, updating or removing (their finish does).
+ * The installation columns a report or finish writes from what the runner
+ * observed. Only the fields it sent: a report with no verify keeps the last.
  */
-export async function reportHostJob(input: {
-  jobId: string;
-  leaseId: string;
-  runner: HostRunner;
-  health?: InstallationHealth;
-  log?: HostLog;
-}): Promise<
+function observedColumns(
+  previous: InstallationHealth | null,
+  input: HostObserved & { health?: InstallationHealth }
+): Partial<InstallationRow> {
+  const out: Partial<InstallationRow> = {};
+  if (input.observedVersion !== undefined)
+    out.observedVersion = input.observedVersion;
+  if (input.os !== undefined) out.observedOs = input.os;
+  if (input.arch !== undefined) out.observedArch = input.arch;
+  if (input.health || input.verify) {
+    out.health = {
+      ...(previous ?? {}),
+      ...(input.health ?? {}),
+      ...(input.verify ? { verify: storedVerify(input.verify) } : {}),
+    };
+    out.lastReportAt = new Date();
+  }
+  if (input.verify || input.health?.services) out.verifiedAt = new Date();
+  return out;
+}
+
+async function writeObserved(
+  installationId: string,
+  input: HostObserved & { health?: InstallationHealth }
+): Promise<void> {
+  const [row] = await db
+    .select({ health: installations.health })
+    .from(installations)
+    .where(eq(installations.id, installationId))
+    .limit(1);
+  const columns = observedColumns(row?.health ?? null, input);
+  if (Object.keys(columns).length === 0) return;
+  await db
+    .update(installations)
+    .set({ ...columns, updatedAt: new Date() })
+    .where(eq(installations.id, installationId));
+}
+
+/**
+ * Health (services, versions, ports, disk), a tool's verify and what it
+ * observed, and, when asked for, the masked log. A report never moves the
+ * installation's lifecycle (finishes do); health is derived at read time.
+ */
+export async function reportHostJob(
+  input: {
+    jobId: string;
+    leaseId: string;
+    runner: HostRunner;
+    health?: InstallationHealth;
+    log?: HostLog;
+  } & HostObserved
+): Promise<
   | { ok: true; installationId: string; status: InstallationStatus | null }
   | HostLeaseRefusal
 > {
@@ -411,41 +516,17 @@ export async function reportHostJob(input: {
     .where(holdsLease(input.jobId, input.leaseId, input.runner))
     .returning({ installationId: hostJobs.installationId });
   if (!job) return refusalFor(input.jobId, input.runner);
-  let status: InstallationStatus | null;
-  if (input.health) {
-    const services = Object.values(input.health.services);
-    const allHealthy = services.length > 0 && services.every((s) => s.healthy);
-    const report = { health: input.health, lastReportAt: new Date() };
-    status = await moveInstallation(
-      job.installationId,
-      ["healthy", "degraded"],
-      allHealthy ? "healthy" : "degraded",
-      {
-        ...report,
-        statusDetail: allHealthy
-          ? null
-          : `Not healthy: ${Object.entries(input.health.services)
-              .filter(([, s]) => !s.healthy)
-              .map(([id, s]) => (s.detail ? `${id} (${s.detail})` : id))
-              .join(", ")}.`,
-      }
-    );
-    if (status !== "healthy" && status !== "degraded") {
-      // Installing, updating or removing: keep the report, not the verdict.
-      await db
-        .update(installations)
-        .set({ ...report, updatedAt: new Date() })
-        .where(eq(installations.id, job.installationId));
-    }
-  } else {
-    const [row] = await db
-      .select({ status: installations.status })
-      .from(installations)
-      .where(eq(installations.id, job.installationId))
-      .limit(1);
-    status = row?.status ?? null;
-  }
-  return { ok: true, installationId: job.installationId, status };
+  await writeObserved(job.installationId, input);
+  const [row] = await db
+    .select({ status: installations.status })
+    .from(installations)
+    .where(eq(installations.id, job.installationId))
+    .limit(1);
+  return {
+    ok: true,
+    installationId: job.installationId,
+    status: row?.status ?? null,
+  };
 }
 
 export interface FinishHostJobInput {
@@ -459,6 +540,7 @@ export interface FinishHostJobInput {
   log?: HostLog;
   output?: Record<string, unknown>;
   cleanedUp?: string[];
+  observed?: HostObserved;
 }
 
 function failureSentence(input: FinishHostJobInput): string | null {
@@ -519,6 +601,10 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
     .returning();
   if (!job) return refusalFor(input.jobId, input.runner);
 
+  // What the runner observed lands whatever the verdict: a failed verify is
+  // what the reconciler repairs from.
+  if (input.observed) await writeObserved(job.installationId, input.observed);
+
   const ok = status === "done";
   let installationStatus: InstallationStatus | null = null;
   switch (job.kind) {
@@ -526,7 +612,7 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
       installationStatus = await moveInstallation(
         job.installationId,
         ["installing"],
-        ok ? "healthy" : "failed",
+        ok ? "installed" : "failed",
         ok
           ? { installedAt: new Date(), statusDetail: null }
           : { statusDetail: error ?? "The install was stopped." }
@@ -537,7 +623,7 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
       installationStatus = await moveInstallation(
         job.installationId,
         ["updating"],
-        "healthy",
+        "installed",
         {
           statusDetail: ok
             ? null
@@ -606,6 +692,18 @@ export async function requestHostJobLogs(input: {
 
 // ── Read verdicts ───────────────────────────────────────────────────────────
 
+/** An installation's health, as read. Never stored. */
+export const INSTALLATION_HEALTH_VERDICTS = [
+  "ok",
+  "degraded",
+  "drifted",
+  "stale",
+  "unknown",
+  "failed",
+] as const;
+export type InstallationHealthVerdict =
+  (typeof INSTALLATION_HEALTH_VERDICTS)[number];
+
 /** A host job as read: `stalled` when a running job's lease ran out. */
 export function hostJobReadStatus(
   row: Pick<HostJobRow, "status" | "leaseExpiresAt">,
@@ -618,37 +716,127 @@ export function hostJobReadStatus(
     : row.status;
 }
 
+/** An ISO 8601 duration (`P7D`, `PT12H`) in seconds; null when unreadable. */
+export function isoDurationSeconds(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const m =
+    /^P(?!$)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(
+      value
+    );
+  if (!m) return null;
+  const [d, h, min, sec] = m.slice(1).map((n) => Number(n ?? 0));
+  return d! * 86_400 + h! * 3_600 + min! * 60 + sec!;
+}
+
+/** How often a tool is verified again: its manifest's, else the default. */
+function reverifySeconds(manifest: Record<string, unknown>): number {
+  const verify = manifest.verify as Record<string, unknown> | undefined;
+  return (
+    isoDurationSeconds(verify?.reverifyEvery) ?? TOOL_REVERIFY_DEFAULT_SECONDS
+  );
+}
+
 /**
- * An installation as read: a healthy one whose computer has not reported
- * within {@link INSTALLATION_REPORT_WINDOW_SECONDS} reads `degraded`, with the
- * last time it was seen. Never stored (design §4 "the computer goes offline").
+ * An installation's health, derived at read time and never stored
+ * (reconciliation f75fbb48 §3.1). Only a lifecycle that ran has a health:
+ * `failed` reads failed; `installed` reads, first match wins:
+ *   - unknown   a service's computer has not reported within
+ *               {@link INSTALLATION_REPORT_WINDOW_SECONDS}, or a tool was
+ *               never verified;
+ *   - failed    a tool's last verify did not pass;
+ *   - degraded  a service reported a service not healthy;
+ *   - drifted   the observed version is not the approved one;
+ *   - stale     a tool's last verify is older than its `reverifyEvery`;
+ *   - ok        otherwise.
+ * Any other lifecycle (planned, installing, updating, removing, removed) has
+ * no health yet: `null`.
  */
-export function installationReadStatus(
+export function installationHealth(
   row: Pick<
     InstallationRow,
-    "status" | "lastReportAt" | "installedAt" | "statusDetail"
+    | "kind"
+    | "status"
+    | "statusDetail"
+    | "health"
+    | "lastReportAt"
+    | "installedAt"
+    | "verifiedAt"
+    | "observedVersion"
+    | "desiredVersion"
+    | "manifest"
   >,
   now: Date = new Date()
 ): {
-  status: InstallationStatus;
-  notSeenSince: Date | null;
+  health: InstallationHealthVerdict | null;
   detail: string | null;
+  notSeenSince: Date | null;
 } {
-  // The last sign of life: a report, else the install's own finish.
-  const seen = row.lastReportAt ?? row.installedAt;
-  const silent =
-    row.status === "healthy" &&
-    (seen === null ||
-      now.getTime() - seen.getTime() >
-        INSTALLATION_REPORT_WINDOW_SECONDS * 1000);
-  if (!silent) {
-    return { status: row.status, notSeenSince: null, detail: row.statusDetail };
+  const verdict = (
+    health: InstallationHealthVerdict,
+    detail: string | null = null,
+    notSeenSince: Date | null = null
+  ) => ({ health, detail, notSeenSince });
+  if (row.status === "failed") return verdict("failed", row.statusDetail);
+  if (row.status !== "installed") {
+    return { health: null, detail: null, notSeenSince: null };
   }
-  return {
-    status: "degraded",
-    notSeenSince: seen,
-    detail: seen
-      ? `The computer has not reported since ${seen.toISOString()}.`
-      : "The computer has never reported on this installation.",
-  };
+  const ageSeconds = (at: Date) => (now.getTime() - at.getTime()) / 1000;
+
+  if (row.kind === "service") {
+    const seen = row.lastReportAt ?? row.installedAt;
+    if (
+      seen === null ||
+      ageSeconds(seen) > INSTALLATION_REPORT_WINDOW_SECONDS
+    ) {
+      return verdict(
+        "unknown",
+        seen
+          ? `The computer has not reported since ${seen.toISOString()}.`
+          : "The computer has never reported on this installation.",
+        seen
+      );
+    }
+    const sick = Object.entries(row.health?.services ?? {}).filter(
+      ([, s]) => !s.healthy
+    );
+    if (sick.length > 0) {
+      return verdict(
+        "degraded",
+        `Not healthy: ${sick
+          .map(([id, s]) => (s.detail ? `${id} (${s.detail})` : id))
+          .join(", ")}.`
+      );
+    }
+  } else {
+    if (row.verifiedAt === null) {
+      return verdict("unknown", "This tool has not been checked yet.");
+    }
+    if (row.health?.verify && !row.health.verify.ok) {
+      return verdict(
+        "failed",
+        `The last check failed (exit code ${row.health.verify.exitCode}).`
+      );
+    }
+  }
+  if (
+    row.desiredVersion &&
+    row.observedVersion &&
+    row.observedVersion !== row.desiredVersion
+  ) {
+    return verdict(
+      "drifted",
+      `Version ${row.observedVersion} is on the computer; ${row.desiredVersion} was approved.`
+    );
+  }
+  if (
+    row.kind === "tool" &&
+    row.verifiedAt !== null &&
+    ageSeconds(row.verifiedAt) > reverifySeconds(row.manifest)
+  ) {
+    return verdict(
+      "stale",
+      `Last checked ${row.verifiedAt.toISOString()}; a check is due.`
+    );
+  }
+  return verdict("ok");
 }

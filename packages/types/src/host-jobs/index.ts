@@ -1,5 +1,5 @@
 /**
- * The host-job wire: what a computer's host runner (`synap host serve`) and
+ * The host-job wire: what a computer's host runner (`synap worker`) and
  * the pod say to each other over Hub REST (`/api/hub/host-jobs/*`). ONE
  * definition read by both sides: the pod's routes parse every body with these
  * schemas, and the runner (synap-cli, plan 64072312 U11) builds and checks its
@@ -17,6 +17,11 @@
  * re-leased; a 409 means the lease went elsewhere, so the runner stops and
  * cleans up without finishing.
  *
+ * ONE wire for both installation kinds (installer reconciliation f75fbb48
+ * §3.2): a `service` reports its services' health, a `tool` its verify result
+ * and the version, OS and arch it observed. The pod derives health and drift
+ * from them; the runner never says "healthy" or "drifted".
+ *
  * Logs never leave the computer unasked: the heartbeat answers
  * `logsRequested`, and the runner sends the masked log in its next report.
  *
@@ -25,11 +30,12 @@
 
 import { z } from "zod";
 
-/** What a host job does. Mirrors `host_jobs.kind` (0399). */
+/** What a host job does. Mirrors `host_jobs.kind` (0409). */
 export const HOST_JOB_WIRE_KINDS = [
   "install",
   "remove",
   "update",
+  "verify",
   "provider_op",
   "verb",
 ] as const;
@@ -67,6 +73,46 @@ export const HostJobHeartbeatBodySchema = z.object({
   leaseId: LeaseId,
   phase: z.enum(["setup", "running"]),
 });
+
+/** Mirrors `installations.kind` (0409). */
+export const INSTALLATION_WIRE_KINDS = ["service", "tool"] as const;
+export type InstallationWireKind = (typeof INSTALLATION_WIRE_KINDS)[number];
+
+/** A verify excerpt is capped at this many characters (secrets masked). */
+export const HOST_VERIFY_EXCERPT_MAX = 2000;
+
+const VerifyExcerpt = z.string().max(HOST_VERIFY_EXCERPT_MAX);
+
+/**
+ * A tool's verify, as the runner ran it: the check's exit code, what it
+ * printed (excerpt, masked), the output's hash, and the optional smoke run.
+ * `ok` is the runner's reading of the manifest's `expect`.
+ */
+export const HostVerifySchema = z.object({
+  ok: z.boolean(),
+  exitCode: z.number().int(),
+  excerpt: VerifyExcerpt.optional(),
+  outputSha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+  smoke: z
+    .object({
+      ok: z.boolean(),
+      exitCode: z.number().int().optional(),
+      excerpt: VerifyExcerpt.optional(),
+    })
+    .optional(),
+});
+export type HostVerify = z.output<typeof HostVerifySchema>;
+
+/** What the runner observed on the computer (a tool; a service may send it). */
+const ObservedFields = {
+  observedVersion: z.string().max(128).nullable().optional(),
+  os: z.string().min(1).max(32).optional(),
+  arch: z.string().min(1).max(32).optional(),
+  verify: HostVerifySchema.optional(),
+};
 
 /** One service's health as the runner checked it (127.0.0.1 only). */
 const ServiceHealth = z.object({
@@ -110,11 +156,16 @@ export const HostJobReportBodySchema = z
       .optional(),
     /** Sent only after a heartbeat answered `logsRequested`; masked. */
     log: HostLogSchema.optional(),
+    ...ObservedFields,
   })
-  .refine((b) => b.health !== undefined || b.log !== undefined, {
-    message: "a report carries health, a log, or both",
-    path: ["health"],
-  });
+  .refine(
+    (b) =>
+      b.health !== undefined || b.log !== undefined || b.verify !== undefined,
+    {
+      message: "a report carries health, a verify result, a log, or several",
+      path: ["health"],
+    }
+  );
 
 export const HostJobFinishBodySchema = z
   .object({
@@ -138,6 +189,8 @@ export const HostJobFinishBodySchema = z
     output: z.record(z.string(), z.unknown()).optional(),
     /** What the runner removed on a failure path. */
     cleanedUp: z.array(z.string().max(300)).max(100).optional(),
+    /** A tool's install, update or verify: what the check saw. */
+    ...ObservedFields,
   })
   .refine((b) => b.status !== "infra" || !!b.infraReason?.trim(), {
     message: "infraReason is required when status is infra",
@@ -161,10 +214,17 @@ export interface LeasedHostJob {
   queuedAt: string;
   installation: {
     id: string;
+    /** `service` (compose services) or `tool` (per-OS install steps). */
+    kind: InstallationWireKind;
     capabilityKey: string;
     capabilityVersion: string | null;
     upstreamVersion: string | null;
-    /** The manifest AS APPROVED: the runner writes compose from it only. */
+    /** The approved version: a repair installs this one again. */
+    desiredVersion: string | null;
+    /**
+     * The manifest AS APPROVED: a service's compose comes from it only; a
+     * tool's install/verify/uninstall steps are read from it only.
+     */
     manifest: Record<string, unknown>;
     /** Service id → image digest. */
     digests: Record<string, string>;
