@@ -14,8 +14,17 @@
  * lead on a person) is the flow board's lens (wave 2): this card names the
  * kind's.
  */
-import { and, db, entities, inArray, ProfileResolutionService } from "@synap/database";
-import { findLifecycleOption, lifecycleOptionLabel } from "@synap-core/types/lifecycle";
+import {
+  and,
+  db,
+  entities,
+  inArray,
+  ProfileResolutionService,
+} from "@synap/database";
+import {
+  findLifecycleOption,
+  lifecycleOptionLabel,
+} from "@synap-core/types/lifecycle";
 import { thingBlockerUnlocks } from "@synap-core/types/units";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import type { NeedsYouBlocks } from "@synap-core/types/needs-you";
@@ -40,9 +49,7 @@ export async function withBlockedThings(
   userId: string,
   slots: OwedSlot[]
 ): Promise<OwedSlot[]> {
-  const ids = [
-    ...new Set(slots.flatMap((s) => blockedThingIdOf(s) ?? [])),
-  ];
+  const ids = [...new Set(slots.flatMap((s) => blockedThingIdOf(s) ?? []))];
   if (ids.length === 0) return slots;
   const rows = await db
     .select({

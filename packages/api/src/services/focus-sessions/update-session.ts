@@ -517,7 +517,10 @@ export const slotBlocksWireSchema = z
   .strict();
 export const slotBlockerKeyWireSchema = z
   .string()
-  .regex(/^[a-z][a-z0-9_]{0,63}$/, "a short snake_case name, e.g. not_connected");
+  .regex(
+    /^[a-z][a-z0-9_]{0,63}$/,
+    "a short snake_case name, e.g. not_connected"
+  );
 export const slotClearedByWireSchema = z.union([
   z.object({ answer: z.literal(true) }).strict(),
   z.object({ intent: z.string().trim().min(1).max(80) }).strict(),

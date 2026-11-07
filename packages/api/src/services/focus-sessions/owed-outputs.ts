@@ -853,12 +853,10 @@ export async function listBlockingSlots(params: {
       const agent =
         !human && isAgentBlockingSlot(slot, { status: row.status, isDraft });
       if (!human && !agent) continue;
-      const named = isPlainObject(slot.blocks) ? slot.blocks.entityId : undefined;
-      const thingIds = named
-        ? askedSet.has(named)
-          ? [named]
-          : []
-        : onThings;
+      const named = isPlainObject(slot.blocks)
+        ? slot.blocks.entityId
+        : undefined;
+      const thingIds = named ? (askedSet.has(named) ? [named] : []) : onThings;
       if (thingIds.length === 0) continue;
       out.push({
         sessionId: row.id,

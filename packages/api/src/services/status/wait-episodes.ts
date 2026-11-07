@@ -251,7 +251,11 @@ export async function syncWaitEpisodesTick(
     add({ subjectType: "focus_session", subjectId: s.id, facetId: null });
     // The thing the work is about waits on what blocks it (its own episodes).
     if (s.subjectEntityId)
-      add({ subjectType: "entity", subjectId: s.subjectEntityId, facetId: null });
+      add({
+        subjectType: "entity",
+        subjectId: s.subjectEntityId,
+        facetId: null,
+      });
   }
   for (const h of holds)
     add({

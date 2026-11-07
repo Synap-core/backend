@@ -17,10 +17,7 @@
  * THROWS on a failed read: the caller says `unavailable`, never "not blocked".
  */
 import type { LifecycleOption } from "@synap-core/types/lifecycle";
-import {
-  deriveThingBlocker,
-  type ThingBlocker,
-} from "@synap-core/types/units";
+import { deriveThingBlocker, type ThingBlocker } from "@synap-core/types/units";
 import {
   readWaitingOnSourcesFor,
   type WaitingOnQuestion,
