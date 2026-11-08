@@ -174,12 +174,10 @@ describe("renderGuidance", () => {
       declaration: Object.fromEntries(
         Object.entries(r.declaration).reverse()
       ) as ResolvedGuidance["declaration"],
-      rows: [...r.rows]
-        .reverse()
-        .map((row): GuidanceRow => ({
-          ...row,
-          fields: [...row.fields].reverse(),
-        })),
+      rows: [...r.rows].reverse().map((row): GuidanceRow => ({
+        ...row,
+        fields: [...row.fields].reverse(),
+      })),
     });
     const a = renderGuidance([VOICE, ANGLES, SKILL]);
     const b = renderGuidance([shuffle(VOICE), shuffle(ANGLES), shuffle(SKILL)]);
