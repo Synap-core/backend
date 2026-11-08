@@ -32,16 +32,17 @@ published to one catalog and installed through shared substrate — not hardcode
 the pod backend. The marketplace is that **package layer**, and the catalog
 (`synap_packages`) is **kind-agnostic** — one door serves every kind:
 
-| Kind                      | Configures                                                       | Standalone install (via `applyMarketInstall`)      |
-| ------------------------- | ---------------------------------------------------------------- | -------------------------------------------------- |
-| **workspace**             | a whole domain (profiles + views + bento + its caps/automations) | ✅ `createWorkspaceFromDefinitionIdempotent`       |
-| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)           | ✅ `createCapabilityFromDefinition`                |
-| **cell**                  | a renderer — the code that draws an entity/widget                | ✅ `installCellFromDefinition` (needs a cache row) |
-| **view**                  | a saved view/layout                                              | ✅ `viewsRouter.create` (needs a `workspaceId`)    |
-| **skill**                 | agent know-how                                                   | ✅ `skillsRouter.create` (pod-wide if no ws)       |
-| **workflow / automation** | a WHEN→ACTION flow                                               | ✅ `automationsRouter.create` into acting ws       |
+| Kind                      | Configures                                                                                     | Standalone install (via `applyMarketInstall`)                                    |
+| ------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **workspace**             | a whole domain (profiles + views + bento + its caps/automations)                               | ✅ `createWorkspaceFromDefinitionIdempotent`                                     |
+| **capability**            | a credentialed tool pack (+ embedded skills/playbooks)                                         | ✅ `createCapabilityFromDefinition`                                              |
+| **cell**                  | a renderer — the code that draws an entity/widget                                              | ✅ `installCellFromDefinition` (needs a cache row)                               |
+| **view**                  | a saved view/layout                                                                            | ✅ `viewsRouter.create` (needs a `workspaceId`)                                  |
+| **skill**                 | agent know-how                                                                                 | ✅ `skillsRouter.create` (pod-wide if no ws)                                     |
+| **workflow / automation** | a WHEN→ACTION flow                                                                             | ✅ `automationsRouter.create` into acting ws                                     |
+| **agent**                 | one AI program a person connects: how a computer finds and wakes it, the skills its agents get | ✅ `installAgentTemplate` (official only; every pod installs every official one) |
 
-**All six kinds install standalone today** through the ONE apply core
+**All seven kinds install standalone today** through the ONE apply core
 `applyMarketInstall` (`services/capabilities/marketplace-install.ts`) — the same
 governed door `market.install` and the `capability.install` proposal executor share,
 each reusing the kind's _governed_ router caller (zero duplicated insert logic). The
@@ -50,6 +51,13 @@ private package can't reach a pod yet (see `governance-and-catalog.md` / RC4); (
 standalone **view / skill / automation stamp no source-link**, so they don't self-heal
 via reconcile the way workspace/capability do. (Subscription-`tier` gating is a
 separate axis — see `governance-and-catalog.md`.)
+
+**Agent templates** (`kind: agent`, CP category `agent`) are official-only: the
+catalog installs all of them on every pod, an agent links to its template by its
+type (on connect, by itself when the type is clear, or after one question to the
+person), and linking attaches the template's `practices.skills`. Whether the pod
+can get an agent working is its wake (`synap_list_agents`, `agentUsers.roster`).
+Guide: pod document `645e384c-1dfb-4dca-957c-422245f2e5af` ("Connect your own agent").
 
 **Words** (template, pack, workspace/work/track/rule template) are defined once
 in the `synap` skill's `concepts` topic. In short: a template's kind is DERIVED

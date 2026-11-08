@@ -108,6 +108,8 @@ export interface AgentMetadata {
    */
   hostname?: string;
   platform?: string;
+  /** Node's `process.arch` as the device flow reported it, when it did. */
+  arch?: string;
   /**
    * COMPUTER principals only: this computer's key lifetime in days. Absent ⇒
    * the pod default (`pod_settings.settings.machineDefaults.keyTtlDays`), else
@@ -121,12 +123,25 @@ export interface AgentMetadata {
    */
   runsScripts?: boolean;
   /**
+   * COMPUTER principals only: the person turned on "Wakes agents" — the pod
+   * may count on this computer's waker (`synap waker`) to start its agents
+   * when work is handed to them (plan v2 slice 4; `machines.setWakesAgents`).
+   * Absent = off, the default.
+   */
+  wakesAgents?: boolean;
+  /**
    * How many pushes a day this agent's work may send its person (founder
    * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
    * only by `agentUsers.setPushLimit`; read by the push producer
    * (`push-decision.ts` rule 4b).
    */
   pushDailyLimit?: number;
+  /**
+   * COMPUTER principals only (0409): the person turned on "Installs from the pod" —
+   * the computer's key carries `host.runner` and leases the host jobs of the
+   * installations on itself. Kept here for the same reason as `runsScripts`.
+   */
+  hostsServices?: boolean;
 }
 
 export const users = pgTable("users", {

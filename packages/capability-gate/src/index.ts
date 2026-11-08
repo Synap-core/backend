@@ -55,6 +55,18 @@ import {
   DENIED_BY_RULE,
   DENIED_BY_RULE_REASON,
 } from "@synap/governance-policy";
+import {
+  TRIAL_RUN_WRITE_REFUSED,
+  trialSessionWriteRefusal,
+} from "./trial-session.js";
+
+export {
+  TRIAL_RUN_WRITE_REFUSED,
+  TRIAL_RUN_WRITE_REFUSED_REASON,
+  trialStampOf,
+  trialSessionWriteRefusal,
+  type TrialSessionStamp,
+} from "./trial-session.js";
 
 /** The grantable kinds a capability run can target. */
 export type CapabilityRunKind = "tool" | "skill" | "command";
@@ -434,6 +446,20 @@ export async function gateCapabilityExecution(
       return buildProposeDecision(input, "UNTRUSTED_ORIGIN");
     }
     return { decision: "run" };
+  }
+
+  // ── 0.8 TRIAL RUN (design b199a3a4, slice 1b) — a run inside a trial
+  //       session (the rule lab) is refused unless it is a declared read
+  //       (returned above): nothing a trial does may land, for any caller,
+  //       whatever a grant or a rule would say. A session that cannot be read
+  //       refuses (fail closed). Tighten-only.
+  const trialRefusal = await trialSessionWriteRefusal(input.sessionId);
+  if (trialRefusal) {
+    return {
+      decision: "deny",
+      reason: trialRefusal,
+      reasonCode: TRIAL_RUN_WRITE_REFUSED,
+    };
   }
 
   // ── 0.9 APP OUTWARD FLOOR (decision 4A, founder 2026-10-28) — a run asked

@@ -50,7 +50,9 @@ import {
 import { SubjectActivity } from "../../../_lib/object/subject-activity";
 import {
   useSetMachineBelongsTo,
+  useSetMachineHostsServices,
   useSetMachineRunsScripts,
+  useSetMachineWakesAgents,
 } from "../../../_lib/presence/use-sensitive-actions";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
 import { ResourceRow, ResourceRowEmpty } from "../../components/resource-row";
@@ -81,6 +83,7 @@ import {
   revokeLine,
   scriptsOwnerWords,
   seedsRevokedLine,
+  wakerWords,
   type ComputerLike,
 } from "./computer-model";
 
@@ -135,6 +138,31 @@ export function ComputerObject({
     null
   );
   const scripts = computer ? scriptsOwnerWords(computer, viewerId) : null;
+  // "Wakes agents" (plan v2 slice 4): a sensitive action, like Runs scripts.
+  const wakesAgents = useSetMachineWakesAgents({
+    onSuccess: async (out) => {
+      addToast({
+        title:
+          out.status === "proposed"
+            ? "Waiting for review. Nothing changed yet."
+            : out.wakesAgents
+              ? computer?.waker?.online
+                ? "This computer now wakes its agents"
+                : "Waking is on. Start its waker so it can start agents."
+              : "This computer no longer wakes its agents",
+        color: "default",
+      });
+      await utils.machines.invalidate();
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        title: "Couldn't change this",
+        description: readableError(err.message) ?? "Try again.",
+        color: "danger",
+      });
+    },
+  });
   // With the proof of presence (W3 slice 3): a sensitive action.
   const runsScripts = useSetMachineRunsScripts({
     onSuccess: async (out) => {
@@ -146,6 +174,29 @@ export function ComputerObject({
             : out.runsScripts
               ? `This computer now runs ${whose} scripts`
               : `This computer no longer runs ${whose} scripts`,
+        color: "default",
+      });
+      await utils.machines.invalidate();
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        title: "Couldn't change this",
+        description: readableError(err.message) ?? "Try again.",
+        color: "danger",
+      });
+    },
+  });
+  // "Installs from the pod" (backend#779): a sensitive action, like Runs scripts.
+  const hostsServices = useSetMachineHostsServices({
+    onSuccess: async (out) => {
+      addToast({
+        title:
+          out.status === "proposed"
+            ? "Waiting for review. Nothing changed yet."
+            : out.hostsServices
+              ? "This computer now installs from the pod"
+              : "This computer no longer installs from the pod",
         color: "default",
       });
       await utils.machines.invalidate();
@@ -211,6 +262,7 @@ export function ComputerObject({
   const c = computer;
   const owner = ownerWords(c, viewerId);
   const words = scriptsOwnerWords(c, viewerId);
+  const waker = wakerWords(c);
   const impact = revokeImpact(c);
   const revoking = revoke.isPending;
   const revoked = c.key?.state === "revoked";
@@ -405,6 +457,68 @@ export function ComputerObject({
                           : words.whose === "your"
                             ? "Run my scripts here"
                             : `Run ${words.whose} scripts here`}
+                      </Button>
+                    </div>
+                  </SectionCard>
+                )}
+                {!revoked && (
+                  <SectionCard title="Installs from the pod">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="min-w-0 flex-1 text-[12.5px] text-foreground/75">
+                        {c.hostsServices
+                          ? `${c.name} installs, updates and removes the tools ${words.approves} for it.`
+                          : `Let ${c.name} install, update and remove the tools ${words.approves} for it.`}
+                      </p>
+                      <Button
+                        size="sm"
+                        radius="md"
+                        variant="flat"
+                        isLoading={hostsServices.isPending}
+                        onPress={() =>
+                          hostsServices.mutate({
+                            machineId: c.id,
+                            enabled: !c.hostsServices,
+                          })
+                        }
+                      >
+                        {c.hostsServices
+                          ? "Stop installing from the pod"
+                          : "Install from the pod here"}
+                      </Button>
+                    </div>
+                  </SectionCard>
+                )}
+                {!revoked && (
+                  <SectionCard title="Wakes agents">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex min-w-0 flex-1 flex-col gap-2">
+                        <p className="text-[12.5px] text-foreground/75">
+                          {waker.line}
+                        </p>
+                        {waker.command && (
+                          <CommandLine command={waker.command} />
+                        )}
+                        {waker.note && (
+                          <p className="text-[12px] text-foreground/65">
+                            {waker.note}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        radius="md"
+                        variant="flat"
+                        isLoading={wakesAgents.isPending}
+                        onPress={() =>
+                          wakesAgents.mutate({
+                            machineId: c.id,
+                            enabled: !c.wakesAgents,
+                          })
+                        }
+                      >
+                        {c.wakesAgents
+                          ? "Stop waking agents"
+                          : "Wake agents here"}
                       </Button>
                     </div>
                   </SectionCard>

@@ -86,12 +86,11 @@ const ROUTED_THROUGH_DOOR: Record<
  * source that a reader can check in one grep.
  */
 const ACKNOWLEDGED: Record<string, string> = {
-  // MATERIALIZATION — seeds stages[0] at session birth. Nobody advanced INTO the
+  // MATERIALIZATION — the birth seed of stages[0] is no longer in this scan:
+  // every door that births a session goes through THE row writer
+  // (`insertFocusSessionRow`, @synap/database `insert-focus-session.ts`),
+  // which seeds `currentStage: firstStageKey(...)`. Nobody advanced INTO the
   // first stage; gating it would pause every run the instant it starts.
-  "api:services/focus-sessions/create-session.ts":
-    "materialization: firstStageKey(playbook?.stages) at INSERT",
-  "api:services/playbooks/playbook-lifecycle.ts":
-    "materialization: stages[0].key at run start",
 
   // APPROVAL RE-APPLY — a human has just answered. Re-gating would ask the same
   // person for the same advance twice.
@@ -155,10 +154,6 @@ const ACKNOWLEDGED: Record<string, string> = {
  * the call site.
  */
 const LEDGER_EXEMPT: Record<string, string> = {
-  "api:services/focus-sessions/create-session.ts":
-    "birth seed of stages[0]: nobody moved it (no backfill, effects change 4)",
-  "api:services/playbooks/playbook-lifecycle.ts":
-    "birth seed of stages[0] at run start",
   "api:services/focus-sessions/follow-playbook.ts":
     "declaration of the stage the work is ALREADY in, not a move",
   "api:services/event-end/run-event-end.ts":

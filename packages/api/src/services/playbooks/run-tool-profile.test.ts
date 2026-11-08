@@ -98,6 +98,7 @@ function deps(over: Partial<Deps> = {}): Deps {
     }),
     readGrants: async () => [],
     readCurrentStage: async () => null,
+    readTrial: async () => false,
     readTaskIntents: async () => ["generate_media"],
     readRegistry: async () => registry,
     ...over,
@@ -107,6 +108,46 @@ function deps(over: Partial<Deps> = {}): Deps {
 const input = { playbookId: "pb-1", workspaceId: "ws-run", userId: "u-1" };
 
 describe("resolveRunToolProfile", () => {
+  it("a TRIAL run (the rule lab) is offered read verbs only, granted or by intent", async () => {
+    const readVerb = { ...verb("research", "exa_search"), verbKind: "read" };
+    const trialIndex = new Map<string, Match[]>([
+      ["research", [readVerb as Match, verb("research", "exa_index")]],
+    ]);
+    const readTrial = vi.fn(async () => true);
+    const p = await resolveRunToolProfile(
+      { ...input, sessionId: "sess-trial" },
+      deps({
+        readPlaybook: async () => ({
+          name: "Draft outreach",
+          requiredIntents: ["research"],
+          stages: [],
+          workspaceId: "ws-crm",
+        }),
+        readTaskIntents: async () => [],
+        readGrants: async () => [
+          { kind: "tool" as const, id: "tool-fireflies" },
+        ],
+        readTrial,
+        readRegistry: async () => ({
+          index: trialIndex,
+          capabilities: [
+            {
+              kind: "source-provider",
+              id: "tool-fireflies",
+              name: "fireflies",
+              verbs: [
+                { id: "fireflies_import_last_meeting", kind: "action" },
+                { id: "fireflies_search", kind: "read" },
+              ],
+            },
+          ],
+        }),
+      })
+    );
+    expect(readTrial).toHaveBeenCalledWith("sess-trial");
+    expect(p.verbs).toEqual(["fireflies_search", "exa_search"]);
+  });
+
   it("folds the playbook's intents and its space's into the verbs serving them — nothing else", async () => {
     const readTaskIntents = vi.fn(async () => ["generate_media"]);
     const readRegistry = vi.fn(async () => registry);

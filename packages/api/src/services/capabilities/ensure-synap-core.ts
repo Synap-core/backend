@@ -884,7 +884,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       // carried on pods seeded before (an omitted intent is left alone).
       intent: null,
       description:
-        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
+        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. A capability entry says where it runs (`runsOn`: pod, computer); one that runs on a computer adds its `systems`, `licence` and `computers` (each of the person's computers with `canInstall`, or `why` not): ask for it with synap_request_installation. Read-only.",
       parameters: {
         type: "object",
         properties: {

@@ -56,6 +56,7 @@ describe("mapCpScopesToPodScopes", () => {
       "providers.write",
       "hub-protocol.admin",
       "box.runner",
+      "host.runner",
     ]);
     expect(out.sort()).toEqual(["hub-protocol.read", "mcp.read"]);
   });

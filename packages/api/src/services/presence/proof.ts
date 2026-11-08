@@ -467,7 +467,7 @@ async function verifyTypedCode(
     throw new PresenceError(
       PRESENCE_INVALID,
       proof.kind === "totp"
-        ? "This code doesn't match your 2FA app, or it was already used. Type the code it shows now."
+        ? "This code doesn't match your authenticator app, or it was already used. Type the code it shows now."
         : "This recovery code doesn't match one of yours, or it was already used."
     );
   }

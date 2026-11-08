@@ -244,7 +244,7 @@ export async function notifyFactorChanged(args: {
 
 /** The refusal of a removal that would leave fewer than two ways in under `enforce`. */
 export const PRESENCE_NEEDS_TWO_WAYS_MESSAGE =
-  "Approvals need you in person on this pod, so keep two ways to confirm it is you. Add another one first (a 2FA app or recovery codes), or, if you lost it, use “I lost my passkey”.";
+  "Approvals need you in person on this pod, so keep two ways to confirm it is you. Add another one first (an authenticator app or recovery codes), or, if you lost it, use “I lost my passkey”.";
 
 /**
  * "Two ways in" (the recovery ladder, founder, 6 Nov 2026): under `enforce`,

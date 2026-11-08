@@ -1315,6 +1315,52 @@ export function buildObjectActionTitle(params: {
   });
 }
 
+/**
+ * The title of a capability asked for one of the person's computers
+ * (`installation/request`): what it does, to which capability, on which
+ * computer. `Install "ffmpeg on your computer" on Mac`, `Remove "…" from
+ * Mac`, and `Add "…" from the marketplace and install it on Mac` when
+ * approving also adds the capability to the pod. The verb comes from the
+ * action door (`resolveActionLabel`); the capability and the computer are
+ * names, never tokens. Without a computer name it falls back to the
+ * generic door.
+ */
+export function buildInstallationTitle(params: {
+  /** `install`, `update`, `verify` or `remove`. */
+  action: string;
+  /** The capability's display name, else its catalog key. */
+  name: string;
+  computer?: string | null;
+  /** Approving it also adds the capability to the pod from the catalog. */
+  addsFromCatalog?: boolean;
+  locale?: Locale;
+}): string {
+  const locale = catalogLocaleOf(params.locale);
+  const t = sentences(locale);
+  const name = params.name.trim();
+  const computer = (params.computer ?? "").trim();
+  if (!computer)
+    return buildObjectActionTitle({
+      action: params.action,
+      objectName: name,
+      locale,
+    });
+  if (params.addsFromCatalog && params.action === "install")
+    return t("vocabulary.title.addAndInstallOn", { name, computer });
+  // A check is the action door's `check` (no `verify` verb exists).
+  const verb = resolveActionLabel(
+    params.action === "verify" ? "check" : params.action,
+    "imperative",
+    locale
+  );
+  return t(
+    params.action === "remove"
+      ? "vocabulary.title.fromComputer"
+      : "vocabulary.title.onComputer",
+    { verb, name, computer }
+  );
+}
+
 /** The title preposition an action takes, or "" for none. */
 function titlePreposition(
   action: string | null | undefined
@@ -2845,6 +2891,8 @@ const PACKAGE_FIELD_LABELS: Readonly<Record<string, string>> = {
   detect: "How it is found on a computer",
   wake: "How a computer starts it",
   practices: "Skills its agents get",
+  toolProfile: "Tools its agents start with",
+  toolGroups: "Tool groups its agents start with",
 };
 
 export function resolvePackageFieldLabel(key: string): string {
@@ -3811,6 +3859,40 @@ export function resolveAgentWakeRefusalLabel(
   return (
     (AGENT_WAKE_REFUSAL_LABELS as Readonly<Record<string, string>>)[why] ??
     humanizeToken(why)
+  );
+}
+
+/**
+ * What a person does about each reason an agent can't be woken (`wake.why`),
+ * one plain sentence each: the fix, never the fault. A surface adds the door
+ * the sentence names (the computer's page, the command with the agent's
+ * name). `agents/wake.ts` holds the floor that a new reason ships with its fix.
+ */
+export const AGENT_WAKE_REFUSAL_FIXES = {
+  paused: "It is paused. Resume it to let it take work again.",
+  binding_broken:
+    "The connector it is set up with does not work. Fix that connector, or set it up again.",
+  no_template:
+    "No agent template matches its type. Install its program from the Marketplace's Agents tab.",
+  no_template_wake:
+    "Its program cannot be started by a computer. It works when someone opens it.",
+  no_computer:
+    "It is on no computer. Run the Synap worker for it on the computer that has its program.",
+  no_waker:
+    "Nothing on its computer starts agents yet. Run the Synap worker for it on that computer.",
+  computer_offline:
+    "Its computer is offline. Turn it on, or start Synap on it.",
+  wakes_off:
+    "Waking agents is turned off on its computer. Turn it back on there.",
+} as const;
+
+/** A wake refusal's fix; an unknown reason gets none rather than a guess. */
+export function resolveAgentWakeRefusalFix(
+  why: string | null | undefined
+): string | null {
+  if (!why) return null;
+  return (
+    (AGENT_WAKE_REFUSAL_FIXES as Readonly<Record<string, string>>)[why] ?? null
   );
 }
 

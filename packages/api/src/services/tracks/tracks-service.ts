@@ -66,6 +66,7 @@ import {
   drizzleSql,
   classifyLifecycleMove,
   workUnitActorOf,
+  firstStageKey,
   type WorkUnitActor,
 } from "@synap/database";
 import {
@@ -608,12 +609,6 @@ export function buildTrackSnapshot(playbook: Playbook) {
     ),
     version: playbook.version,
   };
-}
-
-function firstStageKey(stages: unknown): string | null {
-  if (!Array.isArray(stages)) return null;
-  const first = stages[0] as { key?: unknown } | undefined;
-  return typeof first?.key === "string" && first.key ? first.key : null;
 }
 
 function stageKeys(stages: unknown): string[] {

@@ -17,6 +17,7 @@ import {
   type ProposalExecutorArgs,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import { readCellPlacement } from "../../../services/cells/place-cell-on-view.js";
 import {
   cellContentFingerprint,
   gatedRendererTypeOf,
@@ -186,6 +187,12 @@ export async function applyCellDefineProposal(
     defaultSize: isSize(innerData.defaultSize)
       ? innerData.defaultSize
       : undefined,
+    // Where the reviewed cell lands (`placeOn`, carried in the gate `data` by
+    // MCP `synap_create_cell` and Hub `POST /cells/define`). Approving defines
+    // the cell AND places its tile, in one transaction, as the APPROVER: a
+    // view they may not write, or one that is gone, refuses the whole act and
+    // the proposal stays pending. Re-validated, never trusted.
+    placeOn: readCellPlacement(innerData.placeOn),
     userId,
   });
 

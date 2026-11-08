@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
@@ -24,6 +25,10 @@ import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
+import {
+  CellPlacementSchema,
+  checkCellPlacement,
+} from "../../../services/cells/place-cell-on-view.js";
 import type {
   RendererSlot,
   RendererScope,
@@ -170,6 +175,8 @@ export const buildHandlers: McpHandlerMap = {
          * Enum built from the `CONTENT_KINDS` runtime SSOT, never retyped.
          */
         contentKind: z.enum(CONTENT_KINDS).optional(),
+        /** Place the cell as a tile on this bento view when it is defined. */
+        placeOn: CellPlacementSchema.optional(),
       })
       .safeParse(args);
     if (!parsed.success) {
@@ -190,6 +197,17 @@ export const buildHandlers: McpHandlerMap = {
       rendererSource: parsed.data.rendererSource,
       workspaceId: cellWorkspaceId,
     });
+    // A placement that cannot land is refused now, before it becomes a
+    // proposal a person approves and then sees fail. The view's name rides in
+    // the proposal so the reviewer sees where the tile lands; whether the
+    // APPROVER may write that view is checked again when it is approved.
+    const placeOn = parsed.data.placeOn
+      ? await checkCellPlacement(parsed.data.placeOn, {
+          cellWorkspaceId,
+          userId,
+          permission: "read",
+        })
+      : undefined;
     // Route through the governance gate — it owns RBAC (workspace membership +
     // role, or the agent-join proposal for a non-member) AND the agent
     // propose/execute decision. No manual membership check: that would
@@ -220,6 +238,9 @@ export const buildHandlers: McpHandlerMap = {
         ...(parsed.data.contentKind
           ? { contentKind: parsed.data.contentKind }
           : {}),
+        // Where approving places the cell: the executor defines it AND adds
+        // its tile to this view, in one act.
+        ...(placeOn ? { placeOn } : {}),
       },
     });
     if ("denied" in perm && perm.denied) {
@@ -255,6 +276,7 @@ export const buildHandlers: McpHandlerMap = {
       description: parsed.data.description,
       viewTypes: parsed.data.viewTypes,
       contentKind: parsed.data.contentKind,
+      placeOn: parsed.data.placeOn,
       userId,
     });
     return ok({ status: result.changeType, ...result });
@@ -533,6 +555,15 @@ export const buildHandlers: McpHandlerMap = {
             >[1]["expectedOutputs"],
           }
         : {}),
+      // The rules it follows, by ref: validated by `playbooks.create` with
+      // `playbookGuidanceSchema`, so a bad ref is refused, never dropped.
+      ...(args.guidance !== undefined
+        ? {
+            guidance: args.guidance as Parameters<
+              typeof createPlaybookDoor
+            >[1]["guidance"],
+          }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -575,6 +606,7 @@ export const buildHandlers: McpHandlerMap = {
       "expectedOutputs",
       "activators",
       "humanOnlyStatuses",
+      "guidance",
       "status",
       "scope",
     ] as const satisfies ReadonlyArray<keyof Patch>) {
@@ -856,7 +888,7 @@ export const buildHandlers: McpHandlerMap = {
       const parsedAsk = AskSchema.safeParse(args.ask);
       if (!parsedAsk.success) {
         return toolError(
-          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.`
+          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.${ASK_SKILL_HINT}`
         );
       }
       ask = parsedAsk.data as SlotAsk;

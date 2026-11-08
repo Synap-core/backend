@@ -2285,7 +2285,7 @@ const marketSearchParams = z.object({
   source: z.string().min(1).max(100).optional(),
 });
 
-const marketSearchHandler: BuiltinVerbHandler = async (params) => {
+const marketSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketSearchParams.parse(params);
   const { queryCatalogCache } = await import("./catalog-cache-query.js");
   const { listMarketSources } = await import("./market-sources.js");
@@ -2324,6 +2324,13 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
     };
   }
 
+  // Where a capability runs (the pod, or a computer: which systems, its
+  // licence) and, for one that runs on a computer, which of the person's
+  // computers can take it: what synap_request_installation needs to choose.
+  const { catalogPlacementReader } =
+    await import("../installations/request-installation.js");
+  const placementOf = catalogPlacementReader(ctx.userId);
+
   const compact = await Promise.all(
     entries.map(async (e) => {
       const source = bySourceKey.get(e.source);
@@ -2336,6 +2343,7 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
           version: e.version,
           tier: e.tier,
           installed: await resolveInstalledFlag(e.kind, e.slug),
+          ...(await placementOf(e)),
         };
       }
       // From an added source: say so, and how it installs (pass `source`).

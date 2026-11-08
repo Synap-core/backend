@@ -326,7 +326,11 @@ describe("title provenance on the executor's other writes", () => {
     const { targetId } = await execute("focus_session/create", {
       goal: "Untitled work",
     });
-    expect((await sessionRow(targetId)).metadata.titleSource).toBeUndefined();
+    // No title given ⇒ born named from its goal, `derived` (no session is
+    // stored nameless: THE row writer's rule, as every birth door).
+    const born = await sessionRow(targetId);
+    expect(born.title).toBe("Untitled work");
+    expect(born.metadata.titleSource).toBe("derived");
 
     await execute(
       "focus_session/update",

@@ -20,7 +20,7 @@ import { formatRelative, formatTimestamp } from "../../../lib/format";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { PASSKEYS_PATH } from "../../settings/security/passkeys-path";
-import { SECOND_WAY_HREF } from "../../settings/security/two-factor-path";
+import { WAYS_IN_HREF } from "../../_lib/presence/ways-in/ways-in-model";
 import { en, fr } from "./presence-recovery-copy";
 import {
   needsFreshSignIn,
@@ -196,7 +196,7 @@ export function PresenceRecoveryView() {
                 </Button>
                 <Button
                   as={Link}
-                  href={SECOND_WAY_HREF}
+                  href={WAYS_IN_HREF}
                   variant="flat"
                   radius="md"
                 >

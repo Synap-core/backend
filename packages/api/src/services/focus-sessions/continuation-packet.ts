@@ -599,7 +599,11 @@ export interface ContinuationNextMove {
     | "ready_to_land"
     | "merged"
     | "closed";
-  /** The lifecycle option a `step` move targets (it moves through `moveStatus`). */
+  /**
+   * The lifecycle option a `step` move targets (it moves through
+   * `moveStatus`); on a thing's wait move, the next status the wait stands
+   * between it and (plan e7f753db §9), so a board keeps the next column.
+   */
   to?: string;
   /**
    * What kind of wait it is (`WAIT_KINDS`), on a move read off a waiting-on

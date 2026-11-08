@@ -162,6 +162,7 @@ describe("factorNote: what the presence row says about the person's factors", ()
     totp = false,
     recoveryCodes = 0
   ) => ({
+    enforce: true,
     passkeys,
     deviceKeys,
     totp,

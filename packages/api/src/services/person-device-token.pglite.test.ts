@@ -1154,6 +1154,16 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
       { machineId: "m-1", enabled: true },
       "mutation",
     ],
+    [
+      "machines.setWakesAgents",
+      { machineId: "m-1", enabled: true },
+      "mutation",
+    ],
+    [
+      "machines.setHostsServices",
+      { machineId: "m-1", enabled: true },
+      "mutation",
+    ],
     ["devices.revoke", { deviceId: randomUUID() }, "mutation"],
     // Reading a secret's value, and giving someone else lasting access.
     ["secretsVault.reveal", { id: randomUUID() }, "mutation"],

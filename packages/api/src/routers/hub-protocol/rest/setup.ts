@@ -56,7 +56,10 @@ import {
   type ApiKeyScope,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
-import { loadEngineAgentTypes } from "../../../services/agent-templates/installed.js";
+import {
+  loadEngineAgentTypes,
+  loadTemplateToolSurface,
+} from "../../../services/agent-templates/installed.js";
 import { readAgentGovernance } from "@synap/database/agent-governance";
 
 import { resolveKeyIdentity } from "../../../access/key-identity.js";
@@ -852,6 +855,12 @@ export function registerSetupRoutes(app: HubHono): void {
     }
     const toolProfile: ApiKeyToolProfile | undefined =
       toolProfileParse.data ?? undefined;
+    // None asked: an agent whose template names a starting surface (Hermes:
+    // entry + read) gets it on its FIRST key; a re-mint keeps what its key
+    // lists (`provisionSurfaceAgentKey`). Finding d812debd.
+    const firstKeyToolSurface = toolProfile
+      ? null
+      : await loadTemplateToolSurface(agentType, connectTemplate);
     // A KEY never connects a live AI by itself: the new key is created
     // inactive and its owner approves it (`agent/connect`). `requireApproval`
     // in the body is no longer an opt-in for a key caller — it is the rule.
@@ -1290,6 +1299,7 @@ export function registerSetupRoutes(app: HubHono): void {
         instanceLabel,
         agentLabel,
         ...(toolProfile ? { toolProfile } : {}),
+        ...(firstKeyToolSurface ? { firstKeyToolSurface } : {}),
         // Only the surface-key path provisions a genuine local CLI adjunct
         // (claude-code / codex / cursor). NEVER for jwt/issuer (cloud) agents:
         // an agentCommand on the row makes the renderer try to launch a local

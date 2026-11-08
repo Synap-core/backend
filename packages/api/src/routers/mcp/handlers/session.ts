@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
@@ -70,6 +71,9 @@ import {
   type McpHandlerMap,
   pageLimit,
   pageOffset,
+  pageSlice,
+  LIST_PAGE_DEFAULT,
+  LIST_PAGE_MAX,
   SESSIONS_PAGE_MAX,
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
@@ -135,7 +139,7 @@ function parseSlotInputs(
     }
   } catch (err) {
     return {
-      error: `Invalid output slot: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Invalid output slot: ${err instanceof Error ? err.message : String(err)}${/\bask\b/.test(err instanceof Error ? err.message : String(err)) ? ASK_SKILL_HINT : ""}`,
     };
   }
   return out;
@@ -172,7 +176,7 @@ async function parseOutcomesArg(raw: unknown): Promise<
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     return {
-      error: `Invalid outcomes: ${issue ? `${issue.path.join(".") || "outcomes"}: ${issue.message}` : "malformed"}. Nothing was changed.`,
+      error: `Invalid outcomes: ${issue ? `${issue.path.join(".") || "outcomes"}: ${issue.message}` : "malformed"}. Nothing was changed.${issue?.path.includes("ask") ? ASK_SKILL_HINT : ""}`,
     };
   }
   return { list: parsed.data };
@@ -767,6 +771,7 @@ export const sessionHandlers: McpHandlerMap = {
             playbookId: result.session.playbookId,
             stageKey: result.session.currentStage ?? null,
             stages: result.session.stages,
+            userId,
           })
         : undefined;
     // Recall runs in the background right after a start; this says so, and
@@ -1137,9 +1142,16 @@ export const sessionHandlers: McpHandlerMap = {
     // The roster for the PERSON the key acts for: whose work it is decides
     // which agents may take it (the route's floor). The calling agent decides
     // only `handOff` — what ITS hand-off would do (direct / asks you).
-    return ok(
-      await readAgentsForHandoff(userId, { callerAgentUserId: agentUserId })
+    const roster = await readAgentsForHandoff(userId, {
+      callerAgentUserId: agentUserId,
+    });
+    const { page, paging } = pageSlice(
+      roster.agents,
+      ctx.args,
+      LIST_PAGE_DEFAULT,
+      LIST_PAGE_MAX
     );
+    return ok({ ...roster, agents: page, ...paging });
   },
   synap_list_sessions: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
@@ -1862,6 +1874,7 @@ export const sessionHandlers: McpHandlerMap = {
                   playbookId: result.follow.playbookId,
                   stageKey: result.session.currentStage ?? null,
                   stages: result.session.stages,
+                  userId,
                 }),
               }
             : {}),

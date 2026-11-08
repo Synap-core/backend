@@ -86,11 +86,11 @@ export const en = {
   "passkeyChange.needsProof":
     "A passkey change needs a confirmation from your passkey.",
   "doing.recoveryCodes": "Create new recovery codes",
-  "doing.totpAdd": "Add a 2FA app",
+  "doing.totpAdd": "Add an authenticator app",
   confirmCode: "Confirm with this code",
   "code.label": "Code",
   "code.help":
-    "The 6 digits your 2FA app shows, or one of your recovery codes. A recovery code works once.",
+    "The 6 digits your authenticator app shows, or one of your recovery codes. A recovery code works once.",
   "again.code":
     "That code didn’t confirm it’s you, or it was already used. Type the code your app shows now, or another recovery code.",
   usePasskey: "Use your passkey instead",
@@ -167,11 +167,11 @@ const fr: Catalog<typeof en> = {
   "passkeyChange.needsProof":
     "Modifier une clé d’accès demande une confirmation avec votre clé d’accès.",
   "doing.recoveryCodes": "Créer de nouveaux codes de récupération",
-  "doing.totpAdd": "Ajouter une app de double authentification",
+  "doing.totpAdd": "Ajouter une app d’authentification",
   confirmCode: "Confirmer avec ce code",
   "code.label": "Code",
   "code.help":
-    "Les 6 chiffres affichés par votre app de double authentification, ou l’un de vos codes de récupération. Un code de récupération ne sert qu’une fois.",
+    "Les 6 chiffres affichés par votre app d’authentification, ou l’un de vos codes de récupération. Un code de récupération ne sert qu’une fois.",
   "again.code":
     "Ce code n’a pas confirmé que c’est vous, ou il a déjà servi. Saisissez le code affiché maintenant par votre app, ou un autre code de récupération.",
   usePasskey: "Utiliser plutôt votre clé d’accès",

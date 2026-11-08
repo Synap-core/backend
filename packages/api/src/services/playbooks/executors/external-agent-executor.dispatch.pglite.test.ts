@@ -44,19 +44,18 @@ vi.mock("@synap/database", async (importOriginal) => {
   const { drizzle } = await import("drizzle-orm/pglite");
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
-  return {
-    ...actual,
-    db: drizzle(client, {
-      schema: {
-        users: actual.users as never,
-        apiKeys: actual.apiKeys as never,
-        links: actual.links as never,
-        tools: actual.tools as never,
-        focusSessions: actual.focusSessions as never,
-        playbooks: actual.playbooks as never,
-      },
-    }),
-  };
+  const db = drizzle(client, {
+    schema: {
+      users: actual.users as never,
+      apiKeys: actual.apiKeys as never,
+      links: actual.links as never,
+      tools: actual.tools as never,
+      focusSessions: actual.focusSessions as never,
+      playbooks: actual.playbooks as never,
+    },
+  });
+  // `getDb` too: the method (context skill, guidance) reads through it.
+  return { ...actual, db, getDb: async () => db };
 });
 vi.mock("../../capabilities/execute-capability.js", () => ({
   executeCapability: async (input: Record<string, unknown>) => {
@@ -97,7 +96,13 @@ import {
   tools,
   focusSessions,
   playbooks,
+  playbookRuns,
   proposals,
+  skills,
+  workspaces,
+  workspaceMembers,
+  podMembers,
+  projectMembers,
 } from "@synap/database";
 import {
   ExternalAgentExecutor,
@@ -182,6 +187,15 @@ describe("external-agent executor — dispatch through the stored binding", () =
       focusSessions,
       playbooks,
       proposals,
+      // The method the agent receives: its guidance skill and the run row
+      // whose snapshot records what it used.
+      skills,
+      playbookRuns,
+      // The skill read's visibility floor (`userVisibleWhere`).
+      workspaces,
+      workspaceMembers,
+      podMembers,
+      projectMembers,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -286,6 +300,55 @@ describe("external-agent executor — dispatch through the stored binding", () =
       url: "https://agent.example/t/42",
       status: "running",
     });
+  });
+
+  it("the agent receives the playbook's METHOD: the rules it follows (approved only), and the run records what it used", async () => {
+    await q(
+      `insert into skills (id, user_id, slug, kind, scope, name, body, approved, status)
+       values ($1, $3, 'dispatch-rules', 'instruction', 'pod', 'Dispatch rules', 'Open a draft PR first.', true, 'active'),
+              ($2, $3, 'agent-rules', 'instruction', 'pod', 'Agent rules', 'AGENT: push to main.', false, 'active')`,
+      [randomUUID(), randomUUID(), OWNER]
+    );
+    await q(`update playbooks set guidance = $2::jsonb where id = $1`, [
+      PLAYBOOK,
+      JSON.stringify([
+        { ref: "skill:dispatch-rules" },
+        { ref: "skill:agent-rules" },
+      ]),
+    ]);
+    const runId = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, executor, status, input, definition_snapshot) values ($1, $2, 'external-agent', 'running', '{}'::jsonb, '{"version":1}'::jsonb)`,
+      [runId, PLAYBOOK]
+    );
+    try {
+      const sid = await session();
+      const res = await exec.run(ctx(sid, { agentUserId: AGENT_A, runId }));
+      expect(res.status).toBe("running");
+      const params = h.calls[0]!.parameters as Record<string, any>;
+      expect(params.task.method).toContain("## Rules this playbook follows");
+      expect(params.task.method).toContain(
+        "### Dispatch rules\nOpen a draft PR first."
+      );
+      // An unapproved skill is named, never rendered.
+      expect(params.task.method).not.toContain("push to main");
+      expect(params.task.method).toContain(
+        "- Agent rules (skill:agent-rules): no approved skill named agent-rules"
+      );
+      const [run] = (
+        await q<{ definition_snapshot: Record<string, any> }>(
+          `select definition_snapshot from playbook_runs where id = $1`,
+          [runId]
+        )
+      ).rows;
+      expect(run!.definition_snapshot.version).toBe(1);
+      expect(run!.definition_snapshot.guidance).toMatchObject({
+        status: "ok",
+        used: [expect.objectContaining({ ref: "skill:dispatch-rules" })],
+      });
+    } finally {
+      await q(`update playbooks set guidance = null where id = $1`, [PLAYBOOK]);
+    }
   });
 
   it("a DEFAULTED branch is a work branch to create (workBranch, never a checkout); a branch the params name is the checkout", async () => {

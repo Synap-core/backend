@@ -27,6 +27,7 @@
 
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
+import { validateGuidanceList } from "@synap-core/types/guidance";
 import {
   findDroppedParamEntries,
   MAX_REQUIRED_INTENTS,
@@ -187,6 +188,35 @@ export const playbookRequiredIntentsSchema = z
     }
   });
 
+/**
+ * The rules a playbook follows (design b199a3a4): an ordered list of refs by
+ * kind or skill slug, never ids — `{ ref: "kind:brand-voice-guide", label?,
+ * when?, where? }`. The grammar is the ONE pure validator's
+ * (`@synap-core/types/guidance`; the catalog validator is to call the same
+ * one), so a playbook and a manifest cannot accept different refs. An invalid
+ * item is refused here with its index, never stored: loose objects, so a key
+ * the validator does not know (an `id`) is refused by it, not silently
+ * stripped. The update door applies the same schema.
+ */
+export const playbookGuidanceSchema = z
+  .array(
+    z.looseObject({
+      ref: z.string(),
+      label: z.string().optional(),
+      when: z.string().optional(),
+      where: z.record(z.string(), z.array(z.string())).optional(),
+    })
+  )
+  .superRefine((items, ctx) => {
+    for (const issue of validateGuidanceList(items)) {
+      ctx.addIssue({
+        code: "custom",
+        path: issue.index >= 0 ? [issue.index] : [],
+        message: issue.message,
+      });
+    }
+  });
+
 export const playbookDefinitionSchema = z.object({
   name: z.string().min(1).max(500),
   description: z.string().optional(),
@@ -205,6 +235,8 @@ export const playbookDefinitionSchema = z.object({
   criteria: sessionCriteriaSchema.optional(),
   /** See `playbookRequiredIntentsSchema` — what this process needs the pod to do. */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
+  /** See `playbookGuidanceSchema` — the rules this process follows, by ref. */
+  guidance: playbookGuidanceSchema.optional(),
   /**
    * `{ profileSlug, filter?, statusProperty? }` — the entity kind the playbook
    * operates over, and the property holding its lifecycle. STORES the folded

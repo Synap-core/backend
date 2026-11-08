@@ -43,6 +43,24 @@ The pod-native verb, run via MCP `run_capability` or
 - Empty result → say so plainly ("nothing matched") — never fabricate a
   package that doesn't exist. Offer to capture the gap as a note for later.
 
+### Where a capability runs
+
+Every capability entry says where it runs, and `synap_find`'s marketplace
+matches carry the same fields:
+
+- `runsOn`: `pod`, `computer`, or both.
+- For one that runs on a computer: `systems` (the operating systems it
+  installs on), `licence`, and `computers`, the person's computers, each
+  with `canInstall: true`, or `canInstall: false` and `why` not.
+
+To ask for it, call `synap_request_installation` with its `slug` as
+`capabilityKey` and `computer` set to one of `computers` (its name or id)
+with `canInstall: true`, or `"pod"` for one that runs on the pod. It files
+ONE proposal; when the pod does not have the capability yet, approving it
+adds it from the marketplace and installs it on that computer. A refusal
+names why and lists `computers` to choose again from. Read the result with
+`synap_list_installations` once the computer's worker has run it.
+
 This is the verb an agent should reach for first — it's read-only (auto-runs,
 no approval needed) and mirrors exactly what `synap market --search` shows a
 human.

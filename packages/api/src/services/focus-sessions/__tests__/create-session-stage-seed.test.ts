@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
-import { firstStageKey, readStages } from "../create-session.js";
+import { firstStageKey, readStages } from "@synap/database";
 
 describe("firstStageKey — playbook stage seeding", () => {
   it("seeds from the first stage's key", () => {
@@ -94,16 +94,20 @@ describe("readStages — the session's own copy of the phases (0270)", () => {
 });
 
 describe("the insert actually USES it (reachability, not shape)", () => {
-  it("createFocusSession seeds `stages` from the playbook", async () => {
-    // The pure function above could be perfect while the INSERT ignored it —
-    // the exact defect class where a projection is tested downstream of the
-    // line that matters. There is no DB here, so the seam is pinned in source.
+  it("THE row writer seeds `stages` and `currentStage` from the playbook", async () => {
+    // The pure functions above could be perfect while the INSERT ignored them.
+    // There is no DB here, so the seam is pinned in source; the PGlite parity
+    // suite (`session-birth-parity.pglite.test.ts`) proves every door's row.
     const src = await readFile(
-      new URL("../create-session.ts", import.meta.url),
+      new URL(
+        "../../../../../database/src/utils/insert-focus-session.ts",
+        import.meta.url
+      ),
       "utf8"
     );
     expect(src).toMatch(/stages: readStages\(playbook\?\.stages\)/);
-    // Non-vacuity: the file really is the instantiate door.
     expect(src).toMatch(/currentStage: firstStageKey\(playbook\?\.stages\)/);
+    // Non-vacuity: the file really is the row writer.
+    expect(src).toMatch(/database\.insert\(focusSessions\)/);
   });
 });

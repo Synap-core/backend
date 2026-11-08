@@ -16,7 +16,7 @@ const stepEn = {
   "presence.factors.none": "No passkey yet",
   "presence.factors.add": "Add one",
   "presence.factors.failed": "Couldn’t check your passkeys.",
-  "presence.factors.addSecond": "Add a 2FA app or recovery codes",
+  "presence.factors.addSecond": "Add an authenticator app or recovery codes",
   "reversible.label": "AIs act directly on what can be undone",
   "reversible.line":
     "They create, edit and link without asking, each change with Undo.",
@@ -50,7 +50,7 @@ const stepFr: Catalog<typeof stepEn> = {
   "presence.factors.add": "En ajouter une",
   "presence.factors.failed": "Impossible de vérifier vos clés d’accès.",
   "presence.factors.addSecond":
-    "Ajouter une app de double authentification ou des codes de récupération",
+    "Ajouter une app d’authentification ou des codes de récupération",
   "reversible.label": "Les IA agissent directement sur ce qui peut être annulé",
   "reversible.line":
     "Elles créent, modifient et relient sans demander, chaque modification avec Annuler.",

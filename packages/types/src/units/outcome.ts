@@ -87,6 +87,10 @@ import {
   isDeliverableOutstanding,
   type DeliverableFacts,
 } from "./deliverable.js";
+import type {
+  ThingBlockerBlocks,
+  ThingBlockerClearedBy,
+} from "./thing-blocker.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -126,6 +130,15 @@ export interface SlotFacts extends DeliverableFacts {
   satisfiedByProposalId?: string | null;
   attestedBy?: string | null;
   satisfiedByEvidence?: unknown;
+  /**
+   * The thing this slot holds up and the status it cannot reach yet, its
+   * domain name and what clears it (plan e7f753db §9; `SlotBlocks`,
+   * `SlotClearedBy` in `@synap/playbooks`). Read by `deriveThingBlocker`
+   * through THE waiting-on collector, never by the outcome projection.
+   */
+  blocks?: ThingBlockerBlocks | null;
+  blockerKey?: string | null;
+  clearedBy?: ThingBlockerClearedBy | null;
 }
 
 function text(v: unknown): string | undefined {

@@ -79,6 +79,7 @@ export * from "./utils/package-definition.js";
 export * from "./utils/message-hash.js";
 export * from "./utils/persist-assistant-reply.js";
 export * from "./utils/emit-message-event.js";
+export * from "./utils/insert-focus-session.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/session-started-by.js";
 export * from "./utils/owed-slot-predicate.js";

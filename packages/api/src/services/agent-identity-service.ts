@@ -1063,6 +1063,16 @@ export interface ProvisionSurfaceAgentKeyOpts {
    */
   inheritToolSurface?: "agent" | "instance";
   /**
+   * The surface a FIRST key lists when `toolProfile` is omitted and there is
+   * no key to inherit from: the agent's template's (`spec.toolProfile` +
+   * `toolGroups`, `loadTemplateToolSurface`). Omitted: `entry`, nothing
+   * unlocked. A re-mint still keeps what the agent's key listed.
+   */
+  firstKeyToolSurface?: {
+    toolProfile: ApiKeyToolProfile;
+    toolGroups?: string[];
+  };
+  /**
    * The COMPUTER the agent runs on (0320): the agent is then the distinct
    * "<type> on <computer>" principal, not the creator's computer-less one.
    * Every door names it, null included (D1): a door that forgot to say which
@@ -1287,7 +1297,7 @@ export async function provisionSurfaceAgentKey(
             toolProfile: inherited.toolProfile ?? null,
             toolGroups: inherited.toolGroups ?? [],
           }
-        : { toolProfile: "entry" };
+        : (opts.firstKeyToolSurface ?? { toolProfile: "entry" });
 
   if (opts.pendingApproval !== true)
     await revokeActiveHubInboundKeysForUser(db, {

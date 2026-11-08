@@ -575,6 +575,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.title.noVerb": "Demande\u00a0: {obj}",
   "vocabulary.title.noVerb.named": "Demande\u00a0: {obj} «\u00a0{name}\u00a0»",
   "vocabulary.title.lead": "{verb}\u00a0: {name}",
+  "vocabulary.title.onComputer": "{verb} «\u00a0{name}\u00a0» sur {computer}",
+  "vocabulary.title.fromComputer": "{verb} «\u00a0{name}\u00a0» de {computer}",
+  "vocabulary.title.addAndInstallOn":
+    "Ajouter «\u00a0{name}\u00a0» depuis la marketplace et l’installer sur {computer}",
   "vocabulary.title.verbOnly.named": "{verb} «\u00a0{name}\u00a0»",
   "vocabulary.title.imperative":
     "{verb} {objG, select, f {{objV, select, yes {l’{obj}} other {la {obj}}}} m {{objV, select, yes {l’{obj}} other {le {obj}}}} other {l’élément {Obj}}}",

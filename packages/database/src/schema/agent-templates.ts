@@ -23,6 +23,8 @@ import {
 import type {
   AgentTemplateDetect,
   AgentTemplateWake,
+  McpToolGroupName,
+  McpToolProfile,
 } from "@synap-core/types/agents";
 
 export const agentTemplates = pgTable(
@@ -47,6 +49,16 @@ export const agentTemplates = pgTable(
       .$type<{ skills: string[] }>()
       .notNull()
       .default({ skills: [] }),
+    /**
+     * The MCP tool surface its agents' FIRST key lists when the connect asks
+     * for none (0407): `entry` | `builder`; null = the pod's default (entry).
+     */
+    toolProfile: text("tool_profile").$type<McpToolProfile | null>(),
+    /** Groups unlocked on that first key from the start (only with entry). */
+    toolGroups: jsonb("tool_groups")
+      .$type<McpToolGroupName[]>()
+      .notNull()
+      .default([]),
     /** Holds `marketSource` (the catalog source link + install baseline). */
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()

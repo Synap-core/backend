@@ -1,7 +1,6 @@
 /**
- * Where a second way in is added (the recovery ladder): the 2FA app card on
- * the person's Security page, beside the recovery codes. The "two ways in"
- * lines of the mode card and the onboarding defaults step link here.
+ * The authenticator app card's anchor on the person's Security page. A
+ * "second way in" link goes to the whole list of ways (`WAYS_IN_HREF`),
+ * never to this one card: recovery codes or a phone count as much.
  */
 export const TWO_FACTOR_ANCHOR = "two-factor";
-export const SECOND_WAY_HREF = `/settings/security#${TWO_FACTOR_ANCHOR}`;

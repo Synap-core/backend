@@ -11,6 +11,7 @@
 import type { AgentTemplateWake } from "./agent-template.js";
 import type {
   AGENT_WAKE_HOW_LABELS,
+  AGENT_WAKE_REFUSAL_FIXES,
   AGENT_WAKE_REFUSAL_LABELS,
   AGENT_WAKE_STATE_LABELS,
 } from "../vocabulary/index.js";
@@ -82,6 +83,9 @@ const _refusalWords: Covers<
   AgentWakeRefusal,
   typeof AGENT_WAKE_REFUSAL_LABELS
 > = true;
+const _refusalFixes: Covers<AgentWakeRefusal, typeof AGENT_WAKE_REFUSAL_FIXES> =
+  true;
 void _stateWords;
 void _howWords;
 void _refusalWords;
+void _refusalFixes;

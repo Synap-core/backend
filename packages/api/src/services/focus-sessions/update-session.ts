@@ -73,8 +73,14 @@ import type {
   SlotAskLookedAtKind,
   SlotAskSnapshot,
   SlotAskUrgency,
+  SlotBlocks,
+  SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
+import type {
+  ThingBlockerBlocks,
+  ThingBlockerClearedBy,
+} from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
@@ -186,30 +192,12 @@ export interface UpdateFocusSessionParams {
    * blocker is classified, and the human reads one line to know what to do.
    * The slot lands `pending` like any other — declaring a blocker is not a
    * claim of delivery, and `status: 'done'` is still the approval door's.
+   *
+   * Its shape is DERIVED from {@link CLIENT_DECLARABLE_OUTPUT_FIELDS} — the
+   * same list `addOutputWireSchema` picks — so a field the wire accepts is a
+   * field this door carries (`ref`, `ask`, the blocker trio, ...).
    */
-  addOutput?: {
-    kind: string;
-    label: string;
-    icon?: string;
-    owner?: ExpectedOutput["owner"];
-    blockedReason?: ExpectedOutput["blockedReason"];
-    why?: ExpectedOutput["why"];
-    /** What moves when the person answers — required with `owner: 'human'` from an agent. */
-    unblocks?: ExpectedOutput["unblocks"];
-    /**
-     * WHERE the deliverable lives / where the person must go. Accepted HERE and
-     * not only on the wholesale array because this is the door an agent uses to
-     * declare a blocked slot in ONE call — without it, "block this on the human
-     * AND point them at the page" would need a second, wholesale patch.
-     */
-    ref?: ExpectedOutput["ref"];
-    /**
-     * HOW the person can answer (confirm / choose / form / act / provide).
-     * Accepted here for the same one-call reason as `ref`: blocking on the
-     * person AND saying how to answer is one declaration.
-     */
-    ask?: ExpectedOutput["ask"];
-  };
+  addOutput?: AddOutputParams;
   /**
    * The slot to report produced, named by its LABEL (exact) or its KEY
    * (`slot-keys.ts`, stamped by the server) — additive: a label keeps working.
@@ -498,6 +486,30 @@ const slotAnswerWireSchema = z.object({
   ...AnswerProvenanceSchema.shape,
 });
 
+/**
+ * The blocker trio's wire shapes (plan e7f753db §9). `blocks` names a thing
+ * and a status, both optional (defaults are read, never stored); `blockerKey`
+ * is a short snake_case domain name; `clearedBy` names exactly ONE door.
+ */
+export const slotBlocksWireSchema = z
+  .object({
+    entityId: z.string().uuid().optional(),
+    to: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+export const slotBlockerKeyWireSchema = z
+  .string()
+  .regex(
+    /^[a-z][a-z0-9_]{0,63}$/,
+    "a short snake_case name, e.g. not_connected"
+  );
+export const slotClearedByWireSchema = z.union([
+  z.object({ answer: z.literal(true) }).strict(),
+  z.object({ intent: z.string().trim().min(1).max(80) }).strict(),
+  z.object({ playbookId: z.string().uuid() }).strict(),
+  z.object({ capability: z.string().trim().min(1).max(120) }).strict(),
+]);
+
 export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
@@ -618,6 +630,12 @@ export const expectedOutputWireSchema = z.object({
       at: z.string(),
     })
     .optional(),
+  // The thing this slot holds up (plan e7f753db §9). DECLARED, like
+  // `unblocks`; `blocks.entityId` is floored at write by the same ref floor
+  // (`findUnreachableOutputRefs`).
+  blocks: slotBlocksWireSchema.optional(),
+  blockerKey: slotBlockerKeyWireSchema.optional(),
+  clearedBy: slotClearedByWireSchema.optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -655,6 +673,12 @@ const _lookedAtKindParity: _Mutual<
 > = true;
 void _lookedAtKindsAreRefKinds;
 void _lookedAtKindParity;
+// The blocker's two shapes, mirrored dependency-free in `@synap-core/types`
+// (`deriveThingBlocker` reads them through the waiting-on collector).
+const _blocksParity: _Mutual<SlotBlocks, ThingBlockerBlocks> = true;
+const _clearedByParity: _Mutual<SlotClearedBy, ThingBlockerClearedBy> = true;
+void _blocksParity;
+void _clearedByParity;
 
 /**
  * The slot fields the SERVER owns — written by governance, delegation and
@@ -741,6 +765,12 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   // could already drop a slot from the array outright; guarding this flag
   // would close no hole the wholesale patch leaves open.)
   "optional",
+  // WHICH thing the slot holds up, its domain name and what clears it (plan
+  // e7f753db §9). The declarer's word, like `unblocks`: naming a blocker
+  // closes nothing and receipts nothing.
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -818,6 +848,12 @@ export const addOutputWireSchema = expectedOutputWireSchema.pick(
   ) as { [K in (typeof CLIENT_DECLARABLE_OUTPUT_FIELDS)[number]]: true }
 );
 
+/** `addOutput`'s param — the same declarable slice, as a type. */
+export type AddOutputParams = Pick<
+  ExpectedOutput,
+  (typeof CLIENT_DECLARABLE_OUTPUT_FIELDS)[number]
+>;
+
 /**
  * DERIVED, not hand-maintained — a third list is a third place to forget a
  * field. Everything the server stamps must survive a silent patch, and so must
@@ -845,6 +881,10 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason: renaming a sibling must not turn the playbook's
   // optional milestone invoice back into an owed one.
   "optional",
+  // Same erasure reason: renaming a sibling must not unblock a thing.
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -1634,27 +1674,28 @@ export function applyOutputMutations(
 
   if (patch.addOutput) {
     const add = patch.addOutput;
+    // Built from EVERY declarable field, picked by the list the wire schema
+    // picks — never re-listed by hand. A hand list here once carried six
+    // fields and silently dropped `blocks`/`blockerKey`/`clearedBy` (finding
+    // 7bf164fd), while the same slot declared through `outcomes` kept them.
+    // Only what was actually declared is copied: an absent `owner` MUST stay
+    // absent (it is what "the agent never said" looks like), and `null` (the
+    // wire's CLEAR for `ref`/`ask`) clears nothing on a brand-new slot, so it
+    // simply carries no key.
+    const declared: Partial<OutputItem> = {};
+    for (const field of CLIENT_DECLARABLE_OUTPUT_FIELDS) {
+      const value = add[field];
+      if (value !== undefined && value !== null) {
+        (declared as Record<string, unknown>)[field] = value;
+      }
+    }
     next = [
       ...next,
       reconcileOwedSince({
+        ...declared,
         kind: add.kind,
         label: add.label,
-        icon: add.icon,
         status: "pending",
-        // Only spread what was actually declared — an absent `owner` MUST
-        // stay absent (it is what "the agent never said" looks like), not
-        // become an explicit "agent".
-        ...(add.owner !== undefined ? { owner: add.owner } : {}),
-        ...(add.blockedReason !== undefined
-          ? { blockedReason: add.blockedReason }
-          : {}),
-        ...(add.why !== undefined ? { why: add.why } : {}),
-        ...(add.unblocks !== undefined ? { unblocks: add.unblocks } : {}),
-        // `null` here is the same CLEAR the wire uses; a brand-new slot has
-        // nothing to clear, so it simply carries no key.
-        ...(add.ref ? { ref: add.ref } : {}),
-        // Same: `null` clears nothing on a new slot.
-        ...(add.ask ? { ask: add.ask } : {}),
       }),
     ];
   }

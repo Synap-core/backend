@@ -16,6 +16,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.2)
  */
 
+import { trialRunInputSchema } from "../services/playbooks/trial-run.js";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import { z } from "zod";
@@ -98,6 +99,7 @@ import {
   playbookScopeSchema,
   playbookExpectedOutputSchema,
   playbookRequiredIntentsSchema,
+  playbookGuidanceSchema,
 } from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
@@ -414,6 +416,8 @@ export const updateInputSchema = z.object({
    * change cannot make the patch and the create accept different slugs.
    */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
+  /** See `playbookGuidanceSchema` — REPLACES the declared list, same schema. */
+  guidance: playbookGuidanceSchema.optional(),
   /** See `playbookDefinitionSchema.subjectProfile` — the same schema. */
   subjectProfile: playbookSubjectProfileSchema.optional(),
   /** See `playbookDefinitionSchema.activators` — folded into `subjectProfile`. */
@@ -2050,6 +2054,7 @@ export const playbooksRouter = router({
           stages: input.stages,
           criteria: input.criteria,
           requiredIntents: input.requiredIntents,
+          guidance: input.guidance,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
           metadata: input.metadata,
@@ -2171,6 +2176,7 @@ export const playbooksRouter = router({
             stages: input.stages ?? [],
             criteria: input.criteria ?? [],
             requiredIntents: input.requiredIntents ?? [],
+            guidance: input.guidance ?? [],
             subjectProfile: input.subjectProfile ?? null,
             schedule: input.schedule ?? null,
             metadata: input.metadata ?? {},
@@ -2438,6 +2444,7 @@ export const playbooksRouter = router({
           ...(input.requiredIntents !== undefined
             ? { requiredIntents: input.requiredIntents }
             : {}),
+          ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
             : {}),
@@ -2482,6 +2489,7 @@ export const playbooksRouter = router({
       if (input.criteria !== undefined) set.criteria = input.criteria;
       if (input.requiredIntents !== undefined)
         set.requiredIntents = input.requiredIntents;
+      if (input.guidance !== undefined) set.guidance = input.guidance;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;
       if (input.schedule !== undefined) set.schedule = input.schedule;
@@ -2900,9 +2908,35 @@ export const playbooksRouter = router({
          * run's own grant (`playbook.run`) covers it.
          */
         remember: z.boolean().optional(),
+        /**
+         * TRIAL (the rule lab, design b199a3a4 slice 1b): render each draft in
+         * place of the current version it names, on Synap AI, writing
+         * nothing; the drafted text is the agent's last reply
+         * (`GET /runs/:runId?flowType=playbook` → `playbookDetail.trial`).
+         * A person's act: refused for an agent, with `remember` or with
+         * `handToAgentId`.
+         */
+        trial: trialRunInputSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.trial) {
+        if (input.agentUserId || ctx.agentUserId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only a person can try a draft rule (a trial run) — an agent cannot.",
+            cause: { reasonCode: "PERSON_ONLY" },
+          });
+        }
+        if (input.remember || input.handToAgentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId.",
+          });
+        }
+      }
       // The playbook must be on the caller's USER FLOOR (every member
       // workspace + pod-wide rows) — unchanged predicate, pod-wide as it
       // always was.
@@ -3155,6 +3189,8 @@ export const playbooksRouter = router({
             ? { handToAgentId: input.handToAgentId }
             : {}),
           ...(input.runOn ? { runOn: input.runOn } : {}),
+          // A gated trial stays a trial once approved.
+          ...(input.trial ? { trial: input.trial } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -3219,6 +3255,7 @@ export const playbooksRouter = router({
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
         ...(input.runOn ? { runOn: input.runOn } : {}),
+        ...(input.trial ? { trial: input.trial } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
