@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 114 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 115 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -109,6 +109,7 @@ The pod's MCP server lists 114 tools. A new agent key lists the `entry` tools; t
 | [`synap_request_deploy_approval`](#synap_request_deploy_approval)         | Request deploy approval           | governance   | no        |
 | [`synap_find`](#synap_find)                                               | Find what can do this             | read         | yes       |
 | [`synap_list_capabilities`](#synap_list_capabilities)                     | List tools                        | capabilities | yes       |
+| [`synap_list_installations`](#synap_list_installations)                   | List installations                | capabilities | yes       |
 | [`synap_run_capability`](#synap_run_capability)                           | Run tool                          | capabilities | no        |
 | [`synap_create_verb`](#synap_create_verb)                                 | Create verb                       | capabilities | no        |
 | [`synap_list_automations`](#synap_list_automations)                       | List rules                        | capabilities | yes       |
@@ -1725,6 +1726,17 @@ Discover what the user can actually DO. Returns a SECTIONED view: `integrations`
 | `containerId` | string | no       | Only rows belonging to this capability pack (the `containerId` on integrations/skills, or `builtInPack.containerId`). The default view summarises Synap Core's first-party verbs as ONE `builtInPack` line — pass its containerId to list them.                                                                                                                                                                                                                                                                                                            |
 | `intent`      | string | no       | Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this. |
 | `limit`       | number | no       | Max entries to return (default 20 when `query` is set; unset otherwise).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+## synap_list_installations
+
+**List installations** · Group: `capabilities` · readOnlyHint: true · openWorldHint: false
+
+What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, the person or the computer asks through POST /api/hub/installations/request.
+
+| Parameter       | Type   | Required | Description                                                                  |
+| --------------- | ------ | -------- | ---------------------------------------------------------------------------- |
+| `computerId`    | string | no       | One computer's id (its users id).                                            |
+| `capabilityKey` | string | no       | A capability's catalog slug, e.g. media-transcribe: which computers have it. |
 
 ## synap_run_capability
 

@@ -186,6 +186,7 @@ export const TOOL_GROUPS = {
   /** Connected services, verbs and automations. */
   capabilities: [
     "synap_list_capabilities",
+    "synap_list_installations",
     "synap_run_capability",
     "synap_create_verb",
     "synap_list_automations",

@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 114,
+  "toolCount": 115,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -138,6 +138,7 @@
     ],
     "capabilities": [
       "synap_list_capabilities",
+      "synap_list_installations",
       "synap_run_capability",
       "synap_create_verb",
       "synap_list_automations",
@@ -11302,6 +11303,45 @@
           "limit": {
             "type": "number",
             "description": "Max entries to return (default 20 when `query` is set; unset otherwise)."
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "synap_list_installations",
+      "title": "List installations",
+      "group": "capabilities",
+      "annotations": {
+        "title": "List installations",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, the person or the computer asks through POST /api/hub/installations/request.",
+      "parameters": [
+        {
+          "name": "computerId",
+          "type": "string",
+          "required": false,
+          "description": "One computer's id (its users id)."
+        },
+        {
+          "name": "capabilityKey",
+          "type": "string",
+          "required": false,
+          "description": "A capability's catalog slug, e.g. media-transcribe: which computers have it."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "computerId": {
+            "type": "string",
+            "description": "One computer's id (its users id)."
+          },
+          "capabilityKey": {
+            "type": "string",
+            "description": "A capability's catalog slug, e.g. media-transcribe: which computers have it."
           }
         },
         "required": []

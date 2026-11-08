@@ -6329,6 +6329,120 @@
           "unreadable"
         ]
       },
+      "InstallationRequested": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["approved"] },
+          "installationId": { "type": "string" },
+          "jobId": { "type": ["string", "null"] }
+        },
+        "required": ["status", "installationId", "jobId"]
+      },
+      "InstallationRequestProposed": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["proposed"] },
+          "proposalId": { "type": "string" },
+          "reviewUrl": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["status", "proposalId", "message"]
+      },
+      "InstallationRequest": {
+        "type": "object",
+        "properties": {
+          "capabilityKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "action": {
+            "type": "string",
+            "enum": ["install", "update", "verify", "remove"]
+          },
+          "computer": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "sessionId": { "type": "string", "format": "uuid" }
+        },
+        "required": ["capabilityKey", "action"],
+        "additionalProperties": false
+      },
+      "Installations": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Installation" }
+          }
+        },
+        "required": ["items"]
+      },
+      "Installation": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "computerId": { "type": "string" },
+          "computerName": { "type": "string" },
+          "capabilityKey": { "type": "string" },
+          "kind": { "type": "string", "enum": ["service", "tool"] },
+          "status": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "installing",
+              "installed",
+              "updating",
+              "removing",
+              "removed",
+              "failed"
+            ]
+          },
+          "statusDetail": { "type": ["string", "null"] },
+          "desiredState": {
+            "type": "string",
+            "enum": ["installed", "removed"]
+          },
+          "desiredVersion": { "type": ["string", "null"] },
+          "approvedAt": { "type": ["string", "null"] },
+          "observedVersion": { "type": ["string", "null"] },
+          "observedOs": { "type": ["string", "null"] },
+          "observedArch": { "type": ["string", "null"] },
+          "verifiedAt": { "type": ["string", "null"] },
+          "health": {
+            "type": ["string", "null"],
+            "enum": [
+              "ok",
+              "degraded",
+              "drifted",
+              "stale",
+              "unknown",
+              "failed",
+              null
+            ]
+          },
+          "healthDetail": { "type": ["string", "null"] },
+          "updatedAt": { "type": "string" }
+        },
+        "required": [
+          "id",
+          "computerId",
+          "computerName",
+          "capabilityKey",
+          "kind",
+          "status",
+          "statusDetail",
+          "desiredState",
+          "desiredVersion",
+          "approvedAt",
+          "observedVersion",
+          "observedOs",
+          "observedArch",
+          "verifiedAt",
+          "health",
+          "healthDetail",
+          "updatedAt"
+        ]
+      },
       "ResolveResponse": {
         "type": "object",
         "properties": {
@@ -17540,6 +17654,41 @@
                             }
                           },
                           "required": ["name", "triggerType", "flowDefinition"]
+                        }
+                      },
+                      "placement": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "install": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "verify": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "uninstall": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "permissions": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "licence": { "type": "string" },
+                      "services": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        }
+                      },
+                      "recipes": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": {}
                         }
                       }
                     },
@@ -46226,6 +46375,167 @@
           },
           "503": {
             "description": "The agents could not be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/installations/request": {
+      "post": {
+        "tags": ["Installations"],
+        "summary": "Ask for a capability on one of your computers: install, update to a version, check or remove. An agent's install, update or removal becomes a proposal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InstallationRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied (`approved`): the asked state is recorded and the job, when one is due, is queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationRequested"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "An agent's ask, proposed for the person's approval (`{ status: 'proposed', proposalId, reviewUrl }`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallationRequestProposed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The computer cannot take it (\"Installs from the pod\" is off, or its placement refuses it), or nothing is installed to check or remove",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/installations": {
+      "get": {
+        "tags": ["Installations"],
+        "summary": "What is installed on your computers: this computer (`computer=me`), one computer, the computers that have one capability, or all",
+        "parameters": [
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "computer",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "capabilityKey",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your computers' installations, health derived at read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Installations" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
