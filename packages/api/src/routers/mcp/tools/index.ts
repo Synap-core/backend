@@ -943,13 +943,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Max content chars (slice)",
+              description: "Max content chars (slice)",
             },
             offset: {
               type: "number",
-              description:
-                "Chars to skip (nextOffset)",
+              description: "Chars to skip (nextOffset)",
             },
           },
           required: ["documentId"],
@@ -1361,13 +1359,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Page size, default 50, max 200",
+              description: "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
-              description:
-                "nextOffset of the prior reply",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -3424,13 +3420,11 @@ export const tools = {
           properties: {
             limit: {
               type: "number",
-              description:
-                "Page size, default 50, max 200",
+              description: "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
-              description:
-                "nextOffset of the prior reply",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -4418,13 +4412,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Page size, default 50, max 200",
+              description: "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
-              description:
-                "nextOffset of the prior reply",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -4557,13 +4549,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Page size, default 50, max 200",
+              description: "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
-              description:
-                "nextOffset of the prior reply",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
