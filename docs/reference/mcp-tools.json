@@ -5207,7 +5207,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates the definition ONLY: the cell is not surfaced anywhere until it is bound as a renderer for a kind, which is a separate step — ask the user to do it in the Synap app.",
+      "description": "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a tile; else it shows nowhere until placed or bound (synap_promote_cell_to_renderer).",
       "parameters": [
         {
           "name": "name",
@@ -5243,7 +5243,7 @@
           "name": "contentKind",
           "type": "enum",
           "required": false,
-          "description": "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want.",
+          "description": "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. Only a slot other than 'widget' is offered as a profile renderer.",
           "enum": [
             "entity-detail",
             "entity-card",
@@ -5251,6 +5251,12 @@
             "collection",
             "widget"
           ]
+        },
+        {
+          "name": "placeOn",
+          "type": "object",
+          "required": false,
+          "description": "Bento view (synap_list_views) to add the cell to as a tile, in the same act."
         },
         {
           "name": "reasoning",
@@ -5298,7 +5304,13 @@
               "collection",
               "widget"
             ],
-            "description": "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want."
+            "description": "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. Only a slot other than 'widget' is offered as a profile renderer."
+          },
+          "placeOn": {
+            "type": "object",
+            "properties": { "viewId": { "type": "string" } },
+            "required": ["viewId"],
+            "description": "Bento view (synap_list_views) to add the cell to as a tile, in the same act."
           },
           "reasoning": {
             "type": "string",

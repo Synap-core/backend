@@ -1013,7 +1013,6 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
     ],
     ["/discover", ["entity.read", "relation_def.read"]],
     ["/memory", ["entity.read", "preference.read"]],
-    ["/cells", ["widget.read"]],
     ["/widget-definitions", ["widget.read"]],
   ];
   it.each(AGGREGATE)("GET %s is open to the computer's key", (path) => {
@@ -1049,6 +1048,44 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
       expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
     }
   );
+  // The cells a pod app hosts (design b199a3a4, slice 4): the route reads
+  // through the `widget` grant clause, so a key pinned to spaces is admitted
+  // on `widget.read` and reads its spaces' cells
+  // (cells.app-reads.pglite.test.ts).
+  it.each(["/cells", "/cells/", "/cells/generated%3Ahealth", "/cells/x/"])(
+    "GET %s: a pinned key with widget.read is admitted, without it refused",
+    (path) => {
+      expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({ permissions: ["widget.read"], workspaceIds: ["w1"] })
+        )
+      ).toBe(true);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({
+            permissions: ["view.read", "entity.*.read"],
+            workspaceIds: ["w1"],
+          })
+        )
+      ).toBe(false);
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+  it("GET /cells/:typeKey is one segment: a deeper path is not admitted", () => {
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/cells/a/b",
+        key({ permissions: ["widget.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(false);
+  });
   it("GET /memory reads what POST /memory/search reads: one declaration", () => {
     for (const k of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY])
       expect(restDoorAllowed("GET", "/memory", k)).toBe(

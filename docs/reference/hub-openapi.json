@@ -28017,7 +28017,7 @@
       "get": {
         "tags": ["Cells"],
         "summary": "List installed source cells (frame and iframe)",
-        "description": "The active frame / iframe cells of one space (`workspaceId`, your membership checked) plus the pod-wide ones; with no `workspaceId`, the pod-wide ones only.",
+        "description": "The active frame / iframe cells of one space (`workspaceId`, your membership checked) plus the pod-wide ones; with no `workspaceId`, the pod-wide ones only. A key whose grant is limited reads only the cells its grant reaches (`widget.read`; a key pinned to spaces: the cells of those spaces).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -28075,6 +28075,96 @@
           },
           "403": {
             "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cells/{typeKey}": {
+      "get": {
+        "tags": ["Cells"],
+        "summary": "Read one installed source cell (frame or iframe)",
+        "description": "One active frame / iframe cell by typeKey (URL-encoded: `generated%3Amy-cell`), in the space `workspaceId` names (your membership checked) or, with no `workspaceId`, pod-wide. Read through the same grant as `GET /cells`: a key whose grant does not reach the cell gets 404.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "minLength": 1 },
+            "required": true,
+            "name": "typeKey",
+            "in": "path"
+          },
+          {
+            "schema": { "type": "string" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cell",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "typeKey": { "type": "string" },
+                    "name": { "type": "string" },
+                    "rendererType": {
+                      "type": "string",
+                      "enum": ["frame", "iframe"]
+                    },
+                    "deps": {
+                      "type": "object",
+                      "additionalProperties": { "type": "string" }
+                    },
+                    "rendererSource": { "type": "string" },
+                    "viewTypes": {
+                      "type": ["array", "null"],
+                      "items": { "type": "string" }
+                    },
+                    "contentKind": { "type": ["string", "null"] },
+                    "externalHosts": {
+                      "type": ["array", "null"],
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": [
+                    "typeKey",
+                    "name",
+                    "rendererType",
+                    "deps",
+                    "rendererSource",
+                    "viewTypes",
+                    "contentKind",
+                    "externalHosts"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such cell for you",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
