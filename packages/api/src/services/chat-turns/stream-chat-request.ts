@@ -6,13 +6,18 @@
  * pod. The two callers differ only in two hooks:
  *   - `authorizeTarget`: a narrower caller (an app's grant) may refuse the
  *     resolved workspace/channel (403);
- *   - `delegationFor`: the per-turn token the IS calls the hub with (the
- *     external door's `isDelegationHeaders`, or an app grant's claim).
+ *   - `appGrant`: set for an app, the per-turn IS token then carries the app's
+ *     grant and a signing failure refuses the turn (never the stored key).
  */
 
 import type { Context, Env } from "hono";
 import { z } from "zod";
-import { db } from "@synap/database";
+import {
+  db,
+  isDelegationHeaders,
+  mintIsDelegationToken,
+  IS_DELEGATION_HEADER,
+} from "@synap/database";
 import { getPodCallback } from "../../utils/pod-callback.js";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import { createLogger } from "@synap-core/core";
@@ -51,19 +56,20 @@ export interface ChatStreamOptions {
   userId: string;
   /** Refuse a resolved target the caller's grant does not reach. */
   authorizeTarget?: (target: ChatStreamTarget) => boolean;
-  /** The IS delegation headers for this turn. May throw (the turn is refused). */
-  delegationFor: (turn: {
-    isUrl: string;
-    channelId: string;
-    turnId: string;
-  }) => Record<string, string>;
+  /**
+   * The app's grant claim, when the caller is an app. The turn's IS token then
+   * carries it and cannot be built without it: a signing failure refuses the
+   * turn (503) instead of letting the IS use the stored full-access key.
+   * Unset (an API key): the person's own token, as the external door always did.
+   */
+  appGrant?: Record<string, unknown> | null;
 }
 
 export async function handleChatStream<E extends Env>(
   c: Context<E>,
   opts: ChatStreamOptions
 ): Promise<Response> {
-  const { userId, authorizeTarget, delegationFor } = opts;
+  const { userId, authorizeTarget, appGrant } = opts;
 
   // Parse + validate request body
   let input: z.infer<typeof streamBodySchema>;
@@ -274,15 +280,23 @@ export async function handleChatStream<E extends Env>(
     stream: true,
   };
 
-  // The turn's delegation headers. A builder that throws refuses the turn
-  // (503): the IS must never fall back to a stored full-access key.
+  // The turn's delegation headers. An app's token throws when it cannot be
+  // signed and the turn is refused (503): the IS must never fall back to a
+  // stored full-access key for an app. (`isDelegationHeaders` returns {} on a
+  // signing failure, which is that fallback, so an app never uses it.)
   let delegationHeaders: Record<string, string>;
   try {
-    delegationHeaders = delegationFor({
+    const turn = {
       isUrl,
+      operatorUserId: userId,
       channelId: resolvedChannelId,
-      turnId: durableTurn.id,
-    });
+      runId: durableTurn.id,
+    };
+    delegationHeaders = appGrant
+      ? {
+          [IS_DELEGATION_HEADER]: mintIsDelegationToken({ ...turn, appGrant }),
+        }
+      : isDelegationHeaders(turn);
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },

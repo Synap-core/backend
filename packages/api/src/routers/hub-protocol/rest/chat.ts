@@ -10,12 +10,7 @@
  * session has no grant and keeps the person's full access, as before.
  */
 import { z } from "@hono/zod-openapi";
-import {
-  getRequestGrant,
-  IS_DELEGATION_HEADER,
-  mintIsDelegationToken,
-  type KeyGrant,
-} from "@synap/database";
+import { getRequestGrant, type KeyGrant } from "@synap/database";
 import { permits, type GrantScope } from "@synap/governance-policy/grants";
 import {
   handleChatStream,
@@ -82,15 +77,7 @@ export function registerChatRoutes(app: HubHono): void {
       authorizeTarget: ({ workspaceId }) =>
         chatStreamPermitted(grant, workspaceId),
       // The turn's IS token carries the grant (no grant = the person, as before).
-      delegationFor: ({ isUrl, channelId, turnId }) => ({
-        [IS_DELEGATION_HEADER]: mintIsDelegationToken({
-          isUrl,
-          operatorUserId: userId,
-          channelId,
-          runId: turnId,
-          appGrant: grant ? appGrantClaimOf(grant) : null,
-        }),
-      }),
+      appGrant: grant ? appGrantClaimOf(grant) : null,
     });
   });
 }

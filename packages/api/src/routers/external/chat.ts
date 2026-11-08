@@ -19,7 +19,7 @@
  */
 
 import { Hono } from "hono";
-import { db, eq, and, inArray, or, isDelegationHeaders } from "@synap/database";
+import { db, eq, and, inArray, or } from "@synap/database";
 import { channels, workspaceMembers } from "@synap/database/schema";
 import { ChannelType, ChannelStatus } from "@synap/database/schema";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
@@ -112,14 +112,6 @@ externalChatApp.post(
     const userId = c.get("userId");
     return handleChatStream(c, {
       userId,
-      delegationFor: ({ isUrl, channelId, turnId }) =>
-        // D4: this turn's hub calls run as `userId` on a per-turn token.
-        isDelegationHeaders({
-          isUrl,
-          operatorUserId: userId,
-          channelId,
-          runId: turnId,
-        }),
     });
   }
 );

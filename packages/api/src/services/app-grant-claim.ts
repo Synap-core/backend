@@ -41,7 +41,7 @@ export function appGrantClaimOf(grant: KeyGrant): Record<string, unknown> {
   return {
     scopes: grant.scopes.map((s) => ({
       permissions: [...s.permissions],
-      workspaceIds: s.workspaceIds ?? null,
+      workspaceIds: s.workspaceIds,
       projectIds: s.projectIds ?? null,
       entityIds: s.entityIds ?? null,
     })),
