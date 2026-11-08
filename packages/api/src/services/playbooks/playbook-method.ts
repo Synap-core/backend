@@ -9,6 +9,12 @@
  * with `synap_start_session { templateId }` or `synap_update_session
  * { followPlaybookId }` got none of it. Both doors now render through
  * {@link renderPlaybookMethod}, so the two can never drift.
+ *
+ * The method also carries the RULES the playbook follows (its declared
+ * `guidance`, design b199a3a4): the current, person-approved version of each
+ * ref, rendered by the ONE pure renderer (`@synap-core/types/guidance`)
+ * through {@link loadMethodGuidance}. Every door renders it: the IS kickoff,
+ * the MCP bind doors and the external-agent dispatch.
  */
 
 import {
@@ -22,6 +28,15 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { readStageLessons, type PlaybookStage } from "@synap/playbooks";
+import {
+  guidanceSnapshotOf,
+  guidanceUnavailableText,
+  type GuidanceSnapshot,
+} from "@synap-core/types/guidance";
+import {
+  loadPlaybookGuidance,
+  recordRunGuidance,
+} from "./playbook-guidance.js";
 
 /** The heading the context skill is rendered under. */
 export const PLAYBOOK_HOW_TO_HEADING = "## How to run this playbook";
@@ -65,18 +80,21 @@ export function buildStageSection(stage: PlaybookStage): string {
 
 /**
  * THE renderer. Sections, in order, each omitted when empty: the context
- * skill ("how to run this playbook"), the `body` (the executor's goal block;
- * the MCP doors pass none, the agent already holds its goal), the current
- * stage. Joined by one blank line.
+ * skill ("how to run this playbook"), the rules this playbook follows (the
+ * rendered guidance section, {@link loadMethodGuidance}), the `body` (the
+ * executor's goal block; the MCP doors pass none, the agent already holds its
+ * goal), the current stage. Joined by one blank line.
  */
 export function renderPlaybookMethod(input: {
   contextSkill?: string | null;
+  guidance?: string | null;
   body?: string | null;
   stage?: PlaybookStage | null;
 }): string {
   const howTo = input.contextSkill?.trim();
   return [
     howTo ? `${PLAYBOOK_HOW_TO_HEADING}\n${howTo}` : "",
+    input.guidance?.trim() ?? "",
     input.body ?? "",
     input.stage ? buildStageSection(input.stage) : "",
   ]
@@ -124,6 +142,75 @@ export async function loadPlaybookContextSkill(
   return body ? body : null;
 }
 
+/**
+ * The guidance section for one reader, and what a run records of it. NEVER
+ * throws: a failed read renders a section that says the rules could not be
+ * loaded (never an empty one, which would read as "no rules") and snapshots
+ * `{ status: "unavailable" }`. `text` is "" when the playbook declares none.
+ */
+export async function loadMethodGuidance(
+  playbookId: string,
+  userId: string
+): Promise<{ text: string; snapshot: GuidanceSnapshot }> {
+  try {
+    const { rendered } = await loadPlaybookGuidance(playbookId, { userId });
+    return { text: rendered.text, snapshot: guidanceSnapshotOf(rendered) };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return {
+      text: guidanceUnavailableText(error),
+      snapshot: { status: "unavailable", error },
+    };
+  }
+}
+
+/** The run id the runner threads into an executor's `input` (`runId`). */
+export function runIdOf(input: unknown): string | null {
+  const id = (input as { runId?: unknown } | null | undefined)?.runId;
+  return typeof id === "string" && id ? id : null;
+}
+
+/**
+ * What an EXECUTOR renders the method from, read once per run: the context
+ * skill and the guidance section, with the guidance the run used stamped on
+ * its definition snapshot (`runId`). Shared by the IS kickoff and the
+ * external-agent dispatch so the two cannot read the method differently.
+ * Never throws: a failed context-skill read is logged and skipped (the
+ * executor's long-standing rule), a failed guidance read says so in the
+ * section, and a failed stamp is logged.
+ */
+export async function loadRunMethodParts(input: {
+  playbookId: string | undefined;
+  userId: string;
+  runId?: string | null;
+  warn: (obj: Record<string, unknown>, msg: string) => void;
+}): Promise<{ contextSkill: string | null; guidance: string }> {
+  if (!input.playbookId) return { contextSkill: null, guidance: "" };
+  let contextSkill: string | null = null;
+  try {
+    contextSkill = await loadPlaybookContextSkill(input.playbookId);
+  } catch (err) {
+    // Logged because this query runs on EVERY playbook run: a persistent
+    // failure would silently degrade every run otherwise.
+    input.warn(
+      { err, playbookId: input.playbookId },
+      "context skill lookup failed (non-fatal)"
+    );
+  }
+  const guidance = await loadMethodGuidance(input.playbookId, input.userId);
+  if (input.runId) {
+    try {
+      await recordRunGuidance(input.runId, guidance.snapshot);
+    } catch (err) {
+      input.warn(
+        { err, runId: input.runId },
+        "recording the run's guidance failed (non-fatal)"
+      );
+    }
+  }
+  return { contextSkill, guidance: guidance.text };
+}
+
 /** What a binding door hands the agent: the method, or why it could not. */
 export type BoundPlaybookMethod =
   | {
@@ -148,6 +235,8 @@ export async function loadBoundPlaybookMethod(input: {
   playbookId: string;
   stageKey: string | null;
   stages?: unknown;
+  /** The reader: the guidance renders what THEY may read. */
+  userId: string;
 }): Promise<BoundPlaybookMethod> {
   try {
     const db = await getDb();
@@ -175,12 +264,17 @@ export async function loadBoundPlaybookMethod(input: {
       ? (stages.find((s) => s?.key === input.stageKey) ?? null)
       : null;
     const contextSkill = await loadPlaybookContextSkill(input.playbookId);
+    const guidance = await loadMethodGuidance(input.playbookId, input.userId);
     return {
       status: "ok",
       playbookId: input.playbookId,
       playbookName: playbook.name,
       stageKey: input.stageKey,
-      text: renderPlaybookMethod({ contextSkill, stage }),
+      text: renderPlaybookMethod({
+        contextSkill,
+        guidance: guidance.text,
+        stage,
+      }),
     };
   } catch (err) {
     return {

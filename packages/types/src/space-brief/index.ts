@@ -172,6 +172,12 @@ export interface SpaceTemplateSkill {
  */
 const SPACE_SKILL_SLUG = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*){0,2}$/;
 
+/** True when `slug` is a well-formed skill ref (see `SPACE_SKILL_SLUG`). The
+ * ONE grammar: a playbook's `skill:<slug>` guidance ref is checked by it too. */
+export function isSpaceSkillSlug(slug: string): boolean {
+  return SPACE_SKILL_SLUG.test(slug);
+}
+
 /**
  * Validate ONE declared skill. Returns a human-readable reason, or `null` when
  * it is well-formed. The template validator and the pod's applier BOTH call
@@ -182,7 +188,7 @@ export function validateSpaceSkillDeclaration(skill: unknown): string | null {
   if (!isRecord(skill)) return "a skill must be an object: { slug, mode }";
   const slug = text(skill.slug);
   if (!slug) return "a skill needs a non-empty `slug`";
-  if (!SPACE_SKILL_SLUG.test(slug)) {
+  if (!isSpaceSkillSlug(slug)) {
     return `\`${slug}\` is not a valid skill slug — a lowercase path like system/synap/creative-director`;
   }
   if (!isSpaceSkillMode(skill.mode)) {

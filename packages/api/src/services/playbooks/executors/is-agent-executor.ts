@@ -22,8 +22,9 @@ import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 import { resolveActiveAgentBySlug } from "../../agent-identity-service.js";
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
 import {
-  loadPlaybookContextSkill,
+  loadRunMethodParts,
   renderPlaybookMethod,
+  runIdOf,
 } from "../playbook-method.js";
 import { resolveRunToolProfile } from "../run-tool-profile.js";
 
@@ -86,25 +87,25 @@ export class IsAgentExecutor implements Executor {
       : undefined;
 
     // Layer-2 CONTEXT SKILL — the human-approved "how to run THIS playbook"
-    // instruction (`loadPlaybookContextSkill`). Prepended so the agent gets the
-    // HOW alongside the goal. Absent ⇒ no prefix. Non-fatal: a lookup failure
-    // must never block the run.
-    let contextSkill: string | null = null;
-    if (ctx.playbookId) {
-      try {
-        contextSkill = await loadPlaybookContextSkill(ctx.playbookId);
-      } catch (err) {
-        // Logged because this query runs on EVERY playbook run: a persistent
-        // failure would silently degrade every run otherwise.
-        logger.warn(
-          { err, playbookId: ctx.playbookId },
-          "is-agent: context skill lookup failed (non-fatal)"
-        );
-      }
-    }
+    // instruction — and the RULES this playbook follows (its `guidance`, the
+    // current person-approved version of each ref), read once for the run;
+    // what the run used is stamped on its definition snapshot. Non-fatal: a
+    // lookup failure never blocks the run (a guidance failure says so in the
+    // section).
+    const { contextSkill, guidance } = await loadRunMethodParts({
+      playbookId: ctx.playbookId,
+      userId: ctx.userId,
+      runId: runIdOf(ctx.input),
+      warn: (obj, msg) => logger.warn(obj, `is-agent: ${msg}`),
+    });
 
     // THE method renderer, shared with the MCP binding doors.
-    const kickoff = renderPlaybookMethod({ contextSkill, body: base, stage });
+    const kickoff = renderPlaybookMethod({
+      contextSkill,
+      guidance,
+      body: base,
+      stage,
+    });
 
     // Post the resolved goal as a USER message — the persisted kickoff message
     // the IS responds to. Attributed to the run's acting principal, hence the
