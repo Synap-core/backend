@@ -3481,7 +3481,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. With `placeOn: {viewId}` (a bento view: synap_list_views) approving defines the cell AND places it as a tile on that view, in one act, and the proposal shows that view; a view that is missing, not a bento, in another space, or one the approver may not change refuses the whole act (no cell is written). Without `placeOn` the cell is surfaced nowhere until it is placed on a bento or bound as a renderer for a kind (synap_promote_cell_to_renderer).',
+          'Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a tile; else it shows nowhere until placed or bound (synap_promote_cell_to_renderer).',
         inputSchema: {
           type: "object",
           properties: {
@@ -3513,20 +3513,14 @@ export const tools = {
               type: "string",
               enum: [...CONTENT_KINDS],
               description:
-                "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want.",
+                "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. Only a slot other than 'widget' is offered as a profile renderer.",
             },
             placeOn: {
               type: "object",
-              properties: {
-                viewId: {
-                  type: "string",
-                  description: "UUID of a bento view (synap_list_views).",
-                },
-              },
+              properties: { viewId: { type: "string" } },
               required: ["viewId"],
-              additionalProperties: false,
               description:
-                "Optional: where the cell is SURFACED. Defining the cell also adds it as a tile to this bento view, in one act. A space cell goes on a view of the same space; a pod-global cell on any view.",
+                "Bento view (synap_list_views) to add the cell to as a tile, in the same act.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
