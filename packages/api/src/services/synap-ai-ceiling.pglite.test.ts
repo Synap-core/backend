@@ -1,8 +1,9 @@
 /**
- * Synap AI's standing grant (`resolveSynapAiCeiling`) on a real Postgres, so the join and every filter are tested:
- * only the OPERATOR's PERSONAL agent is Synap AI; its ceiling is the live grants with client_id "synap-ai" on an
- * active key; revoked, expired, other-client, other-principal and inactive-key rows are not in it; a paused agent
- * is refused; nothing configured is `none` (today's behaviour). `narrowedByApp` is the exact meet, never wider.
+ * Synap AI's standing grant on a real Postgres, so the joins and every filter are tested: only the OPERATOR's PERSONAL
+ * agent is Synap AI; its ceiling is the live grants on its pod-held key (service / instance "synap-ai"), as the Keys page
+ * writes them (no client id); revoked or expired grants, other keys, revoked or expired keys, another principal are not in
+ * it; a paused agent is refused; nothing configured is `none`. `ensureSynapAiKey` makes the key once; `synapAiGate` is the
+ * door's question. `narrowedByApp` is the exact meet, never wider.
  *
  * ENGINE: PGlite; the tables are created from their drizzle definitions (enums as text, constraints dropped).
  */
@@ -24,7 +25,16 @@ const holder = vi.hoisted(() => {
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  const mocked = { ...actual };
+  const mocked = {
+    ...actual,
+    eventRepository: { append: async () => undefined },
+    // ensureSynapAiKey builds its own repository: its event append must not reach a real store.
+    EventRepository: class {
+      async append() {
+        return undefined;
+      }
+    },
+  };
   Object.defineProperty(mocked, "db", {
     get: () => holder.db,
     enumerable: true,
@@ -38,9 +48,12 @@ import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { apiKeys, grants, users } from "@synap/database/schema";
 import {
+  ensureSynapAiKey,
   narrowedByApp,
   resolveSynapAiCeiling,
   SYNAP_AI_CLIENT_ID,
+  SYNAP_AI_KEY_INSTANCE,
+  synapAiGate,
 } from "./synap-ai-ceiling.js";
 
 function ddlFor(table: PgTable): string {
@@ -75,13 +88,37 @@ const WS_B = randomUUID();
 const q = (sql: string, params: unknown[] = []) =>
   holder.client!.query(sql, params);
 
-async function addKey(userId: string, active = true): Promise<string> {
+async function addKey(
+  userId: string,
+  over: Partial<{
+    active: boolean;
+    keyType: string;
+    instance: string | null;
+    revoked: boolean;
+    expires: string | null;
+  }> = {}
+): Promise<string> {
+  const o = {
+    active: true,
+    keyType: "service",
+    instance: SYNAP_AI_KEY_INSTANCE as string | null,
+    revoked: false,
+    expires: null as string | null,
+    ...over,
+  };
   const id = randomUUID();
-  await q(`insert into api_keys (id, user_id, is_active) values ($1, $2, $3)`, [
-    id,
-    userId,
-    active,
-  ]);
+  await q(
+    `insert into api_keys (id, user_id, is_active, key_type, instance_id, revoked_at, expires_at) values ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      id,
+      userId,
+      o.active,
+      o.keyType,
+      o.instance,
+      o.revoked ? new Date().toISOString() : null,
+      o.expires,
+    ]
+  );
   return id;
 }
 async function addGrant(
@@ -97,7 +134,7 @@ async function addGrant(
 ) {
   const o = {
     principal: SYNAP_AI,
-    clientId: SYNAP_AI_CLIENT_ID as string | null,
+    clientId: null as string | null,
     permissions: ["entity.read"],
     workspaceIds: [WS_A] as string[] | null,
     revoked: false,
@@ -185,23 +222,36 @@ describe("resolveSynapAiCeiling", () => {
   });
 
   it.each([
-    ["a revoked grant", { revoked: true }, true],
-    ["an expired grant", { expires: "2020-01-01T00:00:00Z" }, true],
+    ["a revoked grant", "grant", { revoked: true }],
+    ["an expired grant", "grant", { expires: "2020-01-01T00:00:00Z" }],
+    ["a grant held for another principal", "grant", { principal: PERSONA }],
+    ["a grant on an INACTIVE key", "key", { active: false }],
+    ["a grant on a REVOKED key", "key", { revoked: true }],
+    ["a grant on an EXPIRED key", "key", { expires: "2020-01-01T00:00:00Z" }],
     [
-      "a grant of another client (the agent's other keys)",
-      { clientId: "app_other" },
-      true,
+      "a grant on the agent's OTHER key (another instance)",
+      "key",
+      { instance: "laptop" },
     ],
-    ["a grant of a bare key (no client)", { clientId: null }, true],
-    ["a grant held for another principal", { principal: PERSONA }, true],
-    ["a grant on an INACTIVE key", {}, false],
-  ] as const)("%s is not in the ceiling", async (_name, over, keyActive) => {
+    [
+      "a grant on a key of another type (a hub key)",
+      "key",
+      { keyType: "hub_inbound" },
+    ],
+  ] as const)("%s is not in the ceiling", async (_name, on, over) => {
     await reset();
-    const key = await addKey(SYNAP_AI, keyActive);
-    await addGrant(key, over as never);
+    const key = await addKey(SYNAP_AI, on === "key" ? (over as never) : {});
+    await addGrant(key, on === "grant" ? (over as never) : {});
     expect(await resolveSynapAiCeiling(OPERATOR, SYNAP_AI)).toEqual({
       status: "none",
     });
+  });
+
+  it("a grant with a client id still counts: the Keys page sets none, the ceiling does not depend on it", async () => {
+    await reset();
+    const key = await addKey(SYNAP_AI);
+    await addGrant(key, { clientId: "anything" });
+    expect((await resolveSynapAiCeiling(OPERATOR, SYNAP_AI)).status).toBe("ok");
   });
 
   it("a grant that is still live (future expiry) IS in it", async () => {
@@ -246,6 +296,110 @@ describe("resolveSynapAiCeiling", () => {
       status: "refused",
       reason: "paused",
     });
+  });
+});
+
+describe("ensureSynapAiKey", () => {
+  it("makes the agent's pod-held key once: linked to the person, nothing can authenticate with it", async () => {
+    await reset();
+    const first = await ensureSynapAiKey(OPERATOR);
+    expect(first.agentUserId).toBe(SYNAP_AI);
+    const rows = (await q(
+      `select user_id, linked_user_id, key_type, instance_id, is_active, scope, key_name from api_keys where id = $1`,
+      [first.keyId]
+    )) as { rows: Record<string, unknown>[] };
+    expect(rows.rows[0]).toMatchObject({
+      user_id: SYNAP_AI,
+      linked_user_id: OPERATOR,
+      key_type: "service",
+      instance_id: SYNAP_AI_KEY_INSTANCE,
+      is_active: true,
+      key_name: "Synap AI",
+    });
+    expect(rows.rows[0]!.scope).toEqual([]);
+    expect((await ensureSynapAiKey(OPERATOR)).keyId).toBe(first.keyId);
+    const count = (await q(
+      `select count(*)::int as n from api_keys where user_id = $1`,
+      [SYNAP_AI]
+    )) as { rows: { n: number }[] };
+    expect(count.rows[0]!.n).toBe(1);
+  });
+
+  it("a person with no personal agent yet gets one, and its key", async () => {
+    await reset();
+    await q(
+      `insert into users (id, email, user_type) values ('fresh-human', 'fresh@x', 'human') on conflict do nothing`
+    );
+    const made = await ensureSynapAiKey("fresh-human");
+    expect(made.agentUserId).not.toBe(SYNAP_AI);
+    const agent = (await q(
+      `select created_by_user_id, is_personal_agent from users where id = $1`,
+      [made.agentUserId]
+    )) as { rows: Record<string, unknown>[] };
+    expect(agent.rows[0]).toMatchObject({
+      created_by_user_id: "fresh-human",
+      is_personal_agent: true,
+    });
+  });
+
+  it("a revoked key is replaced by a new one (the person's revoke is not a dead end)", async () => {
+    await reset();
+    const old = await ensureSynapAiKey(OPERATOR);
+    await q(
+      `update api_keys set is_active = false, revoked_at = now() where id = $1`,
+      [old.keyId]
+    );
+    const next = await ensureSynapAiKey(OPERATOR);
+    expect(next.keyId).not.toBe(old.keyId);
+  });
+});
+
+describe("synapAiGate: may an app's chat turn run for this person", () => {
+  const POD = "https://pod.test.synap.live";
+  beforeAll(() => {
+    process.env.POD_ADMIN_URL = "https://pod-admin.test.synap.live";
+  });
+
+  it("not connected: refused with the Keys page, and the key the person will edit now exists", async () => {
+    await reset();
+    const r = await synapAiGate(OPERATOR, POD);
+    expect(r).toEqual({
+      open: false,
+      status: 409,
+      body: expect.objectContaining({
+        code: "SYNAP_AI_NOT_CONNECTED",
+        connectUrl: "https://pod-admin.test.synap.live/keys",
+      }),
+    });
+    const keys = (await q(
+      `select count(*)::int as n from api_keys where user_id = $1 and instance_id = $2 and is_active`,
+      [SYNAP_AI, SYNAP_AI_KEY_INSTANCE]
+    )) as { rows: { n: number }[] };
+    expect(keys.rows[0]!.n).toBe(1);
+  });
+
+  it("a key with no grant yet is still not connected (the person has not said what it may read)", async () => {
+    await reset();
+    await addKey(SYNAP_AI);
+    expect((await synapAiGate(OPERATOR, POD)).open).toBe(false);
+  });
+
+  it("connected (the person set a grant on its key): open", async () => {
+    await reset();
+    const key = await addKey(SYNAP_AI);
+    await addGrant(key, { permissions: ["entity.read", "document.read"] });
+    expect(await synapAiGate(OPERATOR, POD)).toEqual({ open: true });
+  });
+
+  it("paused: refused, even with a grant", async () => {
+    await reset();
+    const key = await addKey(SYNAP_AI);
+    await addGrant(key);
+    await q(`update users set agent_paused_at = now() where id = $1`, [
+      SYNAP_AI,
+    ]);
+    const r = await synapAiGate(OPERATOR, POD);
+    expect(r).toMatchObject({ open: false, body: { code: "SYNAP_AI_PAUSED" } });
   });
 });
 

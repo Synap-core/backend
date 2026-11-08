@@ -35,6 +35,7 @@ import {
 } from "../../services/chat-turns/chat-turn-store.js";
 import { resolveChatTarget } from "../../utils/resolve-chat-target.js";
 import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
+import { synapAiGate } from "../synap-ai-ceiling.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -136,6 +137,13 @@ export async function handleChatStream<E extends Env>(
       { error: "This chat is outside the grant this app holds" },
       403
     );
+  }
+
+  // An app's turn runs through the person's connected Synap AI (the grant they set once on the Keys page): not
+  // connected (or paused) is refused BEFORE the turn starts, with the page where they connect it.
+  if (appGrant) {
+    const gate = await synapAiGate(userId, new URL(c.req.url).origin);
+    if (!gate.open) return c.json(gate.body, gate.status);
   }
 
   // ── Step 3: Reserve durable chat_turn ────────────────────────────────────
