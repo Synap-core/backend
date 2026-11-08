@@ -768,6 +768,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
 export const GRANT_REST_POST_READS: ReadonlyArray<
   readonly [RegExp, FencedReadDoor]
 > = [
+  // POST /chat/stream (an app's chat turn). It is not a read: it reserves a
+  // chat turn and runs the IS turn, whose hub calls are bounded by the
+  // turn's own grant (the `app_grant` claim, `hub-protocol/_middleware/auth.ts`).
+  // The route itself checks `chat.stream` in the workspace the turn runs in
+  // (`permits`, rest/chat.ts), so it is NARROWED on that gate verb, not READS.
+  [/^\/chat\/stream\/?$/, NARROWED("chat", [], "stream")],
   [
     /^\/knowledge\/(search|ask|answer)\/?$/,
     READS(
