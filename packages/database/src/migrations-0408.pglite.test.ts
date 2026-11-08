@@ -49,7 +49,13 @@ describe("migration 0408 — the status and blocker of a wait", () => {
     expect(cols).toContain("status");
     expect(cols).toContain("blocker_key");
     const base = new PGlite();
-    await base.exec(BASELINE.slice(BASELINE.indexOf("-- 0386")));
+    // The 0386 section only, up to the next section header (a blank line,
+    // then "-- 0NNN"): a later section may reference tables this bare PGlite
+    // does not have. The section's own second line ("-- 0386_…sql.") and the
+    // indented "-- 0408" column comment are not headers.
+    const from = BASELINE.indexOf("-- 0386:");
+    const next = BASELINE.indexOf("\n\n-- 0", from);
+    await base.exec(BASELINE.slice(from, next === -1 ? undefined : next));
     const baseCols = await columns(base);
     expect(baseCols).toContain("status");
     expect(baseCols).toContain("blocker_key");

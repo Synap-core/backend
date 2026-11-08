@@ -59,6 +59,11 @@ export const AI_READ_SUBJECTS = [
   "facet",
   "feed",
   "inbox",
+  // What is installed on the person's computers (installations, 0409;
+  // reconciliation f75fbb48 §3.2): an agent reads its computer's tools and
+  // services; it never writes what a computer observed (only the computer's
+  // own `host.runner` key does).
+  "installation",
   // The Library's groups (grant-read.ts). Reading them is what
   // `library.organize` (AI_GATE_VERBS, always a proposal) works from.
   "library",
@@ -199,6 +204,8 @@ export const AI_PRESET_EXCLUSIONS: Readonly<Record<string, string>> = {
     "A delete: unlinking a conversation deletes it and its mirrored messages. An AI asks through the gate; the key grant never widens to it.",
   "messaging.delete_account":
     "A delete: disconnects the person's account at the provider. An AI asks through the gate; the key grant never widens to it.",
+  "installation.request":
+    "A commitment: install, update or removal steps run on the person's computer. An AI asks through the gate; the key grant never widens to it.",
   "workspace.create": "Space administration.",
   "workspace.update": "Space administration.",
   "workspace.adopt": "Space administration.",

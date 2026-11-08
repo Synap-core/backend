@@ -847,28 +847,18 @@ const startPatchSchemas = {
     slug: z.string().min(1).max(200),
     source: z.enum(["cloud", "here"]),
   }),
+  // Going past the secure-access step records only that: each way in was
+  // added through its own door (passkeys, the authenticator app, codes).
+  access: z.object({}).strict(),
   // Going past the defaults step records only that: each switch was written
   // by its own setting's door (presence.setMode, governanceRules.*, ...).
   defaults: z.object({}).strict(),
-  views: z.object({
-    profile: z.string().min(1).max(200),
-    view: z.string().min(1).max(200),
-    type: z.string().min(1).max(100),
-  }),
-  path: z.object({ kind: z.enum(["quick", "cobuild"]) }),
-  setup: z.object({ proposalId: z.string().uuid() }),
-  agent: z.object({ agentUserId: z.string().min(1).max(200) }),
-  "first-work": z.object({ sessionId: z.string().uuid() }),
 } as const;
 type RecordableStep = keyof typeof startPatchSchemas;
 const START_VALUE_KEY: Record<RecordableStep, string> = {
   intent: "intent",
+  access: "access",
   defaults: "defaults",
-  views: "view",
-  path: "path",
-  setup: "setup",
-  agent: "agent",
-  "first-work": "firstSession",
 };
 
 const startValuesOf = (
@@ -1471,6 +1461,14 @@ export const onboardingRouter = router({
       // transaction); the merge and the derived prefix are computed under it.
       const afterFacts = await factsOf(mergeStart(before), "active");
 
+      // The last recordable step finishes pod admin's journey: `start:done`
+      // is the journey's own status, so the pod sets it here, never a client
+      // (founder, 7 Nov 2026: onboarding ends after the defaults).
+      const finishes =
+        nextStartStep(
+          deriveStartSteps({ ...afterFacts, journeyStatus: "completed" })
+        ) === null;
+
       const journey = await saveJourney({
         userId: ctx.userId,
         lens: POD_LENS,
@@ -1491,6 +1489,18 @@ export const onboardingRouter = router({
           };
         },
       });
-      return journey;
+      if (!finishes) return journey;
+      // A second, separate move: a journey reaches `completed` only from
+      // `active` (assertJourneyTransition), and the first save made it so.
+      return saveJourney({
+        userId: ctx.userId,
+        lens: POD_LENS,
+        status: "completed",
+        evidence: {
+          meaningfulEntityIds: [],
+          completedCriteria: ["pod-setup-steps-completed"],
+          firstValueAt: now,
+        },
+      });
     }),
 });

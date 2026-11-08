@@ -147,6 +147,7 @@ describe("turningOnAsks: ask first unless the person already has two ways in", (
     recoveryCodes = 0
   ) => ({
     passkeys,
+    enforce: true,
     deviceKeys,
     totp,
     recoveryCodes,
@@ -176,6 +177,7 @@ describe("turningOnAsks: ask first unless the person already has two ways in", (
 
 describe("warnsTwoWays: the card warns only on a READ count below two, while ON", () => {
   const one = {
+    enforce: true,
     passkeys: 1,
     deviceKeys: 0,
     totp: false,

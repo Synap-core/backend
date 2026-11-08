@@ -141,9 +141,10 @@ beforeEach(() => {
 });
 
 describe("apiKeys.create — privileged scopes need a pod admin", () => {
-  it("non-vacuity: the derived privileged set is the four authority scopes", () => {
+  it("non-vacuity: the derived privileged set is the five authority scopes", () => {
     expect([...PRIVILEGED_MINT_SCOPES].sort()).toEqual([
       "box.runner",
+      "host.runner",
       "hub-protocol.admin",
       "providers.write",
       "setup.agent",

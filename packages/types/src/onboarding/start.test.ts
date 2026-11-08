@@ -11,14 +11,10 @@ import {
 import { UIPreferencesSchema } from "../preferences/schemas.js";
 
 const T = "2026-10-28T10:00:00.000Z";
-const LATER = "2026-10-28T11:00:00.000Z";
 
 const base: StartFacts = {
   values: null,
-  startViewCount: null,
-  setupProposal: null,
-  agentConnection: "none",
-  externalAgentApprovalReviewedAt: null,
+  waysIn: 0,
   journeyStatus: null,
 };
 const f = (o: Partial<StartFacts>): StartFacts => ({ ...base, ...o });
@@ -27,16 +23,18 @@ const done = (facts: StartFacts) =>
     .filter((s) => s.done)
     .map((s) => s.id);
 
-const setupVals = {
-  v: 1 as const,
-  intent: { slug: "sales", source: "here" as const, at: T },
-  defaults: { at: T },
-  view: { profile: "deal", view: "deal-pipeline", type: "kanban", at: T },
-  path: { kind: "quick" as const, at: T },
-  setup: { proposalId: "p1", at: T },
-};
+const intent = { slug: "sales", source: "here" as const, at: T };
 
 describe("deriveStartSteps (§2.2 table)", () => {
+  it("pod admin's journey is intent, access, defaults, done (founder, 7 Nov 2026)", () => {
+    expect([...START_STEP_IDS]).toEqual([
+      "start:intent",
+      "start:access",
+      "start:defaults",
+      "start:done",
+    ]);
+  });
+
   it("1. empty facts: nothing done, next is intent", () => {
     const s = deriveStartSteps(base);
     expect(s.map((x) => x.id)).toEqual([...START_STEP_IDS]);
@@ -44,93 +42,45 @@ describe("deriveStartSteps (§2.2 table)", () => {
     expect(nextStartStep(s)).toBe("start:intent");
   });
 
-  it("2. intent set marks intent only; next is the defaults step", () => {
-    const facts = f({ values: { v: 1, intent: setupVals.intent } });
+  it("2. intent set marks intent only; next is the secure-access step", () => {
+    const facts = f({ values: { v: 1, intent } });
     expect(done(facts)).toEqual(["start:intent"]);
-    expect(nextStartStep(deriveStartSteps(facts))).toBe("start:defaults");
+    expect(nextStartStep(deriveStartSteps(facts))).toBe("start:access");
   });
 
-  it("2b. defaults: done once the owner went past it, never before", () => {
-    expect(done(f({ values: { v: 1, defaults: { at: T } } }))).toEqual([
-      "start:defaults",
-    ]);
+  it("3. access: one way in is not enough; two ways in are, with nothing recorded", () => {
+    const one = f({ values: { v: 1, intent }, waysIn: 1 });
+    expect(done(one)).not.toContain("start:access");
+    const two = f({ values: { v: 1, intent }, waysIn: 2 });
+    expect(done(two)).toContain("start:access");
+    expect(nextStartStep(deriveStartSteps(two))).toBe("start:defaults");
+  });
+
+  it("4. access: going past it (Skip for now) marks it, whatever the count", () => {
     expect(
-      nextStartStep(
-        deriveStartSteps(
-          f({ values: { v: 1, intent: setupVals.intent, defaults: { at: T } } })
-        )
-      )
-    ).toBe("start:views");
+      done(f({ values: { v: 1, access: { at: T } }, waysIn: 0 }))
+    ).toContain("start:access");
   });
 
-  it("3. views is done when the start declares fewer than 2 views", () => {
-    expect(done(f({ startViewCount: 1 }))).toEqual(["start:views"]);
-    expect(done(f({ startViewCount: 3 }))).toEqual([]);
+  it("5. access: a failed count (null) never marks it done", () => {
+    expect(done(f({ waysIn: null }))).not.toContain("start:access");
   });
 
-  it("4. path set marks path", () => {
-    expect(done(f({ values: { v: 1, path: setupVals.path } }))).toEqual([
-      "start:path",
-    ]);
-  });
-
-  it("5. setup: a stored proposalId alone is NOT done (values are not trusted)", () => {
+  it("6. defaults: done once the owner went past it; next is done", () => {
     const facts = f({
-      values: setupVals,
-      setupProposal: {
-        status: "pending",
-        activeSpaceCount: 0,
-        approvedAt: null,
-      },
-    });
-    expect(done(facts)).not.toContain("start:setup");
-    expect(done(f({ values: setupVals, setupProposal: null }))).not.toContain(
-      "start:setup"
-    );
-  });
-
-  it("6. setup: approved but every created space archived is NOT done", () => {
-    const facts = f({
-      values: setupVals,
-      setupProposal: { status: "approved", activeSpaceCount: 0, approvedAt: T },
-    });
-    expect(done(facts)).not.toContain("start:setup");
-  });
-
-  it("7. setup: approved with a live space is done; agent follows the roster", () => {
-    const facts = f({
-      values: setupVals,
-      setupProposal: { status: "approved", activeSpaceCount: 2, approvedAt: T },
-      agentConnection: "seen",
+      values: { v: 1, intent, access: { at: T }, defaults: { at: T } },
     });
     expect(done(facts)).toEqual([
       "start:intent",
+      "start:access",
       "start:defaults",
-      "start:views",
-      "start:path",
-      "start:setup",
-      "start:agent",
     ]);
-    expect(nextStartStep(deriveStartSteps(facts))).toBe("start:first-work");
-    expect(done(f({ agentConnection: "pending" }))).not.toContain(
-      "start:agent"
-    );
+    expect(nextStartStep(deriveStartSteps(facts))).toBe("start:done");
   });
 
-  it("8. first-work needs a review AFTER setup approval; done follows the journey", () => {
-    const setupProposal = {
-      status: "approved",
-      activeSpaceCount: 1,
-      approvedAt: LATER,
-    };
-    expect(
-      done(f({ setupProposal, externalAgentApprovalReviewedAt: T }))
-    ).not.toContain("start:first-work");
+  it("7. done follows the journey's status", () => {
     const all = f({
-      values: setupVals,
-      setupProposal,
-      agentConnection: "seen",
-      externalAgentApprovalReviewedAt: "2026-10-28T12:00:00.000Z",
+      values: { v: 1, intent, access: { at: T }, defaults: { at: T } },
       journeyStatus: "completed",
     });
     expect(done(all)).toEqual([...START_STEP_IDS]);
@@ -139,7 +89,7 @@ describe("deriveStartSteps (§2.2 table)", () => {
 
   it("completedStartPrefix stops at the first gap", () => {
     const steps = deriveStartSteps(
-      f({ values: { v: 1, intent: setupVals.intent, path: setupVals.path } })
+      f({ values: { v: 1, intent, defaults: { at: T } }, waysIn: 1 })
     );
     expect(completedStartPrefix(steps)).toEqual(["start:intent"]);
   });

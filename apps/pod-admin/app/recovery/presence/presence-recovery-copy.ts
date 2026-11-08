@@ -23,7 +23,7 @@ const pageEn = {
   "waiting.cancel": "Cancel the reset",
   "ready.title": "Your reset is ready",
   "ready.body":
-    "Finishing removes every way you confirm it’s you on this pod: your passkeys stop counting, and your Face ID and Touch ID keys, your 2FA app and your recovery codes are removed. Then you add a passkey again.",
+    "Finishing removes every way you confirm it’s you on this pod: your passkeys stop counting, and your Face ID and Touch ID keys, your authenticator app and your recovery codes are removed. Then you add a passkey again.",
   "ready.finish": "Finish the reset",
   "ready.confirm.title": "Finish the reset?",
   "ready.confirm.consequence":
@@ -36,7 +36,7 @@ const pageEn = {
   "done.body":
     "Add a passkey now, then a second way in, so losing one never locks you out again.",
   "done.addPasskey": "Add a passkey",
-  "done.addSecond": "Add a 2FA app or recovery codes",
+  "done.addSecond": "Add an authenticator app or recovery codes",
   "done.signOutFailed":
     "Some of your other browsers may still be signed in. Sign out in each of them.",
   signedOut: "Sign in to this pod first.",
@@ -63,7 +63,7 @@ const pageFr: Catalog<typeof pageEn> = {
   "waiting.cancel": "Annuler la réinitialisation",
   "ready.title": "Votre réinitialisation est prête",
   "ready.body":
-    "Terminer retire tous vos moyens de confirmer que c’est vous sur ce pod : vos clés d’accès ne comptent plus, et vos clés Face ID et Touch ID, votre app de double authentification et vos codes de récupération sont retirés. Vous ajoutez ensuite une nouvelle clé d’accès.",
+    "Terminer retire tous vos moyens de confirmer que c’est vous sur ce pod : vos clés d’accès ne comptent plus, et vos clés Face ID et Touch ID, votre app d’authentification et vos codes de récupération sont retirés. Vous ajoutez ensuite une nouvelle clé d’accès.",
   "ready.finish": "Terminer la réinitialisation",
   "ready.confirm.title": "Terminer la réinitialisation ?",
   "ready.confirm.consequence":
@@ -77,7 +77,7 @@ const pageFr: Catalog<typeof pageEn> = {
     "Ajoutez maintenant une clé d’accès, puis un deuxième moyen d’accès, pour qu’en perdre un ne vous bloque plus jamais.",
   "done.addPasskey": "Ajouter une clé d’accès",
   "done.addSecond":
-    "Ajouter une app de double authentification ou des codes de récupération",
+    "Ajouter une app d’authentification ou des codes de récupération",
   "done.signOutFailed":
     "Certains de vos autres navigateurs sont peut-être encore connectés. Déconnectez-les depuis chacun d’eux.",
   signedOut: "Connectez-vous d’abord à ce pod.",

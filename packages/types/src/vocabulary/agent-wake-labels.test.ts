@@ -10,9 +10,11 @@ import {
 } from "../agents/wake.js";
 import {
   AGENT_WAKE_HOW_LABELS,
+  AGENT_WAKE_REFUSAL_FIXES,
   AGENT_WAKE_REFUSAL_LABELS,
   AGENT_WAKE_STATE_LABELS,
   resolveAgentWakeHowLabel,
+  resolveAgentWakeRefusalFix,
   resolveAgentWakeRefusalLabel,
   resolveAgentWakeStateLabel,
 } from "./index.js";
@@ -67,6 +69,29 @@ describe("agent wake refusal words", () => {
     expect(Object.keys(AGENT_WAKE_REFUSAL_LABELS).sort()).toEqual(
       [...AGENT_WAKE_REFUSALS].sort()
     );
+  });
+});
+
+describe("agent wake refusal fixes", () => {
+  it("every declared reason has exactly one fix, and only those", () => {
+    expect(Object.keys(AGENT_WAKE_REFUSAL_FIXES).sort()).toEqual(
+      [...AGENT_WAKE_REFUSALS].sort()
+    );
+  });
+
+  it.each([
+    ["no_template", /Marketplace's Agents tab/],
+    ["no_computer", /Run the Synap worker/],
+    ["no_waker", /Run the Synap worker/],
+    ["computer_offline", /Turn it on/],
+    ["paused", /Resume it/],
+  ])("%s says what to do", (why, words) => {
+    expect(resolveAgentWakeRefusalFix(why)).toMatch(words);
+  });
+
+  it("an unknown or absent reason gets no fix, never a guess", () => {
+    expect(resolveAgentWakeRefusalFix("out_of_coffee")).toBeNull();
+    expect(resolveAgentWakeRefusalFix(null)).toBeNull();
   });
 });
 

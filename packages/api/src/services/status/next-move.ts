@@ -23,6 +23,7 @@ import {
   type LifecycleCategory,
   type LifecycleOption,
   type RecordedHold,
+  type StepMark,
 } from "@synap-core/types/lifecycle";
 import {
   WAIT_BALLS,
@@ -249,6 +250,23 @@ export interface ThingNextMoveInput {
   waitingOn: readonly WaitingOnMark[] | "unavailable";
   /** Read for a paused thing only. */
   hold: NextMoveHoldFact;
+}
+
+/**
+ * The next MAIN-PATH step after `status` on a declared lifecycle (rungs 4-5
+ * of {@link deriveThingNextMove}, which reads it): the step a move targets,
+ * `null` when the path has no step left, `off_path` when the status is not
+ * one of the main path's (an undeclared value, a paused or lost option).
+ * The flow read (`flow-read.ts`) names each card's next step with it, so a
+ * card and the thing's own next move never disagree on where it goes.
+ */
+export function nextPathStep(
+  lifecycle: { readonly options: readonly LifecycleOption[] },
+  status: string | null
+): StepMark | null | "off_path" {
+  // One derivation with a thing's blocker (`nextMainPathStep`).
+  const step = nextMainPathStep(lifecycle, status);
+  return step.found ? step.next : "off_path";
 }
 
 /**

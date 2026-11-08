@@ -1,27 +1,32 @@
 /**
  * `@synap-core/types/onboarding/start` — the ONE start model (onboarding A3).
  *
- * Pod-admin, browser and relay all read the same step ids, the same order and
- * the same done-ness rule from here. Pure: no I/O, no database. The server
+ * Pod admin reads the step ids, their order and the done-ness rule from
+ * here; the pod derives them the same way. Pure: no I/O, no database. The server
  * gathers the FACTS (proposal rows, agent roster, journey status) and this
  * file decides. Done-ness is DERIVED from facts, never trusted from
  * `values.start`: a stored pointer says what the person chose, not what
  * happened.
  */
 
+import { PRESENCE_ENFORCE_MIN_WAYS } from "../presence/index.js";
+
 // ── Steps ───────────────────────────────────────────────────────────────────
 
 export const START_STEP_IDS = [
   "start:intent",
+  // Two ways to confirm it's you, before anything else is set (founder,
+  // 7 Nov 2026, session 539e519b): a pod starts in `enforce`, and an owner
+  // with one way in is locked out the day it fails (finding 7bf25c2e). Done
+  // once the owner holds two ways in, or went past it ("Skip for now"; the
+  // top bar keeps saying so until they do).
+  "start:access",
   // The pod's notable defaults, shown once as switches the owner may change
-  // (founder, 5 Nov 2026, session b064a220). Right after the work question,
-  // so the first screen stays about the person's work (ui-composition §9).
+  // (founder, 5 Nov 2026, session b064a220).
   "start:defaults",
-  "start:views",
-  "start:path",
-  "start:setup",
-  "start:agent",
-  "start:first-work",
+  // Pod admin's onboarding ends here (founder, 7 Nov 2026, session
+  // 539e519b): the work itself (views, a first space, an agent, the first
+  // session) is the desktop's and Relay's, never a pod admin page.
   "start:done",
 ] as const;
 export type StartStepId = (typeof START_STEP_IDS)[number];
@@ -36,6 +41,18 @@ export interface StartValues {
    * themselves are written by each setting's own door, never here.
    */
   defaults?: { at: string };
+  /**
+   * The owner went past the secure-access step (Continue, or "Skip for now"
+   * with fewer than two ways in). The ways themselves are added through each
+   * factor's own door (passkeys, the authenticator app, recovery codes).
+   */
+  access?: { at: string };
+  /*
+   * The fields below are no longer steps of pod admin's journey (7 Nov
+   * 2026). They stay readable: stored journeys carry them, and the first
+   * session door (`services/focus-sessions/first-session.ts`) reads `setup`
+   * and writes `firstSession`.
+   */
   view?: { profile: string; view: string; type: string; at: string };
   path?: { kind: "quick" | "cobuild"; at: string };
   setup?: { proposalId: string; at: string };
@@ -46,24 +63,14 @@ export interface StartValues {
 
 // ── Facts: what the server observed ────────────────────────────────────────
 
-export type StartAgentConnection = "none" | "pending" | "seen";
-
 export interface StartFacts {
   /** `journey.progress.values.start`, or null when absent. */
   values: StartValues | null;
-  /** How many views the chosen start declares (S2 is skipped below 2). */
-  startViewCount: number | null;
-  /** The row of `values.start.setup.proposalId`, read from the pod. */
-  setupProposal: {
-    status: "pending" | "approved" | "rejected" | "expired" | string;
-    /** Created spaces that are NOT archived. */
-    activeSpaceCount: number;
-    approvedAt: string | null;
-  } | null;
-  /** `resolveAgentConnection(roster).kind` (the desktop day-one rule). */
-  agentConnection: StartAgentConnection;
-  /** Latest reviewed, approved proposal by an external agent the viewer operates. */
-  externalAgentApprovalReviewedAt: string | null;
+  /**
+   * The owner's ways to confirm it's them (`presenceWaysIn`), or null when
+   * the pod could not count them: a failed read never marks the step done.
+   */
+  waysIn: number | null;
   journeyStatus:
     "offered" | "active" | "completed" | "dismissed" | string | null;
 }
@@ -73,29 +80,13 @@ export interface StartStepState {
   done: boolean;
 }
 
-const isAfter = (a: string | null, b: string | null): boolean => {
-  if (!a || !b) return false;
-  const [ta, tb] = [Date.parse(a), Date.parse(b)];
-  return Number.isFinite(ta) && Number.isFinite(tb) && ta > tb;
-};
-
 /** The §2.2 table. One rule per step; each reads facts, never a stored "done". */
 const DONE_RULES: Record<StartStepId, (f: StartFacts) => boolean> = {
   "start:intent": (f) => !!f.values?.intent,
+  "start:access": (f) =>
+    !!f.values?.access ||
+    (f.waysIn !== null && f.waysIn >= PRESENCE_ENFORCE_MIN_WAYS),
   "start:defaults": (f) => !!f.values?.defaults,
-  "start:views": (f) =>
-    !!f.values?.view || (f.startViewCount !== null && f.startViewCount < 2),
-  "start:path": (f) => !!f.values?.path,
-  "start:setup": (f) =>
-    !!f.values?.setup?.proposalId &&
-    f.setupProposal?.status === "approved" &&
-    f.setupProposal.activeSpaceCount >= 1,
-  "start:agent": (f) => f.agentConnection === "seen",
-  "start:first-work": (f) =>
-    isAfter(
-      f.externalAgentApprovalReviewedAt,
-      f.setupProposal?.approvedAt ?? null
-    ),
   "start:done": (f) => f.journeyStatus === "completed",
 };
 

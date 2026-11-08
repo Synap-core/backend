@@ -51,6 +51,7 @@ import { SubjectActivity } from "../../../_lib/object/subject-activity";
 import {
   useSetMachineBelongsTo,
   useSetMachineRunsScripts,
+  useSetMachineWakesAgents,
 } from "../../../_lib/presence/use-sensitive-actions";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
 import { ResourceRow, ResourceRowEmpty } from "../../components/resource-row";
@@ -135,6 +136,29 @@ export function ComputerObject({
     null
   );
   const scripts = computer ? scriptsOwnerWords(computer, viewerId) : null;
+  // "Wakes agents" (plan v2 slice 4): a sensitive action, like Runs scripts.
+  const wakesAgents = useSetMachineWakesAgents({
+    onSuccess: async (out) => {
+      addToast({
+        title:
+          out.status === "proposed"
+            ? "Waiting for review. Nothing changed yet."
+            : out.wakesAgents
+              ? "This computer now wakes its agents"
+              : "This computer no longer wakes its agents",
+        color: "default",
+      });
+      await utils.machines.invalidate();
+    },
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err)) return;
+      addToast({
+        title: "Couldn't change this",
+        description: readableError(err.message) ?? "Try again.",
+        color: "danger",
+      });
+    },
+  });
   // With the proof of presence (W3 slice 3): a sensitive action.
   const runsScripts = useSetMachineRunsScripts({
     onSuccess: async (out) => {
@@ -405,6 +429,35 @@ export function ComputerObject({
                           : words.whose === "your"
                             ? "Run my scripts here"
                             : `Run ${words.whose} scripts here`}
+                      </Button>
+                    </div>
+                  </SectionCard>
+                )}
+                {!revoked && (
+                  <SectionCard title="Wakes agents">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="min-w-0 flex-1 text-[12.5px] text-foreground/75">
+                        {c.wakesAgents
+                          ? c.waker?.online
+                            ? `${c.name} starts its agents when work is handed to them. Its waker is running.`
+                            : `${c.name} starts its agents when work is handed to them, once its waker runs: \`synap waker install\` on it.`
+                          : `Let ${c.name} start its agents when work is handed to them, without a terminal open. Its waker must be installed on it: \`synap waker install\`.`}
+                      </p>
+                      <Button
+                        size="sm"
+                        radius="md"
+                        variant="flat"
+                        isLoading={wakesAgents.isPending}
+                        onPress={() =>
+                          wakesAgents.mutate({
+                            machineId: c.id,
+                            enabled: !c.wakesAgents,
+                          })
+                        }
+                      >
+                        {c.wakesAgents
+                          ? "Stop waking agents"
+                          : "Wake agents here"}
                       </Button>
                     </div>
                   </SectionCard>

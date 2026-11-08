@@ -88,7 +88,7 @@ export async function notifyAdminsPresenceOff(byUserId: string): Promise<void> {
 
 /** The refusal of turning `enforce` on with fewer than two ways in. */
 export const PRESENCE_ENFORCE_NEEDS_TWO_WAYS_MESSAGE =
-  "Add a second way to confirm it is you first (a 2FA app or recovery codes), so losing your passkey never locks you out.";
+  "Add a second way to confirm it is you first (an authenticator app or recovery codes), so losing your passkey never locks you out.";
 
 /**
  * The one door that changes the mode (`presence.setMode`; the caller has

@@ -37,8 +37,6 @@ import {
   useSetOwnOrganiseDefault,
   useSetReversibleDefault,
 } from "../../_lib/presence/use-sensitive-actions";
-import { PASSKEYS_PATH } from "../../settings/security/passkeys-path";
-import { SECOND_WAY_HREF } from "../../settings/security/two-factor-path";
 import { en, fr } from "./_lib/copy";
 import {
   defaultsStepRows,
@@ -62,6 +60,13 @@ interface Refused {
 }
 
 const CATALOGS = { en, fr };
+
+/**
+ * Where the presence row's "add a way" links go: back to the onboarding's
+ * secure-access step, which adds each way in place, never out of the journey
+ * to another page.
+ */
+const ACCESS_STEP_HREF = "/start/access";
 
 /** Record going past the step. Throws when the pod did not record it. */
 async function recordDefaultsStep(): Promise<void> {
@@ -259,7 +264,7 @@ export function DefaultsStepForm() {
         </Button>
         <Button
           as={Link}
-          href="/start?step=intent"
+          href="/start/access"
           variant="light"
           radius="md"
           isDisabled={pending}
@@ -366,7 +371,7 @@ function DefaultSwitchRow({
           {t("presence.factors.none")}
           <span aria-hidden>·</span>
           <Link
-            href={PASSKEYS_PATH}
+            href={ACCESS_STEP_HREF}
             className="inline-flex min-h-10 items-center font-medium text-primary underline-offset-2 hover:underline"
           >
             {t("presence.factors.add")}
@@ -377,7 +382,7 @@ function DefaultSwitchRow({
         <p className="flex flex-wrap items-center gap-x-2 text-[12px] text-foreground/65">
           {t("presence.twoWays")}
           <Link
-            href={SECOND_WAY_HREF}
+            href={ACCESS_STEP_HREF}
             className="inline-flex min-h-10 items-center font-medium text-primary underline-offset-2 hover:underline"
           >
             {t("presence.factors.addSecond")}

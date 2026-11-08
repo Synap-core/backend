@@ -2441,6 +2441,22 @@ export interface CapabilityDefinition {
    * list-by-producer index ("which capabilities emit event X").
    */
   emits?: string[];
+  /**
+   * Where the capability runs and how a computer installs, checks and removes
+   * it (installer reconciliation f75fbb48 §3.5): `placement`, `install`,
+   * `verify`, `uninstall`, `permissions`, `licence`, `services`, `recipes`.
+   * Pure shapes here; the ONE rule is `CapabilityComputerSpecSchema`
+   * (@synap-core/types/capability-manifest). The applier stores the declared
+   * blocks on the installed capability as `metadata.computer`, verbatim.
+   */
+  placement?: Record<string, unknown>;
+  install?: Record<string, unknown>;
+  verify?: Record<string, unknown>;
+  uninstall?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
+  licence?: string;
+  services?: Array<Record<string, unknown>>;
+  recipes?: Array<Record<string, unknown>>;
 }
 
 // ── LoopDefinition — a config descriptor that INSTANTIATES an autonomy loop ────

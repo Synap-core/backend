@@ -76,7 +76,7 @@ export async function beginTotpEnrolment(args: {
     throw new TRPCError({
       code: "CONFLICT",
       message:
-        "You already use a 2FA app here. Remove it first to set up another one.",
+        "You already use an authenticator app here. Remove it first to set up another one.",
     });
   }
   const id = crypto.randomUUID();

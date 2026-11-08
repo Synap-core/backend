@@ -345,6 +345,8 @@ const ACCESS_TARGETS: ReadonlySet<string> = new Set([
 /** Targets whose writes change what agents and the pod FOLLOW. */
 const HOW_TARGETS: ReadonlySet<string> = new Set([
   "agentTemplate",
+  // A capability asked for one of the person's computers (installation/request).
+  "installation",
   "skill",
   "rule",
   "playbook",

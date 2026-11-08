@@ -2131,6 +2131,30 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0356_box_runs.sql",
   },
 
+  // Installations (0409) — capabilities installed on the person's computers.
+  // Absence means every host-job lease, report and installation read would
+  // throw (42P01).
+  {
+    table: "installations",
+    column: "manifest",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "installation_bindings",
+    column: "auth_applied",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "host_jobs",
+    column: "lease_id",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "intent_defaults",
+    column: "constraints_hash",
+    addedBy: "0409_installations.sql",
+  },
+
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every
   // passage job and sweep tick would fail (42P01).

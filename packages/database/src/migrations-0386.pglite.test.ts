@@ -41,6 +41,21 @@ const M0386 = read(FILE);
 // columns are the two migrations together (`migrations-0408.pglite.test.ts`).
 const M0408 = read("0408_wait_episode_blocker.sql");
 const BASELINE = read("0000_baseline_schema.sql");
+/**
+ * This migration's own baseline block, up to the next block's header: a
+ * later block (one that names tables this test does not stand up) must not
+ * run here.
+ */
+function ownBlock(header: string): string {
+  const from = BASELINE.indexOf(header);
+  const rest = BASELINE.slice(from + header.length);
+  // The next block starts with its own `-- 0NNN:` header line.
+  const next = rest.search(/\n-- 0\d{3}[a-z]?:/);
+  return BASELINE.slice(
+    from,
+    next === -1 ? undefined : from + header.length + next
+  );
+}
 
 let pg: PGlite;
 beforeAll(async () => {
@@ -96,7 +111,7 @@ describe("migration 0386 — wait episodes", () => {
       expect(declared).toContain(c);
     expect((await columns(pg)).sort()).toEqual([...declared].sort());
     const base = new PGlite();
-    await base.exec(BASELINE.slice(BASELINE.indexOf("-- 0386")));
+    await base.exec(ownBlock("-- 0386"));
     expect((await columns(base)).sort()).toEqual([...declared].sort());
     expect(await missingOn(base)).toEqual([]);
     await base.close();

@@ -319,7 +319,7 @@ export function presenceActorLabel(parts: {
     parts.method === "passkey"
       ? "approved with a passkey"
       : parts.method === "totp"
-        ? "approved with a code from a 2FA app"
+        ? "approved with a code from an authenticator app"
         : parts.method === "recovery_code"
           ? "approved with a recovery code"
           : `approved with Face ID or the passcode on ${parts.deviceLabel ?? "a device"}`;
@@ -379,7 +379,7 @@ export const presenceProofSchema = z.discriminatedUnion("kind", [
 export type PresenceProofKind = PresenceProof["kind"];
 
 /**
- * The proofs a person TYPES instead of signing (a 2FA app code, a recovery
+ * The proofs a person TYPES instead of signing (an authenticator app code, a recovery
  * code). Accepted only from a person's browser session (pod admin's dialog),
  * never from a key or a Synap app's device session, and limited to
  * `PRESENCE_TYPED_FAILURES_MAX` wrong codes per person in
@@ -551,9 +551,12 @@ export const SENSITIVE_ACTIONS = {
   "intelligenceRegistry.update": "setup",
   "intelligenceRegistry.rotateKey": "setup",
   "intelligence.registerCustomService": "setup",
-  // A computer's key: how long it lives, whether it runs scripts, whose it is.
+  // A computer's key: how long it lives, whether it runs scripts or installs
+  // from the pod, whose it is.
   "machines.setKeyTtl": "setup",
   "machines.setRunsScripts": "setup",
+  "machines.setHostsServices": "setup",
+  "machines.setWakesAgents": "setup",
   "machines.setBelongsTo": "setup",
   // A secret's value, shown to the session.
   "secretsVault.reveal": "setup",
@@ -626,6 +629,8 @@ export const SENSITIVE_ACTION_TOKENS = {
   },
   "machines.setKeyTtl": { action: "update", objectKind: "machine" },
   "machines.setRunsScripts": { action: "update", objectKind: "machine" },
+  "machines.setHostsServices": { action: "update", objectKind: "machine" },
+  "machines.setWakesAgents": { action: "update", objectKind: "machine" },
   "machines.setBelongsTo": { action: "update", objectKind: "machine" },
   "secretsVault.reveal": { action: "see", objectKind: "secret" },
   "agentUsers.create": { action: "create", objectKind: "agent" },
@@ -748,7 +753,7 @@ export const presenceWordsEn = {
   "presence.lost": "I lost my passkey",
   "presence.useCode": "Use a code instead",
   "presence.twoWays":
-    "Keep two ways in, so losing one never locks you out: a passkey and a 2FA app, or a passkey and recovery codes.",
+    "Keep two ways in, so losing one never locks you out: a passkey and an authenticator app, or a passkey and recovery codes.",
 } as const;
 
 export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
@@ -763,7 +768,7 @@ export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
   "presence.lost": "J’ai perdu ma clé d’accès",
   "presence.useCode": "Utiliser un code",
   "presence.twoWays":
-    "Gardez deux moyens d’accès, pour qu’en perdre un ne vous bloque jamais : une clé d’accès et une app de double authentification, ou une clé d’accès et des codes de récupération.",
+    "Gardez deux moyens d’accès, pour qu’en perdre un ne vous bloque jamais : une clé d’accès et une app d’authentification, ou une clé d’accès et des codes de récupération.",
 };
 
 /** The shared presence words, per catalog language (`useT` / `createT`). */

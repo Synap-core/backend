@@ -1215,12 +1215,25 @@ export interface AgentMetadata {
 	 */
 	runsScripts?: boolean;
 	/**
+	 * COMPUTER principals only: the person turned on "Wakes agents" — the pod
+	 * may count on this computer's waker (`synap waker`) to start its agents
+	 * when work is handed to them (plan v2 slice 4; `machines.setWakesAgents`).
+	 * Absent = off, the default.
+	 */
+	wakesAgents?: boolean;
+	/**
 	 * How many pushes a day this agent's work may send its person (founder
 	 * decision 9bc9f75c, 2026-11-04). Absent = unlimited, the default. Written
 	 * only by `agentUsers.setPushLimit`; read by the push producer
 	 * (`push-decision.ts` rule 4b).
 	 */
 	pushDailyLimit?: number;
+	/**
+	 * COMPUTER principals only (0409): the person turned on "Installs from the pod" —
+	 * the computer's key carries `host.runner` and leases the host jobs of the
+	 * installations on itself. Kept here for the same reason as `runsScripts`.
+	 */
+	hostsServices?: boolean;
 }
 /**
  * Shared provenance vocabulary for the uniform `created_by_kind` column added
@@ -3628,6 +3641,11 @@ export interface WorkspaceIntentSettings {
 	label: string;
 	/** Produced profile slugs (kinds or roles), in order; [] = a library. */
 	produces: string[];
+	/**
+	 * The ONE output the space exists to produce (One model plan, decision 3):
+	 * one of `produces`; absent = none declared (a library never has one).
+	 */
+	primary?: string;
 	source: "template";
 }
 export interface WorkspaceSettings {
@@ -4359,6 +4377,11 @@ export interface WorkerOnly {
 	property: string;
 	in: string[];
 }
+declare const WORKER_SCOPES: readonly [
+	"space",
+	"project"
+];
+export type WorkerScopeKind = (typeof WORKER_SCOPES)[number];
 /**
  * AutomationTriggerConfig
  *
@@ -19998,6 +20021,30 @@ export interface GoalRunsRollup {
 	/** ISO, the soonest scheduled run of a running worker; null = none on a clock. */
 	nextRunAt: string | null;
 }
+/** One enablement as every surface reads it. */
+export interface EnabledWorker {
+	/** The rule — what pause / resume act on. */
+	ruleId: string;
+	playbookId: string;
+	playbookName: string;
+	activatorKey: string;
+	/** The declared activator; null when the playbook no longer declares it. */
+	activator: PlaybookActivator | null;
+	/** The kind or role it works on. */
+	profileSlug: string | null;
+	size: WorkerSize;
+	mode: "propose" | "run";
+	scope: WorkerScopeKind;
+	projectId: string | null;
+	trackId: string | null;
+	/** `paused` = its rule is a draft: nothing fires. */
+	state: "paused" | "running";
+	/** The automation that fires it (null while paused). */
+	automationId: string | null;
+	/** Approvals waiting on a person, and the limit past which it stops. */
+	pendingApprovals: number;
+	maxPendingApprovals: number;
+}
 /** A goal a worker serves, named. */
 export interface ServedGoal {
 	id: string;
@@ -21983,9 +22030,9 @@ export interface HandoffAgent {
 	template: AgentTemplateRef | null;
 	/**
 	 * Can the pod get it working now (`deriveAgentWake`, THE wake rule): awake,
-	 * can_wake (with `how`), or cant_wake with the one reason. Until computers
-	 * can start agents (plan v2 slice 4) no computer is a waker, so a pull
-	 * agent nothing runs reads `cant_wake: no_waker`, never `can_wake`.
+	 * can_wake (with `how`), or cant_wake with the one reason. A pull agent
+	 * nothing runs reads `can_wake` only when its computer's waker holds the
+	 * wake lease and its "Wakes agents" switch is on (`computer-waker.ts`).
 	 */
 	wake: AgentWake;
 	/** direct = lands on the roster now; asks_you = the person approves first. */
@@ -22004,6 +22051,14 @@ export interface SetAgentJobResult {
 	role: string | null;
 	name: string;
 	seat: string | null;
+}
+/**
+ * What can start agents on a computer: its runner, online or not, and the
+ * computer's "Wakes agents" switch. `null` = nothing on it can start agents.
+ */
+export interface ComputerWaker {
+	online: boolean;
+	wakesAgents: boolean;
 }
 /** Where a principal's newest key stands — ONE derivation, server-side. */
 export type MachineKeyState = "active" | "expired" | "expiring" | "none" | "revoked";
@@ -22042,6 +22097,15 @@ export interface MachineView {
 	accessName: string | null;
 	/** "Runs scripts" is on: the computer leases its person's box runs. */
 	runsScripts: boolean;
+	/** "Wakes agents" is on: the pod may count on this computer's waker. */
+	wakesAgents: boolean;
+	/**
+	 * Its waker, as THE wake rule reads it (`computerWakerOf`): `null` = no
+	 * waker ever ran on it; `online` = it polled within the wake lease.
+	 */
+	waker: ComputerWaker | null;
+	/** "Installs from the pod" is on: the computer installs software on itself. */
+	hostsServices: boolean;
 	/** Whose computer it is (0388). Null only on a row written before it. */
 	belongsTo: ComputerBelongsTo | null;
 	agents: HostedAgentView[];
@@ -24688,6 +24752,140 @@ export type ChangeTrackParticipantsResult = {
 	status: "updated";
 	trackId: string;
 } | ProposedOutcome;
+/** A stage that owns a status: where a flow moves a thing into it. */
+export interface FlowStageRef {
+	playbookId: string;
+	playbookName: string;
+	stageKey: string;
+	stageName: string;
+	category: PlaybookStageCategory;
+	/** The stage's entry gate (`resolveStageGate`); null = none. */
+	gate: "awaits" | "check" | "human" | null;
+	/** Who runs the flow (`playbooks.executor`). */
+	executor: string;
+}
+export interface FlowStage {
+	key: string;
+	name: string;
+	category: PlaybookStageCategory;
+	/** The status this stage writes / follows; null = not tied to the lifecycle. */
+	subjectStatus: string | null;
+	gate: FlowStageRef["gate"];
+}
+export interface FlowWorker {
+	ruleId: string;
+	activatorKey: string;
+	mode: "propose" | "run";
+	scope: EnabledWorker["scope"];
+	projectId: string | null;
+	state: EnabledWorker["state"];
+}
+export interface FlowOfFlow {
+	id: string;
+	name: string;
+	/** Null = pod-wide. */
+	workspaceId: string | null;
+	/** The live definition's version; runs snapshot theirs. */
+	version: number;
+	executor: string;
+	stages: FlowStage[];
+	/** Declared states a stage of this flow owns, in stage order. */
+	owns: string[];
+	/** Stage statuses the lifecycle does not declare (a renamed state). */
+	undeclaredStatuses: string[];
+	/** Open runs, and how many run a frozen copy older than `version`. */
+	runs: {
+		onOlderVersion: number;
+		open: number;
+	};
+	/** Its enabled workers (empty when `workers` is withheld). */
+	workers: FlowWorker[];
+}
+export interface FlowNextStep {
+	/** The state a move targets. */
+	to: string;
+	label: string;
+	/** Only a person may move it there. */
+	humanOnly: boolean;
+	/** The stage(s) that own that state; [] = no flow moves it there. */
+	owners: FlowStageRef[];
+}
+export interface FlowCard {
+	id: string;
+	/** A role's facet (what a role move targets); null on a kind. */
+	facetId: string | null;
+	name: string | null;
+	/** The thing's own kind (a role holds people and companies). */
+	profileSlug: string | null;
+	status: string | null;
+	since: string;
+	enteredAt: string | null;
+	stuck: boolean;
+	workedBy: Array<{
+		kind: "session" | "worker";
+		live: boolean;
+		sessionId: string;
+	}>;
+	/** On `properties: true` only. */
+	properties?: Record<string, unknown>;
+	/**
+	 * Its next main-path step; null when it has ended, is paused or lost, or
+	 * stands in a status the lifecycle does not declare.
+	 */
+	next: FlowNextStep | null;
+	/** What stands between it and its next status (filled by S3); null now. */
+	blocker: null;
+}
+export interface FlowState {
+	key: string;
+	label: string;
+	category: string;
+	tone: string;
+	humanOnly: boolean;
+	/** Declared order, from 0. */
+	order: number;
+	owners: FlowStageRef[];
+	count: number;
+	/** Things past its stuck rule; null = it declares none. */
+	stuck: number | null;
+	/** done/lost count only what entered within the window. */
+	windowed: boolean;
+	cards: FlowCard[];
+}
+export interface FlowOf {
+	profileSlug: string;
+	profileKind: "kind" | "role";
+	property: string;
+	/** The space lens; null = pod-wide only; undefined lens reads as null. */
+	workspaceId: string | null;
+	states: FlowState[];
+	/** Things in no declared state (never dropped); null when none. */
+	unclassified: {
+		cards: FlowCard[];
+		count: number;
+		unset: number;
+	} | null;
+	flows: FlowOfFlow[];
+	/** The space's declared outputs; null without a space lens. */
+	space: {
+		primaryOutput: string | null;
+		produces: string[];
+	} | null;
+	totals: {
+		doneWindowed: number;
+		live: number;
+		lostWindowed: number;
+		total: number;
+	};
+	window: {
+		days: number;
+		since: string;
+	};
+	/** A live worker covers this read; null when `workers` is withheld. */
+	hasWorker: boolean | null;
+	/** Parts this caller's grant does not reach: not read, never "none". */
+	withheld: Array<"flows" | "workers">;
+}
 export interface ProposeSetupResult {
 	proposalId: string;
 	/** True when a pending setup already existed and was handed back. */
@@ -24710,12 +24908,8 @@ export interface StartFirstSessionResult {
 }
 declare const START_STEP_IDS: readonly [
 	"start:intent",
+	"start:access",
 	"start:defaults",
-	"start:views",
-	"start:path",
-	"start:setup",
-	"start:agent",
-	"start:first-work",
 	"start:done"
 ];
 export type StartStepId = (typeof START_STEP_IDS)[number];
@@ -37078,6 +37272,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 	}>>;
+	flow: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				causeUrl?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+				expectedStatus?: string | null;
+				fieldErrors?: FieldErrors;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				proposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		of: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				firstN?: number | undefined;
+				profileSlug: string;
+				projectId?: string | undefined;
+				properties?: boolean | undefined;
+				trackId?: string | undefined;
+				window?: {
+					days: number;
+				} | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: FlowOf;
+		}>;
+	}>>;
 	focusSessions: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -43842,6 +44082,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "updated";
 			};
 		}>;
+		setHostsServices: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				machineId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				hostsServices?: undefined;
+				proposalId: string;
+				status: "proposed";
+			} | {
+				hostsServices: boolean;
+				proposalId?: undefined;
+				status: "updated";
+			};
+		}>;
 		setKeyTtl: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				keyTtlDays: number | null;
@@ -43926,6 +44212,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId?: undefined;
 				runsScripts: boolean;
 				status: "updated";
+			};
+		}>;
+		setWakesAgents: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				machineId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				status: "proposed";
+				wakesAgents?: undefined;
+			} | {
+				proposalId?: undefined;
+				status: "updated";
+				wakesAgents: boolean;
 			};
 		}>;
 	}>>;
@@ -45760,7 +46092,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: string;
 					userId: string;
 				} | null;
-				next: "start:agent" | "start:defaults" | "start:done" | "start:first-work" | "start:intent" | "start:path" | "start:setup" | "start:views" | null;
+				next: "start:access" | "start:defaults" | "start:done" | "start:intent" | null;
 				starts: StartCard[] | undefined;
 				steps: StartStepState[];
 			};
@@ -48372,7 +48704,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setKeyTtl" | "machines.setRunsScripts" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {
@@ -48518,6 +48850,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				deviceKeys: number;
+				enforce: boolean;
 				passkeys: number;
 				recoveryCodes: number;
 				totp: boolean;
@@ -56205,7 +56538,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		adminRegister: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "host.runner" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				displayName: string;
 				issuerUrl: string;
 				presence?: {
@@ -56258,7 +56591,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "host.runner" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				expectedStatus?: "approved" | "pending" | "rejected" | "revoked" | undefined;
 				id: string;
 				presence?: {
@@ -58747,6 +59080,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					intent?: {
 						label: string;
+						primary?: string | undefined;
 						produces?: {
 							profile: string;
 						}[] | undefined;
@@ -59070,6 +59404,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					intent?: {
 						label: string;
+						primary?: string | undefined;
 						produces?: {
 							profile: string;
 						}[] | undefined;

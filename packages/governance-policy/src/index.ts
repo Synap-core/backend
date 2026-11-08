@@ -2382,6 +2382,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "channel/merge_branch": "disruptive", // destroy (merge)
   "channel/unbind": "disruptive", // scope
   "command/execute": "disruptive", // effect: a shell (2.06)
+  "installation/request": "disruptive", // effect: install steps run on a person's computer
   "context/link": "reversible",
   "document/create": "reversible",
   "document/section_update": "reversible", // version history restores it
@@ -2659,6 +2660,12 @@ export const GATE_WRITE_DOORS = {
   "channel/merge_branch": "gate",
   "channel/unbind": "gate",
   "command/execute": "gate",
+  // Ask for a capability on one of the person's computers: install, update
+  // or remove (reconciliation f75fbb48 §3.4). A person's ask applies; an
+  // agent's is a proposal the person approves, with a fresh sign-in
+  // (`routers/proposals/executors/installations.ts`). A verify or a repair at
+  // the approved version never reaches the gate.
+  "installation/request": "gate",
   "context/link": "gate",
   "document/create": "gate",
   // The session-document section write door (services/session-document). Two
