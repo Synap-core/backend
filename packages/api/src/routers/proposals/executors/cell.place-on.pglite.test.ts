@@ -132,8 +132,10 @@ async function proposal(typeKey: string, placeOn: unknown): Promise<string> {
       typeKey,
       JSON.stringify({
         data: {
-          name: typeKey,
-          typeKey,
+          // As the doors file it: no typeKey, so the cell lands under the
+          // key derived from its name (`generated:<slug>`), which a payload
+          // may not mint itself (namespaced-type-key.ts).
+          name: typeKey.replace(/^generated:/, ""),
           rendererSource: HTML,
           workspaceId: CRM,
           contentKind: "widget",
