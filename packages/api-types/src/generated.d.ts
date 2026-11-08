@@ -30341,6 +30341,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					agentUserId?: string | undefined;
 					description?: string | undefined;
+					metadata?: Record<string, unknown> | undefined;
 					name: string;
 					reasoning?: string | undefined;
 					source?: string | undefined;

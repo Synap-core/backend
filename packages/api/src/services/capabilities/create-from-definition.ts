@@ -1565,6 +1565,16 @@ export async function createCapabilityFromDefinition(
           description: def.description,
           workspaceId: connWorkspaceId,
           templateKey: def.key,
+          // The declared container config rides the create, so an agent's
+          // install (a proposal: no container yet, so the stamp below never
+          // runs) is approved WITH it. Without it the approved container had
+          // no `metadata.computer` and the pod refused every install request
+          // for it (NOT_INSTALLABLE; dogfood 2026-11-08, media-ffmpeg).
+          metadata: {
+            ...declaredContainerMetadata(rawDef),
+            templateKey: def.key,
+            ...(rawDef.contentHash ? { contentHash: rawDef.contentHash } : {}),
+          },
         })
       ).capability?.id ?? null);
   if (containerId) {
