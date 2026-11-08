@@ -603,6 +603,12 @@ const SESSION_OUTCOMES_PROPERTY = {
         ],
       },
       ask: ASK_JSON_SCHEMA,
+      // A blocker (plan e7f753db §9). Shapes and meaning are taught on
+      // demand (skill system/synap/asks, "Blockers"), not here: the token
+      // budget ratchet. The pod checks them strictly.
+      blocks: { type: "object" },
+      blockerKey: { type: "string" },
+      clearedBy: { type: "object" },
     },
     required: ["label"],
   },

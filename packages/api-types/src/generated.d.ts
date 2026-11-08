@@ -27,6 +27,16 @@ declare const WAIT_KINDS: readonly [
 	"nobody"
 ];
 export type WaitKind = (typeof WAIT_KINDS)[number];
+declare const WAIT_BALLS: readonly [
+	"me",
+	"them",
+	"agent",
+	"machine",
+	"thing",
+	"date",
+	"nobody"
+];
+export type WaitBall = (typeof WAIT_BALLS)[number];
 declare const STATUS_SIGNALS: readonly [
 	"stuck",
 	"late",
@@ -1308,6 +1318,27 @@ declare const NEEDS_YOU_PRIORITIES: readonly [
 ];
 export type NeedsYouPriority = (typeof NEEDS_YOU_PRIORITIES)[number];
 /**
+ * The THING a need-you card holds up (plan e7f753db §9): which thing, the
+ * status it stands on now and the status it cannot reach until the person
+ * answers. Resolved by the pod on the owed slot (`OwedSlot.blockedThing`,
+ * the signal's `blocks`), under the reader's entity floor; a status the pod
+ * cannot name is `null`.
+ */
+export interface NeedsYouBlocks {
+	thing: {
+		id: string;
+		name: string | null;
+	};
+	statusNow: {
+		key: string;
+		label: string;
+	} | null;
+	statusNext: {
+		key: string;
+		label: string;
+	} | null;
+}
+/**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
  * (it would sign identity tokens this pod accepts), or an APPLICATION asking
@@ -1698,6 +1729,53 @@ export interface PullRequestStateFacts {
 	/** When the fact that set `state` happened (ISO). */
 	at: string;
 }
+/** What clears a blocker — the mirror of `SlotClearedBy` (`@synap/playbooks`). */
+export type ThingBlockerClearedBy = {
+	answer: true;
+} | {
+	intent: string;
+} | {
+	playbookId: string;
+} | {
+	capability: string;
+};
+/** Why a thing is blocked: the lead wait, in the pod's own vocabulary. */
+export interface ThingBlockerWhy {
+	/** The coarse waiting-on reason (`WAITING_ON_REASONS`). */
+	reason: WaitingOnReason;
+	/** The finer wait kind (`WAIT_KINDS`); its ball is {@link ThingBlocker.ball}. */
+	waitKind: WaitKind;
+	/** An owed slot's class of blocker ("what to build"), else null. */
+	blockedReason: string | null;
+	/** An owed slot's domain name (`not_connected`), else null. */
+	blockerKey: string | null;
+}
+export interface ThingBlocker {
+	blocked: boolean;
+	/** How many waits block it (the lead one is described below). */
+	count: number;
+	why: ThingBlockerWhy | null;
+	/** Whose move it is: the lead wait's ball (yours first). */
+	ball: WaitBall | null;
+	/**
+	 * The status clearing it lets the thing reach: the lead slot's declared
+	 * `blocks.to` when its lifecycle declares it, else the next main-path
+	 * status. Null when the thing has no lifecycle, stands off its path, or
+	 * has no step left.
+	 */
+	unlocks: {
+		label: string;
+		to: string;
+	} | null;
+	/**
+	 * What clears it: the lead slot's declared door; a person's owed slot with
+	 * none is cleared by their answer. Null when nothing names one (a proposal
+	 * is cleared by its review, a `blocked_by` by the other work).
+	 */
+	clearedBy: ThingBlockerClearedBy | null;
+	/** What is waited on (the lead wait's ref), when the reader may read it. */
+	ref: WaitingOnRef | null;
+}
 declare const TRACK_WORK_KINDS: readonly [
 	"project",
 	"flow",
@@ -1998,6 +2076,14 @@ export interface WaitEpisode {
 	reason: WaitingOnReason | null;
 	/** What is waited on, as the thing's holder reads it; null when unnamed. */
 	ref: WaitingOnRef | null;
+	/**
+	 * The status the subject stood on when the wait was first found (plan
+	 * e7f753db §9); null when it had none or the episode predates the record.
+	 * Absent from an older pod.
+	 */
+	status?: string | null;
+	/** An owed slot's declared blocker name (`not_connected`), else null. */
+	blockerKey?: string | null;
 	/** ISO. The tick that first found the wait (no backfill: at most a tick late). */
 	openedAt: string;
 	/** ISO; null while the wait stands. */
@@ -13619,6 +13705,34 @@ declare const OUTPUT_RETIRED_REASONS: readonly [
 	"not_asked"
 ];
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
+/**
+ * WHICH THING a slot holds up, and the status it holds it out of (plan
+ * e7f753db §9, "blockers, not steps"). Both halves are optional and default
+ * when read (`deriveThingBlocker`, `@synap-core/types/units`): `entityId` to
+ * the declaring session's subject, `to` to the thing's next main-path status.
+ * A slot blocks a thing; it never moves it — the thing stays in its column,
+ * marked blocked, and moves only through the governed status door.
+ */
+export interface SlotBlocks {
+	/** The thing held up. Absent ⇒ the session's subject. Floored at write. */
+	entityId?: string;
+	/** The status it cannot reach yet (a declared option key). Absent ⇒ next. */
+	to?: string;
+}
+/**
+ * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
+ * intent (`request_connection`), a playbook the pod runs, or a capability.
+ * The closed `blockedReason` list stays "what to build"; this says what to RUN.
+ */
+export type SlotClearedBy = {
+	answer: true;
+} | {
+	intent: string;
+} | {
+	playbookId: string;
+} | {
+	capability: string;
+};
 declare const OUTPUT_REF_KINDS: readonly [
 	"view",
 	"cell",
@@ -13998,6 +14112,26 @@ export interface ExpectedOutput {
 	 * a missing relation type must never un-deliver a deliverable.
 	 */
 	subjectEdge?: SlotSubjectEdge;
+	/**
+	 * The THING this slot holds up and the status it holds it out of — see
+	 * {@link SlotBlocks}. DECLARED by the agent, like `unblocks` (whose prose
+	 * it makes exact), never stamped. A person-owned slot with it is a
+	 * need-you card naming the thing; an agent-owned slot with it is a
+	 * runnable blocker — and an agent-owned slot holds a thing up ONLY when it
+	 * declares this (api `listBlockingSlots`).
+	 *
+	 * Cleared with the ownership fields on the hand-back unless an agent's run
+	 * still clears it ({@link blockerOutlivesHandBack}).
+	 */
+	blocks?: SlotBlocks;
+	/**
+	 * The blocker's short DOMAIN name (`not_connected`), lowercase snake. The
+	 * closed `blockedReason` stays "what to build"; this is what the recurrence
+	 * scanner groups repeats by. DECLARED, like `blocks`.
+	 */
+	blockerKey?: string;
+	/** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
+	clearedBy?: SlotClearedBy;
 }
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
@@ -17539,6 +17673,24 @@ export interface OwedSlot {
 	 * surface hands the whole row to the card adapter (`askCardSlotOf`).
 	 */
 	paramName?: string;
+	/**
+	 * The blocker as DECLARED (`ExpectedOutput.blocks` / `blockerKey` /
+	 * `clearedBy`, plan e7f753db §9): which thing and status it holds up, its
+	 * domain name, what clears it. Read by THE waiting-on collector; the
+	 * need-you card reads {@link blockedThing}, the same blocker resolved.
+	 */
+	blocks?: SlotBlocks;
+	blockerKey?: string;
+	clearedBy?: SlotClearedBy;
+	/**
+	 * The thing this ask holds up, RESOLVED for a need-you card: the declared
+	 * `blocks.entityId`, else the session's subject; its name, the status it
+	 * stands on and the status it cannot reach yet (`blocks.to`, else its next
+	 * main-path status). Resolved by the needs-you read only
+	 * (`withBlockedThings`), under the READER's entity floor: a thing the
+	 * reader may not read is not named. Absent when the ask names no thing.
+	 */
+	blockedThing?: NeedsYouBlocks;
 }
 /** Where the person finds a session's asks in their Inbox. */
 export type OwedInbox = "needs-you" | "proposed";
@@ -18528,7 +18680,11 @@ export interface ContinuationNextMove {
 	 * PR has ended: the AI records it).
 	 */
 	reasonCode?: "checks_failed" | "checks_pending" | "closed" | "criteria_unmet" | "merged" | "ready_to_land";
-	/** The lifecycle option a `step` move targets (it moves through `moveStatus`). */
+	/**
+	 * The lifecycle option a `step` move targets (it moves through
+	 * `moveStatus`); on a thing's wait move, the next status the wait stands
+	 * between it and (plan e7f753db §9), so a board keeps the next column.
+	 */
 	to?: string;
 	/**
 	 * What kind of wait it is (`WAIT_KINDS`), on a move read off a waiting-on
@@ -18965,6 +19121,12 @@ export interface StatusOf {
 		forDays: number;
 	};
 	waitingOn: WaitingOnMark[] | Unavailable$1;
+	/**
+	 * Things only: what stands between it and its next status (plan e7f753db
+	 * §9, `deriveThingBlocker`) — read from the same waits as `waitingOn`. A
+	 * hold never blocks: a pause is the status, and `hold` says what it waits on.
+	 */
+	blocker?: ThingBlocker | Unavailable$1;
 	/**
 	 * Its CURRENT hold — what the pause waits on and how it resumes — when it
 	 * stands in a paused status under one (`listHolds`); absent otherwise.
@@ -25708,6 +25870,22 @@ export interface Signal {
 	 */
 	unblocks?: string;
 	/**
+	 * `owed-slot`: the thing the ask's session is ABOUT (`focus_sessions.
+	 * subject_entity_id`) — what lets a card be placed on its thing (plan
+	 * e7f753db §9). An id only: its name travels in `blocks`, floored.
+	 */
+	subjectEntityId?: string;
+	/**
+	 * `owed-slot`: the THING the ask holds up, its status now and the status
+	 * it cannot reach until the person answers (plan e7f753db §9;
+	 * `OwedSlot.blockedThing`, resolved under the reader's entity floor).
+	 */
+	blocks?: NeedsYouBlocks;
+	/** `owed-slot`: the blocker's domain name (`not_connected`), as declared. */
+	blockerKey?: string;
+	/** `owed-slot`: what clears the blocker, as declared (`SlotClearedBy`). */
+	clearedBy?: SlotClearedBy;
+	/**
 	 * WHERE the row came from — the small provenance door (lens grammar §5: a
 	 * source is shown only when it differs from the page's scope; the client
 	 * decides that with `visibleSource`, `@synap-core/types/lens`). The most
@@ -25955,6 +26133,13 @@ export interface OwedSlotSignalInput {
 	needsYouClass?: NeedsYouSlotClass;
 	/** What the answer unblocks, straight from `listOwedSlots`. */
 	unblocks?: string;
+	/** The session's subject, straight from `listOwedSlots`. */
+	subjectEntityId?: string | null;
+	/** The thing it holds up, resolved by `listOwedSlots` (`blockedThing`). */
+	blockedThing?: NeedsYouBlocks;
+	/** The declared blocker's name and door, straight from `listOwedSlots`. */
+	blockerKey?: string;
+	clearedBy?: SlotClearedBy;
 }
 /** One session waiting for the person at the terminal (`listSessionsWaitingForPermission`). */
 export interface PermissionSessionSignalInput {
@@ -38214,7 +38399,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					attestedAt?: string | undefined;
 					attestedBy?: string | undefined;
 					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
+					blockerKey?: string | undefined;
+					blocks?: {
+						entityId?: string | undefined;
+						to?: string | undefined;
+					} | undefined;
 					claimedDone?: boolean | undefined;
+					clearedBy?: {
+						answer: true;
+					} | {
+						intent: string;
+					} | {
+						playbookId: string;
+					} | {
+						capability: string;
+					} | undefined;
 					criterionKey?: string | undefined;
 					decisionId?: string | undefined;
 					delegatedAt?: string | undefined;
@@ -39509,7 +39708,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					attestedAt?: string | undefined;
 					attestedBy?: string | undefined;
 					blockedReason?: "capability" | "credential" | "decision" | "permission" | "physical" | "policy" | undefined;
+					blockerKey?: string | undefined;
+					blocks?: {
+						entityId?: string | undefined;
+						to?: string | undefined;
+					} | undefined;
 					claimedDone?: boolean | undefined;
+					clearedBy?: {
+						answer: true;
+					} | {
+						intent: string;
+					} | {
+						playbookId: string;
+					} | {
+						capability: string;
+					} | undefined;
 					criterionKey?: string | undefined;
 					decisionId?: string | undefined;
 					delegatedAt?: string | undefined;

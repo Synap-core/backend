@@ -1881,6 +1881,15 @@
                     }
                   },
                   "required": ["mode"]
+                },
+                "blocks": {
+                  "type": "object"
+                },
+                "blockerKey": {
+                  "type": "string"
+                },
+                "clearedBy": {
+                  "type": "object"
                 }
               },
               "required": ["label"]
@@ -2210,6 +2219,15 @@
                     }
                   },
                   "required": ["mode"]
+                },
+                "blocks": {
+                  "type": "object"
+                },
+                "blockerKey": {
+                  "type": "string"
+                },
+                "clearedBy": {
+                  "type": "object"
                 }
               },
               "required": ["label"]

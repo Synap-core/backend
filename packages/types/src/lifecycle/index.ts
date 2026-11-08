@@ -223,6 +223,7 @@ export {
   stepsFromTrackStages,
   trackStageStepTone,
   currentStep,
+  nextMainPathStep,
   offPathChoices,
   type StepPosition,
   type StepMark,

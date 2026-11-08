@@ -143,7 +143,7 @@ describe("a thing's next move", () => {
     ).toMatchObject({ kind: "unknown" });
   });
 
-  it("a thing waiting on a person names them; nobody here acts", () => {
+  it("a thing waiting on a person names them; nobody here acts — and keeps its next status (plan e7f753db §9)", () => {
     expect(
       deriveThingNextMove(
         thing({ status: "sent", category: "active", waitingOn: [their] })
@@ -155,6 +155,8 @@ describe("a thing's next move", () => {
       reason: expect.stringMatching(/someone outside/),
       waitKind: "their_reply",
       entityId: ADA,
+      // The wait leads; the board still knows the column it stands before.
+      to: "signed",
     });
   });
 

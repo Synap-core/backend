@@ -37,6 +37,9 @@ const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
 const FILE = "0386_status_wait_episode.sql";
 const M0386 = read(FILE);
+// 0408 adds `status` and `blocker_key` to the same table: the declared
+// columns are the two migrations together (`migrations-0408.pglite.test.ts`).
+const M0408 = read("0408_wait_episode_blocker.sql");
 const BASELINE = read("0000_baseline_schema.sql");
 /**
  * This migration's own baseline block, up to the next block's header: a
@@ -59,6 +62,7 @@ beforeAll(async () => {
   pg = new PGlite();
   await pg.exec(M0386);
   await pg.exec(M0386);
+  await pg.exec(M0408);
 }, 60_000);
 afterAll(async () => {
   await pg.close();
