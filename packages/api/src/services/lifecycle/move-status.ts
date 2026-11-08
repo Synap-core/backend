@@ -5,6 +5,11 @@
  *
  *   resolve the target (kind → entity row, role → facet row) + its lifecycle
  *   → classify the target option (category, humanOnly)
+ *   → STAGE GATE (an agent's move on the subject of an open session that
+ *     follows a playbook, `focus-sessions/subject-move-gate.ts`): a move that
+ *     would skip a gated stage is refused; one into a human- or check-gated
+ *     stage is routed as that stage's advance, so the gate decides BEFORE the
+ *     status is written (a human gate's approval writes it)
  *   → GOVERN: `checkPermissionOrPropose(entity.transition, lifecycleMove)` —
  *     RBAC for a person; for an agent the engine's floor: a human-only option
  *     always proposes, into done/lost proposes by default, other moves execute
@@ -49,12 +54,16 @@ import {
   type Hold,
 } from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  previewPermissionDecision,
+} from "../../utils/permission-check.js";
 import { roleWriteGrantSpace } from "../../utils/role-write-grant.js";
 import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { mayWriteStatusTarget } from "./status-write-floor.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { appSignInPublicId } from "../app-sign-in-policy.js";
+import type { GatedStageEntry } from "../focus-sessions/subject-move-gate.js";
 
 const logger = createLogger({ module: "move-status" });
 
@@ -193,6 +202,12 @@ export type MoveStatusResult =
       proposalId: string;
       reviewUrl?: string;
       proposalType: string;
+      /**
+       * The move entered a HUMAN-gated stage of a session about this thing:
+       * the proposal is that stage's gate, and approving it writes the status
+       * (`subject-move-gate.ts`).
+       */
+      stageGate?: { sessionId: string; stageKey: string };
     }
   | { status: "denied"; reason: string }
   | {
@@ -206,8 +221,11 @@ export type MoveStatusResult =
         | "HOLD_REQUIRED"
         | "HOLD_INVALID"
         | "HOLD_NOT_A_PAUSE"
-        | "OCCURRED_AT_INVALID";
+        | "OCCURRED_AT_INVALID"
+        | "STAGE_GATE";
       reason: string;
+      /** STAGE_GATE: the session whose stage gate refused or held the move. */
+      sessionId?: string;
     };
 
 export async function moveStatus(
@@ -341,6 +359,41 @@ export async function moveStatus(
     };
   }
 
+  // THE STAGE GATE the move would walk (finding 8f2dee79,
+  // `focus-sessions/subject-move-gate.ts`): an agent's move on the subject of
+  // an open session following a playbook is refused when it would skip a
+  // gated stage (the advance's own refusal), and routed as the stage advance
+  // when it enters a human- or check-gated stage, BEFORE anything is written.
+  // A person's move is the person deciding (the gate floor and the follow
+  // treat it so); server code, a replay, a session's end and birth moves
+  // already run the session's own lifecycle.
+  let gateEntries: GatedStageEntry[] | null = null;
+  if (
+    agent &&
+    !input.approvedProposalId &&
+    !input.atSessionEnd &&
+    !input.atSessionBirth
+  ) {
+    // Dynamic: the advance door reaches this door back (its subject write).
+    const { planSubjectMoveGates } =
+      await import("../focus-sessions/subject-move-gate.js");
+    const plan = await planSubjectMoveGates({
+      entityId: target.entityId,
+      role: target.role ?? null,
+      property: target.lifecycle.propertySlug,
+      to,
+    });
+    if (plan.kind === "refused") {
+      return {
+        status: "refused",
+        code: "STAGE_GATE",
+        reason: plan.reason,
+        sessionId: plan.sessionId,
+      };
+    }
+    if (plan.kind === "enter") gateEntries = plan.entries;
+  }
+
   const governanceWorkspaceId = target.workspaceId ?? input.workspaceId ?? null;
   let receiptId: string | undefined;
   if (input.actor.kind !== "system" && !input.approvedProposalId) {
@@ -393,7 +446,7 @@ export async function moveStatus(
       }
       grantWorkspaceId = roleGrant.space;
     }
-    const perm = await checkPermissionOrPropose({
+    const permissionOpts: Parameters<typeof checkPermissionOrPropose>[0] = {
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
@@ -428,7 +481,42 @@ export async function moveStatus(
         `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${to}".`,
       sessionId: input.sessionId ?? undefined,
       data,
-    });
+    };
+    if (gateEntries) {
+      // A mover the ladder would DENY files no gate either; otherwise the
+      // gate is the decision: entering the stage is what the person approves,
+      // and the approval writes the status (as the approver).
+      const preview = await previewPermissionDecision(permissionOpts);
+      if (preview.decision === "deny") {
+        return { status: "denied", reason: preview.reason };
+      }
+      const { enterGatedStages } =
+        await import("../focus-sessions/subject-move-gate.js");
+      const gated = await enterGatedStages({
+        entries: gateEntries,
+        property: target.lifecycle.propertySlug,
+        to,
+        agentUserId: input.actor.agentUserId ?? null,
+      });
+      if (gated.kind === "gate_filed") {
+        return {
+          status: "proposed",
+          proposalId: gated.proposalId,
+          proposalType: gated.proposalType,
+          stageGate: { sessionId: gated.sessionId, stageKey: gated.stageKey },
+        };
+      }
+      if (gated.kind === "held") {
+        return {
+          status: "refused",
+          code: "STAGE_GATE",
+          reason: gated.reason,
+          sessionId: gated.sessionId,
+        };
+      }
+      // Every check passed: the stage stands, the move goes on as asked.
+    }
+    const perm = await checkPermissionOrPropose(permissionOpts);
     if ("denied" in perm && perm.denied) {
       return { status: "denied", reason: perm.reason };
     }
