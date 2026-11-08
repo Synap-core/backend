@@ -286,6 +286,7 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "action governanceRules.widenCell",
         "action machines.setKeyTtl",
         "action machines.setRunsScripts",
+        "action machines.setHostsServices",
         "action machines.setWakesAgents",
         "action machines.setBelongsTo",
       ].sort()

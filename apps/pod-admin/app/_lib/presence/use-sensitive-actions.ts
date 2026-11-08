@@ -174,6 +174,17 @@ export function useSetMachineRunsScripts(
   );
 }
 
+/** "Installs from the pod": this computer leases its tools' install jobs (backend#779). */
+export function useSetMachineHostsServices(
+  defaults?: ActionHandlers<typeof trpc.machines.setHostsServices.useMutation>
+) {
+  return useSensitiveAction(
+    "machines.setHostsServices",
+    trpc.machines.setHostsServices.useMutation(),
+    defaults
+  );
+}
+
 /** "Wakes agents": the pod may count on this computer's waker (plan v2 slice 4). */
 export function useSetMachineWakesAgents(
   defaults?: ActionHandlers<typeof trpc.machines.setWakesAgents.useMutation>

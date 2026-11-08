@@ -11,6 +11,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 const h = vi.hoisted(() => ({
   id: "pc-1",
   answers: new Map<string, unknown>(),
+  /** Every tRPC path the page asked a mutation hook for. */
+  mutations: new Set<string>(),
 }));
 
 /** Every `trpc.<path>.useQuery` answers from `h.answers`, settled. */
@@ -33,7 +35,10 @@ vi.mock("../../../../lib/trpc", () => {
         }
         if (key === "useQueries") return () => [];
         if (key === "useMutation") {
-          return () => ({ mutate: vi.fn(), isPending: false });
+          return () => {
+            h.mutations.add(path);
+            return { mutate: vi.fn(), isPending: false };
+          };
         }
         if (key === "useUtils") return () => leaf("utils");
         return leaf(path ? `${path}.${key}` : key);
@@ -157,5 +162,45 @@ describe("/computers/[id] — the Wakes agents card", () => {
     );
     expect(html).not.toContain("@synap-core/cli waker");
     expect(page).toContain("Wake agents here");
+  });
+});
+
+// Rules out (backend#779 follow-up): the CLI's refusal tells the person to
+// turn on "Installs from the pod" in pod admin › Computers, and no such
+// switch existed; `machines.setHostsServices` had no door anywhere.
+describe("/computers/[id] — the Installs from the pod card", () => {
+  const render = (over: Record<string, unknown>) => {
+    h.mutations.clear();
+    h.answers.set("machines.adminList", [computer(over)]);
+    return text(renderToStaticMarkup(<ComputerPage />));
+  };
+
+  it("off: says what turning it on does, and wires machines.setHostsServices", () => {
+    const page = render({ hostsServices: false });
+    expect(page).toContain("Installs from the pod");
+    expect(page).toContain(
+      "Let Build box install, update and remove the tools Ada approves for it."
+    );
+    expect(page).toContain("Install from the pod here");
+    expect(h.mutations).toContain("machines.setHostsServices");
+  });
+
+  it("on: says what it does now and offers to stop", () => {
+    const page = render({ hostsServices: true });
+    expect(page).toContain(
+      "Build box installs, updates and removes the tools Ada approves for it."
+    );
+    expect(page).toContain("Stop installing from the pod");
+    expect(page).not.toContain("Install from the pod here");
+  });
+
+  it("a revoked computer offers no switch", () => {
+    const page = render({
+      hostsServices: true,
+      key: { state: "revoked" },
+    });
+    expect(page).toContain("Build box");
+    expect(page).not.toContain("Installs from the pod");
+    expect(page).not.toContain("Stop installing from the pod");
   });
 });

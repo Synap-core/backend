@@ -73,6 +73,8 @@ export interface ComputerLike {
   accessName: string | null;
   /** "Runs scripts" is on: it leases its person's box runs. */
   runsScripts?: boolean;
+  /** "Installs from the pod" is on: it leases the install, update and remove jobs of the tools on it (`host.runner`). */
+  hostsServices?: boolean;
   /** "Wakes agents" is on: the pod may count on its waker to start its agents. */
   wakesAgents?: boolean;
   /** Its waker as the wake rule reads it: null = none ever ran; online = within the lease. */
@@ -420,6 +422,10 @@ export function activityLine(
       return data.enabled === true
         ? `Set to run ${whose} scripts`
         : `Stopped running ${whose} scripts`;
+    case "machine_hosts_services":
+      return data.enabled === true
+        ? "Set to install from the pod"
+        : "Stopped installing from the pod";
     case "machine_revoke":
       return typeof data.revokedKeys === "number"
         ? `Revoked — ${data.revokedKeys} key${data.revokedKeys === 1 ? "" : "s"} stopped working`
