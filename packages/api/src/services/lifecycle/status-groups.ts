@@ -207,7 +207,7 @@ export function stuckForDays(
 ): number | null {
   if (days === undefined) return null;
   const since = Date.parse(sinceIso);
-  return since < now - days * 86_400_000
+  return since > now - days * 86_400_000
     ? Math.floor((now - since) / 86_400_000)
     : null;
 }
