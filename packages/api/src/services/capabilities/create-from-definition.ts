@@ -79,6 +79,7 @@ import { createLogger } from "@synap-core/core";
 // the SAME grammar the honest-menu "catalog"/"declared" tiers use. Sub-path
 // import for the same tsup code-splitting reason routers/automations.ts cites.
 import { validateEventPattern } from "@synap-core/types/events/unified";
+import { pickComputerSpec } from "@synap-core/types/capability-manifest";
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
@@ -132,6 +133,25 @@ const MCP_EXEC_COLUMNS = Object.fromEntries(
 };
 
 // Param interpolation (`{{var}}` scheme) is shared via services/_shared/interpolate.
+
+/**
+ * The container-level config a definition DECLARES, as the applier merges it
+ * into `capabilities.metadata`: its `metadata`, plus its computer blocks
+ * (`placement`, `install`, `verify`, `uninstall`, `permissions`, `licence`,
+ * `services`, `recipes`; reconciliation f75fbb48 §3.5) under `computer`,
+ * verbatim, where an installation request reads them
+ * (`services/installations`). A definition with no computer block leaves any
+ * stored one alone.
+ */
+export function declaredContainerMetadata(
+  def: Pick<CapabilityDefinition, "metadata">
+): Record<string, unknown> {
+  const computer = pickComputerSpec(def as Record<string, unknown>);
+  return {
+    ...(def.metadata ?? {}),
+    ...(computer ? { computer } : {}),
+  };
+}
 
 /**
  * Normalize a definition's declared `emits` into the validated, deduped pattern
@@ -1595,7 +1615,7 @@ export async function createCapabilityFromDefinition(
         templateKey: def.key,
         metadata: {
           ...existingMetadata,
-          ...(def.metadata ?? {}),
+          ...declaredContainerMetadata(rawDef),
           templateKey: def.key,
           ...(rawDef.contentHash ? { contentHash: rawDef.contentHash } : {}),
           ...(declaredEmits !== undefined ? { emits: declaredEmits } : {}),

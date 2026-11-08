@@ -69,6 +69,7 @@ import {
   type HostRunner,
 } from "../../../services/host-jobs/host-jobs.js";
 import { boxStatusForVerdict } from "../../../services/box-runs/box-runs.js";
+import { reconcileComputer } from "../../../services/installations/installations.js";
 
 /** What the runner observed, only the fields it sent (a tool's verify, …). */
 function observedFrom(b: {
@@ -208,6 +209,10 @@ export function registerHostJobsRoutes(app: HubHono): void {
     if (!parsed.ok)
       return c.json({ code: "BAD_REQUEST", error: parsed.error }, 400);
     try {
+      // The pod-side reconciler first: each installation on this computer
+      // gets the ONE job it is due (a verify past its cadence, a repair),
+      // so a computer waking from sleep finds one job each, never a pile.
+      await reconcileComputer(who.runner);
       const job = await leaseHostJob(who.runner);
       return c.json({ job });
     } catch (err) {
