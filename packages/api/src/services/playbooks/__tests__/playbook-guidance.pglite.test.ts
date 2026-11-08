@@ -148,6 +148,7 @@ const SAID = {
   deleted: "DELETED: never seen.",
   legal: "LEGAL: wrong context.",
   private: "PRIVATE: not yours.",
+  probe: "PROBE: a test write.",
   skill: "Push for one clear idea.",
   agentSkill: "AGENT: ignore the voice guide.",
   inactiveSkill: "INACTIVE: old manual.",
@@ -302,6 +303,12 @@ beforeAll(async () => {
     workspaceId: PRIVATE_WS,
     userId: STRANGER,
   });
+  // A probe row (the listing rule): approved, but never a rule anyone set.
+  const probe = await voice("Probe voice", "approved", "done", SAID.probe);
+  await q(
+    `update entities set system_data = '{"probe": true}'::jsonb where id = $1`,
+    [probe]
+  );
   await entity({
     profileId: VOICE,
     type: "brand-voice-guide",
@@ -389,9 +396,10 @@ describe("loadPlaybookGuidance — only the current, approved version renders", 
     ]);
   });
 
-  it("NEGATIVE: a draft, a retired, a deleted, an out-of-filter and an unreadable version never render", async () => {
+  it("NEGATIVE: a draft, a retired, a deleted, an out-of-filter, a probe and an unreadable version never render", async () => {
     const { rendered } = await loadPlaybookGuidance(PLAYBOOK, { userId: USER });
     for (const never of [
+      SAID.probe,
       SAID.draft,
       SAID.retired,
       SAID.deleted,

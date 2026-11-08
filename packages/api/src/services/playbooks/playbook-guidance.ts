@@ -9,7 +9,8 @@
  * WHAT RENDERS (security: this text becomes prompt text):
  *   - a kind ref: the entities of that kind whose lifecycle CATEGORY is `done`
  *     (the kind's approved option, e.g. a voice guide `approved`), not deleted,
- *     that the reader may read (`accessScopeWhere`, the entity floor). A draft
+ *     that the reader may read (`accessScopeWhere`, the entity floor) and that
+ *     a listing shows (`listableEntityWhere`: no probe or demo row). A draft
  *     (`open`) or a retired version (`lost`) never renders. A kind that
  *     declares no lifecycle has no approved version, so it renders nothing and
  *     the section says so.
@@ -35,6 +36,7 @@ import {
   or,
   drizzleSql,
   ProfileResolutionService,
+  listableEntityWhere,
 } from "@synap/database";
 import {
   parseGuidanceRef,
@@ -169,7 +171,9 @@ async function resolveKind(
         isNull(entities.deletedAt),
         // THE trust line: only the approved (`done`) version renders.
         eq(entities.statusCategory, "done"),
-        floor
+        floor,
+        // THE listing rule: a probe or demo row is never a rule anyone set.
+        listableEntityWhere()
       )
     )
     .orderBy(entities.id)
