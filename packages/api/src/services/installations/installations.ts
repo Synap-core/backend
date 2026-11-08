@@ -251,6 +251,39 @@ export async function listInstallations(
   const rows = await scopedDb(access).findMany<InstallationRow>(installations, {
     where: and(...conds),
   });
+  return toViews(rows);
+}
+
+/**
+ * What is installed on ONE computer, read for that computer's own key: its
+ * person's live rows on it (owner AND machine), the floor the host-job
+ * routes read on, never through a grant. The caller is the computer itself
+ * (`resolveCallerComputer` returned it for its own key): a computer reads
+ * what is on it whatever its key's grant names, and nothing on another
+ * computer or of another person.
+ */
+export async function listComputerOwnInstallations(
+  computer: ComputerRef,
+  filter: { capabilityKey?: string } = {}
+): Promise<InstallationView[]> {
+  const rows = await db
+    .select()
+    .from(installations)
+    .where(
+      and(
+        eq(installations.userId, computer.ownerUserId),
+        eq(installations.machineUserId, computer.id),
+        ne(installations.status, "removed"),
+        filter.capabilityKey
+          ? eq(installations.capabilityKey, filter.capabilityKey)
+          : undefined
+      )
+    );
+  return toViews(rows);
+}
+
+/** Rows by computer then capability, each as the doors return it. */
+async function toViews(rows: InstallationRow[]): Promise<InstallationView[]> {
   rows.sort(
     (a, b) =>
       a.machineUserId.localeCompare(b.machineUserId) ||

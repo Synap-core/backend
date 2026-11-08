@@ -260,6 +260,29 @@ export function sessionHolderReadable(
 }
 
 /**
+ * What is installed on the person's computers (installations, 0409), read
+ * under `installation` like a PERSON door: the person's own rows, which no
+ * space holds. MCP `synap_list_installations` is exactly this door.
+ */
+const INSTALLATIONS_READ = PERSON("installation");
+
+/**
+ * May this request's key read the person's installations through the owner
+ * floor and its grant (`listInstallations`)? Every unfenced caller may; a
+ * fenced key when its grant reads `installation`, bounded as that PERSON
+ * door. `GET /installations` admits one more caller on its own floor: a
+ * computer's own key reading what is installed on ITSELF (owner and machine,
+ * as the host-job routes floor), whatever its grant names. A key minted
+ * before `installation` joined the AI preset (2026-11-07) carries no such
+ * permission, and the CLI's `synap tools list` is that key's read.
+ */
+export function installationsReadableByGrant(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(INSTALLATIONS_READ, grant!);
+}
+
+/**
  * An id in a REST path: uuid-shaped, so a future static sibling
  * (`/projects/summary`, `/focus-sessions/<word>`) is NOT admitted by a
  * declaration that names an id. Every id below is a uuid; a door whose id is
@@ -532,10 +555,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // space holds, so it is a PERSON door: the app asks for `agent.read` and the
   // person ticks it. `agent` is the subject `agent_configs` reads under.
   [/^\/agent-users\/?$/, PERSON("agent")],
-  // What is installed on the person's computers (installations, 0409): the
-  // person's own rows, which no space holds, read through the access layer's
-  // owner floor. Read under `installation`, the subject a grant names.
-  [/^\/installations\/?$/, PERSON("installation")],
+  // What is installed on the person's computers (installations, 0409). The
+  // ROUTE bounds it (`rest/installations.ts`), as the waker poll below: a
+  // key whose grant reads `installation` (`installationsReadableByGrant`,
+  // the PERSON door MCP `synap_list_installations` is) reads through the
+  // owner floor and its grant; a computer's own key reads only what is
+  // installed on itself (its person's rows on that computer, the host-job
+  // floor); every other scoped key is refused there before a row is read.
+  [/^\/installations\/?$/, SEAMED],
   // Which of those agents the person assigned to one target (a playbook, a
   // kind, a project, a space): the person's own `assigned_to` row on a target
   // they can see (`readAgentAssignment`), the read half of
@@ -938,8 +965,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_match_playbooks: READS("playbook"),
   synap_list_capabilities: READS("tool", "command", "playbook", "automation"),
   // What is installed on the person's computers (`listInstallations`, the
-  // owner floor), as `GET /installations`.
-  synap_list_installations: PERSON("installation"),
+  // owner floor): the grant read of `GET /installations`.
+  synap_list_installations: INSTALLATIONS_READ,
   synap_list_automations: LIST_AUTOMATIONS,
   // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
   // worker rules and their automation runs, and the approvals they wait on.
