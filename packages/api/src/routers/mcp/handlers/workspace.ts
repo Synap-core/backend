@@ -56,6 +56,9 @@ import {
   requireScope,
   readReasoning,
   rejectMissingWriteWorkspace,
+  pageSlice,
+  LIST_PAGE_DEFAULT,
+  LIST_PAGE_MAX,
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
@@ -651,7 +654,13 @@ export const workspaceHandlers: McpHandlerMap = {
         includeArchived: args.includeArchived === true,
         ...(typeof args.appId === "string" ? { appId: args.appId } : {}),
       });
-      const ids = rows.map((w) => w.id);
+      const { page: pageRows, paging } = pageSlice(
+        rows,
+        args,
+        LIST_PAGE_DEFAULT,
+        LIST_PAGE_MAX
+      );
+      const ids = pageRows.map((w) => w.id);
       const [usedBy, counts] = await Promise.all([
         listProjectsUsingWorkspaces(db, ids, userId),
         ids.length
@@ -673,7 +682,8 @@ export const workspaceHandlers: McpHandlerMap = {
       const countById = new Map(counts.map((r) => [r.workspaceId, r.count]));
       return ok({
         count: rows.length,
-        workspaces: rows.map((w) => ({
+        ...paging,
+        workspaces: pageRows.map((w) => ({
           id: w.id,
           name: w.name,
           description: w.description,

@@ -18,7 +18,7 @@
           "detail": {
             "type": "string",
             "enum": ["sources", "brief", "full"],
-            "description": "How much answer you want. full (default) = the provenance-rich answer. brief = a few sentences, no capture suggestions — use it for lookups (who/what/where). sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity."
+            "description": "How much answer you want. brief (default) = a few sentences, no capture suggestions — enough for lookups (who/what/where). full = the provenance-rich answer, longer; ask for it only when you need the detail. sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity."
           },
           "workspaceId": {
             "type": "string",
@@ -138,6 +138,14 @@
             "type": "string",
             "enum": ["raw", "readable"],
             "description": "raw (default) = the stored markdown, embeds as directives (what you edit). readable = embeds replaced by their fallback text (what you quote or summarise)."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Max content chars (slice)"
+          },
+          "offset": {
+            "type": "number",
+            "description": "Chars to skip (nextOffset)"
           }
         },
         "required": ["documentId"]
@@ -444,6 +452,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Workspace ID (optional)"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Max relations returned, newest first (default 50, max 100)."
           }
         },
         "required": ["entityId"]
@@ -532,6 +544,14 @@
           "subtype": {
             "type": "string",
             "description": "Narrow a name lookup (entity profileSlug, view type, tool/skill kind). Optional."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Page size, default 50, max 200"
+          },
+          "offset": {
+            "type": "number",
+            "description": "nextOffset of the prior reply"
           }
         },
         "required": []
@@ -3052,7 +3072,16 @@
       "description": "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
       "inputSchema": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "limit": {
+            "type": "number",
+            "description": "Page size, default 50, max 200"
+          },
+          "offset": {
+            "type": "number",
+            "description": "nextOffset of the prior reply"
+          }
+        },
         "required": []
       }
     },
@@ -5236,6 +5265,14 @@
           "appId": {
             "type": "string",
             "description": "Optional filter by settings.appId"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Page size, default 50, max 200"
+          },
+          "offset": {
+            "type": "number",
+            "description": "nextOffset of the prior reply"
           }
         },
         "required": []
@@ -5370,6 +5407,14 @@
           "includeArchived": {
             "type": "boolean",
             "description": "Also list archived tracks. Default false. Ignored with trackId."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Page size, default 50, max 200"
+          },
+          "offset": {
+            "type": "number",
+            "description": "nextOffset of the prior reply"
           }
         },
         "required": []
