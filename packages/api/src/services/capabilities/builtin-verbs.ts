@@ -2327,26 +2327,9 @@ const marketSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
   // Where a capability runs (the pod, or a computer: which systems, its
   // licence) and, for one that runs on a computer, which of the person's
   // computers can take it: what synap_request_installation needs to choose.
-  const { describePlacement, listPersonsComputers, computerChoices } =
+  const { catalogPlacementReader } =
     await import("../installations/request-installation.js");
-  let computers: Awaited<ReturnType<typeof listPersonsComputers>> | null = null;
-  const placementOf = async (e: (typeof entries)[number]) => {
-    if (e.kind !== "capability" || !e.definition) return {};
-    const { capabilityElementOf } = await import("./package-element.js");
-    const p = describePlacement(
-      e.slug,
-      capabilityElementOf(e.definition) as Record<string, unknown>,
-      e.version
-    );
-    if (!p.runsOn.includes("computer")) return { runsOn: p.runsOn };
-    computers ??= await listPersonsComputers(ctx.userId);
-    return {
-      runsOn: p.runsOn,
-      systems: p.platforms,
-      licence: p.licence,
-      computers: computerChoices(computers, p.installable?.manifest ?? null),
-    };
-  };
+  const placementOf = catalogPlacementReader(ctx.userId);
 
   const compact = await Promise.all(
     entries.map(async (e) => {

@@ -108,6 +108,8 @@ export interface AgentMetadata {
    */
   hostname?: string;
   platform?: string;
+  /** Node's `process.arch` as the device flow reported it, when it did. */
+  arch?: string;
   /**
    * COMPUTER principals only: this computer's key lifetime in days. Absent ⇒
    * the pod default (`pod_settings.settings.machineDefaults.keyTtlDays`), else

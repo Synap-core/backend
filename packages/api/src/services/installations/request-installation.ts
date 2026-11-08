@@ -29,9 +29,8 @@
  * reverse.
  */
 
-import { and, db, eq } from "@synap/database";
-import { capabilities, users } from "@synap/database/schema";
-import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
+import { db, eq } from "@synap/database";
+import { capabilities } from "@synap/database/schema";
 import {
   CapabilityComputerSpecSchema,
   installKind,
@@ -42,7 +41,7 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
-import { machineName } from "../machine-roster.js";
+import { listMachines } from "../machine-roster.js";
 import {
   applyInstallationRequest,
   InstallationRequestError,
@@ -167,40 +166,23 @@ async function capabilityOnPod(capabilityKey: string): Promise<boolean> {
 
 // ── The person's computers ──────────────────────────────────────────────────
 
-/** The person's computers, by name. */
+/**
+ * The person's computers, by name, read through the ONE roster
+ * (`machine-roster.ts` `listMachines`, what pod admin and `machines.list`
+ * show), as the doors name a computer.
+ */
 export async function listPersonsComputers(
   personId: string
 ): Promise<ComputerRef[]> {
-  const rows = await db
-    .select({
-      id: users.id,
-      owner: users.createdByUserId,
-      name: users.name,
-      agentMetadata: users.agentMetadata,
-    })
-    .from(users)
-    .where(
-      and(
-        eq(users.agentType, MACHINE_AGENT_TYPE),
-        eq(users.createdByUserId, personId)
-      )
-    );
-  return rows
-    .map((r) => {
-      const meta = (r.agentMetadata ?? {}) as {
-        platform?: string;
-        arch?: string;
-        hostsServices?: boolean;
-      };
-      return {
-        id: r.id,
-        ownerUserId: personId,
-        name: machineName(r),
-        os: meta.platform ?? null,
-        arch: meta.arch ?? null,
-        installsFromPod: meta.hostsServices === true,
-      };
-    })
+  return (await listMachines(personId))
+    .map((m) => ({
+      id: m.id,
+      ownerUserId: personId,
+      name: m.name,
+      os: m.platform,
+      arch: m.arch,
+      installsFromPod: m.hostsServices,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -277,6 +259,55 @@ export function computerChoices(
           why: refusal?.error ?? "It runs on the pod, not on a computer.",
         };
   });
+}
+
+/** Where a catalog capability runs, as both catalog reads show it. */
+export interface CatalogPlacement {
+  /** Absent for an entry that is not a capability, or carries no definition. */
+  runsOn?: Array<"pod" | "computer">;
+  systems?: string[];
+  licence?: string | null;
+  computers?: ComputerChoice[];
+}
+
+/**
+ * The ONE placement projection of a catalog capability for one person: what
+ * `market.search` and `synap_find`'s marketplace arm add to each capability
+ * entry, so the two reads can never disagree. A capability that runs on a
+ * computer adds its systems, its licence and the person's computers, each
+ * with `canInstall` or `why` not (`computerChoices`). The person's computers
+ * are read once per reader, only when an entry runs on a computer.
+ */
+export function catalogPlacementReader(
+  personId: string
+): (entry: {
+  kind: string;
+  slug: string;
+  version: string | null;
+  definition: Record<string, unknown> | null;
+}) => Promise<CatalogPlacement> {
+  let computers: Promise<ComputerRef[]> | null = null;
+  return async (entry) => {
+    if (entry.kind !== "capability" || !entry.definition) return {};
+    const { capabilityElementOf } =
+      await import("../capabilities/package-element.js");
+    const p = describePlacement(
+      entry.slug,
+      capabilityElementOf(entry.definition) as Record<string, unknown>,
+      entry.version
+    );
+    if (!p.runsOn.includes("computer")) return { runsOn: p.runsOn };
+    computers ??= listPersonsComputers(personId);
+    return {
+      runsOn: p.runsOn,
+      systems: p.platforms,
+      licence: p.licence,
+      computers: computerChoices(
+        await computers,
+        p.installable?.manifest ?? null
+      ),
+    };
+  };
 }
 
 // ── The ask ─────────────────────────────────────────────────────────────────
