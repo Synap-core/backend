@@ -19,7 +19,9 @@
  * Approval is once per (capability, computer): a verify, or an install of
  * the version already approved (a repair), asks nobody and only queues the
  * job. The computer must have "Installs from the pod" on, and the
- * capability's `placement` must allow it.
+ * capability's `placement` must allow it. The rule is `requestInstallation`
+ * (services/installations/request-installation.ts), which MCP
+ * `synap_request_installation` asks through too.
  *
  * What the computer OBSERVED is never written here: only its own key with
  * `host.runner`, through `/host-jobs/*`.
@@ -36,10 +38,6 @@ import {
 } from "./_shared.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { jsonGoverned } from "../proposal-response.js";
-import {
-  checkPermissionOrPropose,
-  proposedMessageFor,
-} from "../../../utils/permission-check.js";
 import { getRequestGrant } from "@synap/database";
 import { AccessContext } from "../../../access/index.js";
 import {
@@ -47,20 +45,14 @@ import {
   installationsReadableByGrant,
 } from "../../../access/grant-door-fence.js";
 import {
-  applyInstallationRequest,
-  installRefusal,
   INSTALLATION_REQUEST_ACTIONS,
-  InstallationRequestError,
   listComputerOwnInstallations,
   listInstallations,
-  loadInstallableCapability,
-  loadLiveInstallation,
   loadPersonsComputer,
-  reconcileInstallation,
-  requestNeedsApproval,
   resolveCallerComputer,
   type ComputerRef,
 } from "../../../services/installations/installations.js";
+import { requestInstallation } from "../../../services/installations/request-installation.js";
 
 type C = Context<{ Variables: HubVariables }>;
 
@@ -205,133 +197,41 @@ export function registerInstallationsRoutes(app: HubHono): void {
           return c.json(NOT_A_COMPUTER, 403) as never;
         if (computer === "not_found")
           return c.json({ error: "Computer not found" }, 404) as never;
-
-        const capability = await loadInstallableCapability(req.capabilityKey);
-        if (!capability)
-          return c.json(
-            {
-              code: "NOT_INSTALLABLE",
-              error: `${req.capabilityKey} is not a capability this pod can install on a computer.`,
-            },
-            404
-          ) as never;
-        const live = await loadLiveInstallation(
-          computer.id,
-          capability.capabilityKey
-        );
-
-        if (req.action === "verify") {
-          if (!live || live.status !== "installed")
-            return c.json(
-              {
-                code: "NOT_INSTALLED",
-                error: `${req.capabilityKey} is not installed on ${computer.name}.`,
-              },
-              409
-            ) as never;
-          const jobId = await reconcileInstallation(live, { kind: "verify" });
-          return c.json(
-            { status: "approved" as const, installationId: live.id, jobId },
-            200
-          );
-        }
-        if (req.action === "remove" && !live)
-          return c.json(
-            {
-              code: "NOT_INSTALLED",
-              error: `${req.capabilityKey} is not installed on ${computer.name}.`,
-            },
-            409
-          ) as never;
-        if (req.action !== "remove") {
-          const refusal = installRefusal(capability, computer);
-          if (refusal)
-            return c.json(
-              { code: "CANNOT_INSTALL", error: refusal },
-              409
-            ) as never;
-        }
-
-        // Approved once for this pair at this version: a repair asks nobody.
-        if (!requestNeedsApproval(live, req) && live) {
-          const jobId = await reconcileInstallation(live, {
-            kind:
-              live.status === "installed" || live.status === "failed"
-                ? "install"
-                : undefined,
-          });
-          return c.json(
-            { status: "approved" as const, installationId: live.id, jobId },
-            200
-          );
-        }
-
-        const perm = await checkPermissionOrPropose({
+        // The one rule (`requestInstallation`), shared with MCP
+        // `synap_request_installation`. This door names an installed
+        // capability only: adding one from the catalog is the MCP door's.
+        const out = await requestInstallation({
           userId,
-          agentUserId: agentUserId ?? undefined,
-          workspaceId: null,
-          subjectType: "installation",
-          action: "request",
-          // Filed for the person even when the agent's key grant does not
-          // name it: approval is the person's, and an agent always proposes
-          // (reconciliation f75fbb48 §3.4.1, founder 2026-11-07; decision
-          // 168f34db §2). The AI preset excludes installation.request, so
-          // without this an agent's ask would be refused, never filed.
-          proposeBeyondGrant: true,
-          ...(req.sessionId ? { sessionId: req.sessionId } : {}),
-          reasoning:
-            req.action === "remove"
-              ? `Remove ${req.capabilityKey} from ${computer.name}: its removal steps run on that computer.`
-              : live
-                ? `Change ${req.capabilityKey} on ${computer.name} to version ${req.version ?? "latest"}: its install steps run again on that computer.`
-                : `Install ${req.capabilityKey} on ${computer.name}: its install steps run on that computer, then it is checked.`,
-          data: {
-            id: computer.id,
-            computerId: computer.id,
-            computerName: computer.name,
-            capabilityKey: capability.capabilityKey,
-            kind: capability.kind,
-            action: req.action,
-            ...(req.version ? { version: req.version } : {}),
-          },
-        });
-        if ("denied" in perm && perm.denied)
-          return c.json(
-            { error: perm.reason ?? "Not permitted" },
-            403
-          ) as never;
-        if ("proposalId" in perm && perm.proposalId) {
-          return jsonGoverned(c, {
-            status: "proposed" as const,
-            proposalId: perm.proposalId,
-            reviewUrl: perm.reviewUrl,
-            message: proposedMessageFor(
-              perm.proposalType,
-              "Proposed: the computer acts on it once the person approves it."
-            ),
-          }) as never;
-        }
-        const out = await applyInstallationRequest({
+          agentUserId,
           computer,
-          capability,
+          capabilityKey: req.capabilityKey,
           action: req.action,
           version: req.version ?? null,
-          approverId: userId,
+          ...(req.sessionId ? { sessionId: req.sessionId } : {}),
         });
+        if (out.status === "refused")
+          return c.json(
+            out.code === "DENIED"
+              ? { error: out.error }
+              : { code: out.code, error: out.error },
+            out.httpStatus
+          ) as never;
+        if (out.status === "proposed")
+          return jsonGoverned(c, {
+            status: "proposed" as const,
+            proposalId: out.proposalId,
+            reviewUrl: out.reviewUrl,
+            message: out.message,
+          }) as never;
         return c.json(
           {
             status: "approved" as const,
-            installationId: out.installation.id,
+            installationId: out.installationId,
             jobId: out.jobId,
           },
           200
         );
       } catch (err) {
-        if (err instanceof InstallationRequestError)
-          return c.json(
-            { code: err.code, error: "Nothing is installed to remove." },
-            409
-          ) as never;
         logger.error({ err }, "POST /installations/request failed");
         return c.json(
           { error: "Could not record the request" },

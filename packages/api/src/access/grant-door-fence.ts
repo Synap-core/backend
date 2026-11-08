@@ -1094,6 +1094,9 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_reject_proposal: WRITE,
     synap_request_deploy_approval: WRITE,
     synap_run_capability: WRITE,
+    // Files the person's `installation/request` proposal (an agent always
+    // proposes, `proposeBeyondGrant`), or a `capability.install` for the pod.
+    synap_request_installation: WRITE,
     synap_create_verb: WRITE,
     synap_trigger_automation: WRITE,
     synap_create_automation: WRITE,

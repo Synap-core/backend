@@ -572,8 +572,10 @@ describe("only the decided doors ask to propose beyond the grant", () => {
     };
     walk(root);
     expect(setters.sort()).toEqual([
-      "routers/hub-protocol/rest/installations.ts",
       "routers/hub-protocol/rest/messaging.ts",
+      // The installation request's one rule (REST /installations/request
+      // and MCP synap_request_installation ask through it).
+      "services/installations/request-installation.ts",
       "services/template-apply/propose.ts",
     ]);
   });
