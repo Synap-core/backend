@@ -367,6 +367,15 @@ describe("installations — the ask", () => {
 
 describe("installations — the read", () => {
   it("this computer's installations (the hosted agent's), by capability, a stranger's as empty", async () => {
+    // Another person's installation of the SAME capability: without it the
+    // stranger read below is empty whatever the owner floor does (it was,
+    // until 2026-11-08: a negative control that bypassed the floor stayed
+    // green).
+    await q(
+      `INSERT INTO installations (user_id, kind, capability_key, machine_user_id, manifest, desired_state, status)
+       VALUES ($1, 'tool', $2, $3, '{}'::jsonb, 'installed', 'installed')`,
+      [OTHER, KEY, STRANGER_BOX]
+    );
     const mine = await hosted().request("/installations?computer=me");
     expect(mine.status).toBe(200);
     const items = (
@@ -382,9 +391,10 @@ describe("installations — the read", () => {
     });
     expect(items[0]!.health).toBeDefined();
     const byKey = await person().request(`/installations?capabilityKey=${KEY}`);
-    expect(((await byKey.json()) as { items: unknown[] }).items).toHaveLength(
-      1
-    );
+    const byKeyItems = (
+      (await byKey.json()) as { items: Array<{ computerId: string }> }
+    ).items;
+    expect(byKeyItems.map((i) => i.computerId)).toEqual([MAC]);
     const stranger = await person().request(
       `/installations?computer=${STRANGER_BOX}`
     );
