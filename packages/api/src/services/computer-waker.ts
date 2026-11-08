@@ -15,7 +15,7 @@
  * `null` = no waker ever stamped this computer: nothing on it can start agents.
  */
 
-import { and, apiKeys, db, eq, inArray } from "@synap/database";
+import { apiKeys, db, inArray } from "@synap/database";
 import type { AgentMetadata } from "@synap/database/schema";
 import type { ComputerWaker } from "./agent-dispatch/agent-wake.js";
 
@@ -35,9 +35,12 @@ export function computerWakerOf(
 }
 
 /**
- * The newest waker stamp over each computer's own keys (`worker_served_at` on
- * a COMPUTER's key is only ever its waker's: a worker runs on an agent's key).
- * One read for every computer of a roster. A failed read throws.
+ * The newest waker stamp over each computer's own keys, whatever their type
+ * (the device-flow key is a `user_pat`, `machine-connect.ts`): the same keys
+ * the Computers roster reads (`machine-roster.ts`), so pod admin and the
+ * hand-off roster never disagree. `worker_served_at` on a COMPUTER's key is
+ * only ever its waker's (a worker runs on an agent's key). One read for every
+ * computer of a roster. A failed read throws.
  */
 export async function loadWakerSeenAt(
   machineUserIds: readonly string[]
@@ -48,9 +51,7 @@ export async function loadWakerSeenAt(
   const rows = await db
     .select({ userId: apiKeys.userId, servedAt: apiKeys.workerServedAt })
     .from(apiKeys)
-    .where(
-      and(inArray(apiKeys.userId, ids), eq(apiKeys.keyType, "hub_inbound"))
-    );
+    .where(inArray(apiKeys.userId, ids));
   for (const r of rows) {
     if (!r.servedAt) continue;
     const cur = out.get(r.userId);
