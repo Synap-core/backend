@@ -944,12 +944,12 @@ export const tools = {
             limit: {
               type: "number",
               description:
-                "Read the body in slices: max characters of `content` to return (default: all, up to the reply cap). The reply then carries `contentTotal` and, while more remains, `nextOffset`.",
+                "Max content chars (slice)",
             },
             offset: {
               type: "number",
               description:
-                "With limit: characters of `content` to skip (a previous reply's `nextOffset`).",
+                "Chars to skip (nextOffset)",
             },
           },
           required: ["documentId"],
@@ -1362,12 +1362,12 @@ export const tools = {
             limit: {
               type: "number",
               description:
-                "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`.",
+                "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
               description:
-                "Rows to skip (from a previous reply's `nextOffset`).",
+                "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -3425,12 +3425,12 @@ export const tools = {
             limit: {
               type: "number",
               description:
-                "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`.",
+                "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
               description:
-                "Rows to skip (from a previous reply's `nextOffset`).",
+                "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -4419,12 +4419,12 @@ export const tools = {
             limit: {
               type: "number",
               description:
-                "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`.",
+                "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
               description:
-                "Rows to skip (from a previous reply's `nextOffset`).",
+                "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -4558,12 +4558,12 @@ export const tools = {
             limit: {
               type: "number",
               description:
-                "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`.",
+                "Page size, default 50, max 200",
             },
             offset: {
               type: "number",
               description:
-                "Rows to skip (from a previous reply's `nextOffset`).",
+                "nextOffset of the prior reply",
             },
           },
           required: [],

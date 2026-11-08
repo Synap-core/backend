@@ -168,8 +168,8 @@ Get a document by ID: its markdown `content`, the `revision` to pass back as `ba
 | ------------ | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `documentId` | string | yes      | Document UUID                                                                                                                                                                          |
 | `format`     | enum   | no       | raw (default) = the stored markdown, embeds as directives (what you edit). readable = embeds replaced by their fallback text (what you quote or summarise). One of: `raw`, `readable`. |
-| `limit`      | number | no       | Read the body in slices: max characters of `content` to return (default: all, up to the reply cap). The reply then carries `contentTotal` and, while more remains, `nextOffset`.       |
-| `offset`     | number | no       | With limit: characters of `content` to skip (a previous reply's `nextOffset`).                                                                                                         |
+| `limit`      | number | no       | Max content chars (slice)                                                                                                                                                              |
+| `offset`     | number | no       | Chars to skip (nextOffset)                                                                                                                                                             |
 
 ## synap_get_thread_context
 
@@ -302,8 +302,8 @@ Fetch ANY object PLUS everything it's linked to, typed. Returns { object, neighb
 | `name`    | string | no       | Fetch by NAME instead of id (a handle). Ambiguous names return candidates to pick from. Provide id OR name.                        |
 | `type`    | string | no       | Object kind: entity (default), project, view, channel, session, playbook, tool, skill, automation, document, track, proposal, run. |
 | `subtype` | string | no       | Narrow a name lookup (entity profileSlug, view type, tool/skill kind). Optional.                                                   |
-| `limit`   | number | no       | Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`.                                     |
-| `offset`  | number | no       | Rows to skip (from a previous reply's `nextOffset`).                                                                               |
+| `limit`   | number | no       | Page size, default 50, max 200                                                                                                     |
+| `offset`  | number | no       | nextOffset of the prior reply                                                                                                      |
 
 ## synap_create_entity
 
@@ -844,10 +844,10 @@ What happened to a goal, a session or a pull request, newest first — read-only
 
 Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.
 
-| Parameter | Type   | Required | Description                                                                                    |
-| --------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
-| `limit`   | number | no       | Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`. |
-| `offset`  | number | no       | Rows to skip (from a previous reply's `nextOffset`).                                           |
+| Parameter | Type   | Required | Description                    |
+| --------- | ------ | -------- | ------------------------------ |
+| `limit`   | number | no       | Page size, default 50, max 200 |
+| `offset`  | number | no       | nextOffset of the prior reply  |
 
 ## synap_create_cell
 
@@ -1094,12 +1094,12 @@ Declare a cross-workspace DATA EDGE on an EXISTING workspace by setting/merging 
 
 List the workspaces (domain lenses) you can see, pod-wide — call this to find a workspace id instead of guessing from orient. Each row: id, name, description, workspaceType, your role, accessKind (member | pod_visible), archived, entityCount, and usedByProjectIds (projects that run through it — an INDEX, not an ACL). Link a project to one with synap_project_use_workspace. To learn what a space is FOR and what it knows — its purpose, the kinds it holds, its rules and its skills — PIN it: pass its workspaceId to `synap_orient`, or `synap_set_workspace_focus`; both return that space's `brief`.
 
-| Parameter         | Type    | Required | Description                                                                                    |
-| ----------------- | ------- | -------- | ---------------------------------------------------------------------------------------------- |
-| `includeArchived` | boolean | no       | Include soft-archived workspaces (default false)                                               |
-| `appId`           | string  | no       | Optional filter by settings.appId                                                              |
-| `limit`           | number  | no       | Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`. |
-| `offset`          | number  | no       | Rows to skip (from a previous reply's `nextOffset`).                                           |
+| Parameter         | Type    | Required | Description                                      |
+| ----------------- | ------- | -------- | ------------------------------------------------ |
+| `includeArchived` | boolean | no       | Include soft-archived workspaces (default false) |
+| `appId`           | string  | no       | Optional filter by settings.appId                |
+| `limit`           | number  | no       | Page size, default 50, max 200                   |
+| `offset`          | number  | no       | nextOffset of the prior reply                    |
 
 ## synap_create_project
 
@@ -1151,8 +1151,8 @@ List a project's GOALS — what people call a goal is a TRACK in tool and field 
 | `projectId`       | string  | no       | Project UUID. Required unless trackId is given.                                                                                                           |
 | `trackId`         | string  | no       | Read ONE goal: its row only (same shape), whatever its status — dropped or closed included. projectId is then optional; if you pass both they must match. |
 | `includeArchived` | boolean | no       | Also list archived tracks. Default false. Ignored with trackId.                                                                                           |
-| `limit`           | number  | no       | Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`.                                                            |
-| `offset`          | number  | no       | Rows to skip (from a previous reply's `nextOffset`).                                                                                                      |
+| `limit`           | number  | no       | Page size, default 50, max 200                                                                                                                            |
+| `offset`          | number  | no       | nextOffset of the prior reply                                                                                                                             |
 
 ## synap_start_track
 

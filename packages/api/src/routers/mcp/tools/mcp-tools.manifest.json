@@ -141,11 +141,11 @@
           },
           "limit": {
             "type": "number",
-            "description": "Read the body in slices: max characters of `content` to return (default: all, up to the reply cap). The reply then carries `contentTotal` and, while more remains, `nextOffset`."
+            "description": "Max content chars (slice)"
           },
           "offset": {
             "type": "number",
-            "description": "With limit: characters of `content` to skip (a previous reply's `nextOffset`)."
+            "description": "Chars to skip (nextOffset)"
           }
         },
         "required": ["documentId"]
@@ -547,11 +547,11 @@
           },
           "limit": {
             "type": "number",
-            "description": "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`."
+            "description": "Page size, default 50, max 200"
           },
           "offset": {
             "type": "number",
-            "description": "Rows to skip (from a previous reply's `nextOffset`)."
+            "description": "nextOffset of the prior reply"
           }
         },
         "required": []
@@ -3044,11 +3044,11 @@
         "properties": {
           "limit": {
             "type": "number",
-            "description": "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`."
+            "description": "Page size, default 50, max 200"
           },
           "offset": {
             "type": "number",
-            "description": "Rows to skip (from a previous reply's `nextOffset`)."
+            "description": "nextOffset of the prior reply"
           }
         },
         "required": []
@@ -5237,11 +5237,11 @@
           },
           "limit": {
             "type": "number",
-            "description": "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`."
+            "description": "Page size, default 50, max 200"
           },
           "offset": {
             "type": "number",
-            "description": "Rows to skip (from a previous reply's `nextOffset`)."
+            "description": "nextOffset of the prior reply"
           }
         },
         "required": []
@@ -5379,11 +5379,11 @@
           },
           "limit": {
             "type": "number",
-            "description": "Page size (default 50, max 200). A reply with `nextOffset` has more: pass it back as `offset`."
+            "description": "Page size, default 50, max 200"
           },
           "offset": {
             "type": "number",
-            "description": "Rows to skip (from a previous reply's `nextOffset`)."
+            "description": "nextOffset of the prior reply"
           }
         },
         "required": []
