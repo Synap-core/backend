@@ -16,6 +16,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.2)
  */
 
+import { trialRunInputSchema } from "../services/playbooks/trial-run.js";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import { z } from "zod";
@@ -2901,9 +2902,35 @@ export const playbooksRouter = router({
          * run's own grant (`playbook.run`) covers it.
          */
         remember: z.boolean().optional(),
+        /**
+         * TRIAL (the rule lab, design b199a3a4 slice 1b): render each draft in
+         * place of the current version it names, on Synap AI, writing
+         * nothing; the drafted text is the agent's last reply
+         * (`GET /runs/:runId?flowType=playbook` → `playbookDetail.trial`).
+         * A person's act: refused for an agent, with `remember` or with
+         * `handToAgentId`.
+         */
+        trial: trialRunInputSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.trial) {
+        if (input.agentUserId || ctx.agentUserId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only a person can try a draft rule (a trial run) — an agent cannot.",
+            cause: { reasonCode: "PERSON_ONLY" },
+          });
+        }
+        if (input.remember || input.handToAgentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId.",
+          });
+        }
+      }
       // The playbook must be on the caller's USER FLOOR (every member
       // workspace + pod-wide rows) — unchanged predicate, pod-wide as it
       // always was.
@@ -3156,6 +3183,8 @@ export const playbooksRouter = router({
             ? { handToAgentId: input.handToAgentId }
             : {}),
           ...(input.runOn ? { runOn: input.runOn } : {}),
+          // A gated trial stays a trial once approved.
+          ...(input.trial ? { trial: input.trial } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -3220,6 +3249,7 @@ export const playbooksRouter = router({
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
         ...(input.runOn ? { runOn: input.runOn } : {}),
+        ...(input.trial ? { trial: input.trial } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });

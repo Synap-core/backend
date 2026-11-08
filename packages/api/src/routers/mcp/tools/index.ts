@@ -514,6 +514,14 @@ const PLAYBOOK_PARAMS_PROPERTY = {
   },
 };
 
+/** The rules a playbook follows (design b199a3a4), parsed by `playbookGuidanceSchema`. */
+const PLAYBOOK_GUIDANCE_PROPERTY = {
+  type: "array",
+  description:
+    "Rules every run follows, in order: [{ ref: 'kind:<slug>' | 'skill:<slug>', label?, when?, where?: { <property>: [values] } }]. Only person-approved versions render. A list you pass REPLACES the stored one.",
+  items: { type: "object" },
+};
+
 const PLAYBOOK_CRITERIA_PROPERTY = {
   type: "array",
   description:
@@ -3764,6 +3772,7 @@ export const tools = {
             },
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
+            guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             sessionId: {
               type: "string",
               description:
@@ -3804,6 +3813,7 @@ export const tools = {
             stages: PLAYBOOK_STAGES_PROPERTY,
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
+            guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             subjectProfileSlug: {
               type: "string",
               description:

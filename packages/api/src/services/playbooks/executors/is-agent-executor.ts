@@ -27,6 +27,7 @@ import {
   runIdOf,
 } from "../playbook-method.js";
 import { resolveRunToolProfile } from "../run-tool-profile.js";
+import { TRIAL_KICKOFF_NOTE } from "../trial-run.js";
 
 /**
  * The stage section moved to the ONE method renderer (`playbook-method.ts`),
@@ -92,10 +93,13 @@ export class IsAgentExecutor implements Executor {
     // what the run used is stamped on its definition snapshot. Non-fatal: a
     // lookup failure never blocks the run (a guidance failure says so in the
     // section).
-    const { contextSkill, guidance } = await loadRunMethodParts({
+    // A TRIAL run (the rule lab) renders its drafts in place, read from its
+    // own session's stamp, and its kickoff says to answer with the draft.
+    const { contextSkill, guidance, trial } = await loadRunMethodParts({
       playbookId: ctx.playbookId,
       userId: ctx.userId,
       runId: runIdOf(ctx.input),
+      sessionId: ctx.sessionId,
       warn: (obj, msg) => logger.warn(obj, `is-agent: ${msg}`),
     });
 
@@ -103,7 +107,7 @@ export class IsAgentExecutor implements Executor {
     const kickoff = renderPlaybookMethod({
       contextSkill,
       guidance,
-      body: base,
+      body: trial ? `${base}\n\n${TRIAL_KICKOFF_NOTE}` : base,
       stage,
     });
 

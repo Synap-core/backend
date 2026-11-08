@@ -11,6 +11,10 @@
  */
 
 import {
+  trialStampOf,
+  TRIAL_RUN_WRITE_REFUSED_REASON,
+} from "@synap/capability-gate";
+import {
   describeBoxDeclaration,
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
@@ -307,6 +311,7 @@ async function loadSessionGovernanceContext(
     )?.governance as { forceProposeWrites?: unknown } | undefined;
     return {
       forceProposeWrites: governance?.forceProposeWrites === true,
+      trial: trialStampOf(session?.metadata) !== null,
       expectedOutputs: Array.isArray(session?.expectedOutputs)
         ? (session.expectedOutputs as ExpectedOutput[])
         : [],
@@ -316,13 +321,18 @@ async function loadSessionGovernanceContext(
       { err, sessionId },
       "Failed to load session governance context — proceeding without it"
     );
-    return { forceProposeWrites: false, expectedOutputs: [] };
+    return { forceProposeWrites: false, trial: false, expectedOutputs: [] };
   }
 }
 
 /** What the ONE session read above yields: a governance flag and the slots. */
 interface SessionGovernanceContext {
   forceProposeWrites: boolean;
+  /**
+   * A TRIAL run's session (the rule lab, design b199a3a4 slice 1b,
+   * `metadata.trial`): every AI write in it is refused.
+   */
+  trial: boolean;
   expectedOutputs: ExpectedOutput[];
 }
 
@@ -2002,6 +2012,20 @@ async function evaluatePermission(
       isAiWrite && sessionId
         ? await loadSessionGovernanceContext(sessionId)
         : null;
+    // A TRIAL run (the rule lab): nothing it writes may land, whatever a rule
+    // or a floor would say. Its session's OWN row (stage, progress, close) is
+    // its bookkeeping, not an output, and goes on. The capability gate and the
+    // send door refuse its runs and sends on their own read, which fails
+    // closed; this read stays best-effort like the stamp above.
+    if (
+      sessionGovernance?.trial &&
+      !(
+        subjectType === "focus_session" &&
+        (data as { id?: unknown } | undefined)?.id === sessionId
+      )
+    ) {
+      return { denied: true, reason: TRIAL_RUN_WRITE_REFUSED_REASON };
+    }
     // A LOOSENING settings change (raise a ceiling, widen a rule to auto,
     // guideline posture:auto, or revoke any guard) is a hard floor — it must
     // always be a human decision, so it can never auto-apply via DEFAULT_

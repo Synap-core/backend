@@ -10,6 +10,7 @@
  * `status: 'proposed'`, operators get the executed result.
  */
 
+import { trialRunInputSchema } from "../../../services/playbooks/trial-run.js";
 import { z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 
@@ -156,6 +157,11 @@ const RunPlaybookBodySchema = z.object({
     .optional()
     .describe(
       "Remember this run's choice (runOn or handToAgentId) as yours for this playbook, so the next launch does not ask (GET /playbooks/{id}/run-choice). A person's act: refused for an agent."
+    ),
+  trial: trialRunInputSchema
+    .optional()
+    .describe(
+      "Try draft rules without making them current: { guidanceOverride: { <current version id>: <draft id> } }. The drafts render in place of those versions, the run is on Synap AI, and every write, send and save in it is refused. The drafted text is the agent's last reply: GET /runs/{runId}?flowType=playbook, playbookDetail.trial.draftedText. A person's act: refused for an agent, with remember or with handToAgentId."
     ),
 });
 
@@ -763,6 +769,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           handToAgentId: body.handToAgentId,
           runOn: body.runOn,
           remember: body.remember,
+          ...(body.trial ? { trial: body.trial } : {}),
           source: "hub-rest",
         }
       );

@@ -555,6 +555,15 @@ export const buildHandlers: McpHandlerMap = {
             >[1]["expectedOutputs"],
           }
         : {}),
+      // The rules it follows, by ref: validated by `playbooks.create` with
+      // `playbookGuidanceSchema`, so a bad ref is refused, never dropped.
+      ...(args.guidance !== undefined
+        ? {
+            guidance: args.guidance as Parameters<
+              typeof createPlaybookDoor
+            >[1]["guidance"],
+          }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -597,6 +606,7 @@ export const buildHandlers: McpHandlerMap = {
       "expectedOutputs",
       "activators",
       "humanOnlyStatuses",
+      "guidance",
       "status",
       "scope",
     ] as const satisfies ReadonlyArray<keyof Patch>) {
