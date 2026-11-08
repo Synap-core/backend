@@ -50,7 +50,7 @@ export function registerChatRoutes(app: HubHono): void {
       "Same SSE frames as /api/external/chat/stream; every hub call the turn makes is bounded by the app's grant. " +
       "Requires hub-protocol.write scope.",
     request: {
-      body: { schema: streamBodySchema },
+      body: streamBodySchema,
     },
     responses: {
       200: {

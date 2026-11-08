@@ -13471,100 +13471,15 @@
           "content": {
             "application/json": {
               "schema": {
-                "schema": {
-                  "def": {
-                    "type": "object",
-                    "shape": {
-                      "query": {
-                        "def": { "type": "string", "checks": [{}] },
-                        "type": "string"
-                      },
-                      "channelId": {
-                        "def": {
-                          "type": "optional",
-                          "innerType": {
-                            "def": {
-                              "type": "string",
-                              "checks": [
-                                {
-                                  "def": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "check": "string_format",
-                                    "abort": false,
-                                    "pattern": {}
-                                  },
-                                  "type": "string"
-                                }
-                              ]
-                            },
-                            "type": "string"
-                          }
-                        },
-                        "type": "optional"
-                      },
-                      "workspaceId": {
-                        "def": {
-                          "type": "optional",
-                          "innerType": {
-                            "def": {
-                              "type": "string",
-                              "checks": [
-                                {
-                                  "def": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "check": "string_format",
-                                    "abort": false,
-                                    "pattern": {}
-                                  },
-                                  "type": "string"
-                                }
-                              ]
-                            },
-                            "type": "string"
-                          }
-                        },
-                        "type": "optional"
-                      },
-                      "agentType": {
-                        "def": {
-                          "type": "optional",
-                          "innerType": {
-                            "def": { "type": "string" },
-                            "type": "string"
-                          }
-                        },
-                        "type": "optional"
-                      },
-                      "requestId": {
-                        "def": {
-                          "type": "optional",
-                          "innerType": {
-                            "def": {
-                              "type": "string",
-                              "checks": [
-                                {
-                                  "def": {
-                                    "type": "string",
-                                    "format": "uuid",
-                                    "check": "string_format",
-                                    "abort": false,
-                                    "pattern": {}
-                                  },
-                                  "type": "string"
-                                }
-                              ]
-                            },
-                            "type": "string"
-                          }
-                        },
-                        "type": "optional"
-                      }
-                    }
-                  },
-                  "type": "object"
-                }
+                "type": "object",
+                "properties": {
+                  "query": { "type": "string", "minLength": 1 },
+                  "channelId": { "type": "string", "format": "uuid" },
+                  "workspaceId": { "type": "string", "format": "uuid" },
+                  "agentType": { "type": "string" },
+                  "requestId": { "type": "string", "format": "uuid" }
+                },
+                "required": ["query"]
               }
             }
           }
