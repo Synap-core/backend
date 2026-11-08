@@ -46,7 +46,7 @@ The pod's MCP server lists 114 tools. A new agent key lists the `entry` tools; t
 | [`synap_relay_answer`](#synap_relay_answer)                               | Relay the person's answer         | entry        | no        |
 | [`synap_ask_person`](#synap_ask_person)                                   | Ask the person                    | entry        | no        |
 | [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
-| [`synap_flow`](#synap_flow)                                               | Get the flow of a kind or role    | read         | yes       |
+| [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
 | [`synap_get_work_release`](#synap_get_work_release)                       | Get the release state             | sessions     | yes       |
@@ -777,7 +777,7 @@ What REALLY needs the person right now, classified by the pod's one needs-you ru
 | `sessionId`   | string | no       | Optional: only this session.           |
 | `limit`       | number | no       | Rows per fold (default 100, max 200).  |
 
-## synap_flow
+## synap_get_flow
 
 **Get the flow of a kind or role** · Group: `read` · readOnlyHint: true · openWorldHint: false
 

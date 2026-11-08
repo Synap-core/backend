@@ -128,7 +128,6 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__file_into_project",
   },
   synap_find: { "pod-mcp": "synap_find", "cp-connector": "pod__find" },
-  synap_flow: { "pod-mcp": "synap_flow", "cp-connector": null },
   synap_get_channel: {
     "pod-mcp": "synap_get_channel",
     "cp-connector": "pod__get_channel",
@@ -145,6 +144,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_get_entity",
     "cp-connector": "pod__get_entity",
   },
+  synap_get_flow: { "pod-mcp": "synap_get_flow", "cp-connector": null },
   synap_get_graph: {
     "pod-mcp": "synap_get_graph",
     "cp-connector": "pod__get_graph",

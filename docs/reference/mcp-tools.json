@@ -39,7 +39,7 @@
       "synap_get_channel",
       "synap_diagnose",
       "synap_template_health",
-      "synap_flow"
+      "synap_get_flow"
     ],
     "data": [
       "synap_create_entity",
@@ -4717,7 +4717,7 @@
       }
     },
     {
-      "name": "synap_flow",
+      "name": "synap_get_flow",
       "title": "Get the flow of a kind or role",
       "group": "read",
       "annotations": {
