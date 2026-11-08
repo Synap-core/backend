@@ -92,6 +92,7 @@ import { projectsRouter } from "./routers/projects.js";
 import { outputsRouter } from "./routers/outputs.js";
 import { tracksRouter } from "./routers/tracks.js";
 import { lifecycleRouter } from "./routers/lifecycle.js";
+import { flowRouter } from "./routers/flow.js";
 import { workersRouter } from "./routers/workers.js";
 import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
@@ -220,6 +221,7 @@ export const coreRouter = router({
   outputs: outputsRouter,
   tracks: tracksRouter,
   lifecycle: lifecycleRouter,
+  flow: flowRouter,
   workers: workersRouter,
   onboarding: onboardingRouter,
   // Settings › Privacy: share setup milestones with the CP (plan §5, OQ3).

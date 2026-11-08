@@ -38,6 +38,7 @@
     "synap_get_document": 956,
     "synap_get_entities": 3344,
     "synap_get_entity": 1068,
+    "synap_get_flow": 1238,
     "synap_get_graph": 1315,
     "synap_get_project": 357,
     "synap_get_proposal": 1448,

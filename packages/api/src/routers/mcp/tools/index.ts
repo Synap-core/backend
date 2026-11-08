@@ -3200,6 +3200,41 @@ export const tools = {
         },
       },
       {
+        name: "synap_get_flow",
+        annotations: {
+          title: "Get the flow of a kind or role",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "How a kind's or role's work flows in a space, in ONE read — read-only. `states` in declared order, each with the flow stage(s) that own it (`owners`: playbook, stage, gate, executor; [] = no flow moves things there; two = a conflict to fix), its count and `cards` (who works each, `next` step + the stage owning it); `unclassified` things; `flows` (active playbooks working it: stages with the status each owns, workers, open runs and `onOlderVersion`); `space.primaryOutput`; `withheld` = parts your grant does not reach (not 'none'). A role (e.g. lead) reads people and companies together; each card names its kind. Use it to see where things stand and which flow to run next, instead of reading the board and the playbooks apart.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileSlug: {
+              type: "string",
+              description:
+                "The kind or role (synap_list_profiles), e.g. deal or lead.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional: the space. Omitted = every space you see.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only this project's things.",
+            },
+            firstN: {
+              type: "number",
+              description:
+                "Cards per state (default 10, max 50); counts are exact.",
+            },
+          },
+          required: ["profileSlug"],
+        },
+      },
+      {
         name: "synap_list_sessions",
         annotations: {
           title: "List focus sessions",

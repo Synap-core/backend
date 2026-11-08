@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 113 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 114 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -46,6 +46,7 @@ The pod's MCP server lists 113 tools. A new agent key lists the `entry` tools; t
 | [`synap_relay_answer`](#synap_relay_answer)                               | Relay the person's answer         | entry        | no        |
 | [`synap_ask_person`](#synap_ask_person)                                   | Ask the person                    | entry        | no        |
 | [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
+| [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
 | [`synap_get_work_release`](#synap_get_work_release)                       | Get the release state             | sessions     | yes       |
@@ -775,6 +776,19 @@ What REALLY needs the person right now, classified by the pod's one needs-you ru
 | `trackId`     | string | no       | Optional: only this goal (track).      |
 | `sessionId`   | string | no       | Optional: only this session.           |
 | `limit`       | number | no       | Rows per fold (default 100, max 200).  |
+
+## synap_get_flow
+
+**Get the flow of a kind or role** · Group: `read` · readOnlyHint: true · openWorldHint: false
+
+How a kind's or role's work flows in a space, in ONE read — read-only. `states` in declared order, each with the flow stage(s) that own it (`owners`: playbook, stage, gate, executor; [] = no flow moves things there; two = a conflict to fix), its count and `cards` (who works each, `next` step + the stage owning it); `unclassified` things; `flows` (active playbooks working it: stages with the status each owns, workers, open runs and `onOlderVersion`); `space.primaryOutput`; `withheld` = parts your grant does not reach (not 'none'). A role (e.g. lead) reads people and companies together; each card names its kind. Use it to see where things stand and which flow to run next, instead of reading the board and the playbooks apart.
+
+| Parameter     | Type   | Required | Description                                                |
+| ------------- | ------ | -------- | ---------------------------------------------------------- |
+| `profileSlug` | string | yes      | The kind or role (synap_list_profiles), e.g. deal or lead. |
+| `workspaceId` | string | no       | Optional: the space. Omitted = every space you see.        |
+| `projectId`   | string | no       | Optional: only this project's things.                      |
+| `firstN`      | number | no       | Cards per state (default 10, max 50); counts are exact.    |
 
 ## synap_list_sessions
 
