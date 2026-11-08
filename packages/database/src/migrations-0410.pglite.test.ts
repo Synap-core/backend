@@ -55,7 +55,10 @@ describe("0410 one input for enrich_entity", () => {
     expect(s.required).toEqual(["name"]);
     expect(s.additionalProperties).toBe(false);
     expect(s.properties.name).toMatchObject({ type: "string", minLength: 1 });
-    expect(s.properties.company).toMatchObject({ type: "string", minLength: 1 });
+    expect(s.properties.company).toMatchObject({
+      type: "string",
+      minLength: 1,
+    });
   });
 
   it("leaves the other intents as they were", async () => {

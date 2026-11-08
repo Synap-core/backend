@@ -78,7 +78,11 @@ const NEUTRAL_KEYS = new Set([
  */
 export function isReachFieldPatch(input: Record<string, unknown>): boolean {
   const properties = input.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties))
+  if (
+    !properties ||
+    typeof properties !== "object" ||
+    Array.isArray(properties)
+  )
     return false;
   const keys = Object.keys(properties);
   if (keys.length === 0 || !keys.every((k) => REACH_FIELDS.includes(k)))
@@ -126,7 +130,9 @@ export async function reachFieldGrantSpace(
   if ((await grantDeniedKey({ ...write, workspaceId: null }, grant)) === null)
     return null;
   for (const space of keySpaces(grant)) {
-    if ((await grantDeniedKey({ ...write, workspaceId: space }, grant)) !== null)
+    if (
+      (await grantDeniedKey({ ...write, workspaceId: space }, grant)) !== null
+    )
       continue;
     const [row] = await db
       .select({ id: entities.id })
