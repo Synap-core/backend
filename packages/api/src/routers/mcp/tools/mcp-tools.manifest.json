@@ -3111,7 +3111,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates the definition ONLY: the cell is not surfaced anywhere until it is bound as a renderer for a kind, which is a separate step — ask the user to do it in the Synap app.",
+      "description": "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. With `placeOn: {viewId}` (a bento view: synap_list_views) approving defines the cell AND places it as a tile on that view, in one act, and the proposal shows that view; a view that is missing, not a bento, in another space, or one the approver may not change refuses the whole act (no cell is written). Without `placeOn` the cell is surfaced nowhere until it is placed on a bento or bound as a renderer for a kind (synap_promote_cell_to_renderer).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3148,6 +3148,18 @@
               "widget"
             ],
             "description": "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want."
+          },
+          "placeOn": {
+            "type": "object",
+            "properties": {
+              "viewId": {
+                "type": "string",
+                "description": "UUID of a bento view (synap_list_views)."
+              }
+            },
+            "required": ["viewId"],
+            "additionalProperties": false,
+            "description": "Optional: where the cell is SURFACED. Defining the cell also adds it as a tile to this bento view, in one act. A space cell goes on a view of the same space; a pod-global cell on any view."
           },
           "reasoning": {
             "type": "string",
