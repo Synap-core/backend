@@ -29,10 +29,12 @@
  * elsewhere, so it cleans up without finishing.
  *
  * Static `/host-jobs/lease` is registered BEFORE the `/:id` routes (Hono).
- * Not in the OpenAPI registry, like `/box-runs`: a machine protocol.
+ * In the OpenAPI reference (the bodies are the wire's own schemas), so the
+ * runner's contract is published with the pod's.
  */
 
 import { z } from "zod";
+import { z as zOpenapi } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { and, db, eq } from "@synap/database";
@@ -54,6 +56,8 @@ import {
   type HubHono,
   type HubVariables,
 } from "./_shared.js";
+import { registerOpenApi } from "./_codecs/_register.js";
+import { ErrorSchema } from "./_codecs/_openapi.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 import {
   finishHostJob,
@@ -88,7 +92,7 @@ function observedFrom(b: {
  * then the principal: the acting agent must be a computer, and the request's
  * person must be the computer's own person.
  */
-async function resolveHostRunner(c: {
+export async function resolveHostRunner(c: {
   get: (k: "scopes" | "agentUserId" | "userId") => unknown;
 }): Promise<
   | { ok: true; runner: HostRunner }
@@ -167,6 +171,8 @@ export function registerHostJobsRoutes(app: HubHono): void {
         ),
     })
   );
+
+  registerHostJobsOpenApi(app);
 
   /** An absent body is `{}`; a body that is not JSON is refused, never `{}`. */
   async function body<T extends z.ZodTypeAny>(
@@ -319,5 +325,142 @@ export function registerHostJobsRoutes(app: HubHono): void {
       logger.error({ err, jobId }, "host-jobs logs read failed");
       return c.json({ error: "Logs read failed" }, httpStatusForTrpcError(err));
     }
+  });
+}
+
+/**
+ * The host-job wire in the Hub OpenAPI reference. Bodies are the wire's own
+ * schemas (`@synap-core/types/host-jobs`); answers are described as the
+ * handlers above write them.
+ */
+function registerHostJobsOpenApi(app: HubHono): void {
+  const runner =
+    "Only a connected computer's own key holding `host.runner` " +
+    '("Installs from the pod" on that computer); any other caller, an agent ' +
+    "hosted on the computer included, is refused `NOT_A_COMPUTER` (403).";
+  const IdParams = zOpenapi.object({ id: zOpenapi.string().uuid() });
+  const refusals = {
+    400: { description: "Bad request", schema: ErrorSchema },
+    401: { description: "Unauthorized", schema: ErrorSchema },
+    403: {
+      description: "Not a computer, or no host.runner scope",
+      schema: ErrorSchema,
+    },
+    404: {
+      description: "No such job for an installation on this computer",
+      schema: ErrorSchema,
+    },
+    409: { description: "The lease is no longer held", schema: ErrorSchema },
+    413: { description: "The body is too large", schema: ErrorSchema },
+  };
+  registerOpenApi(app, {
+    method: "post",
+    path: "/host-jobs/lease",
+    tags: ["HostJobs"],
+    summary: "Lease the next host job of an installation on this computer",
+    description:
+      "Answers `{ job: null }` when nothing is due. The job names the " +
+      "installation's kind (`service` | `tool`), its approved manifest and " +
+      `version. ${runner}`,
+    request: { body: HostJobLeaseBodySchema },
+    responses: {
+      200: {
+        description: "The leased job, or null",
+        schema: zOpenapi.object({
+          job: zOpenapi
+            .record(zOpenapi.string(), zOpenapi.unknown())
+            .nullable(),
+        }),
+      },
+      400: refusals[400],
+      401: refusals[401],
+      403: refusals[403],
+      413: refusals[413],
+    },
+  });
+  registerOpenApi(app, {
+    method: "post",
+    path: "/host-jobs/:id/heartbeat",
+    tags: ["HostJobs"],
+    summary: "Keep a host job's lease, and learn whether to stop or send logs",
+    description: runner,
+    request: { params: IdParams, body: HostJobHeartbeatBodySchema },
+    responses: {
+      200: {
+        description: "The lease is extended",
+        schema: zOpenapi.object({
+          leaseExpiresAt: zOpenapi.string(),
+          stopRequested: zOpenapi.boolean(),
+          logsRequested: zOpenapi.boolean(),
+        }),
+      },
+      ...refusals,
+    },
+  });
+  registerOpenApi(app, {
+    method: "post",
+    path: "/host-jobs/:id/report",
+    tags: ["HostJobs"],
+    summary: "Report health, a verify or the requested log for a host job",
+    description:
+      "A report never moves the installation's lifecycle; health is read " +
+      `from it. Logs are scrubbed of secrets before they are stored. ${runner}`,
+    request: { params: IdParams, body: HostJobReportBodySchema },
+    responses: {
+      200: {
+        description: "Stored",
+        schema: zOpenapi.object({
+          installationId: zOpenapi.string(),
+          status: zOpenapi.string(),
+        }),
+      },
+      ...refusals,
+    },
+  });
+  registerOpenApi(app, {
+    method: "post",
+    path: "/host-jobs/:id/finish",
+    tags: ["HostJobs"],
+    summary: "Finish a host job with its verdict",
+    description:
+      "Moves the installation's lifecycle (installed, failed, removed) by " +
+      `compare-and-set; a second finish is 409. ${runner}`,
+    request: { params: IdParams, body: HostJobFinishBodySchema },
+    responses: {
+      200: {
+        description: "Finished",
+        schema: zOpenapi.object({
+          id: zOpenapi.string(),
+          status: zOpenapi.enum(["done", "failed", "stopped"]),
+          installationStatus: zOpenapi.string(),
+        }),
+      },
+      ...refusals,
+    },
+  });
+  registerOpenApi(app, {
+    method: "get",
+    path: "/host-jobs/:id/logs",
+    tags: ["HostJobs"],
+    summary: "Read the log a computer sent for one of your host jobs",
+    description:
+      "The person's own job, read through the owner floor. `log` is null " +
+      "until the computer sent it (ask for it first). Requires " +
+      "hub-protocol.read scope; a scoped key needs `installation.read`.",
+    request: { params: IdParams },
+    responses: {
+      200: {
+        description: "The job's log",
+        schema: zOpenapi.object({
+          id: zOpenapi.string(),
+          status: zOpenapi.string(),
+          log: zOpenapi.unknown().nullable(),
+          logReceivedAt: zOpenapi.string().nullable(),
+          logsRequestedAt: zOpenapi.string().nullable(),
+        }),
+      },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+    },
   });
 }

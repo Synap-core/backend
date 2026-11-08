@@ -537,6 +537,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // they can see (`readAgentAssignment`), the read half of
   // PUT /agent-users/:id/assignment. Same subject, same PERSON door.
   [/^\/agent-users\/assignments\/?$/, PERSON("agent")],
+  // One host job's log (`rest/host-jobs.ts`), the log a computer sent on
+  // request: the person's own job of an installation on one of their
+  // computers, which no space holds, read through the owner floor. Read under
+  // `installation`, the subject `host_jobs` reads under (grant-read.ts).
+  [/^\/host-jobs\/[^/]+\/logs\/?$/, PERSON("installation")],
   // Who runs a playbook for the person (`playbooks.runChoice`, slice 5a): the
   // playbook through `scopedDb` (its own grant ANDed, `playbook`), plus the
   // person's remembered choice (their `assigned_to` row) and their agents
