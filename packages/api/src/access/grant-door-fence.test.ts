@@ -95,11 +95,16 @@ describe("restDoorAllowed", () => {
     ["GET", "/playbooks/promote-from-session", false],
     ["POST", "/playbooks/11111111-1111-4111-8111-111111111111/run", true], // a write — bounded by the gate
     ["GET", `/projects/${U}/path`, false], // userVisibleWhere sessions — not migrated
-    ["GET", "/search", false],
     // The list door: seamed; its ?q= (Typesense) branch is refused by the
     // route itself for a limited key (entities.scoped-key-list.pglite.test.ts).
     ["GET", "/entities", true],
     ["GET", "/entities/", true],
+    // The search door reads through the entity floor for a fenced grant (withinGrantSearchHits); its siblings do not.
+    ["GET", "/search", true],
+    ["GET", "/search/", true],
+    ["GET", "/search/collection", false],
+    ["GET", "/search/documents", false],
+    ["GET", "/vector-search", false],
     ["GET", "/knowledge", false],
     ["GET", "/compacted-states/latest", false],
     ["POST", "/knowledge/ask", false],
