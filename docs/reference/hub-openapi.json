@@ -13461,6 +13461,148 @@
         }
       }
     },
+    "/chat/stream": {
+      "post": {
+        "tags": ["Chat"],
+        "summary": "Stream one AI chat turn for an app (SSE)",
+        "description": "Streams one chat turn in a workspace the app's grant reaches with `chat.stream`. Same SSE frames as /api/external/chat/stream; every hub call the turn makes is bounded by the app's grant. Requires hub-protocol.write scope.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "schema": {
+                  "def": {
+                    "type": "object",
+                    "shape": {
+                      "query": {
+                        "def": { "type": "string", "checks": [{}] },
+                        "type": "string"
+                      },
+                      "channelId": {
+                        "def": {
+                          "type": "optional",
+                          "innerType": {
+                            "def": {
+                              "type": "string",
+                              "checks": [
+                                {
+                                  "def": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "check": "string_format",
+                                    "abort": false,
+                                    "pattern": {}
+                                  },
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "type": "string"
+                          }
+                        },
+                        "type": "optional"
+                      },
+                      "workspaceId": {
+                        "def": {
+                          "type": "optional",
+                          "innerType": {
+                            "def": {
+                              "type": "string",
+                              "checks": [
+                                {
+                                  "def": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "check": "string_format",
+                                    "abort": false,
+                                    "pattern": {}
+                                  },
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "type": "string"
+                          }
+                        },
+                        "type": "optional"
+                      },
+                      "agentType": {
+                        "def": {
+                          "type": "optional",
+                          "innerType": {
+                            "def": { "type": "string" },
+                            "type": "string"
+                          }
+                        },
+                        "type": "optional"
+                      },
+                      "requestId": {
+                        "def": {
+                          "type": "optional",
+                          "innerType": {
+                            "def": {
+                              "type": "string",
+                              "checks": [
+                                {
+                                  "def": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "check": "string_format",
+                                    "abort": false,
+                                    "pattern": {}
+                                  },
+                                  "type": "string"
+                                }
+                              ]
+                            },
+                            "type": "string"
+                          }
+                        },
+                        "type": "optional"
+                      }
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "text/event-stream of the turn",
+            "content": {
+              "application/json": { "schema": { "type": "string" } }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "error": { "type": "string" } },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Outside the grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "error": { "type": "string" } },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/skills": {
       "post": {
         "tags": ["Skills"],
