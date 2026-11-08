@@ -537,12 +537,6 @@ const ACTION_VERB_ROWS = {
   // matter — the button asks, the session receipt reports.
   plan_approval: { imperative: "Approve plan", past: "Approved plan" },
   deploy_approval: { imperative: "Approve deploy", past: "Approved deploy" },
-  // A playbook STAGE GATE (`playbook.stage_gate`, changeType `stage_gate`):
-  // the person agrees to a session entering a stage. Like the dev gates, not
-  // bare "Approve"; titled as a LEAD (`ACTION_TITLE_LEADS`) whose name is the
-  // stage and the thing ("Approve stage: Send proposal for EU deal"), never
-  // "Stage gate Job" (finding 8f2dee79).
-  stage_gate: { imperative: "Approve stage", past: "Approved stage" },
   // Document-edit proposal types (`DOCUMENT_PATCH_PROPOSAL_TYPES` + the legacy
   // `ai_edit`), filed against an EXISTING document by the pod's patch door.
   // Without rows they humanized to "Section update" / "Ai edit" and composed
@@ -729,20 +723,10 @@ type TitlePreposition = "in" | "of" | "for";
 /**
  * Actions whose title is a LEAD, `<verb>: <name>`, with no kind noun: the
  * object is a batch the name describes, not a record of a kind ("Writes held
- * for review: Claude Code, 2026-10-27, 12 items"), or a stage gate whose
- * name says the stage and the thing. Keyed like {@link ACTION_VERBS} (whole
- * token, then its last dotted segment: `playbook.stage_gate`).
+ * for review: Claude Code, 2026-10-27, 12 items"). Keyed like
+ * {@link ACTION_VERBS} (whole token).
  */
-export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set([
-  "held_writes",
-  "stage_gate",
-]);
-
-function isTitleLead(action: string): boolean {
-  const key = action.toLowerCase();
-  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
-  return ACTION_TITLE_LEADS.has(key) || ACTION_TITLE_LEADS.has(tail);
-}
+export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set(["held_writes"]);
 
 function resolveActionPreposition(action: string | null | undefined): string {
   if (!action) return "";
@@ -1291,7 +1275,7 @@ export function buildObjectActionTitle(params: {
   // reaching it were written by the pod, in English.
   const verbEn = resolveActionLabel(actionToken, mood, "en");
   const verb = resolveActionLabel(actionToken, mood, locale);
-  if (actionToken && isTitleLead(actionToken)) {
+  if (actionToken && ACTION_TITLE_LEADS.has(actionToken.toLowerCase())) {
     const lead = nameSlot(objectName, verbEn, verbEn, "");
     return lead ? t("vocabulary.title.lead", { verb, name: lead }) : verb;
   }

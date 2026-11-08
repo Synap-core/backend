@@ -29,7 +29,6 @@
 import { z } from "zod";
 import {
   db,
-  entities,
   focusSessions,
   playbooks,
   playbookRuns,
@@ -44,7 +43,6 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { Hold } from "@synap-core/types/lifecycle";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   readCriteria,
   resolveStageGate,
@@ -95,37 +93,15 @@ export const StageGatePayloadSchema = z
     /** The `playbook_runs` row this session is executing, when there is one. */
     playbookRunId: z.string().uuid().optional(),
     fromStage: z.string().max(120).nullable().optional(),
-    /**
-     * The gate's display name: the stage and, for a session about a thing,
-     * that thing ("Send proposal for EU data residency deal"). The key a
-     * session proposal names itself by (`extractProposalName`), withheld from
-     * a viewer who may not read the session (`session-content-redaction.ts`).
-     */
-    targetName: z.string().min(1).max(600).optional(),
   })
   .refine((p) => !!p.sessionId !== !!p.trackId, {
     message: "A stage gate names exactly one subject: sessionId or trackId",
   });
 export type StageGatePayload = z.infer<typeof StageGatePayloadSchema>;
 
-/**
- * One-line human summary — what the push notification and the feed row say —
- * through the title door: "Approve stage: Send proposal for EU deal".
- */
+/** One-line human summary — what the push notification and the feed row say. */
 export function summarizeStageGate(payload: StageGatePayload): string {
-  return buildObjectActionTitle({
-    action: "stage_gate",
-    objectName: payload.targetName ?? payload.stageName,
-  });
-}
-
-/** The gate's name: the stage, and the thing the run is about when it has one. */
-export function stageGateName(
-  stageName: string,
-  thingName: string | null | undefined
-): string {
-  const thing = thingName?.trim();
-  return thing ? `${stageName} for ${thing}` : stageName;
+  return `Approve entry into "${payload.stageName}"`;
 }
 
 /**
@@ -242,12 +218,6 @@ export interface StageGateSubject {
    * `[CHECK_GATE_UNEVALUATED]` — unmeasured is not passed.
    */
   checkFailing(fromStage: string): Promise<CheckMeasure>;
-  /**
-   * The name of the thing the subject works on, when it has one (a session's
-   * subject entity): the human gate's title names it. Null when there is
-   * none.
-   */
-  thingName?(): Promise<string | null>;
   /** Where the human-gate proposal points. */
   proposal: {
     targetType: string;
@@ -324,10 +294,6 @@ async function openStageGate(
       : {}),
     ...(playbookRunId ? { playbookRunId } : {}),
     fromStage: input.fromStage ?? null,
-    targetName: stageGateName(
-      stage.name,
-      subject.thingName ? await subject.thingName() : null
-    ),
   });
 
   const paused = await subject.pause({
@@ -499,8 +465,6 @@ export interface SessionStageGateParams {
   projectId?: string | null;
   channelId?: string | null;
   playbookId?: string | null;
-  /** The thing the session is about, when it has one: the gate names it. */
-  subjectEntityId?: string | null;
   toStage: string;
   fromStage?: string | null;
 }
@@ -550,15 +514,6 @@ export function sessionGateSubject(
         },
       });
       return rows.length > 0;
-    },
-    async thingName() {
-      if (!params.subjectEntityId) return null;
-      const [row] = await db
-        .select({ title: entities.title })
-        .from(entities)
-        .where(eq(entities.id, params.subjectEntityId))
-        .limit(1);
-      return row?.title ?? null;
     },
     async checkFailing(fromStage) {
       const { evaluateSession } =
