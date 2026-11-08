@@ -51,6 +51,7 @@ import {
   grantOfScope,
   PodIdentityError,
   verifyIsDelegationToken,
+  type KeyGrant,
   type VerifiedIsDelegation,
 } from "@synap/database";
 import { APP_PERSON_KEY_TYPE } from "@synap/database/schema";
@@ -58,6 +59,10 @@ import {
   AppGrantClaimError,
   parseAppGrantClaim,
 } from "../../../services/app-grant-claim.js";
+import {
+  narrowedByApp,
+  resolveSynapAiCeiling,
+} from "../../../services/synap-ai-ceiling.js";
 import {
   isPersonDeviceToken,
   resolvePersonDeviceSession,
@@ -243,13 +248,16 @@ async function authenticateIsDelegation(
   c.set("keyWorkspaceId", null);
   const refused = await refuseGuestPrincipal(c);
   if (refused) return refused;
-  // The turn's grant: an APP's grant when the token carries one (`app_grant`,
-  // narrowing only), else the full-access delegation grant as before. FAIL
-  // CLOSED: a claim that does not parse is refused, never widened to `*`.
-  let grant;
+  // The turn's grant, from up to two bounds, each narrowing only. FAIL CLOSED: a claim that does not parse is refused,
+  // never widened to `*`; a paused Synap AI is refused; a ceiling that cannot be read throws (a failed read is not "none").
+  //  1. An APP's grant when the token carries one (`app_grant`).
+  //  2. The person's Synap AI ceiling when the token names their personal agent (`act.sub`) and they have set one
+  //     (`resolveSynapAiCeiling`): the standing grant they approved for their own AI; an app's grant narrows it further.
+  //  With neither, the full-access delegation grant, as before (any other agent named in `act.sub` changes nothing).
+  let appGrant: KeyGrant | null = null;
   if (delegation.appGrant) {
     try {
-      grant = parseAppGrantClaim(delegation.appGrant);
+      appGrant = parseAppGrantClaim(delegation.appGrant);
     } catch (err) {
       if (!(err instanceof AppGrantClaimError)) throw err;
       logger.warn(
@@ -260,6 +268,29 @@ async function authenticateIsDelegation(
         message: "This delegation's app grant is malformed.",
       });
     }
+  }
+  let grant: KeyGrant = appGrant ?? IS_DELEGATION_GRANT;
+  let bounded = appGrant !== null;
+  if (delegation.agentUserId) {
+    const ceiling = await resolveSynapAiCeiling(
+      delegation.operatorUserId,
+      delegation.agentUserId
+    );
+    if (ceiling.status === "refused") {
+      logger.warn(
+        { jti: delegation.jti, reason: ceiling.reason },
+        "IS delegation refused: Synap AI"
+      );
+      return authErrorResponse(c, "key_revoked", {
+        message: "Synap AI is paused: it does nothing until it is resumed.",
+      });
+    }
+    if (ceiling.status === "ok") {
+      grant = narrowedByApp(ceiling.grant, appGrant);
+      bounded = true;
+    }
+  }
+  if (bounded) {
     // The same door fence an API key's grant meets (see the key path above).
     const rel = hubRelativePath(c.req.path);
     if (isFencedGrant(grant) && !restDoorAllowed(c.req.method, rel, grant)) {
@@ -274,8 +305,6 @@ async function authenticateIsDelegation(
         403
       );
     }
-  } else {
-    grant = IS_DELEGATION_GRANT;
   }
   // W-A4: a non-channel IS run names itself (`is:<runId>`); the same resolver
   // as the stored key's, the AI service (the token's audience) as the client.
