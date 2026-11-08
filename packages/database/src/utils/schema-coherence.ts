@@ -776,6 +776,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "required_intents",
     addedBy: "0291_playbook_required_intents.sql",
   },
+  // The rules a playbook follows (0411): without it every playbook read and
+  // write that selects the column fails.
+  {
+    table: "playbooks",
+    column: "guidance",
+    addedBy: "0411_playbook_guidance.sql",
+  },
 
   // Backup run ledger (0295). The backup container writes it with psql and
   // GET /status/backup reads it; without it every run's record is lost and the

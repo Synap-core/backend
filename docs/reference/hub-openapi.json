@@ -17383,6 +17383,26 @@
                               "items": { "type": "string", "minLength": 1 },
                               "maxItems": 24
                             },
+                            "guidance": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "ref": { "type": "string" },
+                                  "label": { "type": "string" },
+                                  "when": { "type": "string" },
+                                  "where": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "array",
+                                      "items": { "type": "string" }
+                                    }
+                                  }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": {}
+                              }
+                            },
                             "subjectProfile": {
                               "type": "object",
                               "properties": {
@@ -21218,6 +21238,26 @@
                               "type": "array",
                               "items": { "type": "string", "minLength": 1 },
                               "maxItems": 24
+                            },
+                            "guidance": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "ref": { "type": "string" },
+                                  "label": { "type": "string" },
+                                  "when": { "type": "string" },
+                                  "where": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                      "type": "array",
+                                      "items": { "type": "string" }
+                                    }
+                                  }
+                                },
+                                "required": ["ref"],
+                                "additionalProperties": {}
+                              }
                             },
                             "subjectProfile": {
                               "type": "object",

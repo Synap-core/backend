@@ -17,6 +17,7 @@ import {
 import { createLinks } from "../../../services/links/links-service.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
+import type { GuidanceDeclaration } from "@synap-core/types/guidance";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import {
@@ -166,6 +167,10 @@ export function registerPlaybookExecutors(): void {
         // materializes with an empty requirement list — the agent's declaration
         // is silently dropped on the one path a human explicitly approved.
         requiredIntents: innerData.requiredIntents as string[] | undefined,
+        // The rules the playbook follows. Re-validated by `playbooks.create`
+        // (`playbookGuidanceSchema`); read back so an approved playbook keeps
+        // the guidance its proposal declared.
+        guidance: innerData.guidance as GuidanceDeclaration[] | undefined,
         subjectProfile: innerData.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: innerData.schedule,
@@ -296,6 +301,7 @@ export function registerPlaybookExecutors(): void {
         "stages",
         "criteria",
         "requiredIntents",
+        "guidance",
         "subjectProfile",
         // The process declarations. The update door FOLDS them into
         // `subjectProfile` before its gate, so a proposal carries them there;

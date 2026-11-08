@@ -163,6 +163,7 @@ describe("buildDefinitionSnapshot (D3c run snapshot)", () => {
       params: [{ name: "x" }],
       expectedOutputs: [{ label: "out" }],
       criteria: [{ key: "c1" }],
+      guidance: [{ ref: "kind:brand-voice-guide" }],
     } as unknown as Playbook;
     expect(buildDefinitionSnapshot(playbook)).toEqual({
       version: 3,
@@ -171,6 +172,8 @@ describe("buildDefinitionSnapshot (D3c run snapshot)", () => {
       params: [{ name: "x" }],
       expectedOutputs: [{ label: "out" }],
       criteria: [{ key: "c1" }],
+      // The DECLARED refs; the executor adds what the run used.
+      guidance: { declared: [{ ref: "kind:brand-voice-guide" }] },
     });
   });
 });

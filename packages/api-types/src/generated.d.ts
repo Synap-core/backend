@@ -7817,6 +7817,23 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: true;
 			tableName: "playbooks";
 		}, {}, {}>;
+		guidance: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: unknown;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "guidance";
+			notNull: true;
+			tableName: "playbooks";
+		}, {}, {}>;
 		id: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgUUID";
@@ -46798,6 +46815,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					optional?: boolean | undefined;
 				}[] | undefined;
 				goalTemplate: string;
+				guidance?: {
+					[x: string]: unknown;
+					ref: string;
+					label?: string | undefined;
+					when?: string | undefined;
+					where?: Record<string, string[]> | undefined;
+				}[] | undefined;
 				humanOnlyStatuses?: string[] | undefined;
 				inputStrategy?: Record<string, unknown> | undefined;
 				metadata?: {
@@ -47168,6 +47192,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs: unknown;
 				flowAutomationId: string | null;
 				goalTemplate: string;
+				guidance: unknown;
 				id: string;
 				inputStrategy: unknown;
 				metadata: unknown;
@@ -47261,6 +47286,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedOutputs: unknown;
 				flowAutomationId: string | null;
 				goalTemplate: string;
+				guidance: unknown;
 				id: string;
 				inputStrategy: unknown;
 				metadata: unknown;
@@ -47298,6 +47324,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					flowAutomationId: string | null;
 					goalTemplate: string;
+					guidance: unknown;
 					id: string;
 					inputStrategy: unknown;
 					metadata: unknown;
@@ -47336,6 +47363,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					flowAutomationId: string | null;
 					goalTemplate: string;
+					guidance: unknown;
 					id: string;
 					inputStrategy: unknown;
 					metadata: unknown;
@@ -47444,6 +47472,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					flowAutomationId: string | null;
 					goalTemplate: string;
+					guidance: unknown;
 					id: string;
 					inputStrategy: unknown;
 					metadata: unknown;
@@ -47876,6 +47905,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					optional?: boolean | undefined;
 				}[] | undefined;
 				goalTemplate?: string | undefined;
+				guidance?: {
+					[x: string]: unknown;
+					ref: string;
+					label?: string | undefined;
+					when?: string | undefined;
+					where?: Record<string, string[]> | undefined;
+				}[] | undefined;
 				humanOnlyStatuses?: string[] | undefined;
 				id: string;
 				inputStrategy?: Record<string, unknown> | undefined;
@@ -48145,6 +48181,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expectedOutputs: unknown;
 					flowAutomationId: string | null;
 					goalTemplate: string;
+					guidance: unknown;
 					id: string;
 					inputStrategy: unknown;
 					metadata: unknown;
@@ -58759,6 +58796,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							kind: "command" | "skill" | "tool";
 							ref: string;
 						})[] | undefined;
+						guidance?: {
+							[x: string]: unknown;
+							ref: string;
+							label?: string | undefined;
+							when?: string | undefined;
+							where?: Record<string, string[]> | undefined;
+						}[] | undefined;
 						humanOnlyStatuses?: string[] | undefined;
 						inputStrategy?: Record<string, unknown> | undefined;
 						metadata?: {

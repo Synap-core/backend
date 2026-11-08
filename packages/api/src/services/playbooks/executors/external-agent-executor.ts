@@ -19,7 +19,9 @@
  *
  * ── What the agent receives ─────────────────────────────────────────────────
  * The task (goal fenced as UNTRUSTED data — it is the person's words and the
- * answers fed back, not instructions from Synap), repos when the run params
+ * answers fed back, not instructions from Synap), the playbook's METHOD
+ * (`task.method`: approved context skill, the rules it follows, the current
+ * stage; the one renderer every door uses), repos when the run params
  * carry them, the branch the params name (`branch`, a checkout) or else the
  * per-session work branch to create (`workBranch`, `synap/<session short id>`),
  * the session and room ids, the run's capture path, the
@@ -81,6 +83,10 @@ import {
   postDispatchNotice,
 } from "../../agent-dispatch/binding-call.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbook-lifecycle.js";
+import {
+  loadRunMethodParts,
+  renderPlaybookMethod,
+} from "../playbook-method.js";
 import { paramOwedSlots } from "../../focus-sessions/param-slots.js";
 import { normalizeExpectedLabel } from "../../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../../focus-sessions/delegate-output.js";
@@ -399,7 +405,23 @@ export class ExternalAgentExecutor implements Executor {
     }
     const service = resolveServiceName(binding.provider);
 
-    // 3. Start the task, as the agent.
+    // 3. The playbook's METHOD — the same text the IS kickoff and the MCP bind
+    // doors render (`renderPlaybookMethod`): the approved context skill, the
+    // rules this playbook follows (its guidance, stamped on the run's
+    // snapshot) and the current stage. Not fenced like the goal: every part
+    // of it is person-approved pod content, not the person's free words.
+    const { contextSkill, guidance } = await loadRunMethodParts({
+      playbookId: ctx.playbookId,
+      userId: ctx.userId,
+      runId,
+      warn: (obj, msg) => logger.warn(obj, `external-agent: ${msg}`),
+    });
+    const stage = ctx.currentStage
+      ? (ctx.stages?.find((s) => s.key === ctx.currentStage) ?? null)
+      : null;
+    const method = renderPlaybookMethod({ contextSkill, guidance, stage });
+
+    // 4. Start the task, as the agent.
     const origin = podPublicOrigin() ?? null;
     const params = {
       task: {
@@ -422,6 +444,7 @@ export class ExternalAgentExecutor implements Executor {
             }
           : {}),
         currentStage: ctx.currentStage ?? null,
+        method: method || null,
       },
       ...repoInputs(input, ctx.sessionId),
       sessionId: ctx.sessionId,

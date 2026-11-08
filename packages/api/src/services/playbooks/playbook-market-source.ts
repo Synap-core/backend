@@ -76,6 +76,10 @@ export const PLAYBOOK_MANAGED_FIELDS = [
   // diffs what a template declares against what a pod has, and a gap is
   // reported (see `matchRequiredIntents`), never refused.
   "requiredIntents",
+  // MANAGED for the same reason: a template that changes the rules its
+  // playbook follows (a ref added, a filter narrowed) must reach installed
+  // pods. Refs, never ids, so the declaration is the same on every pod.
+  "guidance",
   "subjectProfile",
   "schedule",
   "executor",

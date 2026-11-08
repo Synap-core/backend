@@ -494,6 +494,7 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   expectedOutputs: unknown;
   criteria: unknown;
   requiredIntents: unknown;
+  guidance: unknown;
   subjectProfile: unknown;
 } {
   return {
@@ -508,6 +509,11 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     // only the template it was launched from — a run whose playbook has since
     // been re-declared must still read as what it actually needed.
     requiredIntents: playbook.requiredIntents,
+    // The rules the run was DECLARED to follow (refs). What it actually USED
+    // (each current version's id and content hash) is stamped next to it by
+    // the executor that renders the method (`recordRunGuidance`), replacing
+    // this list with `{ declared, status, hash, used, demoted, missing }`.
+    guidance: { declared: playbook.guidance },
     // The kind the run's subject must be (the subject-kind floor).
     subjectProfile: playbook.subjectProfile,
   };

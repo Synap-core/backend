@@ -5004,6 +5004,7 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL 
 -- playbook may declare an intent nothing installed serves, and that gap is
 -- what a later install is checked against — so it is reported, never rejected.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "guidance" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0411 (the rules a playbook follows, by kind or skill ref)
 -- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
 -- both seeded from the playbook and authorable afterwards; `stages` was the
 -- missing third, and without it a session running no playbook could not have

@@ -98,6 +98,7 @@ import {
   playbookScopeSchema,
   playbookExpectedOutputSchema,
   playbookRequiredIntentsSchema,
+  playbookGuidanceSchema,
 } from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
@@ -408,6 +409,8 @@ export const updateInputSchema = z.object({
    * change cannot make the patch and the create accept different slugs.
    */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
+  /** See `playbookGuidanceSchema` — REPLACES the declared list, same schema. */
+  guidance: playbookGuidanceSchema.optional(),
   /** See `playbookDefinitionSchema.subjectProfile` — the same schema. */
   subjectProfile: playbookSubjectProfileSchema.optional(),
   /** See `playbookDefinitionSchema.activators` — folded into `subjectProfile`. */
@@ -2044,6 +2047,7 @@ export const playbooksRouter = router({
           stages: input.stages,
           criteria: input.criteria,
           requiredIntents: input.requiredIntents,
+          guidance: input.guidance,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
           metadata: input.metadata,
@@ -2165,6 +2169,7 @@ export const playbooksRouter = router({
             stages: input.stages ?? [],
             criteria: input.criteria ?? [],
             requiredIntents: input.requiredIntents ?? [],
+            guidance: input.guidance ?? [],
             subjectProfile: input.subjectProfile ?? null,
             schedule: input.schedule ?? null,
             metadata: input.metadata ?? {},
@@ -2432,6 +2437,7 @@ export const playbooksRouter = router({
           ...(input.requiredIntents !== undefined
             ? { requiredIntents: input.requiredIntents }
             : {}),
+          ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
             : {}),
@@ -2476,6 +2482,7 @@ export const playbooksRouter = router({
       if (input.criteria !== undefined) set.criteria = input.criteria;
       if (input.requiredIntents !== undefined)
         set.requiredIntents = input.requiredIntents;
+      if (input.guidance !== undefined) set.guidance = input.guidance;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;
       if (input.schedule !== undefined) set.schedule = input.schedule;
