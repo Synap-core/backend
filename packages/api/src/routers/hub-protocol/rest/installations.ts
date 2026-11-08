@@ -9,7 +9,9 @@
  *
  * `computer: "me"` (the default for the request, and a query value for the
  * read) is the computer the caller's key speaks for: the computer's own key,
- * or an agent hosted on it. Otherwise `computerId` names one of the person's
+ * or an agent hosted on it. A scoped key reads per its grant
+ * (`installation`); a computer's own key whose grant does not name it still
+ * reads what is installed on itself, and nothing else. Otherwise `computerId` names one of the person's
  * computers (a stranger's is 404, no oracle).
  *
  * The request is governed (`installation/request`): a person's ask applies;
@@ -38,12 +40,18 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../../utils/permission-check.js";
+import { getRequestGrant } from "@synap/database";
 import { AccessContext } from "../../../access/index.js";
+import {
+  GRANT_DOOR_UNSUPPORTED,
+  installationsReadableByGrant,
+} from "../../../access/grant-door-fence.js";
 import {
   applyInstallationRequest,
   installRefusal,
   INSTALLATION_REQUEST_ACTIONS,
   InstallationRequestError,
+  listComputerOwnInstallations,
   listInstallations,
   loadInstallableCapability,
   loadLiveInstallation,
@@ -366,6 +374,30 @@ export function registerInstallationsRoutes(app: HubHono): void {
       if (denied) return denied as never;
       const { computer, capabilityKey } = c.req.valid("query");
       try {
+        // The fence admits every scoped key here (grant-door-fence.ts): a
+        // key whose grant does not read `installation` is served only when
+        // it is a computer's OWN key, and then only what is on that computer.
+        if (!installationsReadableByGrant(getRequestGrant())) {
+          const own = await resolveCallerComputer(callerOf(c));
+          if (!own || own.id !== callerOf(c).agentUserId)
+            return c.json(
+              { error: GRANT_DOOR_UNSUPPORTED, code: "GRANT_DOOR_UNSUPPORTED" },
+              403
+            ) as never;
+          if (computer !== "me" && computer !== own.id)
+            return c.json(
+              {
+                code: "OWN_COMPUTER_ONLY",
+                error: `This key reads only what is installed on ${own.name}: ask with computer=me.`,
+              },
+              403
+            ) as never;
+          const items = await listComputerOwnInstallations(
+            own,
+            capabilityKey ? { capabilityKey } : {}
+          );
+          return c.json({ items }, 200);
+        }
         let computerId: string | undefined;
         if (computer) {
           const ref = await computerFor(c, computer);
