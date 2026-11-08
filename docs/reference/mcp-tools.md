@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 113 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 115 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -46,6 +46,7 @@ The pod's MCP server lists 113 tools. A new agent key lists the `entry` tools; t
 | [`synap_relay_answer`](#synap_relay_answer)                               | Relay the person's answer         | entry        | no        |
 | [`synap_ask_person`](#synap_ask_person)                                   | Ask the person                    | entry        | no        |
 | [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
+| [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
 | [`synap_get_work_release`](#synap_get_work_release)                       | Get the release state             | sessions     | yes       |
@@ -108,6 +109,7 @@ The pod's MCP server lists 113 tools. A new agent key lists the `entry` tools; t
 | [`synap_request_deploy_approval`](#synap_request_deploy_approval)         | Request deploy approval           | governance   | no        |
 | [`synap_find`](#synap_find)                                               | Find what can do this             | read         | yes       |
 | [`synap_list_capabilities`](#synap_list_capabilities)                     | List tools                        | capabilities | yes       |
+| [`synap_list_installations`](#synap_list_installations)                   | List installations                | capabilities | yes       |
 | [`synap_run_capability`](#synap_run_capability)                           | Run tool                          | capabilities | no        |
 | [`synap_create_verb`](#synap_create_verb)                                 | Create verb                       | capabilities | no        |
 | [`synap_list_automations`](#synap_list_automations)                       | List rules                        | capabilities | yes       |
@@ -126,14 +128,14 @@ The pod's MCP server lists 113 tools. A new agent key lists the `entry` tools; t
 
 THE recall door, for what you cannot already name (it asks the POD; to ask the PERSON, use synap_ask_person). Ask the user's Synap pod anything in natural language — it routes across all knowledge substrates (entities/notes/tasks, how-to runbooks, remembered facts/preferences, and the links/files the user kept in their Library — found by what was read from them) and returns ONE provenance-tagged answer saying which substrate answered. COST: an answer (detail full or brief, the default) runs a model and spends this key's AI budget, far smaller than its read budget; detail:'sources' runs no model and is a plain read. READ DIRECTLY WHEN YOU CAN: you have the id → synap_get_entity / synap_get_document / synap_get_session; you know the kind → synap_get_entities; you want what links to it → synap_get_graph; your open work → synap_orient. Never ask for something one of those returns. Ask when you do not know where the data is, before a non-trivial task or a question about the user's life, work, projects or preferences (the pod is their source of truth, prefer it over your assumptions), and before creating anything, to check what already exists (detail:'sources' is enough for that). This single tool replaces the old search/search_entities/recall_facts/get_knowledge tools.
 
-| Parameter     | Type    | Required | Description                                                                                                                                                                                                                                                                                                              |
-| ------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `query`       | string  | yes      | Your question, in natural language                                                                                                                                                                                                                                                                                       |
-| `detail`      | enum    | no       | How much answer you want. full (default) = the provenance-rich answer. brief = a few sentences, no capture suggestions — use it for lookups (who/what/where). sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity. One of: `sources`, `brief`, `full`. |
-| `workspaceId` | string  | no       | Optional: scope to one workspace. Omit for pod-wide recall across everything the user has. Your declared focus (synap_set_workspace_focus / synap_set_project_focus) is NOT a scope: it only ranks matching results first and hides nothing. The answer's `lens` says what was applied ({ filter, boost, source }).      |
-| `projectId`   | string  | no       | Optional: scope recall to a project (its projects table id). Narrows results to entities linked to that project. Orthogonal to workspaceId — compose both lenses.                                                                                                                                                        |
-| `limit`       | number  | no       | Max results per substrate (default: 10)                                                                                                                                                                                                                                                                                  |
-| `compare`     | boolean | no       | A/B DIAGNOSTIC: run BOTH the baseline and Horizon rankers on the same candidate pool and return { baseline, horizon, diff:{ overlapAtN, moved } } instead of a synthesized answer. Read-only — does NOT change normal recall. For evaluating ranking changes.                                                            |
+| Parameter     | Type    | Required | Description                                                                                                                                                                                                                                                                                                                                                                |
+| ------------- | ------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query`       | string  | yes      | Your question, in natural language                                                                                                                                                                                                                                                                                                                                         |
+| `detail`      | enum    | no       | How much answer you want. brief (default) = a few sentences, no capture suggestions — enough for lookups (who/what/where). full = the provenance-rich answer, longer; ask for it only when you need the detail. sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity. One of: `sources`, `brief`, `full`. |
+| `workspaceId` | string  | no       | Optional: scope to one workspace. Omit for pod-wide recall across everything the user has. Your declared focus (synap_set_workspace_focus / synap_set_project_focus) is NOT a scope: it only ranks matching results first and hides nothing. The answer's `lens` says what was applied ({ filter, boost, source }).                                                        |
+| `projectId`   | string  | no       | Optional: scope recall to a project (its projects table id). Narrows results to entities linked to that project. Orthogonal to workspaceId — compose both lenses.                                                                                                                                                                                                          |
+| `limit`       | number  | no       | Max results per substrate (default: 10)                                                                                                                                                                                                                                                                                                                                    |
+| `compare`     | boolean | no       | A/B DIAGNOSTIC: run BOTH the baseline and Horizon rankers on the same candidate pool and return { baseline, horizon, diff:{ overlapAtN, moved } } instead of a synthesized answer. Read-only — does NOT change normal recall. For evaluating ranking changes.                                                                                                              |
 
 ## synap_get_entities
 
@@ -168,6 +170,8 @@ Get a document by ID: its markdown `content`, the `revision` to pass back as `ba
 | ------------ | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `documentId` | string | yes      | Document UUID                                                                                                                                                                          |
 | `format`     | enum   | no       | raw (default) = the stored markdown, embeds as directives (what you edit). readable = embeds replaced by their fallback text (what you quote or summarise). One of: `raw`, `readable`. |
+| `limit`      | number | no       | Max content chars (slice)                                                                                                                                                              |
+| `offset`     | number | no       | Chars to skip (nextOffset)                                                                                                                                                             |
 
 ## synap_get_thread_context
 
@@ -268,10 +272,11 @@ List all available entity types (profiles) AND the relation types you may link t
 
 Get all relations for an entity — inbound and outbound. Returns typed edges with sourceEntityId, targetEntityId, and relation type. Dependencies ('blocks' / 'depends_on') are included: they are stored as one dependency link, so their row carries storedAs:'link' and a link id. Check before synap_link_entities to avoid duplicates. Use to understand an entity's connections.
 
-| Parameter     | Type   | Required | Description                      |
-| ------------- | ------ | -------- | -------------------------------- |
-| `entityId`    | string | yes      | Entity UUID to get relations for |
-| `workspaceId` | string | no       | Workspace ID (optional)          |
+| Parameter     | Type   | Required | Description                                                 |
+| ------------- | ------ | -------- | ----------------------------------------------------------- |
+| `entityId`    | string | yes      | Entity UUID to get relations for                            |
+| `workspaceId` | string | no       | Workspace ID (optional)                                     |
+| `limit`       | number | no       | Max relations returned, newest first (default 50, max 100). |
 
 ## synap_resolve_identity
 
@@ -299,6 +304,8 @@ Fetch ANY object PLUS everything it's linked to, typed. Returns { object, neighb
 | `name`    | string | no       | Fetch by NAME instead of id (a handle). Ambiguous names return candidates to pick from. Provide id OR name.                        |
 | `type`    | string | no       | Object kind: entity (default), project, view, channel, session, playbook, tool, skill, automation, document, track, proposal, run. |
 | `subtype` | string | no       | Narrow a name lookup (entity profileSlug, view type, tool/skill kind). Optional.                                                   |
+| `limit`   | number | no       | Page size, default 50, max 200                                                                                                     |
+| `offset`  | number | no       | nextOffset of the prior reply                                                                                                      |
 
 ## synap_create_entity
 
@@ -776,6 +783,19 @@ What REALLY needs the person right now, classified by the pod's one needs-you ru
 | `sessionId`   | string | no       | Optional: only this session.           |
 | `limit`       | number | no       | Rows per fold (default 100, max 200).  |
 
+## synap_get_flow
+
+**Get the flow of a kind or role** · Group: `read` · readOnlyHint: true · openWorldHint: false
+
+How a kind's or role's work flows in a space, in ONE read — read-only. `states` in declared order, each with the flow stage(s) that own it (`owners`: playbook, stage, gate, executor; [] = no flow moves things there; two = a conflict to fix), its count and `cards` (who works each, `next` step + the stage owning it); `unclassified` things; `flows` (active playbooks working it: stages with the status each owns, workers, open runs and `onOlderVersion`); `space.primaryOutput`; `withheld` = parts your grant does not reach (not 'none'). A role (e.g. lead) reads people and companies together; each card names its kind. Use it to see where things stand and which flow to run next, instead of reading the board and the playbooks apart.
+
+| Parameter     | Type   | Required | Description                                                |
+| ------------- | ------ | -------- | ---------------------------------------------------------- |
+| `profileSlug` | string | yes      | The kind or role (synap_list_profiles), e.g. deal or lead. |
+| `workspaceId` | string | no       | Optional: the space. Omitted = every space you see.        |
+| `projectId`   | string | no       | Optional: only this project's things.                      |
+| `firstN`      | number | no       | Cards per state (default 10, max 50); counts are exact.    |
+
 ## synap_list_sessions
 
 **List focus sessions** · Group: `sessions` · readOnlyHint: true · openWorldHint: false
@@ -839,7 +859,10 @@ What happened to a goal, a session or a pull request, newest first — read-only
 
 Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.
 
-No parameters.
+| Parameter | Type   | Required | Description                    |
+| --------- | ------ | -------- | ------------------------------ |
+| `limit`   | number | no       | Page size, default 50, max 200 |
+| `offset`  | number | no       | nextOffset of the prior reply  |
 
 ## synap_create_cell
 
@@ -1090,6 +1113,8 @@ List the workspaces (domain lenses) you can see, pod-wide — call this to find 
 | ----------------- | ------- | -------- | ------------------------------------------------ |
 | `includeArchived` | boolean | no       | Include soft-archived workspaces (default false) |
 | `appId`           | string  | no       | Optional filter by settings.appId                |
+| `limit`           | number  | no       | Page size, default 50, max 200                   |
+| `offset`          | number  | no       | nextOffset of the prior reply                    |
 
 ## synap_create_project
 
@@ -1141,6 +1166,8 @@ List a project's GOALS — what people call a goal is a TRACK in tool and field 
 | `projectId`       | string  | no       | Project UUID. Required unless trackId is given.                                                                                                           |
 | `trackId`         | string  | no       | Read ONE goal: its row only (same shape), whatever its status — dropped or closed included. projectId is then optional; if you pass both they must match. |
 | `includeArchived` | boolean | no       | Also list archived tracks. Default false. Ignored with trackId.                                                                                           |
+| `limit`           | number  | no       | Page size, default 50, max 200                                                                                                                            |
+| `offset`          | number  | no       | nextOffset of the prior reply                                                                                                                             |
 
 ## synap_start_track
 
@@ -1699,6 +1726,17 @@ Discover what the user can actually DO. Returns a SECTIONED view: `integrations`
 | `containerId` | string | no       | Only rows belonging to this capability pack (the `containerId` on integrations/skills, or `builtInPack.containerId`). The default view summarises Synap Core's first-party verbs as ONE `builtInPack` line — pass its containerId to list them.                                                                                                                                                                                                                                                                                                            |
 | `intent`      | string | no       | Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this. |
 | `limit`       | number | no       | Max entries to return (default 20 when `query` is set; unset otherwise).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+## synap_list_installations
+
+**List installations** · Group: `capabilities` · readOnlyHint: true · openWorldHint: false
+
+What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, the person or the computer asks through POST /api/hub/installations/request.
+
+| Parameter       | Type   | Required | Description                                                                  |
+| --------------- | ------ | -------- | ---------------------------------------------------------------------------- |
+| `computerId`    | string | no       | One computer's id (its users id).                                            |
+| `capabilityKey` | string | no       | A capability's catalog slug, e.g. media-transcribe: which computers have it. |
 
 ## synap_run_capability
 

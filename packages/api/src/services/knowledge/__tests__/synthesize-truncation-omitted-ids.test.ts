@@ -162,7 +162,7 @@ describe("synap_ask (MCP door) — the omitted ids reach the agent", () => {
 
     const ctx = {
       toolName: "synap_ask",
-      args: { query: "list everything" },
+      args: { query: "list everything", detail: "full" },
       userId: "user-1",
       apiKeyScopes: ["mcp.read"],
       workspaceId: null,

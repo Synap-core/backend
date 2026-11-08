@@ -23,6 +23,7 @@ import {
   type LifecycleCategory,
   type LifecycleOption,
   type RecordedHold,
+  type StepMark,
 } from "@synap-core/types/lifecycle";
 import {
   WAIT_BALLS,
@@ -243,6 +244,24 @@ export interface ThingNextMoveInput {
 }
 
 /**
+ * The next MAIN-PATH step after `status` on a declared lifecycle (rungs 4-5
+ * of {@link deriveThingNextMove}, which reads it): the step a move targets,
+ * `null` when the path has no step left, `off_path` when the status is not
+ * one of the main path's (an undeclared value, a paused or lost option).
+ * The flow read (`flow-read.ts`) names each card's next step with it, so a
+ * card and the thing's own next move never disagree on where it goes.
+ */
+export function nextPathStep(
+  lifecycle: { readonly options: readonly LifecycleOption[] },
+  status: string | null
+): StepMark | null | "off_path" {
+  const steps = stepsFromLifecycle(lifecycle, status);
+  const at = steps.findIndex((s) => s.position === "current");
+  if (at < 0) return "off_path";
+  return steps.slice(at + 1).find((s) => s.position === "ahead") ?? null;
+}
+
+/**
  * A thing's next move. In order:
  *  1. `none` once it has ended (a done or lost status);
  *  2. a pause: its hold's wait ({@link holdNextMove}), a bare pause, or
@@ -272,14 +291,12 @@ export function deriveThingNextMove(
   if (input.waitingOn[0]) {
     return withStuck(unnamedWaitMove(input.waitingOn[0], "thing"), input.stuck);
   }
-  const steps = stepsFromLifecycle(input.lifecycle, input.status);
-  const at = steps.findIndex((s) => s.position === "current");
-  if (at < 0) {
+  const next = nextPathStep(input.lifecycle, input.status);
+  if (next === "off_path") {
     return UNKNOWN(
       "Its status is not one its lifecycle declares, so its next step is not known."
     );
   }
-  const next = steps.slice(at + 1).find((s) => s.position === "ahead");
   if (!next) {
     return {
       kind: "none",

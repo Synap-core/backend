@@ -7,7 +7,7 @@
  *  - `brief` reaches the IS request body (the IS picks its short prompt from it);
  *  - `sources` makes NO IS call at all (no model spend) and is not dressed as a
  *    failure (`answer: null` with no `error`);
- *  - `full` / omitted sends the body every IS version already accepts;
+ *  - `full` sends the body every IS version already accepts (omitted is `brief`, pinned in read.ask-brief-cap.test.ts);
  *  - the reported `detail` is what HAPPENED: an IS that predates `brief`
  *    ignores it and answers in full, and the receipt must then say `full`;
  *  - an unknown value is refused, never silently read as `full`.
@@ -216,7 +216,7 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     isReplies({ answer: "Hetzner.", detail: "brief" });
     const brief = await callAsk({ detail: "brief" });
     isReplies({ answer: "A long answer." });
-    const full = await callAsk({});
+    const full = await callAsk({ detail: "full" });
 
     const b = JSON.parse(brief.text) as {
       sources: unknown[];
@@ -260,12 +260,12 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     expect(payload.sources.map((s) => s.id)).toEqual(["ent-1", "ent-2"]);
   });
 
-  it("default: the IS body carries no detail (byte-compatible) and says full", async () => {
+  it("detail:'full': the IS body carries no detail (byte-compatible) and says full", async () => {
     const fetchMock = isReplies({
       answer: "Hetzner hosts the pod, per a note…",
     });
 
-    const { text } = await callAsk({});
+    const { text } = await callAsk({ detail: "full" });
 
     expect("detail" in sentBody(fetchMock)).toBe(false);
     expect((JSON.parse(text) as { detail: string }).detail).toBe("full");

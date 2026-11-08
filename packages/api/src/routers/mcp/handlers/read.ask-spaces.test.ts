@@ -115,7 +115,7 @@ const usageRow = (workspaceId: string | null, type: string, count: number) => ({
 async function askMcp(query: string): Promise<Record<string, any>> {
   const res = (await readHandlers.synap_ask!({
     toolName: "synap_ask",
-    args: { query },
+    args: { query, detail: "full" },
     userId: "user-1",
     apiKeyScopes: ["mcp.read"],
     caller: {} as never,
