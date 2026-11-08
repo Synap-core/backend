@@ -352,6 +352,11 @@ const GATED_ELSEWHERE: Readonly<
     }
   >
 > = {
+  "POST /installations/request": {
+    via: "requestInstallation",
+    load: () => import("../services/installations/request-installation.js"),
+    why: "installation.request through checkPermissionOrPropose (an agent's install, update or removal is a proposal), shared with MCP synap_request_installation",
+  },
   "PUT /playbooks/:id/run-choice": {
     via: "setPlaybookRunChoiceGoverned",
     load: () => import("../services/playbooks/set-run-choice.js"),

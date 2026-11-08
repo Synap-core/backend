@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 115 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 116 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -110,6 +110,7 @@ The pod's MCP server lists 115 tools. A new agent key lists the `entry` tools; t
 | [`synap_find`](#synap_find)                                               | Find what can do this             | read         | yes       |
 | [`synap_list_capabilities`](#synap_list_capabilities)                     | List tools                        | capabilities | yes       |
 | [`synap_list_installations`](#synap_list_installations)                   | List installations                | capabilities | yes       |
+| [`synap_request_installation`](#synap_request_installation)               | Request installation              | capabilities | no        |
 | [`synap_run_capability`](#synap_run_capability)                           | Run tool                          | capabilities | no        |
 | [`synap_create_verb`](#synap_create_verb)                                 | Create verb                       | capabilities | no        |
 | [`synap_list_automations`](#synap_list_automations)                       | List rules                        | capabilities | yes       |
@@ -1732,12 +1733,26 @@ Discover what the user can actually DO. Returns a SECTIONED view: `integrations`
 
 **List installations** · Group: `capabilities` · readOnlyHint: true · openWorldHint: false
 
-What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, the person or the computer asks through POST /api/hub/installations/request.
+What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, ask with synap_request_installation.
 
 | Parameter       | Type   | Required | Description                                                                  |
 | --------------- | ------ | -------- | ---------------------------------------------------------------------------- |
 | `computerId`    | string | no       | One computer's id (its users id).                                            |
 | `capabilityKey` | string | no       | A capability's catalog slug, e.g. media-transcribe: which computers have it. |
+
+## synap_request_installation
+
+**Request installation** · Group: `capabilities` · readOnlyHint: false · destructiveHint: false · openWorldHint: true
+
+Ask to install a capability on one of the person's computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person's computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. After the computer's worker runs it, read the result with synap_list_installations.
+
+| Parameter       | Type   | Required | Description                                                                                                                                                                                                                                                                                                                                               |
+| --------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `capabilityKey` | string | yes      | The capability's catalog slug, e.g. media-ffmpeg (market.search `slug`).                                                                                                                                                                                                                                                                                  |
+| `computer`      | string | yes      | Where it goes: one of the person's computers by name or id (market.search `computers`), or "pod" for a capability that runs on the pod.                                                                                                                                                                                                                   |
+| `action`        | enum   | no       | Default install. update = another version; verify = run its check now; remove = uninstall from that computer. One of: `install`, `update`, `verify`, `remove`.                                                                                                                                                                                            |
+| `version`       | string | no       | For update: the version to move to.                                                                                                                                                                                                                                                                                                                       |
+| `sessionId`     | string | no       | Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error. |
 
 ## synap_run_capability
 

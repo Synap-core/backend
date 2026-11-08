@@ -6,6 +6,10 @@
  * at filing), and the reconciler queues the one job it calls for. The
  * computer's runner then leases and runs it. Re-approving does nothing.
  *
+ * When the ask named a capability the pod did not have yet (MCP
+ * `synap_request_installation`), the proposal carries `catalog`: approving
+ * adds it from Synap's catalog, then records the installation. One card.
+ *
  * Approval needs a fresh sign-in (installing on a person's machine is a
  * commitment: the default the reconciliation §3.4 names, overridable):
  * `widensCredential` makes the dispatch refuse a Synap app's device session
@@ -25,6 +29,11 @@ import {
   loadPersonsComputer,
 } from "../../../services/installations/installations.js";
 import {
+  addCatalogCapability,
+  loadCatalogCapability,
+  type CatalogAddition,
+} from "../../../services/installations/request-installation.js";
+import {
   registerProposalExecutor,
   attachFailureMeta,
 } from "../execution-registry.js";
@@ -35,6 +44,20 @@ function cannotApply(message: string) {
     new TRPCError({ code: "PRECONDITION_FAILED", message }),
     { errorClass: "conflict" }
   );
+}
+
+/** The catalog addition an agent's ask carried, when well formed. */
+function catalogAdditionOf(raw: unknown): CatalogAddition | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const c = raw as Record<string, unknown>;
+  if (typeof c.slug !== "string" || !c.slug) return null;
+  const text = (v: unknown) => (typeof v === "string" ? v : null);
+  return {
+    slug: c.slug,
+    name: text(c.name) ?? c.slug,
+    version: text(c.version),
+    licence: text(c.licence),
+  };
 }
 
 export function registerInstallationExecutors(): void {
@@ -64,7 +87,33 @@ export function registerInstallationExecutors(): void {
           "Couldn't apply — this computer is not yours, or it is no longer connected. Nothing was asked of it."
         );
       }
-      const capability = await loadInstallableCapability(capabilityKey);
+      let capability = await loadInstallableCapability(capabilityKey);
+      // An agent asked for a capability the pod did not have yet: approving
+      // adds it from Synap's catalog first (the same applier as an approved
+      // `market.install`), after checking the computer against the catalog
+      // definition as it is NOW, so a computer that no longer fits gets
+      // nothing added.
+      const catalog = catalogAdditionOf(data.catalog);
+      if (
+        !capability &&
+        catalog?.slug === capabilityKey &&
+        action === "install"
+      ) {
+        const current = await loadCatalogCapability(catalog.slug);
+        if (!current?.installable)
+          throw cannotApply(
+            `Couldn't apply — ${capabilityKey} is no longer in Synap's marketplace as something to install on a computer. Nothing was added.`
+          );
+        // The person approves the version the card showed, never another.
+        if (catalog.version && current.version !== catalog.version)
+          throw cannotApply(
+            `Couldn't apply — ${capabilityKey} changed in the marketplace since it was asked for (${catalog.version} → ${current.version ?? "unknown"}). Nothing was added: ask again.`
+          );
+        const refusal = installRefusal(current.installable, computer);
+        if (refusal)
+          throw cannotApply(`Couldn't apply — ${refusal} Nothing was added.`);
+        capability = await addCatalogCapability(catalog, userId);
+      }
       if (!capability)
         throw cannotApply(
           `Couldn't apply — ${capabilityKey} is no longer a capability this pod can install. Nothing was asked of the computer.`

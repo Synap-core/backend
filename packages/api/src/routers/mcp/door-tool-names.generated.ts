@@ -313,6 +313,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_request_deploy_approval",
     "cp-connector": "pod__request_deploy_approval",
   },
+  synap_request_installation: {
+    "pod-mcp": "synap_request_installation",
+    "cp-connector": null,
+  },
   synap_request_upload: {
     "pod-mcp": "synap_request_upload",
     "cp-connector": null,

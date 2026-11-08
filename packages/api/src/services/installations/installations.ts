@@ -343,7 +343,7 @@ export async function loadInstallableCapability(
 
 /** Why this capability cannot go on this computer, in words; null when it can. */
 export function installRefusal(
-  capability: InstallableCapability,
+  capability: Pick<InstallableCapability, "manifest">,
   computer: ComputerRef
 ): string | null {
   if (!computer.installsFromPod)

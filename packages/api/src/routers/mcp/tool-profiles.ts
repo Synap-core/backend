@@ -187,6 +187,7 @@ export const TOOL_GROUPS = {
   capabilities: [
     "synap_list_capabilities",
     "synap_list_installations",
+    "synap_request_installation",
     "synap_run_capability",
     "synap_create_verb",
     "synap_list_automations",
