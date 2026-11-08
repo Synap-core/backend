@@ -46,6 +46,7 @@ import {
   type GuidanceField,
   type GuidanceRow,
   type GuidanceSnapshot,
+  type GuidanceUsed,
   type RenderedGuidance,
   type ResolvedGuidance,
 } from "@synap-core/types/guidance";
@@ -359,4 +360,71 @@ export async function recordRunGuidance(
       definitionSnapshot: drizzleSql`coalesce(${playbookRuns.definitionSnapshot}, '{}'::jsonb) || jsonb_build_object('guidance', coalesce(${playbookRuns.definitionSnapshot} -> 'guidance', '{}'::jsonb) || ${JSON.stringify(snapshot)}::jsonb)`,
     })
     .where(eq(playbookRuns.id, runId));
+}
+
+/**
+ * What a send drafted in a playbook run carries (slice 1b): the rules the run
+ * USED, copied from its definition snapshot by the POD when the send is filed
+ * (`proposals.data.guidance`) and kept on the sent message
+ * (`messages.metadata.guidance`). The AI never reports it. `unavailable` = the
+ * run could not read its rules, or the send could not read the run: said, never
+ * an absent stamp that would read as "no rules".
+ */
+export type SendGuidanceStamp =
+  | {
+      status: "ok";
+      runId: string;
+      playbookId: string | null;
+      /** The rendered section's hash (`GuidanceSnapshot.hash`). */
+      hash: string | null;
+      /** Each rule's ref, label, content hash and row ids + versions. */
+      used: GuidanceUsed[];
+    }
+  | { status: "unavailable"; runId: string | null; error: string };
+
+/**
+ * The guidance stamp of a send made in `sessionId`: the rules its LATEST
+ * playbook run used, or null when the session is no run, or its run used no
+ * rule. THROWS on a failed read (the send door stamps `unavailable`).
+ */
+export async function readSendGuidance(
+  sessionId: string
+): Promise<SendGuidanceStamp | null> {
+  const database = await getDb();
+  const [run] = await database
+    .select({
+      id: playbookRuns.id,
+      playbookId: playbookRuns.playbookId,
+      snapshot: playbookRuns.definitionSnapshot,
+    })
+    .from(playbookRuns)
+    .where(eq(playbookRuns.sessionId, sessionId))
+    .orderBy(drizzleSql`${playbookRuns.startedAt} desc`)
+    .limit(1);
+  if (!run) return null;
+  const g = (run.snapshot as { guidance?: unknown } | null)?.guidance as
+    (Partial<GuidanceSnapshot> & { status?: unknown }) | undefined;
+  if (!g || typeof g !== "object") return null;
+  if (g.status === "unavailable") {
+    return {
+      status: "unavailable",
+      runId: run.id,
+      error:
+        typeof (g as { error?: unknown }).error === "string"
+          ? (g as { error: string }).error
+          : "the run could not read its rules",
+    };
+  }
+  if (g.status !== "ok") return null;
+  const used = Array.isArray((g as { used?: unknown }).used)
+    ? ((g as { used: unknown[] }).used as GuidanceUsed[])
+    : [];
+  if (used.length === 0) return null;
+  return {
+    status: "ok",
+    runId: run.id,
+    playbookId: run.playbookId ?? null,
+    hash: typeof g.hash === "string" ? g.hash : null,
+    used,
+  };
 }

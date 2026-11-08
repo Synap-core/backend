@@ -788,6 +788,15 @@ export function registerPlaybookExecutors(): void {
             : {}),
           // Synap AI asked for this run stays Synap AI once approved.
           ...(inner.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+          // A trial (the rule lab) stays a trial once approved: re-validated
+          // by the run door's own schema.
+          ...(inner.trial && typeof inner.trial === "object"
+            ? {
+                trial: inner.trial as {
+                  guidanceOverride: Record<string, string>;
+                },
+              }
+            : {}),
         });
       let batch: BatchRunReceipt | undefined;
       // What this approval started — EVERY approval, not only a batch: the

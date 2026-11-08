@@ -107,6 +107,10 @@ const WORKSPACE = "22222222-2222-4222-8222-222222222222";
 beforeAll(async () => {
   await h.client!.exec(ddlFor(schema.channels as unknown as PgTable));
   await h.client!.exec(ddlFor(schema.events as unknown as PgTable));
+  // The send door reads the session (a trial run's refusal, fail closed) and
+  // its run (the guidance stamp).
+  await h.client!.exec(ddlFor(schema.focusSessions as unknown as PgTable));
+  await h.client!.exec(ddlFor(schema.playbookRuns as unknown as PgTable));
 });
 
 describe("a completed external send writes its audit row", () => {

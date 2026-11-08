@@ -11,6 +11,7 @@
  * `proposals.list` / `activity.summary` use), so no cross-workspace run leaks.
  */
 
+import { readTrialDraft } from "../playbooks/trial-run.js";
 import {
   db,
   and,
@@ -2561,6 +2562,7 @@ async function loadPlaybookRunDetail(
       expectedOutputs: focusSessions.expectedOutputs,
       verificationReport: focusSessions.verificationReport,
       channelId: focusSessions.channelId,
+      metadata: focusSessions.metadata,
     })
     .from(playbookRuns)
     .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
@@ -2587,9 +2589,14 @@ async function loadPlaybookRunDetail(
     };
   }
 
-  const [produced, proposalResult] = await Promise.all([
+  const [produced, proposalResult, trial] = await Promise.all([
     loadRunProduced([sess.id], userId),
     loadRunProposals(sess.id, userId),
+    // A trial run's drafted text (the rule lab). THROWS on a failed read.
+    readTrialDraft({
+      metadata: sess.metadata,
+      channelId: sess.channelId ?? null,
+    }),
   ]);
   const agents = await loadRunAgents(
     sess.channelId ?? null,
@@ -2611,6 +2618,7 @@ async function loadPlaybookRunDetail(
     produced,
     proposals: proposalResult.items,
     agents,
+    ...(trial ? { trial } : {}),
   };
 }
 
