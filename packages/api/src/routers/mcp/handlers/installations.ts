@@ -128,17 +128,25 @@ export const installationHandlers: McpHandlerMap = {
       }
 
       const found = await findPersonsComputer(ctx.userId, target);
-      if (found.status !== "found")
+      if (found.status === "ambiguous") {
+        const choices = computerChoices(
+          found.computers,
+          await manifestFor(capabilityKey)
+        );
+        const ids = new Set(found.candidates.map((c) => c.id));
         return ok({
           status: "refused",
-          code:
-            found.status === "ambiguous"
-              ? "COMPUTER_AMBIGUOUS"
-              : "COMPUTER_NOT_FOUND",
-          error:
-            found.status === "ambiguous"
-              ? `Several of the person's computers are named "${target}": pass one of their ids.`
-              : `None of the person's computers is named "${target}". Pick one below, or "pod".`,
+          code: "COMPUTER_AMBIGUOUS",
+          error: `"${target}" fits ${found.candidates.length} of the person's computers (${found.candidates.map((c) => c.name).join(", ")}): ask the person which one, then pass its id.`,
+          candidates: choices.filter((c) => ids.has(c.id)),
+          computers: choices,
+        });
+      }
+      if (found.status === "not_found")
+        return ok({
+          status: "refused",
+          code: "COMPUTER_NOT_FOUND",
+          error: `None of the person's computers is named "${target}". Pick one below, or "pod".`,
           computers: computerChoices(
             found.computers,
             await manifestFor(capabilityKey)

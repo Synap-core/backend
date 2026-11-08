@@ -186,27 +186,90 @@ export async function listPersonsComputers(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** What a computer is called in words a person says: any case, no `.local`. */
+function plainName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\.local$/, "");
+}
+
+/** The words of a name: "MacBook-Pro-de-Antoine" → macbook, pro, de, antoine. */
+function wordsOf(name: string): string[] {
+  return plainName(name)
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/** A system as a person names it ("my Mac") → `process.platform`. */
+const SYSTEM_ALIASES: Record<string, string> = {
+  mac: "darwin",
+  macos: "darwin",
+  linux: "linux",
+  windows: "win32",
+};
+
+export type ComputerMatch =
+  | { status: "found"; computer: ComputerRef }
+  | { status: "ambiguous"; candidates: ComputerRef[] }
+  | { status: "not_found" };
+
 /**
- * One of the person's computers by id or by name (any case). `ambiguous`
- * when two of their computers share the name.
+ * Which of these computers a caller means by `ref`, the way a person names
+ * one ("install it on my Mac"). The first rung that matches decides:
+ *
+ *   1. its id;
+ *   2. its exact name;
+ *   3. its name in any case, a trailing `.local` ignored on both sides (the
+ *      Mac calls itself `MacBook-Pro.local`, the CLI `MacBook-Pro`);
+ *   4. a prefix of its name, or each word of `ref` starting a word of its
+ *      name ("macbook", "pro");
+ *   5. a system: "mac" / "macos", "linux", "windows" → the person's only
+ *      computer on it.
+ *
+ * Two computers on the deciding rung answer `ambiguous` with both: it never
+ * guesses between them. Pure.
+ */
+export function matchComputer(
+  computers: readonly ComputerRef[],
+  ref: string
+): ComputerMatch {
+  const raw = ref.trim();
+  const wanted = plainName(raw);
+  const words = wordsOf(raw);
+  const rungs: Array<(c: ComputerRef) => boolean> = [
+    (c) => c.id === raw,
+    (c) => c.name === raw,
+    (c) => plainName(c.name) === wanted,
+    (c) => {
+      const own = wordsOf(c.name);
+      return (
+        plainName(c.name).startsWith(wanted) ||
+        (words.length > 0 &&
+          words.every((w) => own.some((o) => o.startsWith(w))))
+      );
+    },
+    (c) => !!SYSTEM_ALIASES[wanted] && c.os === SYSTEM_ALIASES[wanted],
+  ];
+  if (!wanted) return { status: "not_found" };
+  for (const rung of rungs) {
+    const hits = computers.filter(rung);
+    if (hits.length === 1) return { status: "found", computer: hits[0]! };
+    if (hits.length > 1) return { status: "ambiguous", candidates: hits };
+  }
+  return { status: "not_found" };
+}
+
+/**
+ * One of the person's computers as a caller names it (`matchComputer`), with
+ * all of them for a refusal to choose again from.
  */
 export async function findPersonsComputer(
   personId: string,
   ref: string
-): Promise<
-  | { status: "found"; computer: ComputerRef }
-  | { status: "ambiguous" | "not_found"; computers: ComputerRef[] }
-> {
+): Promise<ComputerMatch & { computers: ComputerRef[] }> {
   const computers = await listPersonsComputers(personId);
-  const wanted = ref.trim().toLowerCase();
-  const byId = computers.find((c) => c.id === ref.trim());
-  if (byId) return { status: "found", computer: byId };
-  const byName = computers.filter((c) => c.name.toLowerCase() === wanted);
-  if (byName.length === 1) return { status: "found", computer: byName[0]! };
-  return {
-    status: byName.length > 1 ? "ambiguous" : "not_found",
-    computers: byName.length > 1 ? byName : computers,
-  };
+  return { ...matchComputer(computers, ref), computers };
 }
 
 /** A computer as an agent chooses among them. */
@@ -236,6 +299,25 @@ export function computerRefusal(
   return { reason: "UNSUPPORTED_COMPUTER", error };
 }
 
+/**
+ * The computer has not reported its processor, and this capability runs only
+ * on some processors of its system: allowed (the computer's runner checks
+ * it before any step runs), with the why saying so.
+ */
+function archUnknownMatters(
+  manifest: Record<string, unknown>,
+  computer: ComputerRef
+): boolean {
+  if (computer.arch || !computer.os) return false;
+  const platforms = (manifest.placement as { platforms?: unknown } | undefined)
+    ?.platforms;
+  if (!Array.isArray(platforms)) return false;
+  return platforms.some(
+    (p: { os?: unknown; arch?: unknown }) =>
+      p?.os === computer.os && Array.isArray(p.arch) && p.arch.length > 0
+  );
+}
+
 /** The person's computers, each with whether this capability fits it. */
 export function computerChoices(
   computers: ComputerRef[],
@@ -252,7 +334,15 @@ export function computerChoices(
     if (manifest === undefined) return base;
     const refusal = manifest ? computerRefusal(manifest, c) : null;
     return manifest && !refusal
-      ? { ...base, canInstall: true }
+      ? {
+          ...base,
+          canInstall: true,
+          ...(archUnknownMatters(manifest, c)
+            ? {
+                why: "Its processor is not known yet: it runs only on some processors, and the computer checks that before it installs.",
+              }
+            : {}),
+        }
       : {
           ...base,
           canInstall: false,

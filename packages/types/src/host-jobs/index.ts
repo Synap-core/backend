@@ -56,8 +56,15 @@ export const HostLogSchema = z.object({
   truncated: z.boolean().optional(),
 });
 
+/**
+ * The lease: the runner says what it can take and, on every lease, what the
+ * computer is (`process.platform`, `process.arch`); the pod keeps them on the
+ * computer so the placement check can read its processor before an install.
+ */
 export const HostJobLeaseBodySchema = z
   .object({
+    os: z.string().min(1).max(32).optional(),
+    arch: z.string().min(1).max(32).optional(),
     capacity: z
       .object({
         cpus: z.number().nonnegative().optional(),

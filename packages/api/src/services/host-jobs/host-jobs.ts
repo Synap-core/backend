@@ -48,10 +48,11 @@ import {
   or,
   sql,
 } from "drizzle-orm";
-import { db } from "@synap/database";
+import { db, drizzleSql } from "@synap/database";
 import {
   hostJobs,
   installations,
+  users,
   type HostJobEvidence,
   type HostJobRow,
   type InstallationHealth,
@@ -63,6 +64,7 @@ import type {
   HostVerify,
   LeasedHostJob,
 } from "@synap-core/types/host-jobs";
+import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import { boxStatusForVerdict, capLog } from "../box-runs/box-runs.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
 
@@ -243,11 +245,59 @@ async function moveInstallation(
   return row?.status ?? null;
 }
 
+// ── What the computer says about itself ─────────────────────────────────────
+
+/** A `process.platform` / `process.arch` value as the runner sends it. */
+const SYSTEM_TOKEN = /^[a-z0-9_]{1,32}$/;
+
+/**
+ * The system and processor the computer's runner reported (`process.platform`,
+ * `process.arch`), kept on the computer (`users.agent_metadata.platform` /
+ * `.arch`): the ONE place the roster (`listMachines`) and the placement check
+ * read them, so a capability built for one processor is refused on another
+ * before anyone approves it. Written only when it changed. Only the
+ * computer's own key reaches here (`resolveHostRunner`): it speaks for itself.
+ */
+export async function recordComputerSystem(
+  runner: HostRunner,
+  seen: { os?: string; arch?: string }
+): Promise<void> {
+  const patch: { platform?: string; arch?: string } = {};
+  if (seen.os && SYSTEM_TOKEN.test(seen.os)) patch.platform = seen.os;
+  if (seen.arch && SYSTEM_TOKEN.test(seen.arch)) patch.arch = seen.arch;
+  const keys = Object.keys(patch) as Array<keyof typeof patch>;
+  if (keys.length === 0) return;
+  const changed = or(
+    ...keys.map(
+      (k) =>
+        drizzleSql`${users.agentMetadata}->>${drizzleSql.raw(`'${k}'`)} IS DISTINCT FROM ${patch[k]}`
+    )
+  );
+  await db
+    .update(users)
+    .set({
+      agentMetadata: drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+    })
+    .where(
+      and(
+        eq(users.id, runner.machineUserId),
+        eq(users.agentType, MACHINE_AGENT_TYPE),
+        changed
+      )
+    );
+}
+
 // ── Lease ───────────────────────────────────────────────────────────────────
 
+/**
+ * The next job for this computer, if any. `seen` is what its runner says
+ * about the computer on every lease (system, processor), recorded first.
+ */
 export async function leaseHostJob(
-  runner: HostRunner
+  runner: HostRunner,
+  seen: { os?: string; arch?: string } = {}
 ): Promise<LeasedHostJob | null> {
+  await recordComputerSystem(runner, seen);
   await settleExpired(runner);
   const head = db
     .select({ id: hostJobs.id })
@@ -517,6 +567,7 @@ export async function reportHostJob(
     .returning({ installationId: hostJobs.installationId });
   if (!job) return refusalFor(input.jobId, input.runner);
   await writeObserved(job.installationId, input);
+  await recordComputerSystem(input.runner, input);
   const [row] = await db
     .select({ status: installations.status })
     .from(installations)
@@ -603,7 +654,10 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
 
   // What the runner observed lands whatever the verdict: a failed verify is
   // what the reconciler repairs from.
-  if (input.observed) await writeObserved(job.installationId, input.observed);
+  if (input.observed) {
+    await writeObserved(job.installationId, input.observed);
+    await recordComputerSystem(input.runner, input.observed);
+  }
 
   const ok = status === "done";
   let installationStatus: InstallationStatus | null = null;
