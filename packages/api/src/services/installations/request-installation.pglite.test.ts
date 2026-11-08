@@ -154,12 +154,12 @@ beforeAll(async () => {
   const meta = (platform: string, arch: string, hostsServices: boolean) =>
     JSON.stringify({ platform, arch, hostsServices });
   await q(
-    `INSERT INTO users (id, email, name, agent_type, created_by_user_id, host_user_id, agent_metadata) VALUES
-      ($1, 'a@x', 'person', NULL, NULL, NULL, '{}'::jsonb),
-      ($2, 'm@x', 'Mac', 'machine', $1, NULL, $6::jsonb),
-      ($3, 's@x', 'Surface', 'machine', $1, NULL, $7::jsonb),
-      ($4, 'n@x', 'NAS', 'machine', $1, NULL, $8::jsonb),
-      ($5, 'c@x', 'Claude Code', 'claude-code', $1, $2, '{}'::jsonb)`,
+    `INSERT INTO users (id, email, name, user_type, agent_type, created_by_user_id, host_user_id, agent_metadata) VALUES
+      ($1, 'a@x', 'person', 'human', NULL, NULL, NULL, '{}'::jsonb),
+      ($2, 'm@x', 'Mac', 'agent', 'machine', $1, NULL, $6::jsonb),
+      ($3, 's@x', 'Surface', 'agent', 'machine', $1, NULL, $7::jsonb),
+      ($4, 'n@x', 'NAS', 'agent', 'machine', $1, NULL, $8::jsonb),
+      ($5, 'c@x', 'Claude Code', 'agent', 'claude-code', $1, $2, '{}'::jsonb)`,
     [
       PERSON,
       MAC,
@@ -230,6 +230,54 @@ describe("find: market.search says where a capability runs and which computers c
     expect(computers.find((c) => c.name === "Surface")!.why).toMatch(
       /processor \(arm64\)/
     );
+  });
+
+  it("the synap-market skill names only fields market.search returns, and a tool that exists", async () => {
+    const skill = readFileSync(
+      resolve(here, "../../../../../skills/synap-market/discover-and-fetch.md"),
+      "utf8"
+    );
+    const section = skill
+      .split("### Where a capability runs")[1]
+      ?.split("\n## ")[0];
+    expect(section, "the skill's placement section").toBeTruthy();
+    // Every field the section's list names, read from its backticks.
+    const list = section!
+      .split("\n\n")
+      .find((chunk) => chunk.trimStart().startsWith("- "))!;
+    const fields = [...list.matchAll(/`([a-zA-Z]+)`/g)].map((m) => m[1]!);
+    expect(fields).toEqual(
+      expect.arrayContaining(["runsOn", "systems", "licence", "computers"])
+    );
+    const out = (await BUILTIN_VERBS["market.search"]!(
+      { query: "ffmpeg", kind: "capability" },
+      { userId: PERSON, workspaceId: null, agentUserId: AGENT }
+    )) as { entries: Array<Record<string, unknown>> };
+    const entry = out.entries.find((e) => e.slug === "media-ffmpeg")!;
+    const computerKeys = new Set(
+      (entry.computers as Array<Record<string, unknown>>).flatMap((c) =>
+        Object.keys(c)
+      )
+    );
+    // `pod` and `computer` are the values of `runsOn`, not fields.
+    const values = new Set(["pod", "computer"]);
+    for (const f of fields.filter((f) => !values.has(f)))
+      expect(
+        f in entry || computerKeys.has(f),
+        `the skill names "${f}", which market.search does not return`
+      ).toBe(true);
+    // The tool it tells the agent to call is a real MCP tool.
+    const manifest = JSON.parse(
+      readFileSync(
+        resolve(here, "../../routers/mcp/tools/mcp-tools.manifest.json"),
+        "utf8"
+      )
+    ) as { tools: Array<{ name: string }> };
+    for (const tool of section!.match(/synap_[a-z_]+/g) ?? [])
+      expect(
+        manifest.tools.map((t) => t.name),
+        `the skill names ${tool}`
+      ).toContain(tool);
   });
 
   it("a pod capability says it runs on the pod, with no computers", async () => {

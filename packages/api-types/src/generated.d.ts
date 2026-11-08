@@ -1202,6 +1202,8 @@ export interface AgentMetadata {
 	 */
 	hostname?: string;
 	platform?: string;
+	/** Node's `process.arch` as the device flow reported it, when it did. */
+	arch?: string;
 	/**
 	 * COMPUTER principals only: this computer's key lifetime in days. Absent ⇒
 	 * the pod default (`pod_settings.settings.machineDefaults.keyTtlDays`), else
@@ -22099,6 +22101,8 @@ export interface MachineView {
 	name: string;
 	hostname: string | null;
 	platform: string | null;
+	/** The processor (`process.arch`), when the computer reported it. */
+	arch: string | null;
 	createdAt: Date;
 	/** Newest `last_used_at` over the computer's own keys. */
 	lastSeenAt: Date | null;

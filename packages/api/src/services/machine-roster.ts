@@ -121,6 +121,8 @@ export interface MachineView {
   name: string;
   hostname: string | null;
   platform: string | null;
+  /** The processor (`process.arch`), when the computer reported it. */
+  arch: string | null;
   createdAt: Date;
   /** Newest `last_used_at` over the computer's own keys. */
   lastSeenAt: Date | null;
@@ -355,6 +357,7 @@ async function loadMachineViews(
         name,
         hostname: meta.hostname ?? null,
         platform: meta.platform ?? null,
+        arch: meta.arch ?? null,
         createdAt: m.createdAt,
         lastSeenAt: newest(own.map((k) => k.lastUsedAt)),
         key: keyView(key, now),

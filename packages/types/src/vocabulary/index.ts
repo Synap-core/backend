@@ -1315,6 +1315,52 @@ export function buildObjectActionTitle(params: {
   });
 }
 
+/**
+ * The title of a capability asked for one of the person's computers
+ * (`installation/request`): what it does, to which capability, on which
+ * computer. `Install "ffmpeg on your computer" on Mac`, `Remove "…" from
+ * Mac`, and `Add "…" from the marketplace and install it on Mac` when
+ * approving also adds the capability to the pod. The verb comes from the
+ * action door (`resolveActionLabel`); the capability and the computer are
+ * names, never tokens. Without a computer name it falls back to the
+ * generic door.
+ */
+export function buildInstallationTitle(params: {
+  /** `install`, `update`, `verify` or `remove`. */
+  action: string;
+  /** The capability's display name, else its catalog key. */
+  name: string;
+  computer?: string | null;
+  /** Approving it also adds the capability to the pod from the catalog. */
+  addsFromCatalog?: boolean;
+  locale?: Locale;
+}): string {
+  const locale = catalogLocaleOf(params.locale);
+  const t = sentences(locale);
+  const name = params.name.trim();
+  const computer = (params.computer ?? "").trim();
+  if (!computer)
+    return buildObjectActionTitle({
+      action: params.action,
+      objectName: name,
+      locale,
+    });
+  if (params.addsFromCatalog && params.action === "install")
+    return t("vocabulary.title.addAndInstallOn", { name, computer });
+  // A check is the action door's `check` (no `verify` verb exists).
+  const verb = resolveActionLabel(
+    params.action === "verify" ? "check" : params.action,
+    "imperative",
+    locale
+  );
+  return t(
+    params.action === "remove"
+      ? "vocabulary.title.fromComputer"
+      : "vocabulary.title.onComputer",
+    { verb, name, computer }
+  );
+}
+
 /** The title preposition an action takes, or "" for none. */
 function titlePreposition(
   action: string | null | undefined

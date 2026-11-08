@@ -137,6 +137,7 @@ import {
   withRemainder,
 } from "../../services/proposals/composite-summary.js";
 import {
+  buildInstallationTitle,
   humanizeToken,
   resolveActionLabel,
   resolveObjectNoun,
@@ -3013,6 +3014,11 @@ export function proposalDisplaySummary(params: {
       subjectCount: readRunSubjectIds(payload).length,
     });
   }
+  // A capability asked for one of the person's computers names the
+  // capability and the computer, from what the ask stored
+  // (`requestInstallation`). Outranks a stored summary, like a run's.
+  const installation = installationTitleOf(request.targetType, payload);
+  if (installation) return installation;
   const compositeLabel = labelFromOperations(
     (payload as { operations?: unknown } | undefined)?.operations
   );
@@ -3045,6 +3051,35 @@ export function proposalDisplaySummary(params: {
     )
     ? storedSummary
     : derivedSummary;
+}
+
+/**
+ * The title of an `installation/request` from its stored payload
+ * (`services/installations/request-installation.ts`: computerName,
+ * capabilityKey, action, and `catalog` when approving adds the capability
+ * from the marketplace), through the vocabulary door. Null for any other
+ * proposal, or a payload that names no capability.
+ */
+function installationTitleOf(
+  targetType: string | null | undefined,
+  payload: Record<string, unknown> | undefined
+): string | null {
+  if (targetType !== "installation" || !payload) return null;
+  const text = (v: unknown) =>
+    typeof v === "string" && v.trim() ? v.trim() : null;
+  const catalog =
+    payload.catalog && typeof payload.catalog === "object"
+      ? (payload.catalog as Record<string, unknown>)
+      : null;
+  const name = text(catalog?.name) ?? text(payload.capabilityKey);
+  const action = text(payload.action);
+  if (!name || !action) return null;
+  return buildInstallationTitle({
+    action,
+    name,
+    computer: text(payload.computerName),
+    addsFromCatalog: !!catalog,
+  });
 }
 
 /**

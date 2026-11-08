@@ -67,6 +67,12 @@ export const vocabularySentencesEn = {
   "vocabulary.title.noVerb": "Request: {Obj}",
   "vocabulary.title.noVerb.named": 'Request: {Obj} "{name}"',
   "vocabulary.title.lead": "{verb}: {name}",
+  // A capability asked for one of the person's computers
+  // (`buildInstallationTitle`): what, and on which computer.
+  "vocabulary.title.onComputer": '{verb} "{name}" on {computer}',
+  "vocabulary.title.fromComputer": '{verb} "{name}" from {computer}',
+  "vocabulary.title.addAndInstallOn":
+    'Add "{name}" from the marketplace and install it on {computer}',
   "vocabulary.title.verbOnly.named": '{verb} "{name}"',
   "vocabulary.title.imperative": "{verb} {Obj}",
   "vocabulary.title.imperative.named": '{verb} {Obj} "{name}"',
