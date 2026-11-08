@@ -33,6 +33,12 @@ import {
 import { widgetDefinitions } from "@synap/database/schema";
 import type { ContentKind } from "@synap/database/schema";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
+import {
+  appendCellTile,
+  checkCellPlacement,
+  type CellPlacement,
+  type DbOrTx,
+} from "./place-cell-on-view.js";
 
 // The web and desktop frames load no runtime deps (`checkCellSource` refuses a
 // frame cell that names any the host does not provide). The hosts that still
@@ -121,15 +127,18 @@ export function cellTypeKeyFor(name: string, typeKey?: string): string {
  * Existing rows are never re-checked: a stored cell that would be refused keeps
  * drawing as it does today, until its next write.
  */
-export async function assertCellSourceMounts(input: {
-  name: string;
-  rendererSource: string;
-  typeKey?: string;
-  workspaceId?: string | null;
-  rendererType?: DefineCellInput["rendererType"];
-  deps?: Record<string, string>;
-  externalHosts?: string[] | null;
-}): Promise<CellSourceAdvice> {
+export async function assertCellSourceMounts(
+  input: {
+    name: string;
+    rendererSource: string;
+    typeKey?: string;
+    workspaceId?: string | null;
+    rendererType?: DefineCellInput["rendererType"];
+    deps?: Record<string, string>;
+    externalHosts?: string[] | null;
+  },
+  reader?: CellRowReader
+): Promise<CellSourceAdvice> {
   const explicit = input.rendererType;
   if (explicit === "builtin" || explicit === "mcp-app") return [];
   const mechanism =
@@ -145,7 +154,7 @@ export async function assertCellSourceMounts(input: {
     throw new CellSourceRefusedError(first.refusals);
   }
 
-  const stored = await readStoredCellContent(input);
+  const stored = await readStoredCellContent(input, reader);
   if (
     explicit === undefined &&
     (stored?.rendererType === "builtin" || stored?.rendererType === "mcp-app")
@@ -368,7 +377,15 @@ export interface DefineCellInput {
    * source-only re-push) can never erase a stamped one.
    */
   version?: string | null;
-  /** Acting user — stamped on the realtime event. */
+  /**
+   * PLACE the cell as a tile on this bento view, in the same act
+   * (`place-cell-on-view.ts`): the cell row and the view's new `widget` block
+   * are written in ONE transaction, so a refused placement (view missing, not
+   * a bento, another space, not the caller's to write) writes no cell either.
+   * Absent ⇒ the cell is defined and placed nowhere, as before.
+   */
+  placeOn?: CellPlacement;
+  /** Acting user — stamped on the realtime event; with `placeOn`, the view's writer. */
   userId: string;
 }
 
@@ -408,7 +425,7 @@ export class AgentCellRequiresProposalError extends Error {
   }
 }
 
-export async function defineCell(input: DefineCellInput): Promise<{
+export interface DefinedCell {
   id: string;
   typeKey: string;
   changeType: "created" | "updated";
@@ -420,7 +437,11 @@ export async function defineCell(input: DefineCellInput): Promise<{
    * write stamps its own.
    */
   contentSha256: string | null;
-}> {
+  /** With `placeOn`: the tile the cell now has on that view. */
+  placed?: { viewId: string; blockId: string; alreadyPlaced: boolean };
+}
+
+export async function defineCell(input: DefineCellInput): Promise<DefinedCell> {
   // D1 floor: an agent never defines a cell directly, whichever door it came
   // through (hub /cells/install and an unattributed /cells/define had no gate).
   // The governed doors propose before reaching here; an approved proposal is
@@ -428,6 +449,74 @@ export async function defineCell(input: DefineCellInput): Promise<{
   if (getActingAgentUserId()) {
     throw new AgentCellRequiresProposalError(input.name);
   }
+  const placeOn = input.placeOn;
+  if (!placeOn) return writeCell(input, await getDb());
+
+  // Define AND place, one act: refused before any write when the view cannot
+  // take the tile, and rolled back whole when the view write fails inside.
+  await checkCellPlacement(placeOn, {
+    cellWorkspaceId: input.workspaceId ?? null,
+    userId: input.userId,
+    permission: "write",
+  });
+  const db = await getDb();
+  const { cell, tile } = await db.transaction(async (tx) => {
+    const cell = await writeCell(input, tx, { deferEvent: true });
+    const tile = await appendCellTile(tx, {
+      viewId: placeOn.viewId,
+      cellId: cell.id,
+      typeKey: cell.typeKey,
+      userId: input.userId,
+    });
+    return { cell, tile };
+  });
+  // Committed: now say so. Emitted after the commit so a rolled-back act
+  // never tells a browser to refresh a cell or a view that is not there.
+  emitCellWritten(cell, input);
+  if (!tile.alreadyPlaced && tile.workspaceId) {
+    emitHubRealtimeEvent({
+      eventType: "view.update.completed",
+      subjectId: tile.viewId,
+      userId: input.userId,
+      data: { id: tile.viewId, workspaceId: tile.workspaceId },
+    });
+  }
+  return {
+    ...cell,
+    placed: {
+      viewId: tile.viewId,
+      blockId: tile.blockId,
+      alreadyPlaced: tile.alreadyPlaced,
+    },
+  };
+}
+
+function emitCellWritten(
+  cell: Pick<DefinedCell, "typeKey" | "changeType">,
+  input: Pick<DefineCellInput, "userId" | "workspaceId">
+): void {
+  emitHubRealtimeEvent({
+    eventType:
+      cell.changeType === "created"
+        ? "widget_definition.create.completed"
+        : "widget_definition.update.completed",
+    subjectId: cell.typeKey,
+    userId: input.userId,
+    data: {
+      id: cell.typeKey,
+      typeKey: cell.typeKey,
+      workspaceId: input.workspaceId ?? undefined,
+      changeType: cell.changeType,
+    },
+  });
+}
+
+/** The cell write itself, on `db` (the pool, or the placing transaction). */
+async function writeCell(
+  input: DefineCellInput,
+  db: DbOrTx,
+  opts: { deferEvent?: boolean } = {}
+): Promise<DefinedCell> {
   const depsError = validateDeps(input.deps);
   if (depsError) {
     throw new Error(`defineCell: ${depsError}`);
@@ -435,16 +524,18 @@ export async function defineCell(input: DefineCellInput): Promise<{
   // What cannot mount is refused here, the one writer, whichever door came in
   // (a door that proposes ran it already; an approval re-runs it on the source
   // it materialises).
-  const advice = await assertCellSourceMounts({
-    name: input.name,
-    rendererSource: input.rendererSource,
-    typeKey: input.typeKey,
-    workspaceId: input.workspaceId,
-    rendererType: input.rendererType,
-    deps: input.deps,
-    externalHosts: input.externalHosts,
-  });
-  const db = await getDb();
+  const advice = await assertCellSourceMounts(
+    {
+      name: input.name,
+      rendererSource: input.rendererSource,
+      typeKey: input.typeKey,
+      workspaceId: input.workspaceId,
+      rendererType: input.rendererType,
+      deps: input.deps,
+      externalHosts: input.externalHosts,
+    },
+    db
+  );
   const workspaceId = input.workspaceId ?? null;
 
   const typeKey = cellTypeKeyFor(input.name, input.typeKey);
@@ -824,20 +915,7 @@ export async function defineCell(input: DefineCellInput): Promise<{
     if (stamped.length > 0) contentSha256 = fingerprint;
   }
 
-  emitHubRealtimeEvent({
-    eventType:
-      changeType === "created"
-        ? "widget_definition.create.completed"
-        : "widget_definition.update.completed",
-    subjectId: typeKey,
-    userId: input.userId,
-    data: {
-      id: typeKey,
-      typeKey,
-      workspaceId: workspaceId ?? undefined,
-      changeType,
-    },
-  });
+  if (!opts.deferEvent) emitCellWritten({ typeKey, changeType }, input);
 
   return { id, typeKey, changeType, advice, contentSha256 };
 }

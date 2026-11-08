@@ -721,12 +721,17 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // the path undecoded (`decodeURI` leaves `%2F`), so one segment.
   [/^\/agent-skills\/by-slug\/[^/]+\/?$/, LOAD_SKILL],
   [route("/agent-skills/:id"), LOAD_SKILL],
-  // The pod's stored cell sources (finding 7da9c21f): `GET /cells` reads the
-  // active frame / iframe `widget_definitions` of one space (person's
-  // membership checked) and pod-wide; `GET /widget-definitions` the built-in
-  // catalog plus the installed rows (`listRenderables`). Subject `widget`,
-  // read on no grant clause, so a pinned key is refused.
-  [/^\/cells\/?$/, READS("widget")],
+  // The pod's stored cell sources (finding 7da9c21f). `GET /cells` and
+  // `GET /cells/:typeKey` read the active frame / iframe `widget_definitions`
+  // of one space (person's membership checked) or pod-wide, THROUGH the
+  // grant clause of `widget` (`grantReadPredicate(widgetDefinitions)`), so a
+  // key pinned to spaces (every pod app) reads the cells of its spaces and no
+  // other: NARROWED, admitted on `widget.read` (design b199a3a4, slice 4).
+  // A typeKey is one path segment (`generated%3Ax`). `GET
+  // /widget-definitions` (the built-in catalog plus the installed rows,
+  // `listRenderables`) reads on no grant clause, so a pinned key is refused.
+  [/^\/cells\/?$/, NARROWED("widget", [])],
+  [/^\/cells\/[^/]+\/?$/, NARROWED("widget", [])],
   [/^\/widget-definitions\/?$/, READS("widget")],
   // Poll a bulk import (`rest/import-units.ts`): the pg-boss job the caller
   // enqueued, its state and per-unit outcome (`entityId` | `proposalId` |
