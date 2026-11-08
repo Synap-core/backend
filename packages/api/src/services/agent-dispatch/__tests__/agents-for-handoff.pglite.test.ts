@@ -615,10 +615,11 @@ describe("readAgentsForHandoff — a computer's waker (plan v2 slice 4)", () => 
           JSON.stringify(on ? { wakesAgents: true } : {}),
         ]
       );
-      // The waker's lease: the stamp on the COMPUTER's own key.
+      // The waker's lease: the stamp on the COMPUTER's own key, a `user_pat`
+      // as the device flow mints it (`machine-connect.ts`), never hub_inbound.
       await q(
         `insert into api_keys (id, user_id, key_type, linked_user_id, is_active, last_used_at, worker_served_at, created_at)
-         values ($1, $2, 'hub_inbound', $3, true, $4, $4, now())`,
+         values ($1, $2, 'user_pat', $3, true, $4, $4, now())`,
         [randomUUID(), m, OWNER_W, ago(polledAgo)]
       );
       // A Claude Code on it that nothing runs now (used, never served).

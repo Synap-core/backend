@@ -110,3 +110,52 @@ describe("/computers/[id] — whose computer it is", () => {
     expect(radios.filter((r) => /\schecked/.test(r))).toEqual([]);
   });
 });
+
+// Rules out (backend#909 review): a command written as literal backticks in a
+// sentence, `waker install` handed to a computer it throws on (macOS only),
+// and "installed but not running" read as "never ran".
+describe("/computers/[id] — the Wakes agents card", () => {
+  const render = (over: Record<string, unknown>) => {
+    h.answers.set("machines.adminList", [computer(over)]);
+    const html = renderToStaticMarkup(<ComputerPage />);
+    return { html, page: text(html) };
+  };
+
+  it("no waker ever ran: the command that starts one, per OS, never in backticks", () => {
+    const linux = render({ wakesAgents: true, waker: null });
+    expect(linux.page).toContain("Start its waker on Build box:");
+    expect(linux.html).toContain(">npx @synap-core/cli waker</code>");
+    expect(linux.page).toContain(
+      "On Linux, keep it running (a service manager can start it at boot)."
+    );
+    expect(linux.page).not.toContain("waker install");
+    expect(linux.page).not.toContain("`");
+
+    const mac = render({ platform: "darwin", wakesAgents: false, waker: null });
+    expect(mac.html).toContain(">npx @synap-core/cli waker install</code>");
+    expect(mac.page).not.toContain("keep it running");
+    expect(mac.page).not.toContain("`");
+  });
+
+  it("a waker that ran but is not running now: says so and hands over status", () => {
+    const { html, page } = render({
+      wakesAgents: true,
+      waker: { online: false, wakesAgents: true },
+    });
+    expect(page).toContain("Build box's waker isn't running right now.");
+    expect(html).toContain(">npx @synap-core/cli waker status</code>");
+    expect(page).not.toContain("Start its waker");
+  });
+
+  it("a running waker with the switch off: says it runs and what turning it on does", () => {
+    const { html, page } = render({
+      wakesAgents: false,
+      waker: { online: true, wakesAgents: false },
+    });
+    expect(page).toContain(
+      "Its waker is running. Turn this on and Build box starts its agents when work is handed to them."
+    );
+    expect(html).not.toContain("@synap-core/cli waker");
+    expect(page).toContain("Wake agents here");
+  });
+});

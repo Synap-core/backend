@@ -1195,3 +1195,22 @@ describe("Raycast's REST twins of MCP read tools: one rule per reader", () => {
       expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
   });
 });
+
+describe("a computer's waker poll: GET /computers/me/wakes", () => {
+  // The key `machine-connect.ts` mints at the device flow: a `user_pat` held
+  // by the computer, carrying the AI read & propose grant. It is fenced, so a
+  // REFUSED door refused every real computer's waker (backend#909).
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  it("the computer's own key passes the fence: the route admits only it", () => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", "/computers/me/wakes", COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", "/computers/me/wakes/", COMPUTER)).toBe(true);
+    expect(hubRouteClass("GET", "/computers/me/wakes")).toBe("read");
+  });
+  it("opens the poll only, never a sibling", () => {
+    expect(restDoorAllowed("GET", "/computers/me", COMPUTER)).toBe(false);
+    expect(restDoorAllowed("GET", "/computers/me/wakes/x", COMPUTER)).toBe(
+      false
+    );
+  });
+});

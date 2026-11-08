@@ -82,6 +82,7 @@ import {
   revokeLine,
   scriptsOwnerWords,
   seedsRevokedLine,
+  wakerWords,
   type ComputerLike,
 } from "./computer-model";
 
@@ -144,7 +145,9 @@ export function ComputerObject({
           out.status === "proposed"
             ? "Waiting for review. Nothing changed yet."
             : out.wakesAgents
-              ? "This computer now wakes its agents"
+              ? computer?.waker?.online
+                ? "This computer now wakes its agents"
+                : "Waking is on. Start its waker so it can start agents."
               : "This computer no longer wakes its agents",
         color: "default",
       });
@@ -235,6 +238,7 @@ export function ComputerObject({
   const c = computer;
   const owner = ownerWords(c, viewerId);
   const words = scriptsOwnerWords(c, viewerId);
+  const waker = wakerWords(c);
   const impact = revokeImpact(c);
   const revoking = revoke.isPending;
   const revoked = c.key?.state === "revoked";
@@ -436,13 +440,19 @@ export function ComputerObject({
                 {!revoked && (
                   <SectionCard title="Wakes agents">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="min-w-0 flex-1 text-[12.5px] text-foreground/75">
-                        {c.wakesAgents
-                          ? c.waker?.online
-                            ? `${c.name} starts its agents when work is handed to them. Its waker is running.`
-                            : `${c.name} starts its agents when work is handed to them, once its waker runs: \`synap waker install\` on it.`
-                          : `Let ${c.name} start its agents when work is handed to them, without a terminal open. Its waker must be installed on it: \`synap waker install\`.`}
-                      </p>
+                      <div className="flex min-w-0 flex-1 flex-col gap-2">
+                        <p className="text-[12.5px] text-foreground/75">
+                          {waker.line}
+                        </p>
+                        {waker.command && (
+                          <CommandLine command={waker.command} />
+                        )}
+                        {waker.note && (
+                          <p className="text-[12px] text-foreground/65">
+                            {waker.note}
+                          </p>
+                        )}
+                      </div>
                       <Button
                         size="sm"
                         radius="md"
