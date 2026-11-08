@@ -1,6 +1,6 @@
 ## Apps are views of pod state
 
-Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from `flow.of` (tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`): the kind's lifecycle in order, the playbook stage that owns each status, the things in each with who works them and their next step. A thing's own status and what holds it up come from `statusOf` (`GET /api/hub/orient?statusOf=<id>`). Moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
 ## Before you build anything
 
