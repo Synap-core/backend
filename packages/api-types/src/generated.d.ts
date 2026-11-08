@@ -1218,6 +1218,12 @@ export interface AgentMetadata {
 	 * (`push-decision.ts` rule 4b).
 	 */
 	pushDailyLimit?: number;
+	/**
+	 * COMPUTER principals only (0409): the person turned on "Installs from the pod" —
+	 * the computer's key carries `host.runner` and leases the host jobs of the
+	 * installations on itself. Kept here for the same reason as `runsScripts`.
+	 */
+	hostsServices?: boolean;
 }
 /**
  * Shared provenance vocabulary for the uniform `created_by_kind` column added
@@ -21936,6 +21942,8 @@ export interface MachineView {
 	 * waker ever ran on it; `online` = it polled within the wake lease.
 	 */
 	waker: ComputerWaker | null;
+	/** "Installs from the pod" is on: the computer installs software on itself. */
+	hostsServices: boolean;
 	/** Whose computer it is (0388). Null only on a row written before it. */
 	belongsTo: ComputerBelongsTo | null;
 	agents: HostedAgentView[];
@@ -43861,6 +43869,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "updated";
 			};
 		}>;
+		setHostsServices: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				machineId: string;
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+			};
+			meta: object;
+			output: {
+				hostsServices?: undefined;
+				proposalId: string;
+				status: "proposed";
+			} | {
+				hostsServices: boolean;
+				proposalId?: undefined;
+				status: "updated";
+			};
+		}>;
 		setKeyTtl: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				keyTtlDays: number | null;
@@ -48437,7 +48491,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {
@@ -56271,7 +56325,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		adminRegister: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "host.runner" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				displayName: string;
 				issuerUrl: string;
 				presence?: {
@@ -56324,7 +56378,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
+				allowedScopes: ("ai:analyze" | "auth:exchange-user" | "box.runner" | "chat.stream" | "data.read" | "data.write" | "host.runner" | "hub-protocol.admin" | "hub-protocol.read" | "hub-protocol.write" | "identity:link-user" | "mcp.read" | "mcp.write" | "membership:activate" | "membership:grant" | "probe" | "providers.write" | "provision" | "read:entities" | "realtime:observe" | "setup.agent" | "skills.invoke" | "source-config:write" | "sync" | "tier_update" | "write:entities")[];
 				expectedStatus?: "approved" | "pending" | "rejected" | "revoked" | undefined;
 				id: string;
 				presence?: {

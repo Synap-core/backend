@@ -46235,6 +46235,601 @@
         }
       }
     },
+    "/host-jobs/lease": {
+      "post": {
+        "tags": ["HostJobs"],
+        "summary": "Lease the next host job of an installation on this computer",
+        "description": "Answers `{ job: null }` when nothing is due. The job names the installation's kind (`service` | `tool`), its approved manifest and version. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "capacity": {
+                    "type": "object",
+                    "properties": {
+                      "cpus": { "type": "number", "minimum": 0 },
+                      "memoryMb": { "type": "number", "minimum": 0 },
+                      "diskGb": { "type": "number", "minimum": 0 }
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "additionalProperties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The leased job, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job": {
+                      "type": ["object", "null"],
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": ["job"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a computer, or no host.runner scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is too large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/host-jobs/{id}/heartbeat": {
+      "post": {
+        "tags": ["HostJobs"],
+        "summary": "Keep a host job's lease, and learn whether to stop or send logs",
+        "description": "Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "leaseId": { "type": "string", "format": "uuid" },
+                  "phase": { "type": "string", "enum": ["setup", "running"] }
+                },
+                "required": ["leaseId", "phase"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The lease is extended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "leaseExpiresAt": { "type": "string" },
+                    "stopRequested": { "type": "boolean" },
+                    "logsRequested": { "type": "boolean" }
+                  },
+                  "required": [
+                    "leaseExpiresAt",
+                    "stopRequested",
+                    "logsRequested"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a computer, or no host.runner scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job for an installation on this computer",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The lease is no longer held",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is too large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/host-jobs/{id}/report": {
+      "post": {
+        "tags": ["HostJobs"],
+        "summary": "Report health, a verify or the requested log for a host job",
+        "description": "A report never moves the installation's lifecycle; health is read from it. Logs are scrubbed of secrets before they are stored. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "leaseId": { "type": "string", "format": "uuid" },
+                  "health": {
+                    "type": "object",
+                    "properties": {
+                      "services": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "healthy": { "type": "boolean" },
+                            "detail": { "type": "string", "maxLength": 500 },
+                            "checkedAt": { "type": "string", "maxLength": 64 }
+                          },
+                          "required": ["healthy"]
+                        }
+                      },
+                      "versions": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "digest": { "type": "string", "maxLength": 128 },
+                            "version": { "type": "string", "maxLength": 64 }
+                          }
+                        }
+                      },
+                      "ports": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "service": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "port": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 65535
+                            },
+                            "host": { "type": "string", "enum": ["127.0.0.1"] }
+                          },
+                          "required": ["service", "port", "host"]
+                        },
+                        "maxItems": 50
+                      },
+                      "disk": {
+                        "type": "object",
+                        "properties": {
+                          "usedMb": { "type": "number", "minimum": 0 },
+                          "freeMb": { "type": "number", "minimum": 0 }
+                        }
+                      }
+                    },
+                    "required": ["services"]
+                  },
+                  "log": {
+                    "type": "object",
+                    "properties": {
+                      "head": { "type": "string", "maxLength": 262144 },
+                      "tail": { "type": "string", "maxLength": 262144 },
+                      "totalBytes": {
+                        "type": ["integer", "null"],
+                        "minimum": 0
+                      },
+                      "truncated": { "type": "boolean" }
+                    }
+                  },
+                  "observedVersion": {
+                    "type": ["string", "null"],
+                    "maxLength": 128
+                  },
+                  "os": { "type": "string", "minLength": 1, "maxLength": 32 },
+                  "arch": { "type": "string", "minLength": 1, "maxLength": 32 },
+                  "verify": {
+                    "type": "object",
+                    "properties": {
+                      "ok": { "type": "boolean" },
+                      "exitCode": { "type": ["integer", "null"] },
+                      "excerpt": { "type": "string", "maxLength": 2000 },
+                      "outputSha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "smoke": {
+                        "type": "object",
+                        "properties": {
+                          "ok": { "type": "boolean" },
+                          "exitCode": { "type": ["integer", "null"] },
+                          "excerpt": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["ok"]
+                      }
+                    },
+                    "required": ["ok", "exitCode"]
+                  }
+                },
+                "required": ["leaseId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "installationId": { "type": "string" },
+                    "status": { "type": "string" }
+                  },
+                  "required": ["installationId", "status"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a computer, or no host.runner scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job for an installation on this computer",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The lease is no longer held",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is too large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/host-jobs/{id}/finish": {
+      "post": {
+        "tags": ["HostJobs"],
+        "summary": "Finish a host job with its verdict",
+        "description": "Moves the installation's lifecycle (installed, failed, removed) by compare-and-set; a second finish is 409. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "leaseId": { "type": "string", "format": "uuid" },
+                  "status": {
+                    "type": "string",
+                    "enum": ["done", "failed", "stopped", "timeout", "infra"]
+                  },
+                  "durationMs": { "type": ["integer", "null"], "minimum": 0 },
+                  "infraReason": { "type": "string", "maxLength": 1000 },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 100
+                        },
+                        "ok": { "type": "boolean" },
+                        "detail": { "type": "string", "maxLength": 1000 },
+                        "durationMs": { "type": "integer", "minimum": 0 }
+                      },
+                      "required": ["name", "ok"]
+                    },
+                    "maxItems": 100
+                  },
+                  "log": {
+                    "type": "object",
+                    "properties": {
+                      "head": { "type": "string", "maxLength": 262144 },
+                      "tail": { "type": "string", "maxLength": 262144 },
+                      "totalBytes": {
+                        "type": ["integer", "null"],
+                        "minimum": 0
+                      },
+                      "truncated": { "type": "boolean" }
+                    }
+                  },
+                  "output": { "type": "object", "additionalProperties": {} },
+                  "cleanedUp": {
+                    "type": "array",
+                    "items": { "type": "string", "maxLength": 300 },
+                    "maxItems": 100
+                  },
+                  "observedVersion": {
+                    "type": ["string", "null"],
+                    "maxLength": 128
+                  },
+                  "os": { "type": "string", "minLength": 1, "maxLength": 32 },
+                  "arch": { "type": "string", "minLength": 1, "maxLength": 32 },
+                  "verify": {
+                    "type": "object",
+                    "properties": {
+                      "ok": { "type": "boolean" },
+                      "exitCode": { "type": ["integer", "null"] },
+                      "excerpt": { "type": "string", "maxLength": 2000 },
+                      "outputSha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      },
+                      "smoke": {
+                        "type": "object",
+                        "properties": {
+                          "ok": { "type": "boolean" },
+                          "exitCode": { "type": ["integer", "null"] },
+                          "excerpt": { "type": "string", "maxLength": 2000 }
+                        },
+                        "required": ["ok"]
+                      }
+                    },
+                    "required": ["ok", "exitCode"]
+                  }
+                },
+                "required": ["leaseId", "status"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": {
+                      "type": "string",
+                      "enum": ["done", "failed", "stopped"]
+                    },
+                    "installationStatus": { "type": "string" }
+                  },
+                  "required": ["id", "status", "installationStatus"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a computer, or no host.runner scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job for an installation on this computer",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The lease is no longer held",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is too large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/host-jobs/{id}/logs": {
+      "get": {
+        "tags": ["HostJobs"],
+        "summary": "Read the log a computer sent for one of your host jobs",
+        "description": "The person's own job, read through the owner floor. `log` is null until the computer sent it (ask for it first). Requires hub-protocol.read scope; a scoped key needs `installation.read`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job's log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "status": { "type": "string" },
+                    "log": {},
+                    "logReceivedAt": { "type": ["string", "null"] },
+                    "logsRequestedAt": { "type": ["string", "null"] }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "logReceivedAt",
+                    "logsRequestedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/diagnose": {
       "post": {
         "tags": ["Runs"],
