@@ -72,6 +72,7 @@ import {
   proposals,
 } from "@synap/database/schema";
 import { scopedDb, AccessContext } from "../access/index.js";
+import { entityLensWhere } from "../access/entity-read-floor.js";
 import { TRPCError } from "@trpc/server";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { resolveViewTrust } from "../services/view-trust-service.js";
@@ -176,21 +177,21 @@ function dependencyResultForRelationDoor(result: GovernedLinkResult) {
 const DirectionSchema = z.enum(["source", "target", "both"]).default("both");
 
 /**
- * Entity rows use the data-table access resolver: pod-personal rows stay
- * owner-gated, workspace rows follow membership, and exposed rows remain
- * visible through their anchor. The optional workspace is a narrowing lens.
+ * A neighbour is read through the entity READ floor (`entityLensWhere`): the
+ * floor every entity read uses, with its role and home-space branches, so a
+ * pod-wide person or company that wears a role in the lens space (or is filed
+ * for it) is a neighbour there, as `GET /entities?workspaceId=` lists it (a
+ * pod-scope kind keeps its pod-wide rows under a lens: `includePodWide`).
+ * Without them a workspace lens dropped every pod-wide neighbour, for a member
+ * and for an app alike (CRM G17). A key's grant still bounds the read: the
+ * floor ANDs `grantReadPredicate`, so an app gets only what `GET /entities/:id`
+ * gives it.
  */
 function entityConnectionVisibilityWhere(
   userId: string,
   workspaceId?: string | null
 ) {
-  return accessScopeWhere({
-    workspaceIdColumn: entities.workspaceId,
-    entityIdColumn: entities.id,
-    ownerColumn: entities.userId,
-    userId,
-    workspaceLens: workspaceId,
-  });
+  return entityLensWhere(userId, workspaceId, { includePodWide: true });
 }
 
 /**

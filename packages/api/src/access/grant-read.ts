@@ -181,10 +181,16 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
         )!,
     }),
   ],
-  // Not widened: an edge between a space entity and a pod-wide one is stamped
-  // with that space (lib/relation-workspace-inherit.ts), and a pod-wide edge
-  // is owner-only for members too (access/registry.ts).
-  [relations, spec("relation", relations)],
+  // An edge between a space entity and a pod-wide one is stamped with that
+  // space (lib/relation-workspace-inherit.ts). Beyond it, ONE pod-wide edge:
+  // `works_at` from or to a record wearing a role in a granted space, both
+  // ends read by the same scope (`worksAtRoleLinkWhere`, CRM G17).
+  [
+    relations,
+    spec("relation", relations, {
+      spaceReach: (spaces, scope) => worksAtRoleLinkWhere(spaces, scope),
+    }),
+  ],
   [
     entityFacets,
     spec("facet", entityFacets, {
@@ -331,6 +337,49 @@ export function channelFollowsEntityWhere(scope: GrantScope): SQL {
           )
         )
     )
+  )!;
+}
+
+/**
+ * The pod-wide `works_at` edges a scope limited to `spaces` reads: a person's
+ * link to the company they work at when either end wears a live role in one
+ * of the spaces (`roleInSpacesWhere`, the role rule the member lenses and the
+ * conversations door's company-lead contacts read, backend #871), and BOTH
+ * ends are records this same scope reads (`grantReadClause(entities, scope)`:
+ * its kinds, its spaces and their reach). Two pod-wide records have no space
+ * to stamp the edge with, so without this an app granted the space of the
+ * company's lead role never saw who works there (CRM G17). Nothing else is
+ * widened: another edge type, an edge stamped in a space, or an end the scope
+ * does not read stays out.
+ */
+export function worksAtRoleLinkWhere(spaces: string[], scope: GrantScope): SQL {
+  const entityClause = grantReadClause(entities, scope);
+  const readable = (endColumn: AnyPgColumn) =>
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.id, endColumn),
+            isNull(entities.deletedAt),
+            entityClause
+          )
+        )
+    );
+  const roleWearers = db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(roleInSpacesWhere(entities.workspaceId, entities.id, spaces));
+  return and(
+    isNull(relations.workspaceId),
+    eq(relations.type, "works_at"),
+    or(
+      inArray(relations.sourceEntityId, roleWearers),
+      inArray(relations.targetEntityId, roleWearers)
+    ),
+    readable(relations.sourceEntityId),
+    readable(relations.targetEntityId)
   )!;
 }
 
