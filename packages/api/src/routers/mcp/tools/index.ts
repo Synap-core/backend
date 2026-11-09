@@ -97,10 +97,6 @@ import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-ans
 import { automationDataContractSchema } from "../../automations.js";
 import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
-  playbookRunnerSchema,
-  requiresSchema,
-} from "../../../schemas/playbook-runner.js";
-import {
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
   playbookSubjectProfileSchema,
