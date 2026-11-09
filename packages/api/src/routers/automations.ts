@@ -2009,6 +2009,7 @@ export const automationsRouter = router({
             .enum(["event", "cron", "webhook", "manual"])
             .optional(),
           limit: z.number().min(1).max(100).optional(),
+          offset: z.number().int().min(0).optional(),
         })
         .optional()
     )
@@ -2040,7 +2041,8 @@ export const automationsRouter = router({
           )
         )
         .orderBy(desc(automations.updatedAt), asc(automations.id))
-        .limit(input?.limit ?? 50);
+        .limit(input?.limit ?? 50)
+        .offset(input?.offset ?? 0);
 
       return { automations: rows };
     }),

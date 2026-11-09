@@ -100,6 +100,8 @@ function skill(metadata: unknown): ResolvedSkillRow {
     metadata,
     parameters: null,
     executionMode: "sync",
+    intent: null,
+    inputMap: null,
   };
 }
 

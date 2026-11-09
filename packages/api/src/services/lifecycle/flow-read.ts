@@ -333,7 +333,13 @@ export async function readFlowOf(
     await readThingBlockers(
       { userId: ctx.userId },
       board.columns.flatMap((c) =>
-        c.items.map((i) => ({ id: i.id, status: i.status, lifecycle }))
+        c.items.map((i) => ({
+          id: i.id,
+          // A role board's card: its step is the facet's (a lead's wait).
+          facetId: i.facetId ?? null,
+          status: i.status,
+          lifecycle,
+        }))
       )
     ).catch(() => null);
   const blockerOf = (id: string): FlowCardBlocker =>

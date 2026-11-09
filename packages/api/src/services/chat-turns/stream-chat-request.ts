@@ -149,7 +149,10 @@ export async function handleChatStream<E extends Env>(
   // An app's turn runs through the person's connected Synap AI (the grant they set once on the Keys page): not
   // connected (or paused) is refused BEFORE the turn starts, with the page where they connect it.
   if (appGrant) {
-    const gate = await synapAiGate(userId, new URL(c.req.url).origin);
+    const gate = await synapAiGate(
+      userId,
+      process.env.PUBLIC_URL || new URL(c.req.url).origin
+    );
     if (!gate.open) return c.json(gate.body, gate.status);
   }
 

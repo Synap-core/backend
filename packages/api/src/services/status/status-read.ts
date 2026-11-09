@@ -444,7 +444,8 @@ export async function readStatusOf(
       // Every slot holding the thing up (plan e7f753db §9): a person's owed
       // slot on a session about it or naming it, an agent's slot declaring it.
       owed: { blocking: [t.id] },
-      proposals: { targetIds: [t.id] },
+      // The proposals ON it: its target or subject, or filed in a session on it.
+      proposals: { targetIds: [t.id], onThings: [t.id] },
       blockedNodes: [{ kind: "entity", id: t.id }],
       holds: [{ subjectType: "entity", subjectId: t.id }],
       steps: [{ subjectType: "entity", subjectId: t.id }],

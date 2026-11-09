@@ -67,6 +67,8 @@ function row(overrides: Partial<ResolvedSkillRow>): ResolvedSkillRow {
     metadata: null,
     parameters: null,
     executionMode: "sync",
+    intent: null,
+    inputMap: null,
     ...overrides,
   };
 }

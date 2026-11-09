@@ -285,6 +285,18 @@ async function authenticateIsDelegation(
         message: "Synap AI is paused: it does nothing until it is resumed.",
       });
     }
+    // An app's turn that names the personal agent but finds NO live grant (the person revoked it, or the key, since
+    // the turn began) stops here: falling back to the app's grant alone would make the turn wider the moment the
+    // person narrowed it. Without an app claim (the person's own sessions) `none` keeps today's behaviour.
+    if (ceiling.status === "none" && appGrant !== null) {
+      logger.warn(
+        { jti: delegation.jti },
+        "IS delegation refused: Synap AI has no grant"
+      );
+      return authErrorResponse(c, "key_revoked", {
+        message: "Synap AI has no access: connect it on the Keys page.",
+      });
+    }
     if (ceiling.status === "ok") {
       grant = narrowedByApp(ceiling.grant, appGrant);
       bounded = true;

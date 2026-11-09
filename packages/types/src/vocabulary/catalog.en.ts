@@ -109,6 +109,14 @@ export const vocabularySentencesEn = {
   "vocabulary.membersDecide.unnamed": "Item members decide",
   // `resolveHandedToLabel`: a slot handed to an agent (past).
   "vocabulary.handedTo": "Handed to {name}",
+  // `resolveDoNotContactRefusal`: why the send door sent nothing to a person
+  // marked do not contact (founder, 2026-11-09). The reason, when the person
+  // gave one, is said as written.
+  "vocabulary.refusal.doNotContact":
+    "Nothing was sent: {name} is marked do not contact.",
+  "vocabulary.refusal.doNotContact.reason":
+    "Nothing was sent: {name} is marked do not contact ({reason}).",
+  "vocabulary.refusal.doNotContact.unnamed": "this person",
   // `resolveRunnerStateLabelFor`: a runner's wait read by someone other than
   // the person it waits on (a room member): never "your".
   "vocabulary.runner.needs_permission.named": "Waiting for {name}'s permission",
