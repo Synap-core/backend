@@ -42,6 +42,8 @@ import { profiles } from "@synap/database/schema";
 import {
   HOLD_ON,
   LIFECYCLE_CATEGORIES,
+  LIFECYCLE_REQUIREMENT_DIRECTIONS,
+  LIFECYCLE_REQUIREMENT_OWNERS,
   isTerminalLifecycleCategory,
   type LifecycleOption,
 } from "@synap-core/types/lifecycle";
@@ -73,6 +75,35 @@ import {
 
 const categorySchema = z.enum(LIFECYCLE_CATEGORIES);
 
+const requirementClearedByWire = z.union([
+  z.object({ answer: z.literal(true) }),
+  z.object({ intent: z.string() }),
+  z.object({ playbookId: z.string() }),
+  z.object({ capability: z.string() }),
+]);
+const requirementBaseWire = {
+  blockerKey: z.string(),
+  label: z.string().optional(),
+  clearedBy: requirementClearedByWire.optional(),
+  owner: z.enum(LIFECYCLE_REQUIREMENT_OWNERS).optional(),
+  forKinds: z.array(z.string()).optional(),
+};
+const lifecycleRequirementWire = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("link"),
+    relation: z.string(),
+    direction: z.enum(LIFECYCLE_REQUIREMENT_DIRECTIONS),
+    min: z.number().optional(),
+    ...requirementBaseWire,
+  }),
+  z.object({
+    kind: z.literal("property"),
+    property: z.string(),
+    in: z.array(z.string()).optional(),
+    ...requirementBaseWire,
+  }),
+]);
+
 const lifecycleOptionWire = z.object({
   key: z.string(),
   label: z.string(),
@@ -96,6 +127,8 @@ const lifecycleOptionWire = z.object({
       dateBinding: z.string().optional(),
     })
     .optional(),
+  /** What the step requires of a thing (`LifecycleOptionRequirement`); absent = none. */
+  requires: z.array(lifecycleRequirementWire).optional(),
 });
 
 const lifecycleWire = z.object({

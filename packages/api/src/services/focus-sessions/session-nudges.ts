@@ -151,7 +151,8 @@ export function shouldOfferPlaybooks(session: NudgeSessionLike): boolean {
  */
 export function computeSessionNudges(input: {
   session: NudgeSessionLike;
-  evaluation: Pick<SessionEvaluationSummary, "criteria" | "evaluations">;
+  evaluation: Pick<SessionEvaluationSummary, "criteria" | "evaluations"> &
+    Partial<Pick<SessionEvaluationSummary, "verdict">>;
   phase: NudgePhase;
   playbookCandidates?: PlaybookCandidate[];
   /** The session's next move as THE rule derived it — see `readyToClose`. */
@@ -248,6 +249,30 @@ export function computeSessionNudges(input: {
         ? `${ready}: grade the optional criteria above with evaluate_session, then close with complete_session (if a person worked in it, ask them in its room first).`
         : `${ready}: close with complete_session (if a person worked in it, ask them in its room first). If more work remains, declare it instead.`
     );
+  }
+
+  // Retrospective, at close only. Text, never a write. Read off the shared
+  // verdict (`verdict.state`), not re-derived: "passing" = every REQUIRED
+  // criterion passes, "failing" = a required one failed.
+  if (phase === "complete") {
+    const bound = !!session.playbookId || session.origin === "playbook";
+    // No verdict given ⇒ no retrospective hint (never guessed).
+    const state = evaluation.verdict?.state;
+    if (bound && state === "failing") {
+      out.hints.push(
+        "A required criterion failed under a playbook: if its stage lessons caused it or would have prevented it, propose the patch with synap_update_playbook."
+      );
+    }
+    if (state === "passing") {
+      if (!bound) {
+        out.hints.push(
+          "Will this work repeat? If yes, synap_promote_session_to_playbook turns this session into a playbook; if not, ignore this."
+        );
+      }
+      out.hints.push(
+        "Capture what you learned that stays true: synap_ask first, then synap_capture (knowledge)."
+      );
+    }
   }
 
   return out.hints.length > 0 ? out : undefined;

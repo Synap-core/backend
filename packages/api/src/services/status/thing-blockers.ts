@@ -30,7 +30,7 @@ export interface ThingBlockerAsk {
   /**
    * The ROLE the card is (a lead board's card is a person or company wearing
    * the lead role): its step is the facet's, on the role's lifecycle. Null
-   * for a kind's own card.
+   * for a kind's own card. The same facet decides which `requires` count.
    */
   facetId?: string | null;
   status: string | null;
@@ -55,6 +55,7 @@ export function thingBlockerQuestion(
     steps: [
       { subjectType: "entity", subjectId: id, ...(facetId ? { facetId } : {}) },
     ],
+    requirements: [{ entityId: id, ...(facetId ? { facetId } : {}) }],
   };
 }
 
