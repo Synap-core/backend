@@ -88,10 +88,19 @@ const EMPLOYEE = randomUUID(); // a person with no lead, works_at COMPANY
 const COMPANY = randomUUID(); // a company wearing lead at outreach
 const STRANGER = randomUUID(); // a person with no lead and no company
 const DEAL = randomUUID(); // a kind with a humanOnly option, for parity
+const BOTH = randomUUID(); // a person wearing lead who works_at OWN_CO, also a lead
+const OWN_CO = randomUUID(); // BOTH's company, wearing lead at outreach
+const TWO_JOBS = randomUUID(); // a person with no lead, works_at CO_A and CO_B
+const CO_A = randomUUID(); // a company wearing lead at outreach
+const CO_B = randomUUID(); // a company wearing lead at outreach
 
 const F_OUTREACH = randomUUID();
 const F_QUALIFIED = randomUUID();
 const F_COMPANY = randomUUID();
+const F_BOTH = randomUUID();
+const F_OWN_CO = randomUUID();
+const F_CO_A = randomUUID();
+const F_CO_B = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -234,13 +243,25 @@ beforeAll(async () => {
       ('${EMPLOYEE}', '${OWNER}', null, 'person', '${PERSON_KIND}', 'Linus', null, '{}'),
       ('${COMPANY}', '${OWNER}', null, 'company', '${COMPANY_KIND}', 'Acme', null, '{}'),
       ('${STRANGER}', '${OWNER}', null, 'person', '${PERSON_KIND}', 'Nobody', null, '{}'),
-      ('${DEAL}', '${OWNER}', '${SPACE}', 'deal', '${DEAL_KIND}', 'Acme deal', 'draft', '{"commercialStage":"draft"}');
+      ('${DEAL}', '${OWNER}', '${SPACE}', 'deal', '${DEAL_KIND}', 'Acme deal', 'draft', '{"commercialStage":"draft"}'),
+      ('${BOTH}', '${OWNER}', null, 'person', '${PERSON_KIND}', 'Margaret', null, '{}'),
+      ('${OWN_CO}', '${OWNER}', null, 'company', '${COMPANY_KIND}', 'Apollo', null, '{}'),
+      ('${TWO_JOBS}', '${OWNER}', null, 'person', '${PERSON_KIND}', 'Ken', null, '{}'),
+      ('${CO_A}', '${OWNER}', null, 'company', '${COMPANY_KIND}', 'Bell', null, '{}'),
+      ('${CO_B}', '${OWNER}', null, 'company', '${COMPANY_KIND}', 'Unix Co', null, '{}');
     insert into entity_facets (id, entity_id, profile_id, workspace_id, user_id, status, properties) values
       ('${F_OUTREACH}', '${AT_OUTREACH}', '${LEAD_ROLE}', null, '${OWNER}', 'outreach', '{"leadStage":"outreach","icpScore":4}'),
       ('${F_QUALIFIED}', '${AT_QUALIFIED}', '${LEAD_ROLE}', null, '${OWNER}', 'qualified', '{"leadStage":"qualified"}'),
-      ('${F_COMPANY}', '${COMPANY}', '${LEAD_ROLE}', null, '${OWNER}', 'outreach', '{"leadStage":"outreach"}');
+      ('${F_COMPANY}', '${COMPANY}', '${LEAD_ROLE}', null, '${OWNER}', 'outreach', '{"leadStage":"outreach"}'),
+      ('${F_BOTH}', '${BOTH}', '${LEAD_ROLE}', null, '${OWNER}', 'outreach', '{"leadStage":"outreach"}'),
+      ('${F_OWN_CO}', '${OWN_CO}', '${LEAD_ROLE}', null, '${OWNER}', 'outreach', '{"leadStage":"outreach"}'),
+      ('${F_CO_A}', '${CO_A}', '${LEAD_ROLE}', null, '${OWNER}', 'outreach', '{"leadStage":"outreach"}'),
+      ('${F_CO_B}', '${CO_B}', '${LEAD_ROLE}', null, '${OWNER}', 'outreach', '{"leadStage":"outreach"}');
     insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type) values
-      ('${randomUUID()}', '${OWNER}', null, '${EMPLOYEE}', '${COMPANY}', 'works_at');
+      ('${randomUUID()}', '${OWNER}', null, '${EMPLOYEE}', '${COMPANY}', 'works_at'),
+      ('${randomUUID()}', '${OWNER}', null, '${BOTH}', '${OWN_CO}', 'works_at'),
+      ('${randomUUID()}', '${OWNER}', null, '${TWO_JOBS}', '${CO_A}', 'works_at'),
+      ('${randomUUID()}', '${OWNER}', null, '${TWO_JOBS}', '${CO_B}', 'works_at');
   `);
 }, 120_000);
 
@@ -296,6 +317,21 @@ describe("facet_update moves a role's status through the move door", () => {
     expect(calls.gate[0]).toMatchObject({
       data: { entityId: COMPANY, facetId: F_COMPANY },
     });
+  });
+
+  it("a person who wears the lead themselves moves THEIR lead, never their company's", async () => {
+    const out = await replyMovesLead(BOTH);
+    expect(out).toMatchObject({ status: "moved", facetId: F_BOTH });
+    expect((await facet(F_BOTH)).status).toBe("engaged");
+    expect((await facet(F_OWN_CO)).status).toBe("outreach");
+  });
+
+  it("a person with no lead and two companies that are leads is skipped: never a guess", async () => {
+    const out = await replyMovesLead(TWO_JOBS);
+    expect(out).toMatchObject({ status: "skipped", reason: "no_role" });
+    expect((await facet(F_CO_A)).status).toBe("outreach");
+    expect((await facet(F_CO_B)).status).toBe("outreach");
+    expect(calls.gate).toHaveLength(0);
   });
 
   it("a person who is no lead (and has no company) is skipped, not a failed run", async () => {
