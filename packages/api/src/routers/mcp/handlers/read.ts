@@ -23,6 +23,7 @@ import {
 import {
   ENTITIES_LEAN_NOTE,
   projectLeanEntityList,
+  leanListedUnderRole,
 } from "../../../services/entity-lean-list.js";
 import {
   ASK_DETAILS,
@@ -320,6 +321,12 @@ export const readHandlers: McpHandlerMap = {
     if (!parsedFilters.ok) return ok({ error: parsedFilters.error });
     const filters = parsedFilters.filters;
     const includeFacets = args.includeFacets === true;
+    // Listed under a ROLE, a lean row's status is that role's facet status:
+    // the list loads the facet rows for it (`projectLeanEntityList`).
+    const listedUnder =
+      (args.detail as string | undefined) === "full"
+        ? undefined
+        : await leanListedUnderRole(profileSlug || undefined);
     const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
@@ -336,7 +343,7 @@ export const readHandlers: McpHandlerMap = {
       ...(lastInteractionBefore ? { lastInteractionBefore } : {}),
       ...(args.includeNever === true ? { includeNever: true } : {}),
       ...(filters ? { filters } : {}),
-      ...(includeFacets ? { includeFacets: true } : {}),
+      ...(includeFacets || listedUnder ? { includeFacets: true } : {}),
       limit: limit + 1,
       offset,
     });
@@ -390,7 +397,10 @@ export const readHandlers: McpHandlerMap = {
     return ok({
       entities: await projectLeanEntityList(
         result as unknown as Array<Record<string, unknown>>,
-        fields ? { fields } : {}
+        {
+          ...(fields ? { fields } : {}),
+          ...(listedUnder ? { listedUnder } : {}),
+        }
       ),
       count: result.length,
       ...paging,

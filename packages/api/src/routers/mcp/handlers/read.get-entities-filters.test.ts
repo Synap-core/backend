@@ -21,6 +21,16 @@ vi.mock("../../../services/entity-lean-list.js", async (importOriginal) => ({
   projectLeanEntityList: projectLean,
 }));
 
+// The role lookup a lean list makes before listing (`leanListedUnderRole`):
+// `lead` is a role here, every other slug a kind.
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveSlugKind: vi.fn(async (_db: unknown, slug: string) => ({
+    hasKindRow: slug !== "lead",
+    hasRoleRow: slug === "lead",
+  })),
+}));
+
 import { readHandlers } from "./read.js";
 import type { McpToolContext } from "./shared.js";
 
@@ -95,5 +105,27 @@ describe("synap_get_entities filters + includeFacets", () => {
     const r = await run({ filters: [FILTER] });
     expect(text(r)).toContain("needs profileSlug");
     expect(getEntities).not.toHaveBeenCalled();
+  });
+});
+
+describe("synap_get_entities listed under a role", () => {
+  const STATUS = { field: "status", operator: "equals", value: "qualified" };
+
+  it("a role list loads the facet rows and projects lean rows under the role", async () => {
+    await run({ profileSlug: "lead", filters: [STATUS] });
+    expect(getEntities.mock.calls[0]![0]).toMatchObject({
+      profileSlug: "lead",
+      filters: [STATUS],
+      includeFacets: true,
+    });
+    expect(projectLean.mock.calls[0]![1]).toMatchObject({
+      listedUnder: "lead",
+    });
+  });
+
+  it("control: a kind list loads no facets and is not listed under a role", async () => {
+    await run({ profileSlug: "deal", filters: [STATUS] });
+    expect(getEntities.mock.calls[0]![0]).not.toHaveProperty("includeFacets");
+    expect(projectLean.mock.calls[0]![1]).not.toHaveProperty("listedUnder");
   });
 });
