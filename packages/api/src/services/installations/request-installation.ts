@@ -497,6 +497,16 @@ export interface CatalogAddition {
   licence: string | null;
 }
 
+/**
+ * A version a person can read. A catalog capability's version is the Control
+ * Plane's content hash (`h-<12 hex>`): it pins what the approval installs
+ * (`catalog.version`, checked again on approval) but means nothing to a
+ * person, so the sentence leaves it out.
+ */
+function readableVersion(version: string | null): string | null {
+  return version && !version.startsWith("h-") ? version : null;
+}
+
 /** The sentence the approval card shows. */
 function reasoningFor(
   input: InstallationAskInput,
@@ -508,7 +518,7 @@ function reasoningFor(
     return `Remove ${key} from ${computer.name}: its removal steps run on that computer.`;
   if (addition) {
     const what = [
-      addition.version ? `version ${addition.version}` : null,
+      readableVersion(addition.version) ? `version ${addition.version}` : null,
       addition.licence ? `licence ${addition.licence}` : null,
     ].filter(Boolean);
     return `Add "${addition.name}" (${key}${what.length ? `, ${what.join(", ")}` : ""}) from the marketplace to the pod, then install it on ${computer.name}: its install steps run on that computer, then it is checked.`;

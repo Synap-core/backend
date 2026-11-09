@@ -172,7 +172,8 @@ beforeAll(async () => {
     ]
   );
   for (const [slug, def, version] of [
-    ["media-ffmpeg", DEF, "0.35.0"],
+    // As the Control Plane serves it: a capability's version is its content hash.
+    ["media-ffmpeg", DEF, "h-f735ae04da7f"],
     ["web-reader", POD_DEF, "1.0.0"],
   ] as const)
     await q(
@@ -395,14 +396,17 @@ describe("ask, approve, observe: one card adds media-ffmpeg and installs it on t
         action: "install",
         catalog: {
           slug: "media-ffmpeg",
-          version: "0.35.0",
+          version: "h-f735ae04da7f",
           licence: "GPL-2.0-or-later",
         },
       },
     });
     expect(filed.reasoning).toMatch(
-      /^Add "ffmpeg on your computer" \(media-ffmpeg, version 0\.35\.0, licence GPL-2\.0-or-later\) from the marketplace to the pod, then install it on Mac/
+      /^Add "ffmpeg on your computer" \(media-ffmpeg, licence GPL-2\.0-or-later\) from the marketplace to the pod, then install it on Mac/
     );
+    // The hash pins what approval installs; a person never reads it
+    // (live proposal 55928891 said "version h-f735ae04da7f").
+    expect(filed.reasoning).not.toMatch(/h-f735ae04da7f|version/);
     // Nothing is added before the person approves.
     expect(h.added).toEqual([]);
     const caps = await q(
