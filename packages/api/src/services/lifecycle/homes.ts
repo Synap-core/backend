@@ -118,6 +118,11 @@ import {
   type BoardLensMemo,
 } from "./board-lens.js";
 import {
+  readLeftBehind,
+  LEFT_BEHIND_CAP,
+  type LeftBehindRead,
+} from "./left-behind.js";
+import {
   loadOpenWork,
   loadUnattachedWork,
   UNATTACHED_CAP,
@@ -238,6 +243,13 @@ export interface MovingRead {
   items: MovingItem[];
   /** Open work sessions with no subject and no worker target; capped. */
   unattached: UnattachedLine[];
+  /**
+   * The things whose work ENDED while they stayed open or active, with no
+   * work on them now (`readLeftBehind`); newest-ended first, capped, with the
+   * population's `total`. null = that read failed (logged): never an empty
+   * list, and never a failure of the rest of Moving now.
+   */
+  leftBehind: LeftBehindRead | null;
 }
 
 /** What the trpc ctx carries that these reads use. */
@@ -1094,19 +1106,29 @@ async function resolveMovingIdentities(
  * space, never the person's). Narrowed to that identity's space
  * (`workspaceId`) and/or the project. Beside them, `unattached`: the open
  * work sessions on no thing (`loadUnattachedWork`, narrowed by the session's
- * own space / project). A failed read THROWS — "nothing is moving" is a claim
+ * own space / project), and `leftBehind`: the things whose work ended while
+ * they stayed open or active (`readLeftBehind`; null when that read failed).
+ * A failed read of the moving things THROWS — "nothing is moving" is a claim
  * this read must have earned.
  */
 export async function readMoving(
   ctx: HomesCtx,
   input: { projectId?: string; workspaceId?: string; limit: number }
 ): Promise<MovingRead> {
-  const [work, loose] = await Promise.all([
+  const [work, loose, leftBehind] = await Promise.all([
     loadOpenWork(readerOf(ctx), null),
     loadUnattachedWork(readerOf(ctx), {
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
       limit: Math.min(input.limit, UNATTACHED_CAP),
+    }),
+    readLeftBehind(readerOf(ctx), {
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.projectId ? { projectId: input.projectId } : {}),
+      limit: Math.min(input.limit, LEFT_BEHIND_CAP),
+    }).catch((err: unknown) => {
+      logger.warn({ err }, "moving: left-behind NOT read — reported null");
+      return null;
     }),
   ]);
   const ids = [...work.keys()];
@@ -1144,7 +1166,7 @@ export async function readMoving(
             )
           );
   if (things.length === 0 && loose.length === 0)
-    return { items: [], unattached: [] };
+    return { items: [], unattached: [], leftBehind };
 
   const onThings = things.flatMap((t) => work.get(t.id) ?? []);
   const [identities, names, asksYou, waitKinds] = await Promise.all([
@@ -1242,5 +1264,6 @@ export async function readMoving(
           a.i - b.i
       )
       .map(({ line }) => line),
+    leftBehind,
   };
 }

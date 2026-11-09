@@ -21,6 +21,7 @@ export interface EntityUpdatePatch {
   deleteProperties?: string[];
   profileSlug?: string;
   documentId?: string;
+  homeWorkspaceId?: string | null;
 }
 
 /** What an applied update wrote, named in the API's field words. */
@@ -72,13 +73,14 @@ export function isEmptyEntityPatch(patch: EntityUpdatePatch): boolean {
     Object.keys(patch.metadata ?? {}).length === 0 &&
     (patch.deleteProperties?.length ?? 0) === 0 &&
     !patch.profileSlug &&
-    !patch.documentId
+    !patch.documentId &&
+    patch.homeWorkspaceId === undefined
   );
 }
 
 /** The refusal an empty patch gets — the same words on every door. */
 export function emptyEntityPatchMessage(entityId: string): string {
-  return `Nothing to update on entity ${entityId}: send at least one of title, description (preview), properties (metadata), deleteProperties, profileSlug or documentId. Nothing was written.`;
+  return `Nothing to update on entity ${entityId}: send at least one of title, description (preview), properties (metadata), deleteProperties, profileSlug, documentId or homeWorkspaceId. Nothing was written.`;
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
@@ -110,6 +112,7 @@ export function buildUpdateWriteReceipt(input: {
   if (patch.preview !== undefined) landed.push("description");
   if (patch.documentId) landed.push("documentId");
   if (patch.profileSlug) landed.push("profileSlug");
+  if (patch.homeWorkspaceId !== undefined) landed.push("homeWorkspaceId");
   for (const [key, value] of Object.entries(patch.metadata ?? {})) {
     if (unmodeledKeys.has(key)) continue;
     const held = sameValue(written[key], value);

@@ -21,7 +21,12 @@ import {
   type KratosFlow,
   type SubmitFlowResult,
 } from "../../../lib/kratos-flow";
-import { PasskeyCancelled } from "../../../lib/passkey";
+import {
+  PasskeyCancelled,
+  PasskeyCreateFailed,
+  type PasskeyPlacement,
+} from "../../../lib/passkey";
+import { presenceT } from "../../_lib/presence/copy";
 
 export type JoinOutcome =
   /** The account exists and the invite is accepted. */
@@ -43,6 +48,7 @@ export interface JoinDeps {
   ): Promise<SubmitFlowResult>;
   createPasskey(
     createData: string,
+    placement: PasskeyPlacement,
     person: { name: string; displayName?: string }
   ): Promise<string>;
 }
@@ -80,7 +86,14 @@ async function startFlow(
 const csrf = (flow: KratosFlow) => nodeValue(flow, "csrf_token") ?? "";
 
 export async function joinWithPasskey(
-  input: { token: string; email: string; name?: string; returnTo: string },
+  input: {
+    token: string;
+    email: string;
+    name?: string;
+    returnTo: string;
+    /** The person's answer to "Where should this passkey live?". */
+    placement: PasskeyPlacement;
+  },
   deps: JoinDeps
 ): Promise<JoinOutcome> {
   const started = await startFlow(input.returnTo, deps);
@@ -111,12 +124,15 @@ export async function joinWithPasskey(
 
   let passkey: string;
   try {
-    passkey = await deps.createPasskey(createData, {
+    passkey = await deps.createPasskey(createData, input.placement, {
       name: input.email,
       displayName: input.name || input.email,
     });
   } catch (err) {
     if (err instanceof PasskeyCancelled) return { kind: "cancelled" };
+    if (err instanceof PasskeyCreateFailed) {
+      return { kind: "refused", message: presenceT()(`create.${err.reason}`) };
+    }
     return {
       kind: "refused",
       message: err instanceof Error && err.message ? err.message : JOIN_FAILED,

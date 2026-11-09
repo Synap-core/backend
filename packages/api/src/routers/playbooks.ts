@@ -16,6 +16,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.2)
  */
 
+import { trialRunInputSchema } from "../services/playbooks/trial-run.js";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import { z } from "zod";
@@ -98,6 +99,7 @@ import {
   playbookScopeSchema,
   playbookExpectedOutputSchema,
   playbookRequiredIntentsSchema,
+  playbookGuidanceSchema,
 } from "../schemas/playbook-definition.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
@@ -142,8 +144,8 @@ import {
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
+import { setPlaybookRunChoiceGoverned } from "../services/playbooks/set-run-choice.js";
 import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
-import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
@@ -408,6 +410,8 @@ export const updateInputSchema = z.object({
    * change cannot make the patch and the create accept different slugs.
    */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
+  /** See `playbookGuidanceSchema` — REPLACES the declared list, same schema. */
+  guidance: playbookGuidanceSchema.optional(),
   /** See `playbookDefinitionSchema.subjectProfile` — the same schema. */
   subjectProfile: playbookSubjectProfileSchema.optional(),
   /** See `playbookDefinitionSchema.activators` — folded into `subjectProfile`. */
@@ -2044,6 +2048,7 @@ export const playbooksRouter = router({
           stages: input.stages,
           criteria: input.criteria,
           requiredIntents: input.requiredIntents,
+          guidance: input.guidance,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
           metadata: input.metadata,
@@ -2165,6 +2170,7 @@ export const playbooksRouter = router({
             stages: input.stages ?? [],
             criteria: input.criteria ?? [],
             requiredIntents: input.requiredIntents ?? [],
+            guidance: input.guidance ?? [],
             subjectProfile: input.subjectProfile ?? null,
             schedule: input.schedule ?? null,
             metadata: input.metadata ?? {},
@@ -2432,6 +2438,7 @@ export const playbooksRouter = router({
           ...(input.requiredIntents !== undefined
             ? { requiredIntents: input.requiredIntents }
             : {}),
+          ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
             : {}),
@@ -2476,6 +2483,7 @@ export const playbooksRouter = router({
       if (input.criteria !== undefined) set.criteria = input.criteria;
       if (input.requiredIntents !== undefined)
         set.requiredIntents = input.requiredIntents;
+      if (input.guidance !== undefined) set.guidance = input.guidance;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;
       if (input.schedule !== undefined) set.schedule = input.schedule;
@@ -2832,6 +2840,8 @@ export const playbooksRouter = router({
          * `data` so an approved run keeps its lineage too.
          */
         parentSessionId: z.string().uuid().optional(),
+        /** With parentSessionId: the run is a detour; the parent waits on it. */
+        suspendedIntent: z.string().max(400).optional(),
         /**
          * File the run into a PROJECT and, optionally, a TRACK (a method
          * running in that project, 0272). A track names its own project; a
@@ -2892,9 +2902,35 @@ export const playbooksRouter = router({
          * run's own grant (`playbook.run`) covers it.
          */
         remember: z.boolean().optional(),
+        /**
+         * TRIAL (the rule lab, design b199a3a4 slice 1b): render each draft in
+         * place of the current version it names, on Synap AI, writing
+         * nothing; the drafted text is the agent's last reply
+         * (`GET /runs/:runId?flowType=playbook` → `playbookDetail.trial`).
+         * A person's act: refused for an agent, with `remember` or with
+         * `handToAgentId`.
+         */
+        trial: trialRunInputSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.trial) {
+        if (input.agentUserId || ctx.agentUserId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only a person can try a draft rule (a trial run) — an agent cannot.",
+            cause: { reasonCode: "PERSON_ONLY" },
+          });
+        }
+        if (input.remember || input.handToAgentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId.",
+          });
+        }
+      }
       // The playbook must be on the caller's USER FLOOR (every member
       // workspace + pod-wide rows) — unchanged predicate, pod-wide as it
       // always was.
@@ -3130,6 +3166,9 @@ export const playbooksRouter = router({
           ...(input.parentSessionId
             ? { parentSessionId: input.parentSessionId }
             : {}),
+          ...(input.parentSessionId && input.suspendedIntent
+            ? { suspendedIntent: input.suspendedIntent }
+            : {}),
           ...(filedProjectId ? { projectId: filedProjectId } : {}),
           ...(input.trackId ? { trackId: input.trackId } : {}),
           // The stage the run was proposed AT — re-validated by the replay.
@@ -3144,6 +3183,8 @@ export const playbooksRouter = router({
             ? { handToAgentId: input.handToAgentId }
             : {}),
           ...(input.runOn ? { runOn: input.runOn } : {}),
+          // A gated trial stays a trial once approved.
+          ...(input.trial ? { trial: input.trial } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -3191,6 +3232,9 @@ export const playbooksRouter = router({
         ...(input.parentSessionId
           ? { parentSessionId: input.parentSessionId }
           : {}),
+        ...(input.parentSessionId && input.suspendedIntent
+          ? { suspendedIntent: input.suspendedIntent }
+          : {}),
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         ...(input.trackId ? { trackId: input.trackId } : {}),
         ...(input.trackId && input.trackStage
@@ -3205,6 +3249,7 @@ export const playbooksRouter = router({
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
         ...(input.runOn ? { runOn: input.runOn } : {}),
+        ...(input.trial ? { trial: input.trial } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
@@ -3290,7 +3335,10 @@ export const playbooksRouter = router({
   /**
    * Choose who runs this playbook for the caller from now on: Synap AI, or one
    * of their agents (`setRunChoice`, the assignment edge, one per person per
-   * playbook). HUMAN-ONLY. Returns the read the page draws next.
+   * playbook). A person's choice applies and returns the read the page draws
+   * next. An agent or a third-party app (an agent key) may only ASK: its
+   * choice is a proposal the person approves once (decision D7,
+   * `playbook/set_run_choice`, floored), saved for that person on approval.
    */
   setRunChoice: protectedProcedure
     .input(
@@ -3303,53 +3351,10 @@ export const playbooksRouter = router({
             agentUserId: z.string().uuid(),
           }),
         ]),
+        reasoning: z.string().max(2000).optional(),
       })
     )
-    .mutation(async ({ ctx, input }) => {
-      if (ctx.agentUserId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "Only a person can choose who runs this — an agent key cannot.",
-          cause: { reasonCode: "PERSON_ONLY" },
-        });
-      }
-      const playbook = await scopedDb(
-        AccessContext.from(ctx)
-      ).findFirst<Playbook>(playbooks, {
-        where: eq(playbooks.id, input.playbookId),
-      });
-      if (!playbook) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Playbook ${input.playbookId} not found`,
-        });
-      }
-      // A key that is not an agent is still bounded by its grant: choosing who
-      // runs a playbook is part of running it, the same grant `remember` on
-      // `playbooks.run` rides on (`playbook.run`).
-      await assertKeyMayWrite({
-        subjectType: "playbook",
-        action: "run",
-        workspaceId: playbook.workspaceId ?? null,
-      });
-      if (
-        input.choice.executor === "is-agent" &&
-        playbook.executor === "external-agent"
-      ) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "This process runs only on an agent, so Synap AI cannot run it: choose one of your agents.",
-        });
-      }
-      await setRunChoice({
-        callerId: ctx.userId,
-        playbookId: playbook.id,
-        choice: input.choice,
-      });
-      return readPlaybookRunChoice({ userId: ctx.userId, playbook });
-    }),
+    .mutation(({ ctx, input }) => setPlaybookRunChoiceGoverned(ctx, input)),
 
   getFlow: protectedProcedure
     .input(z.object({ playbookId: z.string().uuid() }))

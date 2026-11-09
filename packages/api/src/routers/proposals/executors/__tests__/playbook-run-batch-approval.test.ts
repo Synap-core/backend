@@ -206,3 +206,29 @@ describe("approving an AGENT-filed run proposal", () => {
     expect(h.runs[0].agentIds).toEqual(["agent-asker", "agent-extra"]);
   });
 });
+
+describe("approving a run proposed as a detour", () => {
+  it("replays parentSessionId AND suspendedIntent, so the parent waits", async () => {
+    await approve({
+      subjectId: "lead-1",
+      parentSessionId: "parent-1",
+      suspendedIntent: "was about to qualify the lead",
+    });
+    expect(h.runs).toHaveLength(1);
+    expect(h.runs[0]).toMatchObject({
+      parentSessionId: "parent-1",
+      suspendedIntent: "was about to qualify the lead",
+    });
+  });
+
+  it("a slice (parent, no suspendedIntent) stays a slice", async () => {
+    await approve({ subjectId: "lead-1", parentSessionId: "parent-1" });
+    expect(h.runs[0]).toMatchObject({ parentSessionId: "parent-1" });
+    expect(h.runs[0]).not.toHaveProperty("suspendedIntent");
+  });
+
+  it("never replays a suspendedIntent without a parent", async () => {
+    await approve({ subjectId: "lead-1", suspendedIntent: "orphan" });
+    expect(h.runs[0]).not.toHaveProperty("suspendedIntent");
+  });
+});

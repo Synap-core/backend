@@ -80,6 +80,7 @@ import {
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
   registerBriefsRoutes,
+  registerChatRoutes,
   registerLibraryRoutes,
   registerToolsRoutes,
   registerTerminalRoutes,
@@ -121,6 +122,9 @@ import {
   registerArtifactsRoutes,
   registerRunsRoutes,
   registerBoxRunsRoutes,
+  registerComputerWakesRoutes,
+  registerHostJobsRoutes,
+  registerInstallationsRoutes,
   registerDiagnoseRoutes,
   registerWorkflowsRoutes,
   registerResolveRoutes,
@@ -323,6 +327,7 @@ registerDocumentsRoutes(app); // /documents*
 registerProposalsRoutes(app); // /proposals*
 registerSkillsRoutes(app); // /skills/system (static doc)
 registerBriefsRoutes(app); // GET /briefs (AI Teaching Substrate composed teaching briefs)
+registerChatRoutes(app); // POST /chat/stream (an app's chat turn, bounded by its grant)
 registerLibraryRoutes(app); // /library/{add,list,search} — first-party Library doors (never agents)
 registerSkillsCrudRoutes(app); // POST/GET /skills (capability-substrate CRUD seam)
 registerToolsRoutes(app); // POST/GET /tools, GET /tools/:id (capability-substrate CRUD seam)
@@ -397,6 +402,9 @@ registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)
 registerBoxRunsRoutes(app); // /box-runs/lease (static first), /box-runs/:id/{heartbeat,uploads,finish} — computer + box.runner
+registerComputerWakesRoutes(app); // /computers/me/wakes — a computer's waker: its lease + which agents to wake
+registerInstallationsRoutes(app); // /installations/request (static first), GET /installations — person/agent; governed installation/request
+registerHostJobsRoutes(app); // /host-jobs/lease (static first), /host-jobs/:id/{heartbeat,report,finish} — computer + host.runner; GET /:id/logs — the owner
 registerDiagnoseRoutes(app); // /diagnose — the THIRD door (mode from payload shape)
 registerWorkflowsRoutes(app); // /workflows/:kind/:id/place + /feed (workflow place)
 registerResolveRoutes(app); // /resolve/:id — universal ID resolver

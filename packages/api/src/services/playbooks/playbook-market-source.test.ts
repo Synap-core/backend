@@ -147,6 +147,96 @@ describe("planPlaybookReconcile", () => {
     expect(p.patch.goalTemplate).toBe("Changed goal.");
   });
 
+  // A stage's `lessons` are the pod's (the lessons scanner writes them on the
+  // live row), never an owner edit: one learned lesson must not freeze every
+  // template change to the stages ("Draft a first message", 6 Nov 2026).
+  const LESSONS = ["Name the decider in the next action."];
+  const stampedAt = (baseline: unknown) => ({
+    marketSource: {
+      packageSlug: "grants",
+      packageVersion: "h-1",
+      installedAt: "x",
+      baseline,
+    },
+  });
+  const withLessons = (stages: typeof STAGES) =>
+    stages.map((s) => (s.key === "draft" ? { ...s, lessons: LESSONS } : s));
+
+  it("a stage that learned lessons still advances to a changed template, and keeps its lessons", () => {
+    const next = {
+      ...TEMPLATE,
+      stages: STAGES.map((s) =>
+        s.key === "draft" ? { ...s, goal: "Draft through the send door." } : s
+      ),
+    };
+    const p = plan(
+      row({
+        scope: "project",
+        stages: withLessons(STAGES),
+        metadata: stampedAt(baselineOf(TEMPLATE)),
+      }),
+      next
+    );
+    expect(p.ownerOwned).not.toContain("stages");
+    expect(p.applied).toEqual(["stages"]);
+    expect(p.patch.stages).toEqual([
+      STAGES[0],
+      { ...STAGES[1], goal: "Draft through the send door.", lessons: LESSONS },
+    ]);
+    // The baseline records the template, never the pod's lessons.
+    const ms = p.metadata!.marketSource as { baseline: { stages: unknown[] } };
+    expect(ms.baseline.stages).toEqual(next.stages);
+  });
+
+  it("a stage with lessons whose text the owner edited stays owner-owned", () => {
+    const edited = withLessons(STAGES).map((s) =>
+      s.key === "draft" ? { ...s, name: "My draft" } : s
+    );
+    const p = plan(
+      row({
+        scope: "project",
+        stages: edited,
+        metadata: stampedAt(baselineOf(TEMPLATE)),
+      }),
+      {
+        ...TEMPLATE,
+        stages: [
+          ...STAGES,
+          { key: "send", name: "Send", category: "completed" },
+        ],
+      }
+    );
+    expect(p.ownerOwned).toContain("stages");
+    expect(p.patch.stages).toBeUndefined();
+  });
+
+  it("a converged row with lessons is up to date: no write", () => {
+    const p = plan(
+      row({
+        scope: "project",
+        stages: withLessons(STAGES),
+        metadata: {
+          marketSource: {
+            packageSlug: "grants",
+            packageVersion: "h-2",
+            installedAt: "x",
+            baseline: baselineOf(TEMPLATE),
+          },
+        },
+      })
+    );
+    expect(p.kind).toBe("up-to-date");
+    expect(p.patch).toEqual({});
+    expect(p.ownerOwned).toEqual([]);
+  });
+
+  it("ADOPT reads lessons as the pod's: stages equal to the template but for lessons are not owner-owned", () => {
+    const p = plan(row({ scope: "project", stages: withLessons(STAGES) }));
+    expect(p.kind).toBe("adopted");
+    expect(p.ownerOwned).toEqual([]);
+    expect(p.patch.stages).toBeUndefined();
+  });
+
   it("a baseline that predates `scope` still gets it (newly-managed field)", () => {
     const oldBaseline = baselineOf({ ...TEMPLATE, scope: undefined });
     delete (oldBaseline as Record<string, unknown>).scope;

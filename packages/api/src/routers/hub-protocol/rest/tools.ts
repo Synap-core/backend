@@ -46,6 +46,7 @@ import {
   rejectAgentApprover,
   requireUuidParam,
 } from "./_shared.js";
+import { refusalBody } from "./_presence.js";
 
 // ── Local OpenAPI schemas ────────────────────────────────────────────────────
 
@@ -669,9 +670,10 @@ export function registerToolsRoutes(app: HubHono): void {
 
       return c.json({ id, approved }, 200);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
       logger.error({ err, id }, "tools approve failed");
-      return c.json({ error: msg }, httpStatusForTrpcError(err));
+      // The typed refusal (PRESENCE_REQUIRED…) rides as `code`, as on
+      // POST /proposals/:id/approve: the client asks for the proof and retries.
+      return c.json(refusalBody(err), httpStatusForTrpcError(err));
     }
   });
 

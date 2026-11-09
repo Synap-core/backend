@@ -107,6 +107,28 @@ describe("needsYouContextFromOwedSlot", () => {
     expect(ctx.unreadable).toEqual([]);
   });
 
+  it("names the thing the slot holds up, as the pod resolved it (plan §9)", () => {
+    const blocks = {
+      thing: { id: "e1", name: "Ada Lovelace" },
+      statusNow: { key: "researching", label: "Researching" },
+      statusNext: { key: "contacted", label: "Contacted" },
+    };
+    const ctx = needsYouContextFromOwedSlot({
+      slot: { ...decisionSlot, blocks },
+      outputs: { status: "ok", value: outputs },
+      session: { status: "ok", value: session },
+    });
+    expect(ctx.blocks).toEqual(blocks);
+    // A slot that names no thing: the line is omitted, never guessed.
+    expect(
+      needsYouContextFromOwedSlot({
+        slot: decisionSlot,
+        outputs: { status: "ok", value: outputs },
+        session: { status: "ok", value: session },
+      }).blocks
+    ).toBeNull();
+  });
+
   it("names the track step from the track read when the caller has it", () => {
     const ctx = needsYouContextFromOwedSlot({
       slot: gradeSlot,
@@ -220,6 +242,7 @@ describe("needsYouContextFromProposal", () => {
 
   it("no session: every line absent, nothing unreadable", () => {
     expect(needsYouContextFromProposal({ proposal: {} })).toEqual({
+      blocks: null,
       unblocks: null,
       meanwhile: null,
       lookedAt: [],

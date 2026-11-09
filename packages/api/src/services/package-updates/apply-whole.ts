@@ -277,6 +277,8 @@ async function fileSpaceUpdate(
       agentUserId,
       body: spaceBody,
       via: PACKAGE_UPDATES_VIA,
+      // The catalog's own definition of the update (`installTemplateFromCatalog`).
+      catalogFixed: true,
     });
     if (filed.kind === "denied") {
       throw new TRPCError({ code: "FORBIDDEN", message: filed.reason });

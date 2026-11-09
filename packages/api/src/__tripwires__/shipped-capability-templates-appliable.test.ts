@@ -33,11 +33,12 @@ const REPO_ROOT = join(import.meta.dirname, "../../../../..");
 
 /**
  * Directory ROOTS scanned recursively for `*.capability.json`. Capability
- * templates are authored in the Control Plane seed catalog today; add a root
- * here (never individual files) if a second home ever appears.
+ * templates live in the ONE catalog home (`synap-app/packages/workspace-templates`);
+ * the Control Plane's copy was retired (control-plane-api 2c755f8e, 5 Nov 2026).
+ * Add a root here (never individual files) if a second home ever appears.
  */
 const TEMPLATE_ROOTS = [
-  join(REPO_ROOT, "synap-control-plane-api/src/seeds/capability-templates"),
+  join(REPO_ROOT, "synap-app/packages/workspace-templates/capabilities"),
 ];
 
 /** Floor, not the exact count — 25 templates shipped when this was written. */
@@ -64,7 +65,7 @@ describe("shipped capability templates are appliable", () => {
       rootsAvailable,
       `Cannot find ${TEMPLATE_ROOTS.join(", ")}. This tripwire validates the ` +
         `shipped capability templates against the apply door's schema, so it ` +
-        `needs synap-control-plane-api checked out BESIDE synap-backend. Clone ` +
+        `needs synap-app (the catalog home) checked out BESIDE synap-backend. Clone ` +
         `it there — do not delete or skip this test, that is how a template ` +
         `that cannot install shipped before.`
     ).toBe(true);
@@ -82,8 +83,16 @@ describe("shipped capability templates are appliable", () => {
     const rel = file.slice(REPO_ROOT.length + 1);
 
     it(`${rel} parses through CapabilityDefinitionSchema`, () => {
-      const raw: unknown = JSON.parse(readFileSync(file, "utf8"));
-      const result = CapabilityDefinitionSchema.safeParse(raw);
+      // A catalog manifest ({apiVersion, kind, meta, spec}): `spec` is the
+      // definition the apply door receives.
+      const manifest = JSON.parse(readFileSync(file, "utf8")) as {
+        kind?: unknown;
+        spec?: unknown;
+      };
+      expect(manifest.kind, `${rel} is not a capability manifest`).toBe(
+        "capability"
+      );
+      const result = CapabilityDefinitionSchema.safeParse(manifest.spec);
       // Surface the actual zod issues if this ever regresses — the founder-facing
       // 400 body is exactly this list.
       expect(

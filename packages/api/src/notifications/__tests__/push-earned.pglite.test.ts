@@ -76,7 +76,10 @@ vi.mock("../expo-push.js", () => ({
 vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: () => undefined,
 }));
-vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
+vi.mock("@synap/events", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  emitSideEffects: async () => undefined,
+}));
 vi.mock("../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -113,10 +116,14 @@ import {
   apiKeys,
 } from "@synap/database";
 import { askFingerprint, type Ask } from "@synap-core/types/ask";
-import type { PushQuickAnswer } from "@synap-core/types/push";
+import { PUSH_DAILY_CAP, type PushQuickAnswer } from "@synap-core/types/push";
 import { NotificationService } from "../NotificationService.js";
 import { writePushPrefs, readPushPrefs } from "../push-prefs.js";
 import { blockExpectedOutput } from "../../services/focus-sessions/block-output.js";
+import {
+  runAskLaterReturn,
+  setAskLater,
+} from "../../services/focus-sessions/ask-later.js";
 import {
   answerSessionSlot,
   attestSessionSlot,
@@ -551,6 +558,86 @@ describe("W8 — a push is earned", () => {
       interruptionLevel: "active",
       channelId: "needs-you",
     });
+  });
+
+  it("an ask back from Later is told again at its level, not swallowed by the session's earlier push (founder D3)", async () => {
+    const sessionId = await seedSession("active");
+    await blockAsk(sessionId, { mode: "confirm", prompt: "Casual tone?" });
+    expect(h.pushes).toHaveLength(1);
+    const until = new Date(Date.now() + 3 * 3_600_000);
+    await setAskLater({
+      sessionId,
+      userId: USER,
+      expectedLabel: "Tone",
+      until,
+      schedule: async () => undefined,
+    });
+    // The job runs at its time (pg-boss `startAfter`); here, directly.
+    expect(
+      await runAskLaterReturn({
+        sessionId,
+        label: "Tone",
+        laterUntil: until.toISOString(),
+      })
+    ).toEqual({ status: "told" });
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[1]).toMatchObject({
+      interruptionLevel: "active",
+      channelId: "needs-you",
+    });
+    // A second delivery of the same return is still one push.
+    await runAskLaterReturn({
+      sessionId,
+      label: "Tone",
+      laterUntil: until.toISOString(),
+    });
+    expect(h.pushes).toHaveLength(2);
+  });
+
+  it("one agent breaks through Focus once a day: its next due-soon ask is a normal push (review 5 Nov 2026)", async () => {
+    const soon = () => new Date(Date.now() + 20 * 60_000).toISOString();
+    for (let i = 0; i < 2; i++) {
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+        answerBy: soon(),
+      } as Ask);
+    }
+    expect(h.pushes).toHaveLength(2);
+    expect(h.pushes[0]).toMatchObject({
+      interruptionLevel: "time-sensitive",
+      channelId: "breaks-focus",
+    });
+    // The same agent's second due-soon ask that day: a normal push.
+    expect(h.pushes[1]).toMatchObject({
+      interruptionLevel: "active",
+      channelId: "needs-you",
+    });
+  });
+
+  it("a due-soon ask past the budget is held back by the person's daily cap like any other push", async () => {
+    const soon = () => new Date(Date.now() + 20 * 60_000).toISOString();
+    for (let i = 0; i < PUSH_DAILY_CAP + 2; i++) {
+      await blockAsk(await seedSession("active"), {
+        mode: "confirm",
+        prompt: "Casual tone?",
+        answerBy: soon(),
+      } as Ask);
+    }
+    // The first breaks through and is never capped; the rest are normal
+    // pushes, and the cap holds the ones past it.
+    expect(h.pushes).toHaveLength(PUSH_DAILY_CAP);
+  });
+
+  it("an answerBy already past is refused at write: nothing is asked, nothing rings", async () => {
+    const sessionId = await seedSession("active");
+    const result = await blockAsk(sessionId, {
+      mode: "confirm",
+      prompt: "Casual tone?",
+      answerBy: new Date(Date.now() - 60_000).toISOString(),
+    } as Ask);
+    expect(result).toMatchObject({ status: "ask_refused" });
+    expect(h.pushes).toHaveLength(0);
   });
 
   it("an agent has no push limit by default; the limit its person sets holds back its pushes past it", async () => {

@@ -52,8 +52,6 @@ export const IS_ONLY_TOOL_TOKENS: Record<string, string> = {
   list_commands: "in-app assistant only (the user's saved commands)",
   get_work_guidelines:
     "in-app assistant only (reads the work guideline for a blocked session)",
-  update_facet:
-    "in-app assistant only (moves a role's status); agent doors have no role-status tool yet",
 };
 
 /**

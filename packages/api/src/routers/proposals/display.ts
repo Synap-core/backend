@@ -142,6 +142,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
+import { installationTitleOf } from "../../services/installations/installation-title.js";
 import {
   projectProposalDataForViewer,
   projectProposalRowForViewer,
@@ -3013,6 +3014,11 @@ export function proposalDisplaySummary(params: {
       subjectCount: readRunSubjectIds(payload).length,
     });
   }
+  // A capability asked for one of the person's computers names the
+  // capability and the computer, from what the ask stored
+  // (`requestInstallation`). Outranks a stored summary, like a run's.
+  const installation = installationTitleFor(request.targetType, payload);
+  if (installation) return installation;
   const compositeLabel = labelFromOperations(
     (payload as { operations?: unknown } | undefined)?.operations
   );
@@ -3045,6 +3051,14 @@ export function proposalDisplaySummary(params: {
     )
     ? storedSummary
     : derivedSummary;
+}
+
+/** An `installation/request` names the capability and the computer. */
+function installationTitleFor(
+  targetType: string | null | undefined,
+  payload: Record<string, unknown> | undefined
+): string | null {
+  return targetType === "installation" ? installationTitleOf(payload) : null;
 }
 
 /**

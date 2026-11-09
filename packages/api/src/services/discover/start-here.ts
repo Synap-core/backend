@@ -95,7 +95,7 @@ export const HANDED_STALE_RESUME_DAYS = workClockIn("stuck", "days");
  * (`focus_sessions` is owner-private); `scheduled` is excluded for the same
  * reason `listOpenFocusSessions` excludes it (future work, not now).
  */
-async function readHandedToYou(
+export async function readHandedToYou(
   userId: string,
   agentUserId: string
 ): Promise<NonNullable<StartHere["handedToYou"]>> {

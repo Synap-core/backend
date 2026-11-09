@@ -73,6 +73,7 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/my-computers/c1",
     "/my-notifications",
     "/settings/security",
+    "/settings/security/passkeys",
     "/link-cloud",
     "/oauth/consent",
     "/approve-agent",

@@ -78,6 +78,14 @@ export const playbooks = pgTable(
      */
     requiredIntents: jsonb("required_intents").notNull().default([]),
     /**
+     * The rules this playbook follows (0411): an ordered list of
+     * `{ ref: "kind:<slug>" | "skill:<slug>", label?, when?, where? }`, refs
+     * never ids (`@synap-core/types/guidance`). Rendered at run time from each
+     * ref's CURRENT, person-approved version under "Rules this playbook
+     * follows" (`services/playbooks/playbook-guidance.ts`).
+     */
+    guidance: jsonb("guidance").notNull().default([]),
+    /**
      * Monotonic definition version (D3c). Bumped on a governed update that
      * changes a definition-affecting field (goalTemplate/stages/params/
      * inputStrategy/channelSpec/expectedOutputs). A run snapshots this into

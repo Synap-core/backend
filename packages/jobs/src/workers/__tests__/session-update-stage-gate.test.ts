@@ -64,6 +64,13 @@ vi.mock("../../utils/automation-governance.js", async (importOriginal) => {
   return { ...actual, checkAutomationWriteOrPropose: mocks.gate };
 });
 
+// A session with no process (playbookId null): the declared-stages check
+// (`stage-declared.ts`) lets any key through, as before. Stubbed so it reads
+// no table this file's `db` does not model.
+vi.mock("../../utils/session-process.js", () => ({
+  loadSessionProcess: async () => null,
+}));
+
 const { executeOutputStep } = await import("../automation-executor.js");
 const { registerStageAdvancer, advanceSessionStageViaSlot } =
   await import("../../utils/stage-advance.js");

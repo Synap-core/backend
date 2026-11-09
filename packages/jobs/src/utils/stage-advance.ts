@@ -25,6 +25,8 @@
  * answer is a failed step the automation run records — not a quiet advance.
  */
 
+import type { UndeclaredStageRefusal } from "./stage-declared.js";
+
 /**
  * Structural mirror of api's `StageAdvanceSession` (no import — cycle). Field
  * names and nullability match exactly, so apps/api registers the real door with
@@ -60,6 +62,8 @@ export interface StageAdvanceOutcome {
   paused: boolean;
   proposalId?: string;
   proposalType?: string;
+  /** The door refused a stage the session's process does not declare. */
+  refused?: UndeclaredStageRefusal;
 }
 
 type StageAdvancer = (

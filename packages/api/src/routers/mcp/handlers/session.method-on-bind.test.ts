@@ -100,6 +100,8 @@ describe("synap_start_session with templateId", () => {
       playbookId: PB,
       stageKey: "draft",
       stages: STAGES,
+      // The guidance renders what the PERSON may read, not the agent.
+      userId: "11111111-1111-4111-8111-111111111111",
     });
     expect(r.method).toEqual(METHOD);
   });
@@ -153,6 +155,8 @@ describe("synap_update_session with followPlaybookId", () => {
       playbookId: PB,
       stageKey: null,
       stages: [],
+      // The guidance renders what the PERSON may read, not the agent.
+      userId: "11111111-1111-4111-8111-111111111111",
     });
     expect(r.method).toEqual(METHOD);
   });

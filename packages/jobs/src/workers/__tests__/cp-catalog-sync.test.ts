@@ -202,6 +202,29 @@ describe("handleCpCatalogSync — request shape", () => {
     expect(urls.some((u) => u.includes("category=template"))).toBe(false);
     expect(urls.some((u) => u.includes("category=automation"))).toBe(false);
   });
+
+  it("agent templates (founder decision D8) are read from the CP category `agent` and cached as kind agent", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities"))
+        return jsonRes({ capabilities: [] });
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      if (url.includes("category=agent"))
+        return jsonRes({ packages: [pkg("claude-code")], total: 1 });
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    expect(fetchedUrls()).toContain(
+      `${CP}/api/packages?category=agent&limit=100&offset=0`
+    );
+    const rows = upsertedRows() as Array<{ slug: string; kind?: string }>;
+    expect(rows.map((r) => [r.kind, r.slug])).toEqual([
+      ["agent", "claude-code"],
+    ]);
+  });
 });
 
 describe("handleCpCatalogSync — 4xx vs transient split", () => {
@@ -946,6 +969,7 @@ describe("refreshOfficialCatalogNow — the on-demand official sync (Hub POST /c
       cell: "empty",
       view: "empty",
       skill: "empty",
+      agent: "empty",
     });
     expect(Number.isNaN(Date.parse(r.refreshedAt))).toBe(false);
     expect(upsertedRows().map((x) => x.slug)).toEqual(["content-os"]);

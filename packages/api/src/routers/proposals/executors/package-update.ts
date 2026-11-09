@@ -1,17 +1,25 @@
 /**
- * The approval half of an agent's package UPDATE that is not a field write:
- * `capability/capability.update`, filed by `POST /package-updates/{slug}/apply`
- * for an agent key (`services/package-updates/apply-whole.ts`). (A space's
- * update is filed through `proposeTemplateApply` and approved by
- * `workspace/update`.)
+ * The approval halves of an agent's package UPDATE that no other door owns:
+ *  - `capability/capability.update`, filed by `POST /package-updates/{slug}/apply`
+ *    for an agent key (`services/package-updates/apply-whole.ts`). (A space's
+ *    update is filed through `proposeTemplateApply` and approved by
+ *    `workspace/update`.)
+ *  - `agentTemplate/update`, an agent's write of an installed agent template's
+ *    fields, filed by its door's gate (`services/agent-templates/update.ts`).
  */
 
 import { TRPCError } from "@trpc/server";
+import { db } from "@synap/database";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
 import {
-  isCapabilityUpdateProposalApproved,
-  markCapabilityUpdateProposalApproved,
+  assertApplied,
+  reportApproved,
+  storedProposalFields,
+} from "./shared.js";
+import type { Context } from "../../../types/context.js";
+import {
+  isPackageUpdateProposalApproved,
+  markPackageUpdateProposalApproved,
 } from "../../../services/package-updates/capability-update-proposal.js";
 
 export function registerPackageUpdateExecutors(): void {
@@ -38,7 +46,7 @@ export function registerPackageUpdateExecutors(): void {
           message: "capability.update requires slug and toVersion",
         });
       }
-      if (await isCapabilityUpdateProposalApproved(input.proposalId)) {
+      if (await isPackageUpdateProposalApproved(input.proposalId)) {
         return { success: true, alreadyApproved: true };
       }
 
@@ -65,7 +73,7 @@ export function registerPackageUpdateExecutors(): void {
         if (applied.status === "applied") warning = applied.warning;
       }
 
-      await markCapabilityUpdateProposalApproved(input.proposalId, userId);
+      await markPackageUpdateProposalApproved(input.proposalId, userId);
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
         input.proposalId,
@@ -74,6 +82,61 @@ export function registerPackageUpdateExecutors(): void {
         userId
       );
       return { success: true, ...(warning ? { refusals: [warning] } : {}) };
+    },
+  });
+
+  // ── agentTemplate/update — an agent's write of an agent template ─────────
+  // Approval replays the same door as the APPROVER (a person): the
+  // `wake.program` refusal and the spec check run again on the row as it is
+  // now, and only the proposed fields are written.
+  registerProposalExecutor({
+    key: "agentTemplate/update",
+    async execute({ proposal, userId, input, deps }) {
+      const fields = storedProposalFields(proposal);
+      const id =
+        (typeof fields.id === "string" ? fields.id : undefined) ??
+        proposal.targetId;
+      if (!id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "agentTemplate.update requires the template id",
+        });
+      }
+      if (await isPackageUpdateProposalApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { updateAgentTemplate } =
+        await import("../../../services/agent-templates/update.js");
+      const { metadata, ...columns } = fields;
+      // The replay must APPLY, never re-propose.
+      assertApplied(
+        await updateAgentTemplate(
+          {
+            db,
+            authenticated: true,
+            userId,
+            workspaceId: null,
+          } as unknown as Context,
+          {
+            id,
+            fields: columns,
+            ...(metadata && typeof metadata === "object"
+              ? { metadata: metadata as Record<string, unknown> }
+              : {}),
+          }
+        )
+      );
+
+      await markPackageUpdateProposalApproved(input.proposalId, userId);
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
     },
   });
 }

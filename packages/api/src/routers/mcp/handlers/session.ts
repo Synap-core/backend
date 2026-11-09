@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
@@ -31,6 +32,7 @@ import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
+import { sessionWriteEcho } from "./session-write-echo.js";
 import {
   waitForConversationChanges,
   waitForSessionAnswers,
@@ -69,6 +71,9 @@ import {
   type McpHandlerMap,
   pageLimit,
   pageOffset,
+  pageSlice,
+  LIST_PAGE_DEFAULT,
+  LIST_PAGE_MAX,
   SESSIONS_PAGE_MAX,
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
@@ -134,7 +139,7 @@ function parseSlotInputs(
     }
   } catch (err) {
     return {
-      error: `Invalid output slot: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Invalid output slot: ${err instanceof Error ? err.message : String(err)}${/\bask\b/.test(err instanceof Error ? err.message : String(err)) ? ASK_SKILL_HINT : ""}`,
     };
   }
   return out;
@@ -171,7 +176,7 @@ async function parseOutcomesArg(raw: unknown): Promise<
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     return {
-      error: `Invalid outcomes: ${issue ? `${issue.path.join(".") || "outcomes"}: ${issue.message}` : "malformed"}. Nothing was changed.`,
+      error: `Invalid outcomes: ${issue ? `${issue.path.join(".") || "outcomes"}: ${issue.message}` : "malformed"}. Nothing was changed.${issue?.path.includes("ask") ? ASK_SKILL_HINT : ""}`,
     };
   }
   return { list: parsed.data };
@@ -657,6 +662,9 @@ export const sessionHandlers: McpHandlerMap = {
         // `null` is the explicit opt-out of template matching; absent = match.
         templateId: readTemplateIdArg(args.templateId),
         matchTemplate: true,
+        // The pod binds the playbook the FACTS name (subject kind, parent's
+        // playbook, a `main red:` title); words only ever offer (d01–d03).
+        bindOnFacts: true,
         // F5/F6: the project's open goals (no trackId named) and the open
         // sessions on close work — suggestions on the reply, never applied.
         offerStartContext: true,
@@ -750,20 +758,31 @@ export const sessionHandlers: McpHandlerMap = {
     // outputs, lessons, grants), the same text the IS executor's kickoff
     // carries (`renderPlaybookMethod`, one renderer for both doors). Without
     // it an MCP agent bound a playbook and learned nothing from it.
+    // A bind the pod made from facts says so in ONE `binding` line instead,
+    // so the start reply stays lean (d01–d03); the playbook itself reads with
+    // synap_list_playbooks `playbookId`.
     const method =
-      result.status === "created" && result.session.playbookId
+      result.status === "created" &&
+      result.session.playbookId &&
+      !result.binding
         ? await (
             await import("../../../services/playbooks/playbook-method.js")
           ).loadBoundPlaybookMethod({
             playbookId: result.session.playbookId,
             stageKey: result.session.currentStage ?? null,
             stages: result.session.stages,
+            userId,
           })
         : undefined;
     // Recall runs in the background right after a start; this says so, and
     // where to read it, instead of the agent concluding nothing exists.
     return ok({
       ...result,
+      // The echo, never the whole row (`session-write-echo.ts`): the id, the
+      // room and the outcome / criterion keys the agent continues with.
+      ...(result.status === "created"
+        ? { session: sessionWriteEcho(result.session, { withKeys: true }) }
+        : {}),
       ...(method ? { method } : {}),
       ...(subjectCandidates.length > 0
         ? {
@@ -879,7 +898,8 @@ export const sessionHandlers: McpHandlerMap = {
       // terminalStatus reachable, a literal here would report every cancel and
       // every failure as a successful close.
       status: result.session.status,
-      session: result.session,
+      // The echo, never the whole closed row (`session-write-echo.ts`).
+      session: sessionWriteEcho(result.session),
       pendingProposals: result.pendingProposals,
       counts: result.counts,
       warnings: result.warnings,
@@ -893,6 +913,10 @@ export const sessionHandlers: McpHandlerMap = {
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
       ...(result.cancel ? { cancel: result.cancel } : {}),
+      // What the end moved (`subjectProfile.onEnd`): each thing moved,
+      // proposed, skipped or failed with why — absent when the process names
+      // nothing for this end.
+      ...(result.endMoves ? { endMoves: result.endMoves } : {}),
       ...(nudges ? { nudges } : {}),
       ...(leftOwed ? { leftOwed } : {}),
       note:
@@ -1118,9 +1142,16 @@ export const sessionHandlers: McpHandlerMap = {
     // The roster for the PERSON the key acts for: whose work it is decides
     // which agents may take it (the route's floor). The calling agent decides
     // only `handOff` — what ITS hand-off would do (direct / asks you).
-    return ok(
-      await readAgentsForHandoff(userId, { callerAgentUserId: agentUserId })
+    const roster = await readAgentsForHandoff(userId, {
+      callerAgentUserId: agentUserId,
+    });
+    const { page, paging } = pageSlice(
+      roster.agents,
+      ctx.args,
+      LIST_PAGE_DEFAULT,
+      LIST_PAGE_MAX
     );
+    return ok({ ...roster, agents: page, ...paging });
   },
   synap_list_sessions: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
@@ -1812,7 +1843,9 @@ export const sessionHandlers: McpHandlerMap = {
         return reply({
           ...(await applyBlockerEdits()),
           status: "updated",
-          session: result.session,
+          // The echo, never the whole row (`session-write-echo.ts`): what
+          // changed reads off it, what is still owed rides `nudges`.
+          session: sessionWriteEcho(result.session),
           ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
           ...(result.targets ? { targets: result.targets } : {}),
           ...(result.completeOutput
@@ -1841,15 +1874,23 @@ export const sessionHandlers: McpHandlerMap = {
                   playbookId: result.follow.playbookId,
                   stageKey: result.session.currentStage ?? null,
                   stages: result.session.stages,
+                  userId,
                 }),
               }
             : {}),
           ...(result.followRefusal
             ? { followRefusal: result.followRefusal }
             : {}),
+          // The facts ladder ran once because a subject or a goal just
+          // arrived (d02): ONE line, what it bound and why, or the offer.
+          ...(result.binding ? { binding: result.binding } : {}),
           // Which track/step it landed in, and — when the step names another
           // domain — that the session was filed where it is, not moved.
           ...(result.trackFiling ? { trackFiling: result.trackFiling } : {}),
+          // Same reason as `completeOutput`: an advance whose stage names a
+          // subject status that did NOT move the subject (skipped, failed, or
+          // waiting on a person) changes nothing the session row shows.
+          ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
           ...(result.warnings ? { warnings: result.warnings } : {}),

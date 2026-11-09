@@ -5,8 +5,9 @@
  * list) and the cloud pull with a mocked CP (ok / empty / not-linked / failed,
  * and a non-owner email gets no answers).
  *
- * NOT covered: the agent / first-work facts (their rule is the pure model's,
- * `packages/types/src/onboarding/start.test.ts`).
+ * The secure-access step reads the owner's ways in through the presence
+ * service (mocked: Kratos is not here); its rule is the pure model's,
+ * `packages/types/src/onboarding/start.test.ts`.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -21,6 +22,7 @@ const h = vi.hoisted(() => ({
   admins: new Set<string>(),
   link: null as null | { podId: string; url: string | null },
   fetch: vi.fn(),
+  waysIn: 0 as number | Error,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -52,9 +54,13 @@ vi.mock("../utils/workspace-role.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isPodAdmin: async (userId: string) => h.admins.has(userId),
 }));
-vi.mock("../services/agent-presence.js", async (importOriginal) => ({
+vi.mock("../services/presence/proof.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  loadAgentPresence: async () => new Map(),
+  // `presenceWaysIn` counts a passkey as one way: N ways = N device keys.
+  presenceFactorCounts: async () => {
+    if (h.waysIn instanceof Error) throw h.waysIn;
+    return { passkeys: 0, deviceKeys: h.waysIn, totp: false, recoveryCodes: 0 };
+  },
 }));
 
 const startOf = (order: number, views: string[]) => ({
@@ -183,6 +189,7 @@ describe("onboarding start reads (real procedures, PGlite)", () => {
     h.admins = new Set([ADMIN]);
     h.link = { podId: "pod-1", url: "https://cp.example" };
     h.fetch.mockReset();
+    h.waysIn = 0;
     cpOk(cpAnswers());
   });
 
@@ -256,59 +263,117 @@ describe("onboarding start reads (real procedures, PGlite)", () => {
       const intent = row!.progress.values.start.intent;
       expect(intent).toMatchObject({ slug: "crm", source: "here", keep: "me" });
       expect(intent.at).not.toBe("t0");
-      // `relay:` ids survive; start ids are the model's prefix (crm has 3 views).
+      // `relay:` ids survive; start ids are the model's prefix. With no way
+      // in yet, the secure-access step comes next.
       expect(row!.progress.completedActionIds).toEqual([
         "relay:tools",
         "start:intent",
       ]);
-      expect(row!.progress.currentActionId).toBe("start:views");
+      expect(row!.progress.currentActionId).toBe("start:access");
+      await caller(ADMIN).recordStartStep({ step: "access", patch: {} });
+      const after = await progressOf(ADMIN);
+      expect(after!.progress.values.start.access.at).toEqual(
+        expect.any(String)
+      );
+      expect(after!.progress.currentActionId).toBe("start:defaults");
     });
 
-    it("a start with one view skips the views step", async () => {
+    it("an owner who already holds two ways in goes straight to the defaults", async () => {
+      h.waysIn = 2;
       await caller(ADMIN).recordStartStep({
         step: "intent",
-        patch: { slug: "content-os", source: "here" },
+        patch: { slug: "crm", source: "here" },
       });
       const row = await progressOf(ADMIN);
       expect(row!.progress.completedActionIds).toEqual([
         "start:intent",
-        "start:views",
+        "start:access",
       ]);
-      expect(row!.progress.currentActionId).toBe("start:path");
+      expect(row!.progress.currentActionId).toBe("start:defaults");
+      expect(row!.progress.values.start.access).toBeUndefined();
     });
 
-    it("enforces transitions: no step past the next one", async () => {
-      await expect(
-        caller(ADMIN).recordStartStep({
-          step: "path",
-          patch: { kind: "quick" },
-        })
-      ).rejects.toMatchObject({ code: "CONFLICT" });
+    it("a failed count keeps the secure-access step open, never skipped", async () => {
+      h.waysIn = new Error("kratos: 503");
+      await caller(ADMIN).recordStartStep({
+        step: "intent",
+        patch: { slug: "crm", source: "here" },
+      });
+      expect((await progressOf(ADMIN))!.progress.currentActionId).toBe(
+        "start:access"
+      );
+      const state = await caller(ADMIN).startState();
+      expect(state.next).toBe("start:access");
+    });
+
+    it("the access and defaults steps record nothing but going past them", async () => {
       await caller(ADMIN).recordStartStep({
         step: "intent",
         patch: { slug: "crm", source: "here" },
       });
       await expect(
         caller(ADMIN).recordStartStep({
+          step: "access",
+          patch: { passkeys: 2 },
+        })
+      ).rejects.toBeTruthy();
+      await caller(ADMIN).recordStartStep({ step: "access", patch: {} });
+      await expect(
+        caller(ADMIN).recordStartStep({
+          step: "defaults",
+          patch: { presence: "report" },
+        })
+      ).rejects.toBeTruthy();
+      expect(
+        (await progressOf(ADMIN))!.progress.values.start.defaults
+      ).toBeUndefined();
+    });
+
+    it("going past the defaults finishes the journey: completed, and no longer due", async () => {
+      await caller(ADMIN).recordStartStep({
+        step: "intent",
+        patch: { slug: "crm", source: "here" },
+      });
+      await caller(ADMIN).recordStartStep({ step: "access", patch: {} });
+      await caller(ADMIN).recordStartStep({ step: "defaults", patch: {} });
+      const row = await progressOf(ADMIN);
+      expect(row!.status).toBe("completed");
+      expect(row!.progress.completedActionIds).toEqual([
+        "start:intent",
+        "start:access",
+        "start:defaults",
+      ]);
+      const state = await caller(ADMIN).startState();
+      expect(state.next).toBeNull();
+      expect(state.due).toBe(false);
+    });
+
+    it("enforces transitions: no step past the next one", async () => {
+      await expect(
+        caller(ADMIN).recordStartStep({ step: "access", patch: {} })
+      ).rejects.toMatchObject({ code: "CONFLICT" }); // intent is next
+      await caller(ADMIN).recordStartStep({
+        step: "intent",
+        patch: { slug: "crm", source: "here" },
+      });
+      await expect(
+        caller(ADMIN).recordStartStep({ step: "defaults", patch: {} })
+      ).rejects.toMatchObject({ code: "CONFLICT" }); // access is next
+      // A step that is no longer pod admin's is unknown, not recordable.
+      await expect(
+        caller(ADMIN).recordStartStep({
           step: "path",
           patch: { kind: "quick" },
         })
-      ).rejects.toMatchObject({ code: "CONFLICT" }); // views is next
-      await caller(ADMIN).recordStartStep({
-        step: "views",
-        patch: { profile: "deal", view: "a", type: "kanban" },
-      });
-      await caller(ADMIN).recordStartStep({
-        step: "path",
-        patch: { kind: "quick" },
-      });
+      ).rejects.toBeTruthy();
       // A choice already made can be changed.
+      await caller(ADMIN).recordStartStep({ step: "access", patch: {} });
       await caller(ADMIN).recordStartStep({
-        step: "path",
-        patch: { kind: "cobuild" },
+        step: "intent",
+        patch: { slug: "content-os", source: "here" },
       });
-      expect((await progressOf(ADMIN))!.progress.values.start.path.kind).toBe(
-        "cobuild"
+      expect((await progressOf(ADMIN))!.progress.values.start.intent.slug).toBe(
+        "content-os"
       );
     });
 

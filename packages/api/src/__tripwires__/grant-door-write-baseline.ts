@@ -102,7 +102,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /messaging/inbound",
   "POST /notifications",
   "POST /package-updates/:slug/apply",
-  "POST /packages/apply",
   "POST /playbooks",
   "POST /playbooks/:id/run",
   "POST /proactive/post",
@@ -141,8 +140,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /skills",
   "POST /skills/:id/approve",
   "POST /threads",
-  "POST /threads/:threadId/messages",
-  "POST /threads/:threadId/messages.batch",
   "POST /tools",
   "POST /tools/:id/approve",
   "POST /tools/:id/auth-binding",
@@ -178,4 +175,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 159;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 156;

@@ -59,9 +59,11 @@ describe("one agent's repeated failures fold into ONE row with a count", () => {
   });
 
   it("a type WITHOUT foldBy keeps folding per target (distinct targets stay apart)", () => {
+    // A type that still asks the person (no `needsYou`, so an item) and has no
+    // foldBy. agent.task_complete is informational now: it never lists.
     const other = nine.slice(0, 2).map((r) => ({
       ...r,
-      type: "agent.task_complete",
+      type: "connector.sync.failed",
     }));
     expect(list(other)).toHaveLength(2);
   });

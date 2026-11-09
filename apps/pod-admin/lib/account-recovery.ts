@@ -28,6 +28,8 @@ export type RecoveryCall<T> =
       status: number;
       error: AccountRecoveryErrorCode | "network";
       message: string;
+      /** With `presence_required`: which presence refusal (`PRESENCE_*`). */
+      reasonCode?: string;
     };
 
 async function call<T>(
@@ -70,7 +72,11 @@ async function call<T>(
     /* not JSON */
   }
   if (res.ok) return { ok: true, data: body as T };
-  const err = (body ?? {}) as { error?: unknown; message?: unknown };
+  const err = (body ?? {}) as {
+    error?: unknown;
+    message?: unknown;
+    reasonCode?: unknown;
+  };
   return {
     ok: false,
     status: res.status,
@@ -84,6 +90,9 @@ async function call<T>(
       typeof err.message === "string"
         ? err.message
         : `This pod answered ${res.status}.`,
+    ...(typeof err.reasonCode === "string"
+      ? { reasonCode: err.reasonCode }
+      : {}),
   };
 }
 
@@ -95,8 +104,12 @@ export const recoveryApi = {
       body: JSON.stringify({ email, code }),
     }),
   status: () => call<AccountRecoveryStatus>("/status"),
-  generateCodes: () =>
-    call<GeneratedRecoveryCodes>("/codes", { method: "POST" }),
+  /** `presence`: a proof for `recovery_codes:<user id>` when the person holds a factor. */
+  generateCodes: (presence?: unknown) =>
+    call<GeneratedRecoveryCodes>("/codes", {
+      method: "POST",
+      body: JSON.stringify(presence ? { presence } : {}),
+    }),
   setCloudTrust: (mode: CloudTrustMode) =>
     call<AccountRecoveryStatus>("/cloud-trust", {
       method: "PUT",

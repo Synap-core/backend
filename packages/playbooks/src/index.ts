@@ -296,6 +296,45 @@ export const OUTPUT_RETIRED_REASONS = [
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 
 /**
+ * WHICH THING a slot holds up, and the status it holds it out of (plan
+ * e7f753db §9, "blockers, not steps"). Both halves are optional and default
+ * when read (`deriveThingBlocker`, `@synap-core/types/units`): `entityId` to
+ * the declaring session's subject, `to` to the thing's next main-path status.
+ * A slot blocks a thing; it never moves it — the thing stays in its column,
+ * marked blocked, and moves only through the governed status door.
+ */
+export interface SlotBlocks {
+  /** The thing held up. Absent ⇒ the session's subject. Floored at write. */
+  entityId?: string;
+  /** The status it cannot reach yet (a declared option key). Absent ⇒ next. */
+  to?: string;
+}
+
+/**
+ * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
+ * intent (`request_connection`), a playbook the pod runs, or a capability.
+ * The closed `blockedReason` list stays "what to build"; this says what to RUN.
+ */
+export type SlotClearedBy =
+  | { answer: true }
+  | { intent: string }
+  | { playbookId: string }
+  | { capability: string };
+
+/**
+ * A blocker cleared by AGENT work (an intent, a playbook, a capability) still
+ * holds the thing after the person answers: the answer hands the slot back to
+ * the agent, which now owes the run. Only a blocker the answer itself clears
+ * (`{answer: true}`, or none declared) ends with the hand-back
+ * (`stampUnblocked`, api `block-output.ts`). Pure.
+ */
+export function blockerOutlivesHandBack(
+  clearedBy: SlotClearedBy | null | undefined
+): boolean {
+  return !!clearedBy && !("answer" in clearedBy);
+}
+
+/**
  * The object kinds a declared output may POINT AT.
  *
  * MIRRORS `SESSION_ARTIFACT_KINDS` (api `services/focus-sessions/record-session-artifact.ts`,
@@ -692,6 +731,26 @@ export interface ExpectedOutput {
    * a missing relation type must never un-deliver a deliverable.
    */
   subjectEdge?: SlotSubjectEdge;
+  /**
+   * The THING this slot holds up and the status it holds it out of — see
+   * {@link SlotBlocks}. DECLARED by the agent, like `unblocks` (whose prose
+   * it makes exact), never stamped. A person-owned slot with it is a
+   * need-you card naming the thing; an agent-owned slot with it is a
+   * runnable blocker — and an agent-owned slot holds a thing up ONLY when it
+   * declares this (api `listBlockingSlots`).
+   *
+   * Cleared with the ownership fields on the hand-back unless an agent's run
+   * still clears it ({@link blockerOutlivesHandBack}).
+   */
+  blocks?: SlotBlocks;
+  /**
+   * The blocker's short DOMAIN name (`not_connected`), lowercase snake. The
+   * closed `blockedReason` stays "what to build"; this is what the recurrence
+   * scanner groups repeats by. DECLARED, like `blocks`.
+   */
+  blockerKey?: string;
+  /** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
+  clearedBy?: SlotClearedBy;
 }
 
 /** See {@link ExpectedOutput.subjectEdge}. */
@@ -750,6 +809,13 @@ export interface PlaybookActivator {
    * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
    */
   unless?: { property: string; present: true };
+  /**
+   * `created` / `enters_status` only: keep only a thing whose property holds
+   * one of these values (trimmed, any case), e.g. `{ property: "post-format",
+   * in: ["Short Video", "Long Video"] }`. Mirror of `WorkerOnly`
+   * (`@synap-core/types/workers`).
+   */
+  only?: { property: string; in: string[] };
 }
 
 /** Where a failed stage gate sends the run — see {@link PlaybookStage.onFail}. */
@@ -866,6 +932,12 @@ export interface SlotAskOption {
   description?: string;
   /** One short fact to weigh before picking it ("Skips 1,284 tests"). */
   caution?: string;
+  /** What the person looks at before picking it. Mirrors `AskOptionMedia`. */
+  media?: {
+    kind: "image" | "video" | "audio";
+    ref: { url: string } | { assetId: string } | { entityId: string };
+    alt?: string;
+  };
 }
 
 /** The question a choose option opens once picked: ONE level, 2–4 options. */
@@ -1038,6 +1110,54 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
+ * How much model a stage's work needs — ADVISORY. `deep` = architecture or
+ * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
+ * a smaller model can do. An executor MAY map it to a model; nothing reads it
+ * yet, and absent means "no preference" (the executor's own default).
+ */
+export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
+export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
+
+/**
+ * Pod-wide hard ceiling on the items one `forEach` stage may fan out to. The
+ * run handler that consumes `forEach` must never exceed it, whatever `max` says.
+ */
+export const PLAYBOOK_FOR_EACH_MAX_ITEMS = 200;
+
+/**
+ * A stage that runs once per item of a collection (a UNIT), e.g. one run per
+ * shot of a film. DECLARED, ADVISORY UNTIL THE EXECUTOR LANDS: it names WHAT to
+ * iterate, it does not iterate; a run executes the stage once. This is the one
+ * statement of that for `forEach` and `when`; the schema, the MCP stage schema
+ * and the tool text point here.
+ */
+export interface PlaybookStageForEach {
+  /**
+   * The collection to iterate: a run param name (`shots`) or a dotted path into
+   * the subject or earlier outputs (`subject.shots`). A reference, never data.
+   */
+  over: string;
+  /** Name the current item goes by inside the stage (default: `item`). */
+  as?: string;
+  /** Items at most (1 to {@link PLAYBOOK_FOR_EACH_MAX_ITEMS}). */
+  max?: number;
+}
+
+/**
+ * A condition under which a stage runs. DECLARED, ADVISORY UNTIL THE EXECUTOR
+ * LANDS (see {@link PlaybookStageForEach}): it names the test, it does not
+ * evaluate it. Give `equals` or `exists` (or both).
+ */
+export interface PlaybookStageWhen {
+  /** A run param or earlier output to test: a name or dotted path. A reference, never data. */
+  param: string;
+  /** The stage runs when the value at `param` equals this. */
+  equals?: string | number | boolean | null;
+  /** The stage runs when the value at `param` is present (true) or absent (false). */
+  exists?: boolean;
+}
+
+/**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
  * (progress-only). The active stage's `key` is stored on
@@ -1127,6 +1247,24 @@ export interface PlaybookStage {
    * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
    */
   onFail?: PlaybookStageOnFail;
+  /**
+   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
+   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
+   * a model later. Never a control: a stage with or without it runs the same.
+   */
+  tier?: PlaybookStageTier;
+  /**
+   * Run this stage once per item of a collection — see
+   * {@link PlaybookStageForEach}. Absent ⇒ the stage runs once, as before.
+   * Advisory: nothing consumes it yet.
+   */
+  forEach?: PlaybookStageForEach;
+  /**
+   * Run this stage only when the condition holds — see
+   * {@link PlaybookStageWhen}. Absent ⇒ the stage always runs, as before.
+   * Advisory: nothing consumes it yet.
+   */
+  when?: PlaybookStageWhen;
 }
 
 /**
@@ -2303,6 +2441,22 @@ export interface CapabilityDefinition {
    * list-by-producer index ("which capabilities emit event X").
    */
   emits?: string[];
+  /**
+   * Where the capability runs and how a computer installs, checks and removes
+   * it (installer reconciliation f75fbb48 §3.5): `placement`, `install`,
+   * `verify`, `uninstall`, `permissions`, `licence`, `services`, `recipes`.
+   * Pure shapes here; the ONE rule is `CapabilityComputerSpecSchema`
+   * (@synap-core/types/capability-manifest). The applier stores the declared
+   * blocks on the installed capability as `metadata.computer`, verbatim.
+   */
+  placement?: Record<string, unknown>;
+  install?: Record<string, unknown>;
+  verify?: Record<string, unknown>;
+  uninstall?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
+  licence?: string;
+  services?: Array<Record<string, unknown>>;
+  recipes?: Array<Record<string, unknown>>;
 }
 
 // ── LoopDefinition — a config descriptor that INSTANTIATES an autonomy loop ────

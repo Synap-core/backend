@@ -310,6 +310,9 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // not you, something you own is broken into (W3 slice 3).
   "security.factor_changed": "work-broke",
   "security.presence_mode_changed": "work-broke",
+  "security.presence_sensitivity_changed": "work-broke",
+  // "I lost my passkey": every device hears it, so it is cancelled in time.
+  "security.presence_recovery": "work-broke",
   // Not a 10-second decision: in-app / Home only.
   "connector.sync.failed": null,
   "inbox.mention": null,
@@ -327,6 +330,16 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
  * it still counts.
  */
 export const PUSH_DAILY_CAP = 3;
+
+/**
+ * How many asks due within the hour ONE agent may break through the person's
+ * Focus with, per day (review 5 Nov 2026, reviews backend #1 / oversight 2):
+ * `answerBy` is written by the asking agent, so without a budget an agent that
+ * dates every ask "now" would break Focus and skip {@link PUSH_DAILY_CAP} on
+ * every push. Past it, the agent's next due-soon ask goes as a normal push,
+ * counted and capped like any other. The day is the person's own.
+ */
+export const PUSH_DUE_SOON_DAILY_PER_AGENT = 1;
 
 /**
  * Categories the cap never holds back and never counts: "something you own

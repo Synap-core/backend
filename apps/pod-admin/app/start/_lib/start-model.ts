@@ -54,17 +54,23 @@ export interface StartState {
 // ── Pages ───────────────────────────────────────────────────────────────────
 
 /**
- * Each step's page. Only the intent step has one (`/start`). The other six
- * have no page yet (where the rest of onboarding lives is a founder decision),
- * so they resolve to Home, whose "Getting started" band says where setup
- * stands (`?start=<step>`). A link to `/start/<step>` was a 404 for every
- * released pod. Add a step to `STEPS_WITH_PAGE` only together with its page:
- * the guard in `start-shell.test.tsx` derives the existing pages from `app/`.
+ * Each step's page. Pod admin's journey is the work question (`/start`), the
+ * secure-access step (`/start/access`) and the defaults (`/start/defaults`),
+ * then done (founder, 7 Nov 2026, session 539e519b): the pod finishes the
+ * journey when the defaults are passed. `start:done` is never a page: an
+ * open journey whose next step is `done` goes Home. Add a step to
+ * `STEPS_WITH_PAGE` only together with its page: the guard in
+ * `start-shell.test.tsx` derives the existing pages from `app/`.
  */
-export const STEPS_WITH_PAGE: readonly StartStepId[] = ["start:intent"];
+export const STEPS_WITH_PAGE: readonly StartStepId[] = [
+  "start:intent",
+  "start:access",
+  "start:defaults",
+];
 
 export function startStepHref(step: StartStepId): string {
   if (step === "start:intent") return "/start";
+  if (step === "start:done") return navHref("home");
   if (STEPS_WITH_PAGE.includes(step)) {
     return `/start/${step.slice("start:".length)}`;
   }
@@ -77,12 +83,13 @@ export function startBandStep(param: string | null): StartStepId | null {
   return START_STEP_IDS.find((id) => id === `start:${param}`) ?? null;
 }
 
-/** "Step N of 7" — the trail every `/start` page shows. */
+/** "Step N of M" — the trail every `/start` page shows. */
 export function startStepNumber(step: StartStepId): {
   n: number;
   of: number;
 } {
-  return { n: START_STEP_IDS.indexOf(step) + 1, of: START_STEP_IDS.length };
+  // `done` is not a step the person takes: the trail counts the pages.
+  return { n: START_STEP_IDS.indexOf(step) + 1, of: STEPS_WITH_PAGE.length };
 }
 
 /**
@@ -120,9 +127,30 @@ export function startPageDestination(input: {
   const { read } = input;
   if (!read.ok) return { kind: "redirect", href: START_UNAVAILABLE_HREF };
   const { next } = read.data;
-  if (next === null) return { kind: "redirect", href: HOME };
+  if (next === null || next === "start:done") {
+    return { kind: "redirect", href: HOME };
+  }
   if (next !== "start:intent" && !input.backToIntent) {
     return { kind: "redirect", href: startStepHref(next) };
+  }
+  return { kind: "render", state: read.data };
+}
+
+/**
+ * A step's own page (`/start/<step>`): drawn while the journey is open, so
+ * the owner may come back to it; a finished journey goes Home, a FAILED read
+ * goes Home with the failure shown (never a step drawn on a guess).
+ */
+export function stepPageDestination(
+  read: PodCallResult<StartState>
+): { kind: "redirect"; href: string } | { kind: "render"; state: StartState } {
+  if (!read.ok) return { kind: "redirect", href: START_UNAVAILABLE_HREF };
+  if (read.data.next === null || read.data.next === "start:done") {
+    return { kind: "redirect", href: HOME };
+  }
+  // The work question comes first: a step past it waits until it is answered.
+  if (read.data.next === "start:intent") {
+    return { kind: "redirect", href: startStepHref("start:intent") };
   }
   return { kind: "render", state: read.data };
 }

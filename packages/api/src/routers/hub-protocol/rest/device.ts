@@ -27,6 +27,7 @@
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 import { DeviceCreateBody as CreateBody } from "./device-body.js";
 import { toPodAdminOrigin } from "../../../utils/pod-admin-origin.js";
+import { loadEngineAgentTypes } from "../../../services/agent-templates/installed.js";
 import {
   DEVICE_MAX_AGENTS,
   collectDeviceToken,
@@ -122,6 +123,24 @@ export function registerDeviceRoutes(app: HubHono): void {
         },
         400
       );
+    // Only an engine this pod knows rides a computer's connection: an
+    // installed agent template's harness, or the built-in floor.
+    const asked = [
+      ...(parsed.data.agents ?? []),
+      ...(parsed.data.rows ?? []).map((r) => r.agentType),
+    ];
+    if (asked.length > 0) {
+      const engines = await loadEngineAgentTypes();
+      const unknown = [...new Set(asked.filter((t) => !engines.has(t)))];
+      if (unknown.length > 0)
+        return c.json(
+          {
+            error: "invalid_request",
+            error_description: `agents: ${unknown.join(", ")} is no AI program this pod knows. Install its agent template first.`,
+          },
+          400
+        );
+    }
     const origin = process.env.PUBLIC_URL || new URL(c.req.url).origin;
     try {
       const res = await createDeviceRequest({

@@ -46,6 +46,7 @@ import { ResponsiveTable } from "../components/responsive-table";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
 import { FilterChip, FilterRow } from "../components/filter-chip";
+import { statusOption } from "../components/filter-options";
 import {
   neverRanCallout,
   RULE_FILTERS,
@@ -251,16 +252,25 @@ function RulesInner() {
             param="filter"
             defaultValue="active"
             value={filter}
-            options={RULE_FILTERS.map((f) => ({
-              id: f.key,
-              label: f.label,
-              count:
-                loading || rules.isError
-                  ? null
-                  : counting
-                    ? "…"
-                    : counts[f.key],
-            }))}
+            options={RULE_FILTERS.map((f) =>
+              statusOption(f.key, {
+                label: f.label,
+                count:
+                  loading || rules.isError
+                    ? null
+                    : counting
+                      ? "…"
+                      : counts[f.key],
+              })
+            )}
+          />
+        }
+        search={
+          <ListSearch
+            value={search.input}
+            onChange={search.setInput}
+            label={t("listSearch.rules")}
+            className=""
           />
         }
       />
@@ -305,11 +315,6 @@ function RulesInner() {
           />
         ) : visible.length === 0 ? (
           <>
-            <ListSearch
-              value={search.input}
-              onChange={search.setInput}
-              label={t("listSearch.rules")}
-            />
             <ResourceRowEmpty
               message={
                 search.query
@@ -320,11 +325,6 @@ function RulesInner() {
           </>
         ) : (
           <>
-            <ListSearch
-              value={search.input}
-              onChange={search.setInput}
-              label={t("listSearch.rules")}
-            />
             {search.query && (ruleDrain.draining || ruleDrain.capped) && (
               <p className="mb-2 text-[12px] text-foreground/65">
                 {t("listSearch.partial.rules", { n: all.length })}

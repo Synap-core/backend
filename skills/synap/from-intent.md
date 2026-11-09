@@ -1,5 +1,9 @@
 ## From intent — conductor for a new area of work
 
+## Apps are views of pod state
+
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+
 Use this when the user states an **intent** to start or track something that may need structure (a project, domains, kinds, roles, deals-shaped things) — not when they only want to capture a fact into types that already exist (`synap` skill).
 
 This skill does **not** provision Company OS. That is `system/agent-os/skill` (install **domains** from templates). This skill decides **what the graph should be**, asks until that is clear, then loads the specialist skill for each write.

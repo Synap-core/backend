@@ -115,6 +115,7 @@ const OBJECT_KIND: Record<CatalogKind, string> = {
   cell: "cell",
   skill: "skill",
   view: "view",
+  agent: "agent",
 };
 
 /** A source by id (`synap`, `acme`); the official URL is still read for older links. */

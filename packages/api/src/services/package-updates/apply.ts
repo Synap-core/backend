@@ -206,8 +206,8 @@ export async function applyPackageUpdate(
     );
     if (whole) return applyWholePackageUpdate(ctx, whole, input);
   }
-  // The rows this door applies field by field (view, skill, automation)
-  // change no records.
+  // The rows this door applies field by field (view, skill, automation,
+  // agent template) change no records.
   const planned = await planPackageRows(input.slug);
   refuseUngovernedAgentWrite(
     ctx,

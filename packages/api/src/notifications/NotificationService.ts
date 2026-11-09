@@ -39,6 +39,7 @@ import { emitChatEvent } from "../utils/chat-realtime-broadcast.js";
 import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
+import { formatMessage, type ParamValue } from "@synap-core/types/i18n";
 import { sendExpoPush } from "./expo-push.js";
 import { openLink, podPublicOrigin } from "../utils/deep-links.js";
 import {
@@ -50,6 +51,8 @@ import {
 } from "@synap-core/types/push";
 import {
   agentPushLimitApplies,
+  dueSoonBudgetApplies,
+  dueSoonPushesToday,
   agentPushesCountedToday,
   decidePush,
   derivePushFacts,
@@ -61,6 +64,7 @@ import {
   readPodPushSettings,
   recordPush,
   withinAgentPushLimit,
+  withinDueSoonBudget,
   withinPushCap,
 } from "./push-decision.js";
 import type {
@@ -92,6 +96,38 @@ function interpolate(template: string, data: Record<string, unknown>): string {
     const value = data[key];
     return value !== undefined && value !== null ? String(value) : "";
   });
+}
+
+/**
+ * A notification's title and body from its registry row and the producer's
+ * data: mustache `{{variable}}` by default, or, for a row declaring
+ * `messageSyntax: "icu"`, ICU messages formatted in English (notifications are
+ * not rendered per locale yet, rule i18n §8). Only string and number values
+ * reach an ICU message; a missing one selects `other`. Pure.
+ */
+export function renderNotificationText(
+  def: Pick<
+    NotificationDef,
+    "titleTemplate" | "bodyTemplate" | "messageSyntax"
+  >,
+  data: Record<string, unknown>
+): { title: string; body: string } {
+  if (def.messageSyntax === "icu") {
+    const params: Record<string, ParamValue> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value === "string" || typeof value === "number") {
+        params[key] = value;
+      }
+    }
+    return {
+      title: formatMessage(def.titleTemplate, params, "en"),
+      body: formatMessage(def.bodyTemplate, params, "en"),
+    };
+  }
+  return {
+    title: interpolate(def.titleTemplate, data),
+    body: interpolate(def.bodyTemplate, data),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -544,8 +580,7 @@ export const NotificationService = {
       return undefined;
     }
 
-    const title = interpolate(def.titleTemplate, input.data);
-    const body = interpolate(def.bodyTemplate, input.data);
+    const { title, body } = renderNotificationText(def, input.data);
     const actions = materializeActions(def.actions, input);
 
     const groupKey = resolveNotificationGroupKey(def, input);
@@ -917,6 +952,33 @@ export const NotificationService = {
           // only when it applies, so an exempt or forced push never waits on
           // it. A failed count skips the push, except a blocking ask (as for
           // unreadable settings above).
+          // The due-soon budget (rule 3b), BEFORE the cap: `answerBy` is the
+          // asking agent's field, so each agent breaks Focus at most
+          // PUSH_DUE_SOON_DAILY_PER_AGENT time(s) a day; past it the push is
+          // a normal one the cap below may hold back. A failed count keeps
+          // the push but drops its break-through (logged): never louder on
+          // an unread budget.
+          if (dueSoonBudgetApplies(decision)) {
+            try {
+              decision = withinDueSoonBudget(
+                decision,
+                await dueSoonPushesToday(
+                  input.userId,
+                  facts.agentUserId ?? null,
+                  await recipientTimezone(input.userId)
+                )
+              );
+            } catch (err) {
+              decision = withinDueSoonBudget(
+                decision,
+                Number.POSITIVE_INFINITY
+              );
+              logger.warn(
+                { err, type: input.type, notificationId: row.id },
+                "Due-soon budget unreadable — pushed as a normal push"
+              );
+            }
+          }
           if (pushCapApplies(decision)) {
             try {
               decision = withinPushCap(

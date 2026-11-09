@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   REQUEST_LATER_CHOICES,
   REQUEST_LATER_MAX_MS,
+  laterTimeProblem,
   requestLaterUntil,
 } from "./request-later.js";
 
@@ -51,5 +52,39 @@ describe("requestLaterUntil — the three Later choices", () => {
       expect(t).toBeGreaterThan(now.getTime());
       expect(t - now.getTime()).toBeLessThanOrEqual(REQUEST_LATER_MAX_MS);
     }
+  });
+});
+
+describe("laterTimeProblem — the one Later time check (a request's and an ask's)", () => {
+  const now = new Date("2026-11-05T12:00:00Z");
+  const at = (ms: number) => new Date(now.getTime() + ms);
+
+  it("a time in the future, within the limit, is fine", () => {
+    expect(laterTimeProblem(at(60_000), now, "an ask")).toBeNull();
+    expect(
+      laterTimeProblem(at(REQUEST_LATER_MAX_MS), now, "a request")
+    ).toBeNull();
+  });
+
+  it("now, the past or an unreadable time is refused", () => {
+    expect(laterTimeProblem(now, now, "an ask")).toBe(
+      "Later needs a time in the future."
+    );
+    expect(laterTimeProblem(at(-1), now, "a request")).toBe(
+      "Later needs a time in the future."
+    );
+    expect(laterTimeProblem(new Date(NaN), now, "an ask")).toBe(
+      "Later needs a time in the future."
+    );
+  });
+
+  it("past the limit names the limit's own day count and the thing set aside", () => {
+    const days = REQUEST_LATER_MAX_MS / (24 * 60 * 60 * 1000);
+    expect(laterTimeProblem(at(REQUEST_LATER_MAX_MS + 1), now, "an ask")).toBe(
+      `Later can set an ask aside for ${days} days at most.`
+    );
+    expect(
+      laterTimeProblem(at(REQUEST_LATER_MAX_MS + 1), now, "a request")
+    ).toBe(`Later can set a request aside for ${days} days at most.`);
   });
 });

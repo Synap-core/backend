@@ -108,6 +108,12 @@ function makePgliteSql(db: PGlite): Sql {
 // entity_facets, …) stay EMPTY — every op runs as a 0-row no-op; the point is
 // that Postgres plans each statement.
 const SCHEMA = `
+-- research.finding-kind-to-research-finding reads a space's template stamp.
+CREATE TABLE workspaces (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  package_slug text,
+  settings jsonb DEFAULT '{}'
+);
 CREATE TABLE profiles (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug text NOT NULL,

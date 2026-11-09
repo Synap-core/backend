@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
     close: () => Promise<void>;
   },
   matchCalls: 0,
+  matchInputs: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -48,8 +49,9 @@ vi.mock("../match-session-template.js", async (orig) => {
   const actual = await orig<Record<string, unknown>>();
   return {
     ...actual,
-    matchSessionTemplate: async () => {
+    matchSessionTemplate: async (input: Record<string, unknown>) => {
       h.matchCalls++;
+      h.matchInputs.push(input);
       return {
         candidates: Array.from({ length: 5 }, (_, i) => ({
           id: `pb-${i}`,
@@ -194,6 +196,17 @@ describe("session nudges (PGlite)", () => {
       "tsc",
       "tests",
     ]);
+  });
+
+  it("the offer never includes Goal templates (a session cannot bind one)", async () => {
+    h.matchInputs.length = 0;
+    await loadSessionNudges({
+      session: await rowOf(await seed()),
+      phase: "update",
+      userId: USER,
+    });
+    expect(h.matchInputs).toHaveLength(1);
+    expect(h.matchInputs[0]).toMatchObject({ excludeGoalTemplates: true });
   });
 
   it("the stamp is atomic: a second claim on the same session LOSES (race-safe once)", async () => {

@@ -57,6 +57,7 @@ import {
   focusSessions,
   isUniqueViolation,
   playbooks,
+  insertFocusSessionRow,
 } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
 import {
@@ -74,7 +75,6 @@ import {
   type LinkInput,
   type PlaybookParam,
   type PlaybookParamTypeError,
-  type PlaybookStage,
   type SessionCriterion,
 } from "@synap/playbooks";
 import {
@@ -83,8 +83,10 @@ import {
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
-import { stampSlotKeys } from "../focus-sessions/slot-keys.js";
-import { stageSlotsToAdd } from "../focus-sessions/stage-slots.js";
+import {
+  withBirthStageSlots,
+  writeSessionBirthSubjectMove,
+} from "../focus-sessions/session-birth.js";
 import { parseCommandTemplate } from "../../utils/command-template.js";
 import { authoringMisses } from "../../utils/template-diagnostics.js";
 import {
@@ -410,6 +412,13 @@ export interface InstantiateInput {
    */
   origin?: "playbook" | "automation" | "agent" | "human";
   /**
+   * The agent that started the run, when one did. The birth stage's subject
+   * move (`writeSessionBirthSubjectMove`) is governed as this agent; absent,
+   * it is the person's (`userId`) — the approved-proposal path, where the
+   * approval is the person's decision.
+   */
+  agentUserId?: string | null;
+  /**
    * A FIXED row id, for the approved-proposal path: the `focus_session/create`
    * executor materializes at `proposal.targetId` so any link built at propose
    * time resolves. With an id the insert is conflict-safe (a re-approve writes
@@ -660,67 +669,68 @@ export async function instantiateSessionRow(
           PARAM_SLOT_CIRCUMSTANCE.run
         )
       : [];
-  // Seed the active stage from the playbook's first stage (null when stageless,
-  // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
-  const stages = (playbook.stages as PlaybookStage[]) ?? [];
-  const currentStage = stages[0]?.key ?? null;
   // The run is born INTO its first stage, so it owes that stage's declared
-  // outputs from birth — the same rule every later advance applies
-  // (`stage-slots.ts`, through `advanceSessionStage`).
-  const firstStageSlots = stageSlotsToAdd(
-    stages,
-    currentStage,
-    declaredOutputs
-  );
-  // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
-  const expectedOutputs = stampSlotKeys([
-    ...declaredOutputs,
-    ...firstStageSlots,
-    ...paramSlots,
-  ]);
-
-  const insert = db.insert(focusSessions).values({
-    ...(input.id ? { id: input.id } : {}),
-    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-    workspaceId: input.workspaceId,
-    userId: input.userId,
-    title,
-    goal,
-    playbookId: playbook.id,
-    // Typed origin (migration 0240) — instantiating from a playbook IS the
-    // definition of a playbook-origin session; the caller knows it without
-    // inspecting metadata.
-    origin: input.origin ?? "playbook",
-    projectId: input.projectId ?? null,
-    trackId: input.trackId ?? null,
-    trackStage: input.trackId ? (input.trackStage ?? null) : null,
-    subjectEntityId: input.subjectId ?? null,
-    expectedOutputs,
-    // Playbook-level + every stage's criteria, stageKey stamped — the one
-    // copy rule. Written in this body, so the approved-proposal path grades
-    // against the same list as a direct instantiate.
-    criteria: input.criteria ?? collectPlaybookCriteria(playbook),
-    currentStage,
-    channelId: input.channelId ?? null,
-    agentIds: input.agentIds ?? [],
-    status: input.status ?? "active",
-    metadata: {
-      ...(input.metadata ?? {}),
-      [RUN_PROMPT_METADATA_KEY]: prompt,
-      // The answers the run was actually given — see RUN_PARAMS_METADATA_KEY.
-      // Written unconditionally (an empty object for a param-less playbook) so
-      // a reader can tell "this run was given nothing" from "this row predates
-      // the field", which absence alone cannot say.
-      [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues,
-      titleSource: (ownTitle
-        ? "agent"
-        : "derived") satisfies SessionTitleSource,
+  // outputs from birth (`withBirthStageSlots`); the row writer seeds the
+  // stage, copies the stages and keys every slot.
+  const session = await insertFocusSessionRow(
+    db,
+    {
+      id: input.id,
+      correlationId: input.correlationId ?? null,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      title,
+      goal,
+      playbook,
+      // Typed origin (migration 0240) — instantiating from a playbook IS the
+      // definition of a playbook-origin session; the caller knows it without
+      // inspecting metadata.
+      origin: input.origin ?? "playbook",
+      projectId: input.projectId ?? null,
+      trackId: input.trackId ?? null,
+      trackStage: input.trackStage ?? null,
+      subjectEntityId: input.subjectId ?? null,
+      expectedOutputs: [
+        ...withBirthStageSlots(playbook, declaredOutputs),
+        ...paramSlots,
+      ],
+      // Playbook-level + every stage's criteria, stageKey stamped — the one
+      // copy rule. Written in this body, so the approved-proposal path grades
+      // against the same list as a direct instantiate.
+      criteria: input.criteria ?? collectPlaybookCriteria(playbook),
+      channelId: input.channelId ?? null,
+      agentIds: input.agentIds ?? [],
+      status: input.status ?? "active",
+      metadata: {
+        ...(input.metadata ?? {}),
+        [RUN_PROMPT_METADATA_KEY]: prompt,
+        // The answers the run was actually given — see RUN_PARAMS_METADATA_KEY.
+        // Written unconditionally (an empty object for a param-less playbook) so
+        // a reader can tell "this run was given nothing" from "this row predates
+        // the field", which absence alone cannot say.
+        [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues,
+        titleSource: (ownTitle
+          ? "agent"
+          : "derived") satisfies SessionTitleSource,
+      },
     },
-  });
-  const [session] = input.id
-    ? await insert.onConflictDoNothing().returning()
-    : await insert.returning();
+    // A caller-fixed id (the approved proposal's) is conflict-safe: a
+    // re-approve writes nothing and returns null.
+    input.id ? { onConflict: "nothing" } : {}
+  );
   if (!session) return null;
+
+  // BIRTH STAGE = SUBJECT STATUS, the direct start's rule (backend#862): the
+  // run was born into its first stage, so that stage's `subjectStatus` moves
+  // the subject now, governed as whoever started it. Only a LIVE session: an
+  // appointment (`scheduled`) is work nobody has started yet.
+  if (session.status === "active") {
+    await writeSessionBirthSubjectMove({
+      session,
+      userId: input.userId,
+      agentUserId: input.agentUserId ?? null,
+    });
+  }
 
   // Provenance edges.
   const edges: LinkInput[] = [

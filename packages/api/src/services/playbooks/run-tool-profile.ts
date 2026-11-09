@@ -60,7 +60,8 @@ export interface GrantableCapability {
   kind?: string;
   id: string;
   name: string;
-  verbs?: ReadonlyArray<{ id: string }>;
+  /** `kind` = the registry's read / write / action axis (a trial keeps reads). */
+  verbs?: ReadonlyArray<{ id: string; kind?: string }>;
 }
 
 /**
@@ -98,6 +99,11 @@ export interface RunToolProfileDeps {
   }): Promise<CapabilityRef[]>;
   /** The session's active stage key (null = stageless). */
   readCurrentStage(sessionId: string): Promise<string | null>;
+  /**
+   * The session is a TRIAL run (`metadata.trial`, the rule lab): it is
+   * offered read verbs only (throws when it cannot be read).
+   */
+  readTrial(sessionId: string): Promise<boolean>;
   /** The space's declared `taskIntents` (throws when it cannot be read). */
   readTaskIntents(workspaceId: string): Promise<string[]>;
   /** ONE registry read under the run's lens: intent → verbs, and every capability. */
@@ -139,6 +145,15 @@ const defaultDeps: RunToolProfileDeps = {
       columns: { currentStage: true },
     });
     return row?.currentStage ?? null;
+  },
+  async readTrial(sessionId) {
+    const { db, eq, focusSessions } = await import("@synap/database");
+    const { trialStampOf } = await import("@synap/capability-gate");
+    const row = await db.query.focusSessions.findFirst({
+      where: eq(focusSessions.id, sessionId),
+      columns: { metadata: true },
+    });
+    return trialStampOf(row?.metadata) !== null;
   },
   async readTaskIntents(workspaceId) {
     const { readWorkspaceTaskIntents } =
@@ -188,13 +203,16 @@ function activeStageGrants(
  */
 function grantedVerbs(
   grants: readonly CapabilityRef[],
-  capabilities: readonly GrantableCapability[]
+  capabilities: readonly GrantableCapability[],
+  readsOnly = false
 ): string[] {
   const verbs: string[] = [];
   for (const grant of grants) {
     for (const cap of capabilities) {
       if (!grantNames(grant, cap)) continue;
-      for (const v of cap.verbs ?? []) verbs.push(v.id);
+      for (const v of cap.verbs ?? []) {
+        if (!readsOnly || v.kind === "read") verbs.push(v.id);
+      }
     }
   }
   return verbs;
@@ -227,6 +245,18 @@ export function foldRunVerbs(
     else dropped++;
   }
   return { verbs, dropped };
+}
+
+/** The intent index keeping only read verbs (a trial run). PURE. */
+function readVerbsOnly(
+  index: ReadonlyMap<string, readonly IntentVerbMatch[]>
+): ReadonlyMap<string, readonly IntentVerbMatch[]> {
+  return new Map(
+    [...index].map(([intent, matches]) => [
+      intent,
+      matches.filter((m) => m.verbKind === "read"),
+    ])
+  );
 }
 
 /** The declared intents, deduplicated and bounded to what the IS accepts. */
@@ -264,10 +294,13 @@ export async function resolveRunToolProfile(
     }
     playbookName = playbook.name.slice(0, RUN_PROFILE_MAX_NAME_CHARS);
     const spaceId = playbook.workspaceId ?? input.workspaceId;
-    const [taskIntents, grants, currentStage] = await Promise.all([
+    const [taskIntents, grants, currentStage, trial] = await Promise.all([
       spaceId ? deps.readTaskIntents(spaceId) : [],
       deps.readGrants({ playbookId: input.playbookId, userId: input.userId }),
       input.sessionId ? deps.readCurrentStage(input.sessionId) : null,
+      // A TRIAL (the rule lab) is offered reads only: its writes are refused
+      // at the gate anyway, so offering them would only spend turns.
+      input.sessionId ? deps.readTrial(input.sessionId) : false,
     ]);
     intents = boundIntents([...readRequiredIntents(playbook), ...taskIntents]);
     const allGrants = [
@@ -280,10 +313,11 @@ export async function resolveRunToolProfile(
         workspaceId: input.workspaceId,
         userId: input.userId,
       });
+      const index = trial ? readVerbsOnly(registry.index) : registry.index;
       const folded = foldRunVerbs(
-        grantedVerbs(allGrants, registry.capabilities),
+        grantedVerbs(allGrants, registry.capabilities, trial),
         intents,
-        registry.index
+        index
       );
       verbs = folded.verbs;
       if (folded.dropped > 0) {

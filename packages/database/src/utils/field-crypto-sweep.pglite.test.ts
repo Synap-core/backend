@@ -114,6 +114,7 @@ const ID = {
   vaultClient: randomUUID(),
   peer: randomUUID(),
   settings: randomUUID(),
+  totp: randomUUID(),
 };
 
 beforeAll(async () => {
@@ -166,6 +167,10 @@ beforeAll(async () => {
   await q(
     `insert into sync_peers (id, peer_pod_url, direction, auth_token) values ($1,'https://peer.test','push','peer-token-plain')`,
     [ID.peer]
+  );
+  await q(
+    `insert into presence_totp_factors (id, user_id, label, secret) values ($1,'u1','app',$2)`,
+    [ID.totp, headServiceKey(SERVICE_RAW, "totp-secret")]
   );
   await q(`insert into pod_settings (id, settings) values ($1,$2)`, [
     ID.settings,
@@ -220,6 +225,7 @@ describe("pod field crypto on the real schema", () => {
       "ai_provider_credentials.encrypted_api_key": { plaintext: 1 },
       "secrets.encrypted_data": { legacy: 1 },
       "sync_peers.auth_token": { plaintext: 1 },
+      "presence_totp_factors.secret": { legacy: 1 },
       "pod_settings.federation_oidc_client_secret": { plaintext: 1 },
     });
   });
@@ -267,6 +273,7 @@ describe("pod field crypto on the real schema", () => {
       "ai_provider_credentials.encrypted_api_key": { t2: 1 },
       "secrets.encrypted_data": { t2: 1 },
       "sync_peers.auth_token": { t2: 1 },
+      "presence_totp_factors.secret": { t2: 1 },
       "pod_settings.federation_oidc_client_secret": { t2: 1 },
     });
   });

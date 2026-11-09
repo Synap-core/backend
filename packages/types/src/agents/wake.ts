@@ -8,8 +8,10 @@
  * `…RefusalLabel`). No client derives a wake state.
  */
 
+import type { AgentTemplateWake } from "./agent-template.js";
 import type {
   AGENT_WAKE_HOW_LABELS,
+  AGENT_WAKE_REFUSAL_FIXES,
   AGENT_WAKE_REFUSAL_LABELS,
   AGENT_WAKE_STATE_LABELS,
 } from "../vocabulary/index.js";
@@ -57,6 +59,13 @@ export interface AgentTemplateRef {
   slug: string;
   label: string;
   version: string | null;
+  /**
+   * How a computer starts it on handed work, as the INSTALLED template holds
+   * it (`agent_templates.wake`): the pod is the one source a runner reads.
+   * `null` = the installed template carries none, or the template is built in
+   * (the pod holds no wake block for it).
+   */
+  wake: AgentTemplateWake | null;
 }
 
 // Coverage floors: a state, path or reason without its words fails the build,
@@ -74,6 +83,9 @@ const _refusalWords: Covers<
   AgentWakeRefusal,
   typeof AGENT_WAKE_REFUSAL_LABELS
 > = true;
+const _refusalFixes: Covers<AgentWakeRefusal, typeof AGENT_WAKE_REFUSAL_FIXES> =
+  true;
 void _stateWords;
 void _howWords;
 void _refusalWords;
+void _refusalFixes;

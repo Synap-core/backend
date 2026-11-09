@@ -130,6 +130,10 @@ import {
   PROPOSAL_APPROVE_QUEUE,
 } from "./proposal-approve-worker.js";
 import {
+  ASK_LATER_RETURN_QUEUE,
+  handleAskLaterReturn,
+} from "./ask-later-return-worker.js";
+import {
   handleLibraryLightRead,
   handleLibraryLightReadSweep,
   LIBRARY_LIGHT_READ_QUEUE,
@@ -145,6 +149,10 @@ import {
   MORNING_BRIEF_QUEUE,
 } from "./morning-brief-worker.js";
 import { handlePodHealth, POD_HEALTH_QUEUE } from "./pod-health-worker.js";
+import {
+  handlePresenceChallengeSweep,
+  PRESENCE_CHALLENGE_SWEEP_QUEUE,
+} from "./presence-challenge-sweep.js";
 import { handleSyncPush, SYNC_PUSH_QUEUE } from "./sync-push.js";
 import { handleSyncPull, SYNC_PULL_QUEUE } from "./sync-pull.js";
 import {
@@ -386,6 +394,8 @@ const ALL_QUEUES = [
   API_USAGE_RETENTION_QUEUE,
   // Phone push hygiene: Expo receipts per send + the daily unused-phone sweep.
   PUSH_RECEIPTS_QUEUE,
+  // An owed ask back from the person's Later (one job per Later, handler slot, IoC).
+  ASK_LATER_RETURN_QUEUE,
   PUSH_DEVICE_SWEEP_QUEUE,
   "feed-scheduler",
   FEED_SOURCE_EXECUTE_QUEUE,
@@ -405,6 +415,8 @@ const ALL_QUEUES = [
   MORNING_BRIEF_QUEUE,
   // The pod health check (every 2 min; handler slot, IoC).
   POD_HEALTH_QUEUE,
+  // Proof of presence: the hourly sweep of expired challenges.
+  PRESENCE_CHALLENGE_SWEEP_QUEUE,
   SYNC_PUSH_QUEUE,
   SYNC_PULL_QUEUE,
   SYNC_PUSH_FILES_QUEUE,
@@ -921,6 +933,14 @@ export async function registerAllWorkers(): Promise<void> {
   await boss.work(PUSH_DEVICE_SWEEP_QUEUE, async () => handlePushDeviceSweep());
   logger.info("Registered workers: push-receipts, push-device-sweep");
 
+  // An owed ask back from Later (on-demand: the Later door sends one job per
+  // Later, starting at its time). Handler slot filled by the api layer at
+  // boot (IoC); a stale job (the Later changed) does nothing.
+  await boss.work(ASK_LATER_RETURN_QUEUE, async ([job]: any[]) =>
+    handleAskLaterReturn(job)
+  );
+  logger.info("Registered worker: ask-later-return");
+
   // Feed scheduler (cron: every minute — schedules due source subscription fetches)
   await boss.work("feed-scheduler", async () => handleFeedScheduler());
   logger.info("Registered worker: feed-scheduler");
@@ -1000,6 +1020,12 @@ export async function registerAllWorkers(): Promise<void> {
   // The pod health check (every 2 min; handler slot filled by the api layer).
   await boss.work(POD_HEALTH_QUEUE, async () => handlePodHealth());
   logger.info("Registered worker: pod-health-check");
+
+  // Proof of presence: delete the challenges past their retention (hourly).
+  await boss.work(PRESENCE_CHALLENGE_SWEEP_QUEUE, async () =>
+    handlePresenceChallengeSweep()
+  );
+  logger.info("Registered worker: presence-challenge-sweep");
 
   // Hydration summary post — Orchestrator's first proactive message after
   // import review (Gap 3 of onboarding). One attempt, swallow-on-fail.

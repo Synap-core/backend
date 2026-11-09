@@ -138,7 +138,7 @@ Every lifecycle option has one fixed category: `open · active · paused · done
 
 ### The one door
 
-Every status change — your call, a board drag, a method's step, a sync — goes through `moveStatus`. As an agent: a kind's status = `update_entity` with the lifecycle property set to the new value AND, over MCP, `expectedStatus` = the status you saw (the in-app `update_entity` has no `expectedStatus` yet; the door still checks the lifecycle); a role's status = `update_facet` `status` where your tools list it (the in-app agent; MCP has no role-status tool yet).
+Every status change — your call, a board drag, a method's step, a sync — goes through `moveStatus`. As an agent: a kind's status = `update_entity` with the lifecycle property set to the new value AND, over MCP, `expectedStatus` = the status you saw (the in-app `update_entity` has no `expectedStatus` yet; the door still checks the lifecycle); a role's status = `update_facet` with the role's status field in `properties` AND `expectedStatus` = the status you saw (over MCP: `synap_update_facet`, backend#863; the in-app agent: `update_facet` `status`).
 
 - `conflict` (with the current status) is normal: someone moved it; re-read and decide again. A person's move always wins.
 - `proposed` is success (a done/lost move, or governance said review).
@@ -157,6 +157,10 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 ### Workers
 
 A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
+
+### Agents and their templates
+
+An agent is one connected AI program (its `agent_type` = which program). Its **agent template** (catalog kind `agent`) says how a computer finds it (`detect`), how one starts it on handed work (`wake`: program + args + params, data never a shell line), whether that wake was tried on a real computer (`tried`), and the skills its agents get (`practices.skills`, attached when it links). Whether the pod can get an agent working now is its **wake**: `synap_list_agents` answers awake, can wake, or can't wake with the one reason. Read it, never guess it, before handing work to an agent. Guide: pod document `645e384c-1dfb-4dca-957c-422245f2e5af`.
 
 ### Goals (tracks)
 
@@ -303,6 +307,10 @@ Environment failure ≠ product bug: when Docker Hub rate-limits a pull (`429 To
 ---
 
 ## From intent — conductor for a new area of work
+
+## Apps are views of pod state
+
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
 Use this when the user states an **intent** to start or track something that may need structure (a project, domains, kinds, roles, deals-shaped things) — not when they only want to capture a fact into types that already exist (`synap` skill).
 
@@ -2222,9 +2230,9 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a _receipt_, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
 
-**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped for the same project, that session is adopted (`adopted: true`, same id) — never a second one; another project's writes stay in their own group. Grouping is per conversation and per project: another conversation's session is joined only by passing its id as `sessionId`. On MCP, every write reply names where it landed (`attribution.filed`: session id and name). **One session per piece of work:** a session you started takes every later write, so when an MCP reply carries a `topicHint` (this write is about another project), start a new session if it is new work; rename the current one with `synap_update_session { title }` when its name no longer fits. Names given by automation follow the work as it grows; once you or the person name a session, it keeps that name.
+**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped for the same project, that session is adopted (`adopted: true`, same id) — never a second one; another project's writes stay in their own group. Grouping is per conversation and per project: another conversation's session is joined only by passing its id as `sessionId`. On MCP, a write reply names where it landed (`attribution.filed`: session id and name) when you did not name the session, or when it landed somewhere else. **One session per piece of work:** a session you started takes every later write, so when an MCP reply carries a `topicHint` (this write is about another project), start a new session if it is new work; rename the current one with `synap_update_session { title }` when its name no longer fits. Names given by automation follow the work as it grows; once you or the person name a session, it keeps that name.
 
-**Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
+**Fetch the pod's processes before you invent one.** The pod binds a playbook on FACTS, never on words: the one you name with `templateId`; else the one active playbook for the subject's kind (with a matching status when the playbook maps stages to it); else the playbook the parent session follows; else the main-red playbook for a `main red:` title. The reply says which and why in ONE `binding` line, or offers the few it could not choose between. With no `templateId`, the response's `playbooks` block also lists `candidates` ranked against your title and goal (id, name, score, and the `reason` each one matched): suggestions, never applied. A subject or goal that arrives later re-runs the facts once. Follow one later, or release one the pod bound, with `synap_update_session { followPlaybookId }` (`null` releases, and the pod never re-binds it). Pass `templateId: null` to skip the ranked suggestions (facts still bind). You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
 **Declare your OUTCOMES** — a new session you start must declare at least one fact (or a deliverable with `verify`), or the start is refused (`NO_CRITERIA`); continuing an existing one needs none. `outcomes: [{ key?, label, kind, verify?, owner? }]` on `synap_start_session` / `synap_update_session` (Hub: the same field on `POST`/`PATCH /focus-sessions`). One list of what the work must yield, each one verifiable. Two kinds:
 
@@ -3204,10 +3212,11 @@ start on it, and a person decides at the moments that commit the business. It ne
 The reference is Content OS "Produce Content" (`synap-app/packages/workspace-templates/src/content-os.yaml`).
 
 **Official vs pod-local.** An official template or capability lives ONLY in the catalog
-(`synap-app/packages/workspace-templates/`, by kind) and is published with
-`synap catalog publish --official` (CI on main). A playbook, kind or automation an agent creates on a pod
-(`synap_create_playbook`, `synap_define_kind`, …) is **pod-local**: it never reaches the catalog. To make it
-official, write it into the catalog file and publish.
+(`synap-app/packages/workspace-templates/`, by kind); landing it on app-bases main publishes it (CI). A
+playbook, kind or automation an agent creates on a pod (`synap_create_playbook`, `synap_define_kind`, …) is
+**pod-local**: it never reaches the catalog. To make it official, write it into the catalog file and land it
+on main. A pod draft proposal mirrored into the catalog is a second copy: once the file lands, withdraw the
+proposal; the review is the catalog commit.
 
 | Field                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -3282,8 +3291,8 @@ batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
 `{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
-writes it into the catalog and publishes it with
-`synap catalog publish --official`.
+writes it into the catalog (`synap-app/packages/workspace-templates`); landing it
+on app-bases main publishes it.
 
 ---
 

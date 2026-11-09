@@ -56,6 +56,7 @@ import {
   SETUP_AGENT_HUB_SCOPES,
   revokeActiveHubInboundKeysForUser,
 } from "./hub-integration-registration.js";
+import { assertPresencePass, type PresencePass } from "./presence/pass.js";
 
 type AgentRow = typeof agents.$inferSelect;
 type UserRow = typeof users.$inferSelect;
@@ -893,7 +894,13 @@ export async function createNamedAgent(opts: {
   name: string;
   agentType: string;
   createdByUserId: string;
+  /** The gate's pass for `agentUsers.create` (`passPresenceForAction`): it mints an agent key. */
+  presence: PresencePass | null;
 }): Promise<CreateNamedAgentResult> {
+  assertPresencePass(opts.presence, {
+    actions: ["agentUsers.create"],
+    userId: opts.createdByUserId,
+  });
   const { agentUserId, email } = await findOrCreateServiceAgentUser({
     creatorId: opts.createdByUserId,
     agentType: opts.agentType,
@@ -1055,6 +1062,16 @@ export interface ProvisionSurfaceAgentKeyOpts {
    * key (V1 D4) while its re-authorize keeps what it had.
    */
   inheritToolSurface?: "agent" | "instance";
+  /**
+   * The surface a FIRST key lists when `toolProfile` is omitted and there is
+   * no key to inherit from: the agent's template's (`spec.toolProfile` +
+   * `toolGroups`, `loadTemplateToolSurface`). Omitted: `entry`, nothing
+   * unlocked. A re-mint still keeps what the agent's key listed.
+   */
+  firstKeyToolSurface?: {
+    toolProfile: ApiKeyToolProfile;
+    toolGroups?: string[];
+  };
   /**
    * The COMPUTER the agent runs on (0320): the agent is then the distinct
    * "<type> on <computer>" principal, not the creator's computer-less one.
@@ -1280,7 +1297,7 @@ export async function provisionSurfaceAgentKey(
             toolProfile: inherited.toolProfile ?? null,
             toolGroups: inherited.toolGroups ?? [],
           }
-        : { toolProfile: "entry" };
+        : (opts.firstKeyToolSurface ?? { toolProfile: "entry" });
 
   if (opts.pendingApproval !== true)
     await revokeActiveHubInboundKeysForUser(db, {

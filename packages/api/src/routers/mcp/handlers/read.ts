@@ -71,8 +71,11 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
+  LIST_PAGE_DEFAULT,
+  LIST_PAGE_MAX,
   pageLimit,
   pageOffset,
+  pageSlice,
   ENTITIES_PAGE_MAX,
 } from "./shared.js";
 
@@ -104,7 +107,7 @@ export const readHandlers: McpHandlerMap = {
     }
     // `detail` (decision B9a): refused when unknown, never read as `full` — a
     // typo must not silently cost the caller the long answer it tried to avoid.
-    const detail = (args.detail ?? "full") as AskDetail;
+    const detail = (args.detail ?? "brief") as AskDetail;
     if (!ASK_DETAILS.includes(detail)) {
       return toolError(
         `detail must be one of ${ASK_DETAILS.join(", ")} (got ${JSON.stringify(args.detail)}).`
@@ -374,11 +377,33 @@ export const readHandlers: McpHandlerMap = {
   synap_get_document: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const result = await caller.documents.getDocument({
+    const fetched = await caller.documents.getDocument({
       userId,
       documentId: args.documentId as string,
       ...(args.format === "readable" ? { format: "readable" as const } : {}),
     });
+    // Body slicing, ONLY when the caller asked for a slice: a default cut would
+    // let a read-modify-write (`synap_update_document`) write back half a body.
+    // The global reply cap is what bounds an unsliced read, and its notice
+    // names this `limit` / `offset` pair.
+    const body = fetched.document.content;
+    const sliceAsked = args.limit !== undefined || args.offset !== undefined;
+    const start = pageOffset(args.offset);
+    const end =
+      start +
+      pageLimit(args.limit, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    const result =
+      sliceAsked && typeof body === "string"
+        ? {
+            ...fetched,
+            document: { ...fetched.document, content: body.slice(start, end) },
+            slice: {
+              contentTotal: body.length,
+              offset: start,
+              ...(end < body.length ? { nextOffset: end } : {}),
+            },
+          }
+        : fetched;
     // Another person's document is their text, not the caller's: fenced
     // (`untrusted`, audit F5). The author is read through the caller's own
     // floor (the read above already admitted the document); a row that cannot
@@ -485,6 +510,51 @@ export const readHandlers: McpHandlerMap = {
    * call `signals.needsYou`, so an agent and an outside reader see the same
    * rows by fold and the same count.
    */
+  synap_get_flow: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const profileSlug =
+      typeof args.profileSlug === "string" ? args.profileSlug.trim() : "";
+    if (!profileSlug)
+      return ok({
+        error: "profileSlug is required: a kind or role (synap_list_profiles).",
+      });
+    const projectId =
+      typeof args.projectId === "string" && args.projectId
+        ? args.projectId
+        : "";
+    if (projectId && !isUuid(projectId))
+      return ok({ error: `projectId is not a valid id: ${projectId}` });
+    const firstN =
+      typeof args.firstN === "number" && Number.isFinite(args.firstN)
+        ? Math.min(50, Math.max(0, Math.floor(args.firstN)))
+        : undefined;
+    const callerCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      undefined,
+      undefined,
+      undefined,
+      agentUserId
+    );
+    // The SAME function as tRPC `flow.of` and Hub `GET /flow`; the space is
+    // the confined lens (`adapter.ts`): a bound key reads its own space.
+    const { flowOfInput, readFlowOf } =
+      await import("../../../services/lifecycle/flow-read.js");
+    return ok(
+      await readFlowOf(
+        flowOfInput.parse({
+          profileSlug,
+          ...(ctx.confinedWorkspaceId
+            ? { workspaceId: ctx.confinedWorkspaceId }
+            : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(firstN !== undefined ? { firstN } : {}),
+        }),
+        callerCtx as Parameters<typeof readFlowOf>[1]
+      )
+    );
+  },
   synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -933,6 +1003,9 @@ export const readHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const entityId = args.entityId as string;
+    // Newest `limit` edges (the read's own cap is 100): said in the schema, so
+    // a hub node is bounded here and not only by the global reply cap.
+    const relLimit = pageLimit(args.limit, 50, 100);
     // The lens, in order: the caller's explicit workspaceId; else the
     // entity's OWN workspace (a "no relations" answer then reflects its real
     // home, not whichever member workspace sorted first).
@@ -949,13 +1022,18 @@ export const readHandlers: McpHandlerMap = {
     // the caller's own pod-wide edges), so nothing outside it is reachable.
     if (!relWsId) {
       return ok(
-        await caller.relations.listRelationsPodWide({ userId, entityId })
+        await caller.relations.listRelationsPodWide({
+          userId,
+          entityId,
+          limit: relLimit,
+        })
       );
     }
     const result = await caller.relations.listRelations({
       userId,
       workspaceId: relWsId,
       entityId,
+      limit: relLimit,
     });
     return ok(result);
   },
@@ -1030,7 +1108,14 @@ export const readHandlers: McpHandlerMap = {
     if (!envelope.found) {
       return ok({ error: `No ${gKind} with id '${gId}'` });
     }
-    return ok(envelope);
+    // Neighbours page like every list door; `counts` stay the full totals.
+    const { page, paging } = pageSlice(
+      envelope.neighbors,
+      args,
+      LIST_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
+    return ok({ ...envelope, neighbors: page, ...paging });
   },
   synap_get_channel: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;

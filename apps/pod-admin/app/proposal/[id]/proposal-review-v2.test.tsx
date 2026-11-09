@@ -65,8 +65,11 @@ vi.mock("@heroui/react", async (importOriginal) => {
   return { ...real, Button };
 });
 
-vi.mock("../../../lib/trpc", () => ({
+vi.mock("../../../lib/trpc", async () => ({
   trpc: {
+    presence: (
+      await import("../../_lib/presence/__tests__/trpc-double")
+    ).presenceTrpcDouble(),
     // The approve hook reads the page's cached request (proof up front).
     useUtils: () => ({ proposals: { get: { getData: () => undefined } } }),
     useQueries: () => [],

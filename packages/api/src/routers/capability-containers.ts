@@ -220,6 +220,14 @@ export const capabilityContainersRouter = router({
          * `capability-template-key.parity.tripwire.test.ts`).
          */
         templateKey: z.string().min(1).max(255).optional(),
+        /**
+         * The container config a capability definition DECLARES
+         * (`declaredContainerMetadata`: its `metadata`, its computer blocks
+         * under `computer`, plus `templateKey` / `contentHash`). Carried in
+         * the proposal so an approved install is the definition's, not an
+         * empty container: an installation request reads `metadata.computer`.
+         */
+        metadata: z.record(z.string(), z.unknown()).optional(),
         agentUserId: z.string().uuid().optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
@@ -250,6 +258,9 @@ export const capabilityContainersRouter = router({
           // UNADDRESSED container, and the next apply would mint yet another
           // one. The executor reads it back.
           templateKey: input.templateKey ?? null,
+          // What the person approves is the container the definition declares
+          // (its computer blocks included), and the executor writes it.
+          metadata: input.metadata ?? null,
         },
       });
       if ("denied" in perm && perm.denied)
@@ -270,6 +281,17 @@ export const capabilityContainersRouter = router({
         name: input.name,
         description: input.description,
         templateKey: input.templateKey ?? null,
+        // The column is the address; its metadata twin never disagrees.
+        ...(input.metadata
+          ? {
+              metadata: {
+                ...input.metadata,
+                ...(input.templateKey
+                  ? { templateKey: input.templateKey }
+                  : {}),
+              },
+            }
+          : {}),
       });
       // `status` is reported HONESTLY: a create at an address (or name) that
       // already resolves returns the existing container as "reused". Hardcoding

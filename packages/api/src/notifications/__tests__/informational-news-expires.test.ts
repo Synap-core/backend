@@ -74,6 +74,30 @@ import {
 } from "../../services/signals/needs-you-union.js";
 
 const NEWS = ["pod.update_failed", "session.closed.criteria_unmet"] as const;
+
+/** Past events. They stay in the bell and must not count as needing you. */
+const PAST_NEWS = [
+  "proposal.auto_approved",
+  "intake.prompt_version_regression",
+  "connector.sync.complete",
+  "entity.created_by_ai",
+  "skill.triggered",
+  "agent.task_complete",
+  "data.entity.deleted",
+  "data.document.created",
+  "data.view.created",
+  "data.relation.created",
+] as const;
+
+/** Asks that omit needsYou and must stay items. */
+const STILL_ASKS = [
+  "proposal.created",
+  "connector.sync.failed",
+  "agent.task_failed",
+  "pod.update_available",
+  "pod.update_rollback_failed",
+  "track.review_ready",
+] as const;
 const USER = "11111111-1111-4111-8111-111111111111";
 const SESSION = "55555555-5555-4555-8555-555555555555";
 
@@ -99,6 +123,16 @@ describe("informational news never counts in needs-you", () => {
     expect(needsYouRole(type)).toBe("informational");
   });
 
+  it.each(PAST_NEWS)("%s is news, not an ask", (type) => {
+    expect(getNotificationDef(type), type).toBeDefined();
+    expect(needsYouRole(type)).toBe("informational");
+    expect(getNotificationDef(type)?.expiresAfterMs).toBe(STALE_NEWS_EXPIRY_MS);
+  });
+
+  it.each(STILL_ASKS)("%s still counts until it is read", (type) => {
+    expect(needsYouRole(type)).toBe("item");
+  });
+
   it("the real union counts the ask beside them, and only the ask", () => {
     const r = countNeedsYou({
       distinctClusters: 0,
@@ -107,16 +141,19 @@ describe("informational news never counts in needs-you", () => {
       notifications: [
         row("pod.update_failed", 1),
         row("session.closed.criteria_unmet", 2),
+        ...PAST_NEWS.map((type, i) => row(type, 10 + i)),
         // An ordinary item — proves the union still counts rows at all.
         row("inbox.email", 3),
+        row("proposal.created", 4),
+        row("agent.task_failed", 5),
       ],
       notificationsTruncated: false,
       owedSlots: [],
       owedTruncated: false,
       openQuestionSessionIds: new Set(),
     });
-    expect(r.notifications).toBe(1);
-    expect(r.needsYou).toBe(1);
+    expect(r.notifications).toBe(3);
+    expect(r.needsYou).toBe(3);
   });
 });
 

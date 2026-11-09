@@ -1817,6 +1817,9 @@ function stampRunPosture(
       skillKind,
       granted: v.granted,
       execMode: v.effectiveExecMode,
+      // The backing skill's authored read-only declaration: the gate runs such
+      // a verb with no review (`verbDeclaresReadOnly`), so this door says so.
+      declaredReadOnly: v.declaredReadOnly,
     }),
   }));
   row.governance =

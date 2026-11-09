@@ -83,6 +83,7 @@ import { isOutputRefVisible } from "../services/focus-sessions/assert-output-ref
 import { sessionTargetsSchema } from "../services/focus-sessions/session-targets-wire.js";
 import type { SessionTargetsWrite } from "../services/focus-sessions/session-targets.js";
 import type { FollowOutcome } from "../services/focus-sessions/follow-playbook.js";
+import type { StageSubjectStatusOutcome } from "../services/focus-sessions/stage-subject-status.js";
 import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
 import {
   blockExpectedOutput,
@@ -249,6 +250,7 @@ function slotOwnershipResult(
         message: `"${input.expectedLabel}" ${SLOT_MOVED_ON_PHRASES.alreadyDone}`,
       });
     case "ref_unreachable":
+    case "ask_refused":
       // Block only. The `default` below returns SUCCESS, so a refusal with no
       // case here would report `ok: true` while the pointer was dropped.
       throw new TRPCError({ code: "BAD_REQUEST", message: result.reason });
@@ -2067,6 +2069,8 @@ export const focusSessionsRouter = router({
         ...(result.playbooks ? { playbooks: result.playbooks } : {}),
         ...(result.adopted ? { adopted: result.adopted } : {}),
         ...(result.targets ? { targets: result.targets } : {}),
+        // Born into a stage that moves the subject: what the move did.
+        ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
       };
     }),
 
@@ -2307,6 +2311,23 @@ export const focusSessionsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: moveRefusal });
       }
 
+      // DECLARED STAGES ONLY — the advance door's rule (`stage-declared.ts`),
+      // asked before this door's own multi-field UPDATE below.
+      if (patch.currentStage !== undefined) {
+        const { refuseUndeclaredStage } =
+          await import("@synap/jobs/utils/stage-declared.js");
+        const undeclared = await refuseUndeclaredStage(
+          existing,
+          patch.currentStage
+        );
+        if (undeclared) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: undeclared.reason,
+          });
+        }
+      }
+
       // TRACK FILING — the ONE resolution (throws the refusal as a TRPCError).
       const trackFilingModule =
         await import("../services/tracks/session-track-filing.js");
@@ -2528,6 +2549,7 @@ export const focusSessionsRouter = router({
       //
       // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
       let stageGated = false;
+      let subjectMove: StageSubjectStatusOutcome | undefined;
       if (patch.currentStage !== undefined) {
         const { advanceSessionStage } =
           await import("../services/focus-sessions/advance-stage.js");
@@ -2546,6 +2568,10 @@ export const focusSessionsRouter = router({
           stageWrite: "caller",
         });
         stageGated = advance.paused;
+        // What the advance did to the subject (the MCP door's `subjectMove`).
+        const { reportedSubjectMove } =
+          await import("../services/focus-sessions/stage-subject-status.js");
+        subjectMove = reportedSubjectMove(advance.subjectStatus);
       }
 
       // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
@@ -2597,9 +2623,13 @@ export const focusSessionsRouter = router({
         ...(follow ? { follow } : {}),
         // What `targets` did: which were added, which already were.
         ...(targetsWrite ? { targets: targetsWrite } : {}),
+        // What a stage advance did to the subject, when the stage asked for a
+        // move: moved, waiting on a person, skipped or failed, with why.
+        ...(subjectMove ? { subjectMove } : {}),
       } as FocusSession & {
         follow?: FollowOutcome;
         targets?: SessionTargetsWrite;
+        subjectMove?: StageSubjectStatusOutcome;
       };
     }),
 
@@ -2639,6 +2669,8 @@ export const focusSessionsRouter = router({
           ...(result.session as FocusSession),
           warnings: result.warnings,
           ...(result.verdict ? { verdict: result.verdict } : {}),
+          // What the end moved (`subjectProfile.onEnd`), each with why.
+          ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         };
       } catch (err) {
         const e = err as { code?: string; message?: string };

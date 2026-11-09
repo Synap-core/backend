@@ -58,6 +58,8 @@ const WS = "00000000-0000-4000-8000-000000000001";
 const INTENT = {
   label: "Sales",
   produces: [{ profile: "lead" }, { profile: "deal" }],
+  // The primary output (One model, decision 3) rides every door too.
+  primary: "deal",
 };
 
 type Parser = { parse: (v: unknown) => unknown };
@@ -136,6 +138,8 @@ describe("template intent — every install door carries it", () => {
     expect(projectTemplateIntent(body.intent)).toEqual({
       label: "Sales",
       produces: ["lead", "client", "deal", "campaign", "outreach-touch"],
+      // The catalog's primary output (One model, decision 3) arrives too.
+      primary: "deal",
       source: "template",
     });
   });
@@ -150,6 +154,7 @@ describe("template intent — every install door carries it", () => {
     expect(projectTemplateIntent(parsed.definition.intent)).toEqual({
       label: "Product",
       produces: ["devplane_feature", "devplane_story", "ui-design"],
+      primary: "devplane_feature",
       source: "template",
     });
   });

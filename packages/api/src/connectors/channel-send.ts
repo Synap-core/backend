@@ -29,6 +29,7 @@
  *    `external_message.sent` for automations; "when did we last speak" moves.
  */
 
+import type { SendGuidanceStamp } from "../services/playbooks/playbook-guidance.js";
 import { createLogger } from "@synap-core/core";
 import {
   db,
@@ -592,6 +593,8 @@ export async function recordChannelSend(args: {
   workspaceId: string | null;
   proposalId?: string | null;
   draftedBy?: DraftedBy | null;
+  /** The rules the drafting run used (see SendExternalMessageInput.guidance). */
+  guidance?: SendGuidanceStamp | null;
   /** A subject the caller gave; recorded, not sent (see SendExternalMessageInput.subject). */
   subject?: string | null;
 }): Promise<RecordedChannelSend> {
@@ -643,6 +646,7 @@ export async function recordChannelSend(args: {
       ...(args.proposalId ? { proposalId: args.proposalId } : {}),
       ...(accountId ? { accountId } : {}),
       ...(args.draftedBy ? { draftedBy: args.draftedBy } : {}),
+      ...(args.guidance ? { guidance: args.guidance } : {}),
       ...(args.subject ? { subject: args.subject } : {}),
     },
     // Already delivered by the connector: never mirrored out again.

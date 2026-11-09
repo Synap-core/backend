@@ -44,12 +44,14 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { openLink } from "../../utils/deep-links.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
+  ASK_ANSWER_BY_PAST_MESSAGE,
   ASK_LIMITS,
   ASK_LOOKED_AT_KINDS,
   AnswerProvenanceSchema,
   AskAnswerValueSchema,
   AskCauseSchema,
   AskSchema,
+  isAskAnswerByPast,
   AskSnapshotSchema,
   PendingRelayedAnswerSchema,
   askFingerprint,
@@ -71,8 +73,14 @@ import type {
   SlotAskLookedAtKind,
   SlotAskSnapshot,
   SlotAskUrgency,
+  SlotBlocks,
+  SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
+import type {
+  ThingBlockerBlocks,
+  ThingBlockerClearedBy,
+} from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
@@ -136,6 +144,9 @@ import {
   withDefaultUnblocks,
 } from "./slot-asked-event.js";
 import type { FollowOutcome } from "./follow-playbook.js";
+// Type only: the writer behind it (move-status, the permission gate) is
+// imported lazily where the advance reports it.
+import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   closedRunRefusal,
   normalizeSessionTitle,
@@ -181,30 +192,12 @@ export interface UpdateFocusSessionParams {
    * blocker is classified, and the human reads one line to know what to do.
    * The slot lands `pending` like any other — declaring a blocker is not a
    * claim of delivery, and `status: 'done'` is still the approval door's.
+   *
+   * Its shape is DERIVED from {@link CLIENT_DECLARABLE_OUTPUT_FIELDS} — the
+   * same list `addOutputWireSchema` picks — so a field the wire accepts is a
+   * field this door carries (`ref`, `ask`, the blocker trio, ...).
    */
-  addOutput?: {
-    kind: string;
-    label: string;
-    icon?: string;
-    owner?: ExpectedOutput["owner"];
-    blockedReason?: ExpectedOutput["blockedReason"];
-    why?: ExpectedOutput["why"];
-    /** What moves when the person answers — required with `owner: 'human'` from an agent. */
-    unblocks?: ExpectedOutput["unblocks"];
-    /**
-     * WHERE the deliverable lives / where the person must go. Accepted HERE and
-     * not only on the wholesale array because this is the door an agent uses to
-     * declare a blocked slot in ONE call — without it, "block this on the human
-     * AND point them at the page" would need a second, wholesale patch.
-     */
-    ref?: ExpectedOutput["ref"];
-    /**
-     * HOW the person can answer (confirm / choose / form / act / provide).
-     * Accepted here for the same one-call reason as `ref`: blocking on the
-     * person AND saying how to answer is one declaration.
-     */
-    ask?: ExpectedOutput["ask"];
-  };
+  addOutput?: AddOutputParams;
   /**
    * The slot to report produced, named by its LABEL (exact) or its KEY
    * (`slot-keys.ts`, stamped by the server) — additive: a label keeps working.
@@ -364,6 +357,14 @@ export type UpdateFocusSessionResult =
        */
       followRefusal?: string;
       /**
+       * The late re-resolve (founder decision d02, `bind-on-facts.ts`): the
+       * FIRST time a subject or a goal arrives on a session that follows no
+       * playbook, the pod runs the facts ladder once. ONE line: what it bound
+       * and why, or the fact-based offer. Absent when it did not run or
+       * found nothing.
+       */
+      binding?: string;
+      /**
        * What a `trackId`/`trackStage` in the patch did — present only when the
        * patch carried one. `domainNote` says the step names another domain and
        * the session was filed where it is, not moved.
@@ -400,6 +401,14 @@ export type UpdateFocusSessionResult =
       subSessionsFiled?: string[];
       /** What `targets` did: which were added, which already were. */
       targets?: SessionTargetsWrite;
+      /**
+       * What a `currentStage` advance did to the session's subject, present
+       * whenever the entered stage declares a `subjectStatus`: written,
+       * proposed, failed, or skipped with why (`reportedSubjectMove`). The
+       * stage stands either way; a move that did not happen must reach the
+       * caller, who otherwise reads the advance as having moved the thing.
+       */
+      subjectMove?: StageSubjectStatusOutcome;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -476,6 +485,30 @@ const slotAnswerWireSchema = z.object({
   // parse, and the stripped echo then reads as a forged answer.
   ...AnswerProvenanceSchema.shape,
 });
+
+/**
+ * The blocker trio's wire shapes (plan e7f753db §9). `blocks` names a thing
+ * and a status, both optional (defaults are read, never stored); `blockerKey`
+ * is a short snake_case domain name; `clearedBy` names exactly ONE door.
+ */
+export const slotBlocksWireSchema = z
+  .object({
+    entityId: z.string().uuid().optional(),
+    to: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+export const slotBlockerKeyWireSchema = z
+  .string()
+  .regex(
+    /^[a-z][a-z0-9_]{0,63}$/,
+    "a short snake_case name, e.g. not_connected"
+  );
+export const slotClearedByWireSchema = z.union([
+  z.object({ answer: z.literal(true) }).strict(),
+  z.object({ intent: z.string().trim().min(1).max(80) }).strict(),
+  z.object({ playbookId: z.string().uuid() }).strict(),
+  z.object({ capability: z.string().trim().min(1).max(120) }).strict(),
+]);
 
 export const expectedOutputWireSchema = z.object({
   kind: z.string(),
@@ -597,6 +630,12 @@ export const expectedOutputWireSchema = z.object({
       at: z.string(),
     })
     .optional(),
+  // The thing this slot holds up (plan e7f753db §9). DECLARED, like
+  // `unblocks`; `blocks.entityId` is floored at write by the same ref floor
+  // (`findUnreachableOutputRefs`).
+  blocks: slotBlocksWireSchema.optional(),
+  blockerKey: slotBlockerKeyWireSchema.optional(),
+  clearedBy: slotClearedByWireSchema.optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -634,6 +673,12 @@ const _lookedAtKindParity: _Mutual<
 > = true;
 void _lookedAtKindsAreRefKinds;
 void _lookedAtKindParity;
+// The blocker's two shapes, mirrored dependency-free in `@synap-core/types`
+// (`deriveThingBlocker` reads them through the waiting-on collector).
+const _blocksParity: _Mutual<SlotBlocks, ThingBlockerBlocks> = true;
+const _clearedByParity: _Mutual<SlotClearedBy, ThingBlockerClearedBy> = true;
+void _blocksParity;
+void _clearedByParity;
 
 /**
  * The slot fields the SERVER owns — written by governance, delegation and
@@ -720,6 +765,12 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   // could already drop a slot from the array outright; guarding this flag
   // would close no hole the wholesale patch leaves open.)
   "optional",
+  // WHICH thing the slot holds up, its domain name and what clears it (plan
+  // e7f753db §9). The declarer's word, like `unblocks`: naming a blocker
+  // closes nothing and receipts nothing.
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -797,6 +848,12 @@ export const addOutputWireSchema = expectedOutputWireSchema.pick(
   ) as { [K in (typeof CLIENT_DECLARABLE_OUTPUT_FIELDS)[number]]: true }
 );
 
+/** `addOutput`'s param — the same declarable slice, as a type. */
+export type AddOutputParams = Pick<
+  ExpectedOutput,
+  (typeof CLIENT_DECLARABLE_OUTPUT_FIELDS)[number]
+>;
+
 /**
  * DERIVED, not hand-maintained — a third list is a third place to forget a
  * field. Everything the server stamps must survive a silent patch, and so must
@@ -824,6 +881,10 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason: renaming a sibling must not turn the playbook's
   // optional milestone invoice back into an owed one.
   "optional",
+  // Same erasure reason: renaming a sibling must not unblock a thing.
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -1003,6 +1064,40 @@ export function personsSlotsHandedAway(
       );
     })
     .map((item) => item.label);
+}
+
+/**
+ * The labels of incoming slots whose ask names an `answerBy` already past
+ * ({@link isAskAnswerByPast}) — refused at write, by every door that declares
+ * a slot. Round-tripping the stored ask's own `answerBy` unchanged is fine:
+ * only a value the caller is WRITING now is judged. Pure.
+ */
+export function pastAnswerByLabels(
+  current: OutputItem[],
+  incoming: readonly (OutputItem | undefined)[],
+  now: Date | number = Date.now()
+): string[] {
+  const { twinOf } = storedTwins(current);
+  return incoming
+    .filter((item): item is OutputItem => {
+      const answerBy = (item?.ask as { answerBy?: unknown } | null | undefined)
+        ?.answerBy;
+      if (!isAskAnswerByPast(answerBy, now)) return false;
+      const stored = (
+        twinOf(item)?.ask as { answerBy?: unknown } | null | undefined
+      )?.answerBy;
+      return stored !== answerBy;
+    })
+    .map((item) => item.label);
+}
+
+/** The refusal of {@link pastAnswerByLabels}. */
+export function pastAnswerByError(labels: string[]): string {
+  const named = labels
+    .slice(0, 5)
+    .map((l) => `"${l}"`)
+    .join(", ");
+  return `Refused: ${named}: ${ASK_ANSWER_BY_PAST_MESSAGE} Nothing was changed.`;
 }
 
 /** The refusal of {@link personsSlotsHandedAway}, as a `BAD_REQUEST`. */
@@ -1579,27 +1674,28 @@ export function applyOutputMutations(
 
   if (patch.addOutput) {
     const add = patch.addOutput;
+    // Built from EVERY declarable field, picked by the list the wire schema
+    // picks — never re-listed by hand. A hand list here once carried six
+    // fields and silently dropped `blocks`/`blockerKey`/`clearedBy` (finding
+    // 7bf164fd), while the same slot declared through `outcomes` kept them.
+    // Only what was actually declared is copied: an absent `owner` MUST stay
+    // absent (it is what "the agent never said" looks like), and `null` (the
+    // wire's CLEAR for `ref`/`ask`) clears nothing on a brand-new slot, so it
+    // simply carries no key.
+    const declared: Partial<OutputItem> = {};
+    for (const field of CLIENT_DECLARABLE_OUTPUT_FIELDS) {
+      const value = add[field];
+      if (value !== undefined && value !== null) {
+        (declared as Record<string, unknown>)[field] = value;
+      }
+    }
     next = [
       ...next,
       reconcileOwedSince({
+        ...declared,
         kind: add.kind,
         label: add.label,
-        icon: add.icon,
         status: "pending",
-        // Only spread what was actually declared — an absent `owner` MUST
-        // stay absent (it is what "the agent never said" looks like), not
-        // become an explicit "agent".
-        ...(add.owner !== undefined ? { owner: add.owner } : {}),
-        ...(add.blockedReason !== undefined
-          ? { blockedReason: add.blockedReason }
-          : {}),
-        ...(add.why !== undefined ? { why: add.why } : {}),
-        ...(add.unblocks !== undefined ? { unblocks: add.unblocks } : {}),
-        // `null` here is the same CLEAR the wire uses; a brand-new slot has
-        // nothing to clear, so it simply carries no key.
-        ...(add.ref ? { ref: add.ref } : {}),
-        // Same: `null` clears nothing on a new slot.
-        ...(add.ask ? { ask: add.ask } : {}),
       }),
     ];
   }
@@ -2006,6 +2102,25 @@ export async function updateFocusSession(
     }
   }
 
+  // A DEADLINE ALREADY PAST, refused to the caller who wrote it (review
+  // 5 Nov 2026): "overdue" is P0, whose push breaks through Focus, so a past
+  // `answerBy` would be a way around the person's push budget.
+  {
+    const declared = [
+      ...(params.expectedOutputs ?? []),
+      ...(params.addOutput ? [params.addOutput] : []),
+    ];
+    if (declared.length > 0) {
+      const stored: OutputItem[] = Array.isArray(existing.expectedOutputs)
+        ? (existing.expectedOutputs as OutputItem[])
+        : [];
+      const past = pastAnswerByLabels(stored, declared as OutputItem[]);
+      if (past.length > 0) {
+        return { status: "denied", reason: pastAnswerByError(past) };
+      }
+    }
+  }
+
   // WHAT IT UNBLOCKS (decision E, needs-truth §5): an AGENT that hands the
   // person a slot says what moves on the answer. Read on the slots this patch
   // would newly pose (`slotsMissingUnblocks`, the provenance stamp's own
@@ -2154,6 +2269,21 @@ export async function updateFocusSession(
       toStage: params.currentStage,
     });
     if (refusal) return { status: "denied", reason: refusal };
+  }
+
+  // DECLARED STAGES ONLY — the advance door's rule (`stage-declared.ts`),
+  // asked HERE because this door writes the stage inside its own multi-field
+  // UPDATE (and an agent's write may become a proposal applied later): a key
+  // the session's process does not declare is refused before anything is
+  // stored or proposed. A session with no stages keeps free keys.
+  if (params.currentStage !== undefined) {
+    const { refuseUndeclaredStage } =
+      await import("@synap/jobs/utils/stage-declared.js");
+    const undeclared = await refuseUndeclaredStage(
+      existing,
+      params.currentStage
+    );
+    if (undeclared) return { status: "denied", reason: undeclared.reason };
   }
 
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
@@ -2750,6 +2880,7 @@ export async function updateFocusSession(
   // `stageWrite: "caller"` because the stage rode along in the multi-field UPDATE
   // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
+  let subjectMove: StageSubjectStatusOutcome | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -2771,6 +2902,10 @@ export async function updateFocusSession(
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
     if (advance.paused) gatedStatus = "paused";
+    // What the advance did to the subject, whenever the entered stage asked
+    // for a move: a move that did not happen is never silent.
+    const { reportedSubjectMove } = await import("./stage-subject-status.js");
+    subjectMove = reportedSubjectMove(advance.subjectStatus);
   }
 
   // ── FOLLOW / RELEASE A PLAYBOOK ─────────────────────────────────────────────
@@ -2808,6 +2943,36 @@ export async function updateFocusSession(
       case "not_found":
         followRefusal = `Focus session ${sessionId} not found`;
         break;
+    }
+  }
+
+  // ── BIND ON THE FIRST FACT (d02) ────────────────────────────────────────────
+  // A subject or a goal that arrived WITH this patch (it is on the row now and
+  // was not before) re-runs the facts ladder ONCE per session, through the
+  // follow door. Never when this patch itself followed or released a playbook:
+  // the caller's own choice wins, and a released playbook is never re-bound.
+  let binding: string | undefined;
+  let reboundSession: typeof updated | undefined;
+  const latest = followedSession ?? updated;
+  const subjectArrived = !existing.subjectEntityId && !!latest.subjectEntityId;
+  const goalArrived = !existing.trackId && !!latest.trackId;
+  if (
+    params.followPlaybookId === undefined &&
+    !latest.playbookId &&
+    (subjectArrived || goalArrived)
+  ) {
+    const { rebindOnFirstFact } = await import("./bind-on-facts.js");
+    const rebound = await rebindOnFirstFact({
+      session: latest,
+      userId,
+      agentUserId,
+    });
+    binding = rebound?.line;
+    if (rebound?.decision === "bind") {
+      const reloaded = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+      });
+      if (reloaded) reboundSession = reloaded as typeof updated;
     }
   }
 
@@ -2885,7 +3050,7 @@ export async function updateFocusSession(
   // than `updated` and carries the `playbookId`, the merged criteria and the
   // merged deliverables. Returning the pre-follow row would tell the caller its
   // attach did nothing.
-  const finalSession = followedSession ?? updated;
+  const finalSession = reboundSession ?? followedSession ?? updated;
   return {
     status: "updated",
     session: gatedStatus
@@ -2896,8 +3061,10 @@ export async function updateFocusSession(
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),
+    ...(binding ? { binding } : {}),
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
+    ...(subjectMove ? { subjectMove } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),

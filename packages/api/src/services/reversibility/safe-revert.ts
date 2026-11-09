@@ -794,6 +794,7 @@ async function inspectEntityField(
     .select({
       title: entities.title,
       preview: entities.preview,
+      homeWorkspaceId: entities.homeWorkspaceId,
       deletedAt: entities.deletedAt,
     })
     .from(entities)

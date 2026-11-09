@@ -226,3 +226,39 @@ describe("buildProposalSummary — a code skill's declared tools (review of #199
     ).not.toContain("using");
   });
 });
+
+/**
+ * A template install's card names what it adds by what it holds (founder,
+ * 2026-11-05): ONE object is a template, several a pack. The exact strings.
+ */
+describe("buildProposalSummary — installing a package", () => {
+  it("one object is a template", () => {
+    expect(
+      buildProposalSummary("workspace", "create", {
+        name: "Weekly review",
+        source: "packages.apply",
+        contents: { playbooks: [{ name: "Weekly review" }] },
+      })
+    ).toBe('Add template "Weekly review"');
+  });
+
+  it("a space with its kinds and views is a pack", () => {
+    expect(
+      buildProposalSummary("workspace", "create", {
+        name: "Content OS",
+        source: "packages.apply",
+        contents: {
+          spaces: [{ role: "self", name: "Content OS" }],
+          kinds: [{ slug: "post" }],
+          views: [{ name: "Calendar", default: true }],
+        },
+      })
+    ).toBe('Add pack "Content OS"');
+  });
+
+  it("a space created any other way still reads as creating a space", () => {
+    expect(
+      buildProposalSummary("workspace", "create", { name: "Sales" })
+    ).not.toMatch(/^Add (pack|template)/);
+  });
+});

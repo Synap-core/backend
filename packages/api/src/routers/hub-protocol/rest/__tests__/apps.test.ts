@@ -266,6 +266,21 @@ vi.mock(
   })
 );
 
+// Proof of presence (review of 6 Nov, backend#874): the routes ask the gate,
+// whose behaviour is tested in services/presence. Here it lets every call
+// through as a pod in `report` mode does, with a real pass the services
+// accept, so these tests keep reading what the ROUTE and the SERVICE decide.
+vi.mock("../../../../services/presence/gate.js", async () => {
+  const { mintPresencePass } =
+    await import("../../../../services/presence/pass.js");
+  return {
+    passPresenceForAction: async (args: { path: never; userId: string }) => ({
+      verdict: null,
+      pass: mintPresencePass(args.path, args.userId, false),
+    }),
+  };
+});
+
 const { registerAppsRoutes } = await import("../apps.js");
 const { renameApp, removeApp } =
   await import("../../../../services/app-connect.js");
@@ -274,6 +289,7 @@ const { registerAppExecutors } =
 const { proposalExecRegistry } =
   await import("../../../proposals/execution-registry.js");
 const { appsRouter } = await import("../../../apps.js");
+const { router } = await import("../../../../trpc.js");
 const { runWithActingAgent } = await import("@synap/database");
 
 function makeApp_(vars: Record<string, unknown>) {
@@ -811,8 +827,13 @@ describe("app lifecycle writes — the owner's own credential only", () => {
     nothingWritten();
   });
 
+  // Mounted under its root key, so each procedure runs with its full path
+  // (`apps.issueKey`): the step-up middleware reads the path to ask the gate.
   const caller = () =>
-    appsRouter.createCaller({ authenticated: true, userId: OWNER } as never);
+    router({ apps: appsRouter }).createCaller({
+      authenticated: true,
+      userId: OWNER,
+    } as never).apps;
   const trpcDoors: Array<[string, () => Promise<unknown>]> = [
     ["apps.create", () => caller().create({ name: "synap.live" })],
     [

@@ -43,6 +43,10 @@ import {
   sourceConfigs,
   sourceSubscriptions,
   boxRuns,
+  installations,
+  installationBindings,
+  hostJobs,
+  intentDefaults,
   inboundDeliveries,
   userPreferences,
   userResourceState,
@@ -599,6 +603,48 @@ registerVisibility({
     userColumn: boxRuns.userId,
     nullWorkspaceMeans: "ownerPrivate",
   },
+});
+// An installation (0409) is its OWNER's: what runs on their computer, its
+// bindings (the URLs it is reachable at) and its host jobs, within the
+// workspace lens; a NULL workspace stays owner-private, as a box run. The
+// computer never reads through here: the host-job routes floor on the
+// computer itself (`machine_user_id`) and its own person.
+registerVisibility({
+  table: installations,
+  query: () => db.query.installations,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: installations.workspaceId,
+    userColumn: installations.userId,
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+registerVisibility({
+  table: installationBindings,
+  query: () => db.query.installationBindings,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: installationBindings.workspaceId,
+    userColumn: installationBindings.userId,
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+registerVisibility({
+  table: hostJobs,
+  query: () => db.query.hostJobs,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: hostJobs.workspaceId,
+    userColumn: hostJobs.userId,
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// A remembered provider choice (0409) is a PREFERENCE: the person's alone,
+// whatever space it was made for.
+registerVisibility({
+  table: intentDefaults,
+  query: () => db.query.intentDefaults,
+  rule: { kind: "user", userColumn: intentDefaults.userId },
 });
 // A focus session is one person's goal-bound work room, READABLE by its owner
 // and by the HUMAN roster of its own minted room (founder decision C,

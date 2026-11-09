@@ -22,6 +22,7 @@ import {
   proveEachUpFront,
 } from "./presence-model";
 import { usePresence } from "./presence-provider";
+import { usePodSensitivity } from "./use-sensitivity";
 
 type ApproveMutation = ReturnType<typeof trpc.proposals.approve.useMutation>;
 /** `proposals.approve`'s input; `presence` is this hook's to add. */
@@ -100,6 +101,8 @@ function useHandled<I, O>(
 export function useApproveProposal(handlers: Handlers<ApproveOutput> = {}) {
   const approve = trpc.proposals.approve.useMutation();
   const { prove } = usePresence();
+  // W5: what this pod asks a passkey for (a row switched off is not asked).
+  const choice = usePodSensitivity();
   const utils = trpc.useUtils();
   const { mutate, mutateAsync, running } = useHandled((input: ApproveInput) => {
     // The request as the page already read it (`proposals.get`, the cache
@@ -113,7 +116,7 @@ export function useApproveProposal(handlers: Handlers<ApproveOutput> = {}) {
     return approveWithPresence({
       subject: { proposalId: input.proposalId },
       prove,
-      upFront: proposal ? needsPresence(proposal) : false,
+      upFront: proposal ? needsPresence(proposal, choice) : false,
       attempt: (presence) =>
         approve.mutateAsync(presence ? { ...input, presence } : input),
     });

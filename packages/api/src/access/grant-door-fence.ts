@@ -54,6 +54,12 @@ export type FencedReadDoor =
       readonly subject: string;
       readonly full: readonly string[];
       readonly action: string;
+      /**
+       * Also admit a key that reads every `full` subject unbounded (it gets
+       * the whole answer), when the door served such keys before it was
+       * narrowed for one that holds `<subject>.<action>` only.
+       */
+      readonly orReadsFull?: boolean;
     }
   | { readonly bound: "refused"; readonly reason: string };
 
@@ -90,17 +96,27 @@ const PERSON = (subject: string): FencedReadDoor => ({
 const NARROWED = (
   subject: string,
   full: readonly string[],
-  action = "read"
+  action = "read",
+  opts: { orReadsFull?: boolean } = {}
 ): FencedReadDoor => ({
   bound: "narrowed",
   subject,
   full,
   action,
+  ...(opts.orReadsFull ? { orReadsFull: true } : {}),
 });
 const REFUSED = (reason: string): FencedReadDoor => ({
   bound: "refused",
   reason,
 });
+
+/**
+ * The flow read (`flow.of`): Hub `GET /flow` and MCP `synap_get_flow` call the
+ * same `readFlowOf`, which narrows a fenced key itself
+ * (`readProfileUnderGrant`), so they share this one declaration. Admitted
+ * when one live scope grants `entity.<some kind>.read`, as `/lifecycle`.
+ */
+const FLOW_OF = NARROWED("entity", []);
 
 /**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
@@ -133,6 +149,29 @@ const LOAD_SKILL = READS();
  */
 const MEMORY_RECALL = READS("entity", "preference");
 
+/*
+ * MCP read tools whose Hub REST twin calls the SAME reader, so one
+ * declaration rules on both doors (as PROPOSAL_GET): a key that may call the
+ * tool over MCP may call its route over REST, and no other. The Raycast
+ * extension calls the REST twins with its own scoped key, which was refused
+ * every one of them while the same key could call the MCP tools.
+ */
+/** The lens map: MCP `synap_orient` and Hub `GET /orient` both call `discover()`. */
+const ORIENT = READS("entity", "project", "session", "proposal", "track");
+/** The kinds and roles: both call tRPC `profiles.listProfiles`. */
+const LIST_PROFILES = READS("entity");
+/** A space's automations: both call tRPC `automations.listAutomations`. */
+const LIST_AUTOMATIONS = READS("automation");
+/** One thread's context: both call tRPC `context.getThreadContext`. */
+const THREAD_CONTEXT = READS("channel", "entity", "document");
+/**
+ * The person's own personal channel, GET-OR-CREATE: MCP `synap_get_channel`
+ * (`channels.ensurePersonal`) and Hub `GET /channels/personal` resolve or
+ * create it through the same `resolveOrCreateChannel(…, PERSONAL,
+ * orchestrator)`. The door of what it returns: a channel row.
+ */
+const GET_CHANNEL = READS("channel");
+
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
@@ -146,7 +185,7 @@ function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
  * Does one live scope grant `<subject>.<action>`, whatever it is pinned to?
  * For a qualified subject, on at least one qualifier (an intent, a kind).
  */
-function grantHoldsAction(
+export function grantHoldsAction(
   grant: KeyGrant,
   subject: string,
   action: string
@@ -183,7 +222,12 @@ export function grantBoundsDoor(
   if (door.bound === "seamed") return true;
   if (door.bound === "person") return grantReadsSubject(grant, door.subject);
   if (door.bound === "narrowed")
-    return grantHoldsAction(grant, door.subject, door.action);
+    return (
+      grantHoldsAction(grant, door.subject, door.action) ||
+      (door.orReadsFull === true &&
+        door.full.length > 0 &&
+        grantBoundsDoor(READS(...door.full), grant))
+    );
   // A deny-all scope (`permissions: []`) reads nothing — `every` over a door
   // that declares no subject would otherwise let it through.
   return grant.scopes.some(
@@ -216,6 +260,29 @@ export function sessionHolderReadable(
 }
 
 /**
+ * What is installed on the person's computers (installations, 0409), read
+ * under `installation` like a PERSON door: the person's own rows, which no
+ * space holds. MCP `synap_list_installations` is exactly this door.
+ */
+const INSTALLATIONS_READ = PERSON("installation");
+
+/**
+ * May this request's key read the person's installations through the owner
+ * floor and its grant (`listInstallations`)? Every unfenced caller may; a
+ * fenced key when its grant reads `installation`, bounded as that PERSON
+ * door. `GET /installations` admits one more caller on its own floor: a
+ * computer's own key reading what is installed on ITSELF (owner and machine,
+ * as the host-job routes floor), whatever its grant names. A key minted
+ * before `installation` joined the AI preset (2026-11-07) carries no such
+ * permission, and the CLI's `synap tools list` is that key's read.
+ */
+export function installationsReadableByGrant(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return !isFencedGrant(grant) || grantBoundsDoor(INSTALLATIONS_READ, grant!);
+}
+
+/**
  * An id in a REST path: uuid-shaped, so a future static sibling
  * (`/projects/summary`, `/focus-sessions/<word>`) is NOT admitted by a
  * declaration that names an id. Every id below is a uuid; a door whose id is
@@ -236,8 +303,9 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // `userId` is the caller's own id or `me` (rest/entities.ts).
   new RegExp(`^/users/(?:me|${ID})/entities/?$`),
   // The list door. Every branch reads through `entities.getEntities` (the
-  // seamed `entities.list` floor) EXCEPT full-text `q` (Typesense), which the
-  // route itself refuses for a fenced grant (rest/entities.ts). `filters` are
+  // seamed `entities.list` floor), and full-text `q` ranks in Typesense, then
+  // `search.search` re-reads its hits through that same floor for a fenced
+  // grant (`withinGrantSearchHits`, services/retrieval/). `filters` are
   // ANDed inside that floor (only narrow); `includeWorkspace` names only the
   // spaces of the rows returned (entities.filters-space-names.pglite.test.ts).
   /^\/entities\/?$/,
@@ -322,6 +390,29 @@ export const SESSION_PACKET_SUBJECTS: readonly string[] = [
   "track",
   "project",
 ];
+
+/** What the package preview reads from the pod (POST /packages/preflight). */
+export const PACKAGE_PREFLIGHT_SUBJECTS: readonly string[] = [
+  "entity",
+  "project",
+  "proposal",
+];
+
+/**
+ * May this request's key read the pod's parts of a package preview (the
+ * target space, the kinds it would reuse, the rows an update would change)?
+ * Every unfenced caller may; a fenced key only when one scope reads every
+ * subject unbounded. Otherwise POST /packages/preflight answers what the
+ * package brings and says the rest was withheld.
+ */
+export function packagePreflightReadable(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...PACKAGE_PREFLIGHT_SUBJECTS), grant!)
+  );
+}
 
 /**
  * May this request's key read a session's whole packet? Every unfenced
@@ -464,11 +555,24 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // space holds, so it is a PERSON door: the app asks for `agent.read` and the
   // person ticks it. `agent` is the subject `agent_configs` reads under.
   [/^\/agent-users\/?$/, PERSON("agent")],
+  // What is installed on the person's computers (installations, 0409). The
+  // ROUTE bounds it (`rest/installations.ts`), as the waker poll below: a
+  // key whose grant reads `installation` (`installationsReadableByGrant`,
+  // the PERSON door MCP `synap_list_installations` is) reads through the
+  // owner floor and its grant; a computer's own key reads only what is
+  // installed on itself (its person's rows on that computer, the host-job
+  // floor); every other scoped key is refused there before a row is read.
+  [/^\/installations\/?$/, SEAMED],
   // Which of those agents the person assigned to one target (a playbook, a
   // kind, a project, a space): the person's own `assigned_to` row on a target
   // they can see (`readAgentAssignment`), the read half of
   // PUT /agent-users/:id/assignment. Same subject, same PERSON door.
   [/^\/agent-users\/assignments\/?$/, PERSON("agent")],
+  // One host job's log (`rest/host-jobs.ts`), the log a computer sent on
+  // request: the person's own job of an installation on one of their
+  // computers, which no space holds, read through the owner floor. Read under
+  // `installation`, the subject `host_jobs` reads under (grant-read.ts).
+  [/^\/host-jobs\/[^/]+\/logs\/?$/, PERSON("installation")],
   // Who runs a playbook for the person (`playbooks.runChoice`, slice 5a): the
   // playbook through `scopedDb` (its own grant ANDed, `playbook`), plus the
   // person's remembered choice (their `assigned_to` row) and their agents
@@ -564,6 +668,15 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // the kinds it may already read, never another kind's. Admitted when one live
   // scope grants `entity.<some kind>.read`.
   [/^\/lifecycle\/?$/, NARROWED("entity", [])],
+  // THE FLOW READ (`readFlowOf`, services/lifecycle/flow-read.ts): a kind's
+  // or role's states, the stages owning them, its things by state and the
+  // flows working it. The read narrows itself through the SAME check as
+  // `/lifecycle` (`readProfileUnderGrant`): a fenced key names `workspaceId`
+  // and holds `entity.<profileSlug>.read` (`facet.read` for a role) there.
+  // Its rows go through the seams (things: `accessScopeWhere`; flows and
+  // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
+  // and the workers (no seam) come back `withheld`. Same as MCP `synap_get_flow`.
+  [/^\/flow\/?$/, FLOW_OF],
   // `readWorkRelease` (services/dev-loop/work-release.ts), narrowed by the
   // read itself (`workReleaseReach`): a key reading every subject unbounded
   // gets it whole; one pinned to spaces gets the snapshots and sessions its
@@ -608,12 +721,17 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // the path undecoded (`decodeURI` leaves `%2F`), so one segment.
   [/^\/agent-skills\/by-slug\/[^/]+\/?$/, LOAD_SKILL],
   [route("/agent-skills/:id"), LOAD_SKILL],
-  // The pod's stored cell sources (finding 7da9c21f): `GET /cells` reads the
-  // active frame / iframe `widget_definitions` of one space (person's
-  // membership checked) and pod-wide; `GET /widget-definitions` the built-in
-  // catalog plus the installed rows (`listRenderables`). Subject `widget`,
-  // read on no grant clause, so a pinned key is refused.
-  [/^\/cells\/?$/, READS("widget")],
+  // The pod's stored cell sources (finding 7da9c21f). `GET /cells` and
+  // `GET /cells/:typeKey` read the active frame / iframe `widget_definitions`
+  // of one space (person's membership checked) or pod-wide, THROUGH the
+  // grant clause of `widget` (`grantReadPredicate(widgetDefinitions)`), so a
+  // key pinned to spaces (every pod app) reads the cells of its spaces and no
+  // other: NARROWED, admitted on `widget.read` (design b199a3a4, slice 4).
+  // A typeKey is one path segment (`generated%3Ax`). `GET
+  // /widget-definitions` (the built-in catalog plus the installed rows,
+  // `listRenderables`) reads on no grant clause, so a pinned key is refused.
+  [/^\/cells\/?$/, NARROWED("widget", [])],
+  [/^\/cells\/[^/]+\/?$/, NARROWED("widget", [])],
   [/^\/widget-definitions\/?$/, READS("widget")],
   // Poll a bulk import (`rest/import-units.ts`): the pg-boss job the caller
   // enqueued, its state and per-unit outcome (`entityId` | `proposalId` |
@@ -625,6 +743,16 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // Server faults (0392, `services/server-faults/read.ts`): the exact cause of
   // every 5xx on the pod, whoever met it. Pod owner or admin only, like
   // `/usage`; no grant can narrow it, so a scoped key is refused.
+  // A computer's waker poll (`rest/computer-wakes.ts`). The computer's own
+  // device-flow key IS a scoped key: `machine-connect.ts` mints it as a
+  // `user_pat` carrying the "AI — read & propose" grant
+  // (`aiDefaultCapabilities()`), so refusing the door here refused every real
+  // computer. The ROUTE admits only that caller: a computer principal
+  // (`agentType` machine) of its own person, holding `hub-protocol.read`, on
+  // a device session that is not stale (`refuseStaleDeviceSession`). Any
+  // other key (a person's, an agent's, an app's) is refused there before a
+  // row is read, so no grant makes a key a computer's waker.
+  [/^\/computers\/me\/wakes\/?$/, SEAMED],
   [
     /^\/errors\/[^/]+\/?$/,
     REFUSED("Pod internals: the cause of every server error on the pod."),
@@ -648,12 +776,18 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   ],
   // A space's conversations (`listSpaceConversations`, services/channels/
   // space-conversations.ts, CRM Messages contract A): the people through
-  // `entityReadVisibleWhere` + `facetInWorkspaceLensWhere`, their channels
+  // `entityReadVisibleWhere` + `roleInWorkspaceLensWhere`, their channels
   // through `channelVisibilityWhere`, their drafts through
   // `proposalUserFloor`, each carrying the key's grant (a key without
   // `proposal.read` sees no drafts). Admitted for `channel.read`; the route
   // then requires it in the space asked about.
   [/^\/channels\/conversations\/?$/, NARROWED("channel", [])],
+  // The REST twins of MCP read tools, one declaration each (see ORIENT):
+  [/^\/orient\/?$/, ORIENT],
+  [/^\/profiles\/?$/, LIST_PROFILES],
+  [/^\/automations\/?$/, LIST_AUTOMATIONS],
+  [route("/threads/:id/context"), THREAD_CONTEXT],
+  [/^\/channels\/personal\/?$/, GET_CHANNEL],
 ];
 
 /**
@@ -666,6 +800,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
 export const GRANT_REST_POST_READS: ReadonlyArray<
   readonly [RegExp, FencedReadDoor]
 > = [
+  // POST /chat/stream (an app's chat turn). It is not a read: it reserves a
+  // chat turn and runs the IS turn, whose hub calls are bounded by the
+  // turn's own grant (the `app_grant` claim, `hub-protocol/_middleware/auth.ts`).
+  // The route itself checks `chat.stream` in the workspace the turn runs in
+  // (`permits`, rest/chat.ts), so it is NARROWED on that gate verb, not READS.
+  [/^\/chat\/stream\/?$/, NARROWED("chat", [], "stream")],
   [
     /^\/knowledge\/(search|ask|answer)\/?$/,
     READS(
@@ -704,9 +844,17 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // space and its template state (`resolvePreflightComposeTarget`,
   // `previewTemplateApply`: proposals), the pod's kinds, and the rows an update
   // would change (`pendingTemplateDataChanges`, every entity of the package's
-  // kinds, read with no floor). The same subjects as GET /workspaces: no pin
-  // narrows it, so a pinned key (an app) is refused.
-  [/^\/packages\/preflight\/?$/, READS("entity", "project", "proposal")],
+  // kinds, read with no floor). No pin narrows those, so a key gets them only
+  // when it reads them unbounded (`packagePreflightReadable`). A key that may
+  // ask to install (`package.install`, an app: its grant is always pinned) is
+  // admitted too and gets what the package itself brings, the pod's parts
+  // said withheld (L7 "Add to my pod").
+  [
+    /^\/packages\/preflight\/?$/,
+    NARROWED("package", PACKAGE_PREFLIGHT_SUBJECTS, "install", {
+      orReadsFull: true,
+    }),
+  ],
   // "Recall again" (`recallSessionAgain`): runs the session's recall as its
   // OWNER, pod-wide (`retrieve()`, the engine behind `synap_ask`), and writes
   // what it found into the session and its room, which the key then reads. So
@@ -770,6 +918,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_get_project: SEAMED,
   synap_list_projects: SEAMED,
   synap_list_views: SEAMED,
+  // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
+  synap_get_flow: FLOW_OF,
   // Aggregate doors: the subjects they read.
   synap_ask: READS(
     "entity",
@@ -779,7 +929,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "preference",
     "project"
   ),
-  synap_orient: READS("entity", "project", "session", "proposal", "track"),
+  synap_orient: ORIENT,
   synap_find: READS("tool", "command", "playbook", "automation"),
   synap_get_entity: READS("entity", "relation", "facet", "document"),
   synap_get_graph: READS(
@@ -790,9 +940,9 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
     "session",
     "project"
   ),
-  synap_list_profiles: READS("entity"),
+  synap_list_profiles: LIST_PROFILES,
   synap_list_workspaces: READS("entity", "project"),
-  synap_get_thread_context: READS("channel", "entity", "document"),
+  synap_get_thread_context: THREAD_CONTEXT,
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: PROPOSAL_GET,
   synap_list_sessions: READS("session", "project"),
@@ -819,7 +969,10 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_playbooks: READS("playbook"),
   synap_match_playbooks: READS("playbook"),
   synap_list_capabilities: READS("tool", "command", "playbook", "automation"),
-  synap_list_automations: READS("automation"),
+  // What is installed on the person's computers (`listInstallations`, the
+  // owner floor): the grant read of `GET /installations`.
+  synap_list_installations: INSTALLATIONS_READ,
+  synap_list_automations: LIST_AUTOMATIONS,
   // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
   // worker rules and their automation runs, and the approvals they wait on.
   synap_list_workers: READS("track", "playbook", "automation", "proposal"),
@@ -875,6 +1028,7 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_link_entities: WRITE,
     synap_attach_facet: WRITE,
     synap_detach_facet: WRITE,
+    synap_update_facet: WRITE,
     synap_define_role: WRITE,
     synap_define_kind: WRITE,
     synap_start_session: WRITE,
@@ -939,12 +1093,15 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     // Get-OR-create: it RETURNS a channel row, the person's personal channel
     // (tRPC `channels.ensurePersonal`, owner-wide) or one bound to an object
     // (`channels.resolveOrCreateChannel`). The door of what it reads.
-    synap_get_channel: READS("channel"),
+    synap_get_channel: GET_CHANNEL,
     synap_post_message: WRITE,
     synap_revise_proposal: WRITE,
     synap_reject_proposal: WRITE,
     synap_request_deploy_approval: WRITE,
     synap_run_capability: WRITE,
+    // Files the person's `installation/request` proposal (an agent always
+    // proposes, `proposeBeyondGrant`), or a `capability.install` for the pod.
+    synap_request_installation: WRITE,
     synap_create_verb: WRITE,
     synap_trigger_automation: WRITE,
     synap_create_automation: WRITE,

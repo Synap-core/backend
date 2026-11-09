@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  PLAYBOOK_FOR_EACH_MAX_ITEMS,
   PLAYBOOK_STAGE_CATEGORIES,
   resolveStageCategory,
   type PlaybookStage,
@@ -202,6 +203,162 @@ describe("playbookStageSchema — stage.domain (W2a)", () => {
         playbookStageSchema.safeParse({ ...validStage, domain: bad }).success
       ).toBe(false);
     }
+  });
+});
+
+describe("playbookStageSchema — stage.tier (advisory model tier)", () => {
+  it("accepts deep, standard and quick, and keeps absent absent", () => {
+    for (const tier of ["deep", "standard", "quick"]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, tier });
+      expect(r.success && r.data.tier).toBe(tier);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success).toBe(true);
+    expect(none.success && "tier" in none.data).toBe(false);
+  });
+
+  it("refuses anything outside the closed set", () => {
+    for (const bad of ["fast", "Deep", "", " quick", null, 1, ["quick"]]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, tier: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, tier: "quick" },
+    ]);
+    expect(r.success && r.data[0].tier).toBe("quick");
+  });
+});
+
+describe("playbookStageSchema — stage.forEach (run once per item)", () => {
+  it("accepts a collection path with an optional item name, and keeps absent absent", () => {
+    for (const forEach of [
+      { over: "shots" },
+      { over: "subject.shots", as: "shot" },
+    ]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, forEach });
+      expect(r.success && r.data.forEach).toEqual(forEach);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success && "forEach" in none.data).toBe(false);
+  });
+
+  it("refuses prose, a missing collection, a misspelled key and a bad item name", () => {
+    for (const bad of [
+      { over: "every shot in the film" },
+      { over: "" },
+      { over: "shots.", as: "shot" },
+      {},
+      { over: "shots", each: "x" },
+      { over: "shots", as: "my shot" },
+      "shots",
+      null,
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, forEach: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, forEach: { over: "shots", as: "shot" } },
+    ]);
+    expect(r.success && r.data[0].forEach).toEqual({
+      over: "shots",
+      as: "shot",
+    });
+  });
+});
+
+describe("forEach / when — bounded and prototype-safe (declared, advisory)", () => {
+  const ok = (extra: Record<string, unknown>) =>
+    playbookStageSchema.safeParse({ ...validStage, ...extra }).success;
+
+  it("refuses a path segment that reaches the prototype chain", () => {
+    for (const seg of ["__proto__", "constructor", "prototype"]) {
+      expect(ok({ forEach: { over: `${seg}.x` } }), seg).toBe(false);
+      expect(ok({ forEach: { over: `subject.${seg}` } }), seg).toBe(false);
+      expect(ok({ forEach: { over: "shots", as: seg } }), seg).toBe(false);
+      expect(ok({ when: { param: `${seg}.x`, exists: true } }), seg).toBe(
+        false
+      );
+    }
+    expect(ok({ forEach: { over: "subject.shots", as: "shot" } })).toBe(true);
+  });
+
+  it("bounds the fan-out: max is an int in 1..the pod-wide cap", () => {
+    expect(ok({ forEach: { over: "shots", max: 12 } })).toBe(true);
+    expect(
+      ok({ forEach: { over: "shots", max: PLAYBOOK_FOR_EACH_MAX_ITEMS } })
+    ).toBe(true);
+    for (const max of [0, -1, 1.5, PLAYBOOK_FOR_EACH_MAX_ITEMS + 1, "9"]) {
+      expect(ok({ forEach: { over: "shots", max } }), String(max)).toBe(false);
+    }
+  });
+
+  it("says the item name is wrong, not the collection", () => {
+    const r = playbookStageSchema.safeParse({
+      ...validStage,
+      forEach: { over: "shots", as: "my shot" },
+    });
+    expect(!r.success && JSON.stringify(r.error.issues)).toContain(
+      "forEach.as"
+    );
+  });
+
+  it("when.equals is a scalar: no object, no array, no huge string", () => {
+    expect(ok({ when: { param: "p", equals: { a: 1 } } })).toBe(false);
+    expect(ok({ when: { param: "p", equals: ["a"] } })).toBe(false);
+    expect(ok({ when: { param: "p", equals: "x".repeat(501) } })).toBe(false);
+    expect(ok({ when: { param: "p", equals: null } })).toBe(true);
+  });
+});
+
+describe("playbookStageSchema — stage.when (run only if true)", () => {
+  it("accepts equals and/or exists on a param path, and keeps absent absent", () => {
+    for (const when of [
+      { param: "needsVoiceover", equals: true },
+      { param: "subject.kind", equals: "film" },
+      { param: "script", exists: true },
+      { param: "script", exists: false },
+      { param: "mode", equals: 0, exists: true },
+    ]) {
+      const r = playbookStageSchema.safeParse({ ...validStage, when });
+      expect(r.success && r.data.when).toEqual(when);
+    }
+    const none = playbookStageSchema.safeParse(validStage);
+    expect(none.success && "when" in none.data).toBe(false);
+  });
+
+  it("refuses prose, a missing param, an empty condition, a misspelled key and a bad type", () => {
+    for (const bad of [
+      { param: "if the film has a voiceover", equals: true },
+      { param: "", exists: true },
+      { equals: true },
+      { param: "script" },
+      { param: "script", equal: true },
+      { param: "script", exists: "yes" },
+      "script",
+      null,
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, when: bad }).success
+      ).toBe(false);
+    }
+  });
+
+  it("survives the stages-list door round trip", () => {
+    const r = playbookStagesSchema.safeParse([
+      { ...validStage, when: { param: "needsVoiceover", equals: true } },
+    ]);
+    expect(r.success && r.data[0].when).toEqual({
+      param: "needsVoiceover",
+      equals: true,
+    });
   });
 });
 

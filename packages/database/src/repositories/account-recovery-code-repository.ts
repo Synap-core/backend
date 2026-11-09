@@ -1,8 +1,9 @@
 /**
  * The ONE door to `account_recovery_codes` (0294).
  *
- * Holds hashes only — hashing, comparison and every policy decision live in
- * `apps/api/src/account-recovery/`. This repository answers "which hashes",
+ * Holds hashes only — hashing and comparison live in `@synap/api`
+ * (`services/account-recovery/codes.ts`), every policy decision in the account
+ * recovery doors and the presence proof. This repository answers "which hashes",
  * "claim this one" and "replace the batch", and nothing else.
  *
  * Every read THROWS on failure: a caller that cannot tell "no codes" from

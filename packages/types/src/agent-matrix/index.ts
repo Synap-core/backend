@@ -117,6 +117,7 @@ export const GOVERNANCE_RUNGS = [
   "arbitrary-execution",
   "human-only-status",
   "lifecycle-terminal",
+  "lifecycle-reopen",
   "host-asks-first",
 ] as const;
 export type GovernanceRung = (typeof GOVERNANCE_RUNGS)[number];

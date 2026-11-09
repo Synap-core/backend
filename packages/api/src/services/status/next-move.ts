@@ -19,10 +19,11 @@
  * ball in `waitKind` (`them`).
  */
 import {
-  stepsFromLifecycle,
+  nextMainPathStep,
   type LifecycleCategory,
   type LifecycleOption,
   type RecordedHold,
+  type StepMark,
 } from "@synap-core/types/lifecycle";
 import {
   WAIT_BALLS,
@@ -229,6 +230,15 @@ function withStuck(
   };
 }
 
+/** The next main-path step as a wait move's `to`, when the thing has one. */
+function withNextTo(
+  move: ContinuationNextMove,
+  input: Pick<ThingNextMoveInput, "lifecycle" | "status">
+): ContinuationNextMove {
+  const step = nextMainPathStep(input.lifecycle, input.status);
+  return step.found && step.next ? { ...move, to: step.next.key } : move;
+}
+
 export interface ThingNextMoveInput {
   /** Its declared lifecycle (a thing without one gets no next move). */
   lifecycle: { readonly options: readonly LifecycleOption[] };
@@ -240,6 +250,23 @@ export interface ThingNextMoveInput {
   waitingOn: readonly WaitingOnMark[] | "unavailable";
   /** Read for a paused thing only. */
   hold: NextMoveHoldFact;
+}
+
+/**
+ * The next MAIN-PATH step after `status` on a declared lifecycle (rungs 4-5
+ * of {@link deriveThingNextMove}, which reads it): the step a move targets,
+ * `null` when the path has no step left, `off_path` when the status is not
+ * one of the main path's (an undeclared value, a paused or lost option).
+ * The flow read (`flow-read.ts`) names each card's next step with it, so a
+ * card and the thing's own next move never disagree on where it goes.
+ */
+export function nextPathStep(
+  lifecycle: { readonly options: readonly LifecycleOption[] },
+  status: string | null
+): StepMark | null | "off_path" {
+  // One derivation with a thing's blocker (`nextMainPathStep`).
+  const step = nextMainPathStep(lifecycle, status);
+  return step.found ? step.next : "off_path";
 }
 
 /**
@@ -267,19 +294,25 @@ export function deriveThingNextMove(
   if (input.waitingOn === "unavailable") {
     return UNKNOWN("What this thing waits on could not be read.");
   }
+  // A wait leads, but the thing still has a next step (plan e7f753db §9):
+  // the move keeps `to`, the status the wait stands between it and.
   const lead = leadWaitRef(input.waitingOn);
-  if (lead) return withStuck(waitMove(lead, "thing"), input.stuck);
-  if (input.waitingOn[0]) {
-    return withStuck(unnamedWaitMove(input.waitingOn[0], "thing"), input.stuck);
+  if (lead) {
+    return withStuck(withNextTo(waitMove(lead, "thing"), input), input.stuck);
   }
-  const steps = stepsFromLifecycle(input.lifecycle, input.status);
-  const at = steps.findIndex((s) => s.position === "current");
-  if (at < 0) {
+  if (input.waitingOn[0]) {
+    return withStuck(
+      withNextTo(unnamedWaitMove(input.waitingOn[0], "thing"), input),
+      input.stuck
+    );
+  }
+  const step = nextMainPathStep(input.lifecycle, input.status);
+  if (!step.found) {
     return UNKNOWN(
       "Its status is not one its lifecycle declares, so its next step is not known."
     );
   }
-  const next = steps.slice(at + 1).find((s) => s.position === "ahead");
+  const next = step.next;
   if (!next) {
     return {
       kind: "none",

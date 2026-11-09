@@ -19,7 +19,7 @@ import {
   type AccountRecoveryDeps,
   type AccountRecoveryLimiters,
 } from "./account-recovery.js";
-import { hashRecoveryCode, newBatchSalt } from "../account-recovery/codes.js";
+import { hashRecoveryCode, newBatchSalt } from "@synap/api";
 import {
   ConcurrencyCap,
   FixedWindowLimiter,
@@ -51,6 +51,15 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
   };
   const log = (level: string) => (obj: Record<string, unknown>, msg?: string) =>
     logs.push({ level, obj, msg });
+  /** The presence gate's answer for new codes (null = go on). */
+  const presence = {
+    refusal: null as null | {
+      error: "presence_required" | "reauth_required";
+      reasonCode: string;
+      message: string;
+    },
+    asked: [] as Array<{ userId: string; proof: unknown }>,
+  };
 
   const authenticate: MiddlewareHandler = async (c, next) => {
     const raw = c.req.header("x-test-session");
@@ -133,11 +142,23 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
     podAdminConfig: () => ({ ok: false, code: "POD_ADMIN_URL_REQUIRED" }),
     isPodAdmin: async (userId) => userId === OWNER.userId,
     countCloudOnlyOwners: async () => 0,
+    presenceForNewCodes: async (userId, proof) => {
+      presence.asked.push({ userId, proof });
+      return presence.refusal;
+    },
     audit: async (entry) => {
       audits.push(entry);
     },
   };
-  return { rows, logs, audits, kratos, deps, getTrust: () => trust };
+  return {
+    rows,
+    logs,
+    audits,
+    kratos,
+    presence,
+    deps,
+    getTrust: () => trust,
+  };
 }
 
 /** Seed a batch with REAL hashes; returns the plaintext codes. */
@@ -590,6 +611,65 @@ describe("POST /codes — generation requires privilege", () => {
     expect(
       (await redeem(router, { email: OWNER_EMAIL, code: body.codes[3] })).status
     ).toBe(200);
+  });
+});
+
+describe("POST /codes — new codes are a new proof factor (the recovery ladder)", () => {
+  it("GUARDRAIL: refused with presence_required when the presence gate refuses; the old batch stays", async () => {
+    const world = makeWorld();
+    await seed(world, CODES);
+    world.presence.refusal = {
+      error: "presence_required",
+      reasonCode: "PRESENCE_REQUIRED",
+      message: "Confirm it is you.",
+    };
+    const res = await app(world).request("/codes", {
+      method: "POST",
+      headers: { "x-test-session": session({}) },
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: "presence_required",
+      message: "Confirm it is you.",
+      reasonCode: "PRESENCE_REQUIRED",
+    });
+    expect(world.rows).toHaveLength(CODES.length);
+  });
+
+  it("the body's proof reaches the gate, for the caller; a passed gate makes the codes", async () => {
+    const world = makeWorld();
+    const proof = { kind: "recovery_code", challengeId: "c", code: "x" };
+    const res = await app(world).request("/codes", {
+      method: "POST",
+      headers: {
+        "x-test-session": session({}),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ presence: proof }),
+    });
+    expect(res.status).toBe(200);
+    expect(world.presence.asked).toEqual([{ userId: OWNER.userId, proof }]);
+  });
+
+  it("GUARDRAIL: a first factor on a stale or federated sign-in is refused with reauth_required; nothing is made", async () => {
+    const world = makeWorld();
+    world.presence.refusal = {
+      error: "reauth_required",
+      reasonCode: "STEP_UP_REQUIRED",
+      message: "Sign in again.",
+    };
+    const res = await app(world).request("/codes", {
+      method: "POST",
+      headers: { "x-test-session": session({}) },
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: "reauth_required",
+      reasonCode: "STEP_UP_REQUIRED",
+    });
+    expect(world.rows).toHaveLength(0);
   });
 });
 

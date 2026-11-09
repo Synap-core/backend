@@ -86,6 +86,22 @@ export async function probeProviderOnIS(
 }
 
 /**
+ * The IS routing order of the pod's providers: enabled ones, lower `priority`
+ * first. Its head is the IS default (`routing.default`). ONE rule, shared with
+ * the run-choice read that names the provider Synap AI uses
+ * (`services/playbooks/active-provider.ts`).
+ */
+export function providerRoutingOrder(
+  rows: readonly { providerId: string; enabled: boolean; priority: number }[]
+): string[] {
+  return rows
+    .filter((p) => p.enabled)
+    .slice()
+    .sort((a, b) => a.priority - b.priority)
+    .map((p) => p.providerId);
+}
+
+/**
  * Push the full ai_providers config to the active IS so it hot-reloads.
  *
  * Throws `ISProviderError` on a missing key or non-ok IS response, with the status + body text in the message
@@ -132,10 +148,7 @@ export async function pushProvidersToIS(): Promise<void> {
     };
   });
 
-  const enabledIds = rows
-    .filter((p) => p.enabled)
-    .sort((a, b) => a.priority - b.priority)
-    .map((p) => p.providerId);
+  const enabledIds = providerRoutingOrder(rows);
 
   const routing = {
     default: enabledIds[0] ?? "",

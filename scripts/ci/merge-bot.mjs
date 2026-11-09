@@ -293,6 +293,30 @@ export function sharedCommitOf(pr, carriers) {
 }
 
 /**
+ * Open PRs with a HIGHER number that carry a commit of `pr`. Those are
+ * descendants: they cannot enter the merge queue while `pr` is open (the
+ * queue removes a PR that holds another open PR's commits), so a Depends-On
+ * from `pr` onto one of them can never be satisfied first. `[]` when this
+ * PR's commits were not read — the caller already refuses an unread list.
+ * Pure.
+ */
+export function descendantNumbers(pr, carriers) {
+  const oids = commitOidsOf(pr);
+  if (!oids) return [];
+  const seen = new Set();
+  const out = [];
+  for (const oid of oids) {
+    for (const n of carriers?.get(oid) ?? []) {
+      if (n > pr.number && !seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * The `/hold` on a PR: the latest comment by someone with write access
  * (HOLD_ASSOCIATIONS) whose own line is `/hold` or `/unhold`, newest wins.
  * Returns { by, at } while held, else null. Pure.
@@ -445,13 +469,33 @@ export function queueFailuresSince(pr, since) {
  * One Depends-On state from the resolver's results (layout.mjs evaluateAll).
  * A waiting dependency on a PR of `repo` that is in `queued` (Map of PR number
  * -> head sha) RIDES (hold.mjs rideTheQueue, the one copy of the rule).
- * Returns { state: "landed" | "rides" | "waiting" | "blocked", behind: [n] }.
+ * Returns { state: "landed" | "rides" | "waiting" | "blocked", behind: [n],
+ * waived?: [n] }. `waive` is the caller's descendant PR numbers
+ * ({@link descendantNumbers}): a waiting dependency on one of them is treated
+ * as landed. A blocked line is never waived. `waived` is present only when a
+ * line was skipped, so a caller that compares the whole object stays stable
+ * when nothing was.
  */
-export function dependsState(results, { repo, queued }) {
-  const ridden = rideTheQueue(results ?? [], { repo, queued });
+export function dependsState(results, { repo, queued, waive = [] } = {}) {
+  const waiveSet = new Set(waive);
+  const waived = [];
+  const adjusted = (results ?? []).map((r) => {
+    if (
+      r?.status === "waiting" &&
+      r?.dep?.kind === "pr" &&
+      waiveSet.has(r.dep.number)
+    ) {
+      waived.push(r.dep.number);
+      return { ...r, status: "landed" };
+    }
+    return r;
+  });
+  const ridden = rideTheQueue(adjusted, { repo, queued });
   const behind = ridden.filter((r) => r.rides).map((r) => r.dep.number);
   const v = verdictOf(ridden);
-  return { state: v === "landed" && behind.length ? "rides" : v, behind };
+  const out = { state: v === "landed" && behind.length ? "rides" : v, behind };
+  if (waived.length) out.waived = waived;
+  return out;
 }
 
 /**
@@ -971,7 +1015,15 @@ export async function runBot({
       );
       // Depends-On and the files are read only for a PR whose checks are green.
       if (checks.ok) {
-        const dep = dependsState(await depends(pr, repo), { repo, queued });
+        const dep = dependsState(await depends(pr, repo), {
+          repo,
+          queued,
+          waive: descendantNumbers(pr, carriers),
+        });
+        if (dep.waived?.length)
+          log(
+            `${tag} Depends-On #${dep.waived.join(", #")} carries this PR's commits, so that wait is skipped`
+          );
         const files = listPrFiles(gh, repo, pr.number, readToken);
         const commits = isDependabotAuthor(pr)
           ? dependabotOnly(listPrCommits(gh, repo, pr.number, readToken))

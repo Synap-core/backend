@@ -41,6 +41,13 @@ export const RUN_TURNS_META_KEY = "runTurns";
 export const HELD_RUN_META_KEY = "heldRun";
 
 /**
+ * When the owner's message last woke the session's agent (`session-answer.ts`
+ * `takeMessageWakeWindow`): `{ at }`. Server-owned: a forged future date would
+ * keep the agent from ever being woken by a message.
+ */
+export const MESSAGE_WAKE_META_KEY = "messageWake";
+
+/**
  * The `focus_sessions.metadata` keys ONLY the server writes, because the
  * server decides on them: an intent that answers an ask by itself, the reads
  * revoked at close, the propose-only governance of a playbook run, the client
@@ -70,6 +77,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "automationChainContext",
   RUN_TURNS_META_KEY,
   HELD_RUN_META_KEY,
+  MESSAGE_WAKE_META_KEY,
   "run",
   DEV_LOOP_METADATA_KEY,
   CHECK_GATE_METADATA_KEY,

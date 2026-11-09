@@ -42,6 +42,11 @@ import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
+import { grantReadPredicate } from "../../../access/grant-read.js";
+import {
+  CellPlacementSchema,
+  checkCellPlacement,
+} from "../../../services/cells/place-cell-on-view.js";
 
 // deps validation now lives INSIDE the defineCell door (security review
 // 2026-07-12: marketplace-install called defineCell without it — enforcing at
@@ -66,6 +71,40 @@ const InstalledCellSchema = z.object({
   externalHosts: z.array(z.string()).nullable(),
 });
 
+type InstalledCellRow = typeof widgetDefinitions.$inferSelect;
+
+/** One installed source cell, as `GET /cells` and `GET /cells/:typeKey` project it. */
+function projectInstalledCell(
+  r: InstalledCellRow
+): z.infer<typeof InstalledCellSchema> {
+  return {
+    typeKey: r.typeKey,
+    name: r.name,
+    // `frame` | `iframe`: how a surface draws `rendererSource`.
+    rendererType: r.rendererType as "frame" | "iframe",
+    deps: (r.deps as Record<string, string>) ?? {},
+    rendererSource: r.rendererSource ?? "",
+    // Null when the cell declares no view-renderer affinity (0221).
+    viewTypes: r.viewRendererViewTypes ?? null,
+    // The slot this cell can fill (entity-detail / entity-card /
+    // entity-profile / collection / widget). ACCEPTING IS NOT PRODUCING:
+    // `POST /cells/define` takes `contentKind` and `defineCell` persists
+    // it, but this read door omitted it — so an agent could set the slot
+    // and then never see it, and could not tell a pickable renderer from
+    // an unpickable one. Same class as the MCP tool that accepted
+    // `contentKind` without advertising it. Found by dogfooding the
+    // approved probe cell on 2026-09-05.
+    contentKind: r.contentKind ?? null,
+    // The frame's declared egress (0249). Projected for the same
+    // "accepting is not producing" reason `contentKind` is: the pod
+    // PERSISTS this list, and a read door that omits it leaves an
+    // operator unable to tell a connected cell from a contained one —
+    // which is the whole question this column exists to answer. Null =
+    // declares none = the frame reaches no external origin.
+    externalHosts: r.externalHosts ?? null,
+  };
+}
+
 export function registerCellsRoutes(app: HubHono): void {
   registerOpenApi(app, {
     method: "get",
@@ -73,7 +112,7 @@ export function registerCellsRoutes(app: HubHono): void {
     tags: ["Cells"],
     summary: "List installed source cells (frame and iframe)",
     description:
-      "The active frame / iframe cells of one space (`workspaceId`, your membership checked) plus the pod-wide ones; with no `workspaceId`, the pod-wide ones only.",
+      "The active frame / iframe cells of one space (`workspaceId`, your membership checked) plus the pod-wide ones; with no `workspaceId`, the pod-wide ones only. A key whose grant is limited reads only the cells its grant reaches (`widget.read`; a key pinned to spaces: the cells of those spaces).",
     request: { query: z.object({ workspaceId: uuidQueryParam.optional() }) },
     responses: {
       200: {
@@ -114,6 +153,11 @@ export function registerCellsRoutes(app: HubHono): void {
         where: and(
           inArray(widgetDefinitions.rendererType, ["frame", "iframe"]),
           eq(widgetDefinitions.isActive, true),
+          // The calling key's grant (`widget` subject), narrow-only: the
+          // fence admits a key holding `widget.read` however it is pinned
+          // (grant-door-fence.ts `NARROWED("widget")`), and this clause is
+          // what keeps a key pinned to spaces inside them.
+          grantReadPredicate(widgetDefinitions),
           workspaceId
             ? or(
                 isNull(widgetDefinitions.workspaceId),
@@ -123,36 +167,72 @@ export function registerCellsRoutes(app: HubHono): void {
         ),
         orderBy: (t, { asc }) => [asc(t.name)],
       });
-      return c.json(
-        rows.map((r) => ({
-          typeKey: r.typeKey,
-          name: r.name,
-          // `frame` | `iframe`: how a surface draws `rendererSource`.
-          rendererType: r.rendererType,
-          deps: (r.deps as Record<string, string>) ?? {},
-          rendererSource: r.rendererSource ?? "",
-          // Null when the cell declares no view-renderer affinity (0221).
-          viewTypes: r.viewRendererViewTypes ?? null,
-          // The slot this cell can fill (entity-detail / entity-card /
-          // entity-profile / collection / widget). ACCEPTING IS NOT PRODUCING:
-          // `POST /cells/define` takes `contentKind` and `defineCell` persists
-          // it, but this read door omitted it — so an agent could set the slot
-          // and then never see it, and could not tell a pickable renderer from
-          // an unpickable one. Same class as the MCP tool that accepted
-          // `contentKind` without advertising it. Found by dogfooding the
-          // approved probe cell on 2026-09-05.
-          contentKind: r.contentKind ?? null,
-          // The frame's declared egress (0249). Projected for the same
-          // "accepting is not producing" reason `contentKind` is: the pod
-          // PERSISTS this list, and a read door that omits it leaves an
-          // operator unable to tell a connected cell from a contained one —
-          // which is the whole question this column exists to answer. Null =
-          // declares none = the frame reaches no external origin.
-          externalHosts: r.externalHosts ?? null,
-        }))
-      );
+      return c.json(rows.map(projectInstalledCell));
     } catch (err) {
       logger.error({ err }, "cells.listInstalled failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/cells/{typeKey}",
+    tags: ["Cells"],
+    summary: "Read one installed source cell (frame or iframe)",
+    description:
+      "One active frame / iframe cell by typeKey (URL-encoded: `generated%3Amy-cell`), in the space `workspaceId` names (your membership checked) or, with no `workspaceId`, pod-wide. Read through the same grant as `GET /cells`: a key whose grant does not reach the cell gets 404.",
+    request: {
+      params: z.object({ typeKey: z.string().min(1) }),
+      query: z.object({ workspaceId: uuidQueryParam.optional() }),
+    },
+    responses: {
+      200: { description: "The cell", schema: InstalledCellSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "No such cell for you", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * GET /cells/:typeKey?workspaceId=...
+   * One installed source cell — the row `GET /cells` lists, by key, so a host
+   * (a client app mounting a bento tile) reads the source of the tile it draws
+   * without listing every cell. Same fence (`NARROWED("widget")`), same grant
+   * clause, same projection.
+   */
+  app.get("/cells/:typeKey", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const typeKey = c.req.param("typeKey");
+    const workspaceId = c.req.query("workspaceId");
+    const userId = c.get("userId");
+    if (
+      workspaceId &&
+      !(await verifyWorkspaceReadAccess(userId, workspaceId))
+    ) {
+      return c.json({ error: "Access denied to workspace" }, 403);
+    }
+    try {
+      const db = await getDb();
+      const row = await db.query.widgetDefinitions.findFirst({
+        where: and(
+          eq(widgetDefinitions.typeKey, typeKey),
+          inArray(widgetDefinitions.rendererType, ["frame", "iframe"]),
+          eq(widgetDefinitions.isActive, true),
+          grantReadPredicate(widgetDefinitions),
+          workspaceId
+            ? eq(widgetDefinitions.workspaceId, workspaceId)
+            : isNull(widgetDefinitions.workspaceId)
+        ),
+      });
+      if (!row) return c.json({ error: "Cell not found" }, 404);
+      return c.json(projectInstalledCell(row));
+    } catch (err) {
+      logger.error({ err }, "cells.getInstalled failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)
@@ -364,6 +444,8 @@ export function registerCellsRoutes(app: HubHono): void {
         // fail the agent-user lookup inside the gate.
         agentUserId: z.string().min(1).optional(),
         reasoning: z.string().max(2000).optional(),
+        /** Place the cell as a tile on this bento view when it is defined. */
+        placeOn: CellPlacementSchema.optional(),
       })
       .safeParse(rawBody);
 
@@ -384,6 +466,7 @@ export function registerCellsRoutes(app: HubHono): void {
       viewTypes,
       contentKind,
       reasoning,
+      placeOn,
     } = parsed.data;
     const userId = c.get("userId");
     // body.agentUserId wins; fall back to the auto-injected context value the
@@ -438,6 +521,19 @@ export function registerCellsRoutes(app: HubHono): void {
         deps,
       });
 
+      // A placement that cannot land is refused before it becomes a proposal.
+      // The view's name rides in the proposal so the reviewer sees where the
+      // tile lands; whether the APPROVER may write that view is checked again
+      // when it is approved (and, on the direct path, by `defineCell`).
+      const proposedPlacement =
+        placeOn && agentUserId
+          ? await checkCellPlacement(placeOn, {
+              cellWorkspaceId: workspaceId ?? null,
+              userId: userId ?? "",
+              permission: "read",
+            })
+          : undefined;
+
       // Governance membrane — AGENT callers only. Operator-initiated defines
       // (CLI `synap cell push` / `synap artifact`, which post to this same
       // route with no agentUserId) stay DIRECT writes: hub-protocol calls are
@@ -482,6 +578,9 @@ export function registerCellsRoutes(app: HubHono): void {
             // against the scope the proposal was REVIEWED at (a `revise` can
             // re-target `proposals.workspaceId` after this payload is written).
             ...(parsed.data.typeKey ? { typeKey: parsed.data.typeKey } : {}),
+            // Where approving places the cell: the executor defines it AND
+            // adds its tile to this view, in one act.
+            ...(proposedPlacement ? { placeOn: proposedPlacement } : {}),
           },
           reasoning,
         });
@@ -506,7 +605,7 @@ export function registerCellsRoutes(app: HubHono): void {
         }
       }
 
-      const { typeKey } = await defineCell({
+      const { typeKey, placed } = await defineCell({
         name,
         rendererSource,
         workspaceId: workspaceId ?? null,
@@ -516,11 +615,17 @@ export function registerCellsRoutes(app: HubHono): void {
         deps,
         viewTypes,
         contentKind,
+        placeOn,
         userId: userId ?? "",
       });
 
       return c.json(
-        { success: true, typeKey, ...(advice.length > 0 ? { advice } : {}) },
+        {
+          success: true,
+          typeKey,
+          ...(placed ? { placed } : {}),
+          ...(advice.length > 0 ? { advice } : {}),
+        },
         201
       );
     } catch (err) {

@@ -179,6 +179,12 @@ const CP_ONLY: Record<string, string> = {
   // stale-entry check below will say so.
   start:
     "onboarding START carried by CP, served at /api/onboarding/starts; not applied by packages/apply",
+  // The body of a `category = "agent"` PACKAGE (control-plane-api 49b13f1e,
+  // founder decision D8): an official agent template, catalog-only. The pod
+  // installs it from the catalog sync (`installOfficialAgentTemplates`), never
+  // through /api/hub/packages/apply, which provisions a WORKSPACE.
+  agent:
+    "agent-PACKAGE body (catalog-only); installed by the catalog sync, never through packages/apply",
 };
 
 /**

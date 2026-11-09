@@ -338,6 +338,43 @@ export const facetProcs = {
       const filedWorkspaceId =
         facetWorkspaceId ?? grantWorkspaceId ?? ctx.workspaceId ?? null;
 
+      // ALREADY WORN. The entity already wears this role on the attach's key
+      // (entity, role, context, stored lens): `FacetRepository.attach` would
+      // hand the live row back UNCHANGED, dropping the `status`/`properties`
+      // sent. Governing that first filed a proposal that wrote nothing, and
+      // its approval read as success (an agent setting a lead's `nextAction`
+      // through attach, 2026-10-27). Say so, before any audit or proposal: the
+      // caller changes the role's fields through `updateFacet` with this id.
+      //
+      // The one attach that is NOT a no-op is kept: a shared role attached from
+      // a SECOND lens (stored pod-wide, asked in a workspace) fills the keys the
+      // live row lacks (`fillMissingProperties`, widen-only) — that still runs
+      // the governed path below.
+      if (roleProfileId) {
+        const worn = await new FacetRepository(
+          await getDb(),
+          eventRepository
+        ).findLiveMatch(
+          input.entityId,
+          roleProfileId,
+          input.contextEntityId ?? null,
+          storedFacetWorkspaceId
+        );
+        const wornProps = (worn?.properties ?? {}) as Record<string, unknown>;
+        const fillsMissingKeys =
+          storedFacetWorkspaceId !== facetWorkspaceId &&
+          Object.keys(input.properties ?? {}).some((k) => !(k in wornProps));
+        if (worn && !fillsMissingKeys) {
+          return {
+            status: "exists" as const,
+            message:
+              "The entity already has this role; nothing was written. To change the role's fields or status, update the facet (facetId).",
+            facetId: worn.id,
+            facet: worn,
+          };
+        }
+      }
+
       // 1. .requested
       const requestedEvent = await auditLog({
         subjectType: "entity_facet",

@@ -750,6 +750,9 @@ interface Gap {
  * close the work it is filed on.
  */
 const ASK_PERSON_WITHHELD = [
+  // `title` was reachable only by accident (the nested `form.title` of the old
+  // inlined ask schema); the compact ask no longer spells the form out.
+  "title",
   "goal",
   "status",
   "expectedStatus",

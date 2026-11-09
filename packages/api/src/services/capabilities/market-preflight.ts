@@ -157,6 +157,23 @@ function summarizeSkill(definition: Def): MarketInstallSummary {
   };
 }
 
+function summarizeAgent(definition: Def): MarketInstallSummary {
+  // Published agent templates nest under `agent` (as skills under `skill`).
+  const def = asRecord(definition.agent) ?? definition;
+  const notices: string[] = [];
+  if (def.worker === true && def.tried === false) {
+    notices.push(
+      "Its way of starting the program on a computer has not been tried yet."
+    );
+  }
+  return {
+    workspace: "optional",
+    adds: part("agent", [definition]),
+    notices,
+    params: [],
+  };
+}
+
 function summarizeAutomation(definition: Def): MarketInstallSummary {
   const autos = asArray(definition.automations);
   const selfRunning = autos.filter((a) => {
@@ -243,5 +260,7 @@ export function summarizeMarketInstall(
       return summarizeCell(definition);
     case "template":
       return summarizeTemplate(definition);
+    case "agent":
+      return summarizeAgent(definition);
   }
 }

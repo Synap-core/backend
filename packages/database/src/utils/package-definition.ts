@@ -11,6 +11,7 @@
  * for fine-grained operations. Templates use PackageDefinition.
  */
 
+import type { GuidanceDeclaration } from "@synap-core/types/guidance";
 import type { WorkspaceDefinitionInput } from "./create-workspace-from-definition.js";
 import type {
   WorkspaceSpaceBrief,
@@ -107,6 +108,12 @@ export interface PackagePlaybook {
   stages?: Array<Record<string, unknown>>;
   /** Binary acceptance criteria, validated at apply. */
   criteria?: Array<Record<string, unknown>>;
+  /**
+   * The rules this playbook follows: refs by kind or skill slug, never ids
+   * (`@synap-core/types/guidance`), validated at apply by the ONE playbook
+   * definition schema. Portable across pods as written.
+   */
+  guidance?: GuidanceDeclaration[];
   expectedOutputs?: Array<Record<string, unknown>>;
   /** Free-form → `playbooks.metadata` (never a `marketSource` link). */
   metadata?: Record<string, unknown>;

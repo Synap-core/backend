@@ -69,10 +69,13 @@ vi.mock("../../../utils/pending-capture-dedup.js", () => ({
 
 const { readHandlers } = await import("./read.js");
 
-async function askMcp(detail: string): Promise<Record<string, any>> {
+async function askMcp(detail?: string): Promise<Record<string, any>> {
   const res = (await readHandlers.synap_ask!({
     toolName: "synap_ask",
-    args: { query: "how do we prevent duplicate captures", detail },
+    args: {
+      query: "how do we prevent duplicate captures",
+      ...(detail ? { detail } : {}),
+    },
     userId: "user-1",
     apiKeyScopes: ["mcp.read"],
     caller: {} as never,
@@ -102,6 +105,12 @@ describe("synap_ask brief envelope, read through the MCP door", () => {
     expect(reply.message).toMatch(/AI synthesis did not run/);
     expect(reply.sources).toHaveLength(5);
     expect(reply.truncated.omittedSources).toHaveLength(5);
+  });
+
+  it("is BRIEF when `detail` is omitted (the description's default)", async () => {
+    const reply = await askMcp();
+    expect(reply.sources).toHaveLength(5);
+    expect(reply.sourcesOmitted).toBe(3);
   });
 
   it("leaves a full answer untouched", async () => {

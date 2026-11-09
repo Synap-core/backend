@@ -45,6 +45,7 @@ function selectChain(): any {
     from: () => chain,
     innerJoin: () => chain, // object-room floor subqueries (project-scope.ts)
     where: () => chain,
+    orderBy: () => chain, // the room's session (`resolveRoomSession`)
     limit: () => Promise.resolve(state.channelRows),
     then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
       Promise.resolve(state.channelRows).then(res, rej),

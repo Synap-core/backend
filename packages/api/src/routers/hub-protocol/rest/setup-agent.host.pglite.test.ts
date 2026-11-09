@@ -18,7 +18,16 @@
  *   - Q-D1: an AI's own key cannot register another AI (403, nothing minted);
  *   - Q-D2: a computer-less agent is adopted onto its person's ONLY
  *     computer, once; with two computers a fresh agent is made instead;
- *   - `/users/me` names the key's holder and its computer.
+ *   - `/users/me` names the key's holder and its computer;
+ *   - 59c75aab: an INSTALLED agent template's type (hermes) is an engine like
+ *     codex: a computer's key connects it with no `asPerson`, one agent per
+ *     computer, its grant clipped to the computer's even when `asPerson` was
+ *     asked; without the template it is refused, and the device door the
+ *     same;
+ *   - d812debd: an agent's FIRST key lists its template's tool surface
+ *     (`toolProfile` + `toolGroups`) when the connect asks for none; an
+ *     explicit `toolProfile` wins; a type whose template names none starts
+ *     on `entry`, nothing unlocked.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
@@ -28,6 +37,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  connects: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -61,7 +71,10 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => ({
 }));
 vi.mock("../../../services/agent-connect.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  fileAgentConnectProposal: async () => ({ proposalId: "prop-1" }),
+  fileAgentConnectProposal: async (args: Record<string, unknown>) => {
+    h.connects.push(args);
+    return { proposalId: "prop-1" };
+  },
 }));
 
 import { is } from "drizzle-orm";
@@ -77,6 +90,7 @@ import {
 } from "../../../services/machine-connect.js";
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
+import { registerDeviceRoutes } from "./device.js";
 import { registerSetupRoutes } from "./setup.js";
 import { registerUsersRoutes } from "./users.js";
 
@@ -150,6 +164,7 @@ function app() {
   a.use("*", hubAuthMiddleware as never);
   registerSetupRoutes(a as never);
   registerUsersRoutes(a as never);
+  registerDeviceRoutes(a as never);
   return a;
 }
 
@@ -299,5 +314,240 @@ describe("GET /users/me names the key's holder (D1)", () => {
       kind: "machine",
       hostUserId: box.computer.id,
     });
+  });
+});
+
+describe("59c75aab: an installed agent template's type is an engine, like codex", () => {
+  const THREE = "human-hermes-computers";
+  const ask = (bearer: string, body: Record<string, unknown>) =>
+    app().request("/setup/agent", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const askDevice = (agents: string[]) =>
+    app().request("/setup/device", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        clientName: "synap-cli",
+        hostname: "ct112",
+        agents,
+      }),
+    });
+  const hermesAgents = () =>
+    q<{ id: string }>(
+      `select id from users where agent_type = 'hermes' and created_by_user_id = $1`,
+      [THREE]
+    );
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, email, user_type, email_verified, timezone, locale, is_personal_agent)
+       values ($1, $1 || '@x', 'human', true, 'UTC', 'en', false)`,
+      [THREE]
+    );
+  });
+
+  it("not installed: a computer's key is refused hermes (no asPerson), nothing made; the device door too", async () => {
+    const box = await connectComputer(THREE, "ct112-before");
+    const res = await ask(box.computer.apiKey, {
+      agentType: "hermes",
+      instanceId: "inst-ct112",
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as {
+      code: string;
+      allowedSurfaceTypes: string[];
+    };
+    expect(body.code).toBe("SURFACE_AGENT_TYPE_REQUIRED");
+    expect(body.allowedSurfaceTypes).toContain("codex");
+    expect(body.allowedSurfaceTypes).not.toContain("hermes");
+    expect(await hermesAgents()).toEqual([]);
+
+    const device = await askDevice(["hermes"]);
+    expect(device.status).toBe(400);
+    expect(
+      ((await device.json()) as { error_description: string }).error_description
+    ).toMatch(/hermes is no AI program this pod knows/);
+  });
+
+  it("installed: each computer gets its OWN Hermes on the plain connect path, asPerson ignored, neither key touches the other", async () => {
+    await q(
+      `insert into agent_templates (slug, name, harness, aliases, worker, tried, practices, metadata)
+       values ('hermes', 'Hermes Agent', 'hermes', '[]'::jsonb, true, true, '{"skills":[]}'::jsonb, '{}'::jsonb)`
+    );
+    const mac = await connectComputer(THREE, "mac");
+    const ct112 = await connectComputer(THREE, "ct112");
+
+    h.connects.length = 0;
+    const onMac = await ask(mac.computer.apiKey, {
+      agentType: "hermes",
+      instanceId: "inst-mac",
+    });
+    expect(onMac.status).toBe(200);
+    const macAgent = ((await onMac.json()) as { agentUserId: string })
+      .agentUserId;
+
+    // What the CLI's custom path sends today (#98): asPerson. An engine type
+    // takes the per-computer path anyway.
+    const onServer = await ask(ct112.computer.apiKey, {
+      agentType: "hermes",
+      instanceId: "inst-ct112",
+      asPerson: true,
+    });
+    expect(onServer.status).toBe(200);
+    const serverAgent = ((await onServer.json()) as { agentUserId: string })
+      .agentUserId;
+
+    expect(serverAgent).not.toBe(macAgent);
+    expect((await userRow(macAgent))!.host_user_id).toBe(mac.computer.id);
+    expect((await userRow(serverAgent))!.host_user_id).toBe(ct112.computer.id);
+    // The plain connect approval, never the presence-gated one.
+    expect(h.connects.map((c) => c.asPerson)).toEqual([null, null]);
+    expect(await liveKeysOf(macAgent)).toHaveLength(1);
+    expect(await liveKeysOf(serverAgent)).toHaveLength(1);
+
+    // The device door connects it with the computer, like codex.
+    expect((await askDevice(["hermes", "codex"])).status).toBe(200);
+  });
+
+  it("a type no template names still needs asPerson from a computer's key", async () => {
+    const box = await connectComputer(THREE, "custom-box");
+    const plain = await ask(box.computer.apiKey, {
+      agentType: "researcher",
+      instanceId: "inst-r",
+    });
+    expect(plain.status).toBe(400);
+    h.connects.length = 0;
+    const asked = await ask(box.computer.apiKey, {
+      agentType: "researcher",
+      instanceId: "inst-r",
+      asPerson: true,
+    });
+    expect(asked.status).toBe(200);
+    expect(h.connects[0]?.asPerson).not.toBeNull();
+  });
+});
+
+describe("d812debd: a template's tool surface is its agents' first key's", () => {
+  const FOUR = "human-tool-surface";
+  const ask = (bearer: string, body: Record<string, unknown>) =>
+    app().request("/setup/agent", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const keyOf = async (agentUserId: string) => {
+    const rows = await q<{ tool_profile: string | null; tool_groups: unknown }>(
+      `select tool_profile, tool_groups from api_keys
+       where user_id = $1 and revoked_at is null`,
+      [agentUserId]
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  };
+  const connect = async (
+    hostname: string,
+    body: Record<string, unknown>
+  ): Promise<string> => {
+    const box = await connectComputer(FOUR, hostname);
+    const res = await ask(box.computer.apiKey, body);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { agentUserId: string }).agentUserId;
+  };
+  // `api_keys.tool_groups` is a text[]: pglite returns an array.
+  const groups = (v: unknown) => (Array.isArray(v) ? [...v].sort() : v);
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, email, user_type, email_verified, timezone, locale, is_personal_agent)
+       values ($1, $1 || '@x', 'human', true, 'UTC', 'en', false)`,
+      [FOUR]
+    );
+    await q(
+      `insert into agent_templates (slug, name, harness, aliases, worker, tried, practices, tool_profile, tool_groups, metadata)
+       values ('reader-agent', 'Reader Agent', 'reader-agent', '["reader"]'::jsonb, false, true, '{"skills":[]}'::jsonb, 'entry', '["read"]'::jsonb, '{}'::jsonb),
+              ('plain-agent', 'Plain Agent', 'plain-agent', '[]'::jsonb, false, true, '{"skills":[]}'::jsonb, null, '[]'::jsonb, '{}'::jsonb)`
+    );
+  });
+
+  it("none asked: the first key lists the template's profile and groups", async () => {
+    const agent = await connect("ts-1", {
+      agentType: "reader-agent",
+      instanceId: "inst-ts-1",
+    });
+    const key = await keyOf(agent);
+    expect(key.tool_profile).toBe("entry");
+    expect(groups(key.tool_groups)).toEqual(["read"]);
+  });
+
+  it("the connect names the template: the same surface", async () => {
+    const agent = await connect("ts-2", {
+      agentType: "reader-agent",
+      instanceId: "inst-ts-2",
+      template: "reader-agent",
+    });
+    expect(groups((await keyOf(agent)).tool_groups)).toEqual(["read"]);
+  });
+
+  it("an explicit toolProfile wins over the template's", async () => {
+    const agent = await connect("ts-3", {
+      agentType: "reader-agent",
+      instanceId: "inst-ts-3",
+      toolProfile: "builder",
+    });
+    const key = await keyOf(agent);
+    expect(key.tool_profile).toBe("builder");
+    expect(groups(key.tool_groups) ?? []).toEqual([]);
+  });
+
+  it("a template that names no surface: entry, nothing unlocked, as before", async () => {
+    const agent = await connect("ts-4", {
+      agentType: "plain-agent",
+      instanceId: "inst-ts-4",
+    });
+    const key = await keyOf(agent);
+    expect(key.tool_profile).toBe("entry");
+    expect(groups(key.tool_groups) ?? []).toEqual([]);
+  });
+
+  it("an agent that already holds a key keeps that key's surface when its template later names one (never widened by the template)", async () => {
+    await q(
+      `insert into agent_templates (slug, name, harness, aliases, worker, tried, practices, tool_profile, tool_groups, metadata)
+       values ('grow-agent', 'Grow Agent', 'grow-agent', '[]'::jsonb, false, true, '{"skills":[]}'::jsonb, null, '[]'::jsonb, '{}'::jsonb)`
+    );
+    const box = await connectComputer(FOUR, "ts-5");
+    const body = { agentType: "grow-agent", instanceId: "inst-ts-5" };
+    const first = await ask(box.computer.apiKey, body);
+    expect(first.status).toBe(200);
+    const agent = ((await first.json()) as { agentUserId: string }).agentUserId;
+
+    // The catalog update now gives this program entry + read.
+    await q(
+      `update agent_templates set tool_profile = 'entry', tool_groups = '["read"]'::jsonb where slug = 'grow-agent'`
+    );
+    const again = await ask(box.computer.apiKey, body);
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { agentUserId: string }).agentUserId).toBe(
+      agent
+    );
+
+    const keys = await q<{ tool_profile: string | null; tool_groups: unknown }>(
+      `select tool_profile, tool_groups from api_keys where user_id = $1 order by created_at`,
+      [agent]
+    );
+    // A second key WAS minted, and it lists what the first did.
+    expect(keys).toHaveLength(2);
+    for (const k of keys) {
+      expect(k.tool_profile).toBe("entry");
+      expect(groups(k.tool_groups) ?? []).toEqual([]);
+    }
   });
 });

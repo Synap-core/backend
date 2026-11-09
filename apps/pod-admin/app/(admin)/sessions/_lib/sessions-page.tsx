@@ -32,6 +32,7 @@ import { kindIcon } from "../../../_lib/object/kind-icon";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { PageHeader, PageShell } from "../../components/page-header";
 import { FilterChip, FilterRow } from "../../components/filter-chip";
+import { statusOption } from "../../components/filter-options";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -250,11 +251,9 @@ export function SessionsPage() {
             param={SEGMENT_PARAM}
             defaultValue="running"
             value={segment}
-            options={SESSION_SEGMENTS.map((s) => ({
-              id: s.key,
-              label: s.label,
-              count: counts[s.key],
-            }))}
+            options={SESSION_SEGMENTS.map((s) =>
+              statusOption(s.key, { label: s.label, count: counts[s.key] })
+            )}
             onChange={() => setSettledLimit(PAGE_STEP)}
           />
         }

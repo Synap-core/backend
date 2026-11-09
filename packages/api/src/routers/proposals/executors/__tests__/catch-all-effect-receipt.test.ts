@@ -705,16 +705,21 @@ describe("(6) focus_session/create — the reference effect receipt", () => {
     join(process.cwd(), "src/routers/proposals/executors/focus-session.ts"),
     "utf8"
   );
+  const writerSrc = readFileSync(
+    join(process.cwd(), "../database/src/utils/insert-focus-session.ts"),
+    "utf8"
+  );
 
   it("builds `rows` from the INSERT's own .returning(), not from a boolean", () => {
     // Two branches feed `insertedSessions`, and each is a statement's own
-    // `.returning()`: the ad-hoc insert here, and — for a playbook instantiate —
+    // `.returning()` through THE row writer (`insertFocusSessionRow`): the
+    // ad-hoc start here, and — for a playbook instantiate —
     // `instantiateSessionRow`'s conflict-safe insert. (X1: the ad-hoc insert
     // runs on the claim transaction — `database` is the tx handle — and its
     // rows ride out as `claimed.rows`; a re-apply at the same id is now LINKED
     // by the claim, asserted in focus-session-playbook-instantiate.pglite.test.ts.)
     expect(src).toMatch(
-      /const insertProposedSession = async \([\s\S]*?\) => \{[\s\S]*?return database\s*\.insert\(focusSessions\)[\s\S]*?\.returning\(\);/
+      /const insertProposedSession = async \([\s\S]*?\) => \{[\s\S]*?const row = await insertFocusSessionRow\(\s*database,[\s\S]*?return row \? \[row\] : \[\];/
     );
     expect(src).toMatch(
       /rows: isPlaybookRun\s*\?\s*\[\]\s*:\s*await insertProposedSession\(t, correlationHolder\)/
@@ -722,13 +727,17 @@ describe("(6) focus_session/create — the reference effect receipt", () => {
     expect(src).toMatch(
       /const insertedSessions = isPlaybookRun\s*\? await instantiateApprovedPlaybook\([\s\S]*?: claimed\.rows;/
     );
-    expect(src).toMatch(/return row \? \[row\] : \[\];/);
     expect(src).toMatch(/rows:\s*insertedSessions\.length/);
     expect(src).toMatch(/ids:\s*insertedSessions\.map\(/);
+    // The writer hands back the statement's own row (null on a conflict).
+    expect(writerSrc).toMatch(
+      /const \[kept\] = await insert\.onConflictDoNothing\(\)\.returning\(\);\s*return kept \?\? null;/
+    );
   });
 
   it("the zero-row outcome is reachable (onConflictDoNothing) — which is the point", () => {
-    expect(src).toContain(".onConflictDoNothing()");
+    expect(src).toMatch(/\{ onConflict: "nothing" \}/);
+    expect(writerSrc).toContain(".onConflictDoNothing()");
   });
 });
 

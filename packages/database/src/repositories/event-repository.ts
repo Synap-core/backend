@@ -148,6 +148,13 @@ export const UNGOVERNED_INSTRUMENTATION_EPOCH = new Date(
 const visibilityDialect = new PgDialect();
 
 /**
+ * The keys `searchEvents({ dataEquals })` may read from `data`: a plain
+ * identifier. The key is also sent as a bound parameter; the pattern refuses
+ * anything else before a query is built.
+ */
+const DATA_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+/**
  * Open a raw `events` WHERE with a caller-supplied VISIBILITY floor.
  *
  * The floor is a Drizzle predicate built by the access layer (the `events`
@@ -817,6 +824,13 @@ export class EventRepository {
        * internal/system readers that already clamp by `userId`.
        */
       visibleWhere?: SQL;
+      /**
+       * Only events whose `data->>key` equals `value`, in SQL before the
+       * limit and offset, so a page is never spent on rows a caller would
+       * drop. `key` must be a plain identifier (it throws otherwise); key and
+       * value are both bound parameters.
+       */
+      dataEquals?: { key: string; value: string };
     } = {}
   ): Promise<EventRecord[]> {
     const opened = openEventsWhere(
@@ -855,6 +869,16 @@ export class EventRepository {
       query += ` AND subject_type = $${paramIndex}`;
       params.push(filters.subjectType);
       paramIndex++;
+    }
+
+    if (filters.dataEquals) {
+      const { key, value } = filters.dataEquals;
+      if (!DATA_KEY_PATTERN.test(key)) {
+        throw new Error(`searchEvents: dataEquals key is not an identifier`);
+      }
+      query += ` AND data->>($${paramIndex}::text) = $${paramIndex + 1}`;
+      params.push(key, value);
+      paramIndex += 2;
     }
 
     if (filters.subjectTypes && filters.subjectTypes.length > 0) {

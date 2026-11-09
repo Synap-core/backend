@@ -9,7 +9,7 @@ POST /api/hub/views
   "type":        "kanban",
   "profileSlug": "task",
   "config": {
-    "groupBy":  { "property": "projectId" },
+    "groupByField": "projectId",
     "columns":  [
       { "slug": "title" },
       { "slug": "priority" },
@@ -23,4 +23,4 @@ POST /api/hub/views
 }
 ```
 
-The `config` shape varies by view type — kanban needs `groupBy`, calendar needs a date property, gallery needs an image property. When in doubt, fetch an existing view of the same type first and mirror its structure.
+The `config` shape varies by view type — kanban needs `groupByField` (a property key, a string; `groupBy` is not read), calendar needs a date property, gallery needs an image property. When in doubt, fetch an existing view of the same type first and mirror its structure.

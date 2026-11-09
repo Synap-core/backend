@@ -602,6 +602,11 @@ export interface WorkspaceIntentSettings {
   label: string;
   /** Produced profile slugs (kinds or roles), in order; [] = a library. */
   produces: string[];
+  /**
+   * The ONE output the space exists to produce (One model plan, decision 3):
+   * one of `produces`; absent = none declared (a library never has one).
+   */
+  primary?: string;
   source: "template";
 }
 

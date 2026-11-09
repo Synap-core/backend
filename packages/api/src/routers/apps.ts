@@ -209,6 +209,7 @@ export const appsRouter = router({
         publicId: input.publicId,
         ownerUserId: ctx.userId,
         via: "ui",
+        presence: ctx.presencePass,
       })
     ),
 
@@ -273,6 +274,7 @@ export const appsRouter = router({
           // Same credential facts the Hub door passes (PR #29 L3).
           actorAgentUserId: ctx.agentUserId,
           actorKeyType: ctx.keyType,
+          presence: ctx.presencePass,
         })
       )
     ),
@@ -292,6 +294,7 @@ export const appsRouter = router({
         applyAutomatically: input.applyAutomatically,
         actorAgentUserId: ctx.agentUserId,
         actorKeyType: ctx.keyType,
+        presence: ctx.presencePass,
       })
     ),
 

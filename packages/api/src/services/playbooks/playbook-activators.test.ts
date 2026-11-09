@@ -871,6 +871,67 @@ describe("stage workers (work model L4)", () => {
     ).toBe(false);
   });
 
+  it("an activator's only rides on the per-thing worker spec, and only when declared", async () => {
+    const only = { property: "post-format", in: ["Short Video", "Long Video"] };
+    setPlaybook([
+      { on: "enters_status", status: "briefed", mode: "propose", only },
+    ]);
+    await run();
+    expect(configOf(0).__worker).toEqual({
+      key: "enters_status:briefed",
+      size: "per_thing",
+      profileSlug: "post",
+      status: "briefed",
+      only,
+    });
+  });
+
+  it("the wire admits only on a per-thing created / enters_status activator, with a slug and 1 to 50 values", async () => {
+    const { playbookActivatorSchema } =
+      await import("../../schemas/playbook-process.js");
+    const only = { property: "post-format", in: ["Carousel"] };
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "enters_status",
+        status: "Briefed",
+        only,
+      }).success
+    ).toBe(true);
+    expect(
+      playbookActivatorSchema.safeParse({ on: "created", only }).success
+    ).toBe(true);
+    const count = playbookActivatorSchema.safeParse({
+      on: "count",
+      status: "Review",
+      min: 3,
+      only,
+    });
+    expect(count.success).toBe(false);
+    expect(JSON.stringify(count.error?.issues)).toContain(
+      "only keeps ONE thing by its value"
+    );
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "enters_status",
+        status: "Briefed",
+        size: "per_moment",
+        only,
+      }).success
+    ).toBe(false);
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "created",
+        only: { property: "post-format", in: [] },
+      }).success
+    ).toBe(false);
+    expect(
+      playbookActivatorSchema.safeParse({
+        on: "created",
+        only: { property: "a b", in: ["x"] },
+      }).success
+    ).toBe(false);
+  });
+
   it("a MANUAL worker compiles no rule", async () => {
     setPlaybook([{ on: "manual", mode: "run" }]);
     const res = await run();

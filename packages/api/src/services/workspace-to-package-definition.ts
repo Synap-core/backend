@@ -33,6 +33,7 @@
 
 import { parseProfilePresentation } from "@synap-core/types/presentation";
 import { readSpaceBrief } from "@synap-core/types/space-brief";
+import type { GuidanceDeclaration } from "@synap-core/types/guidance";
 import { RULE_CATEGORY, readRuleMetadata } from "./rules/index.js";
 import {
   getDb,
@@ -405,6 +406,7 @@ export async function workspaceToPackageDefinition(opts: {
       stages: playbooksTable.stages,
       criteria: playbooksTable.criteria,
       expectedOutputs: playbooksTable.expectedOutputs,
+      guidance: playbooksTable.guidance,
       metadata: playbooksTable.metadata,
     })
     .from(playbooksTable)
@@ -728,6 +730,7 @@ export interface ExportedPlaybookRow {
   stages: unknown;
   criteria: unknown;
   expectedOutputs: unknown;
+  guidance?: unknown;
   metadata: unknown;
 }
 
@@ -744,6 +747,8 @@ export function playbookRowToPackagePlaybook(
   const criteria = (p.criteria as Array<Record<string, unknown>> | null) ?? [];
   const expectedOutputs =
     (p.expectedOutputs as Array<Record<string, unknown>> | null) ?? [];
+  // Refs, never ids: the rules a playbook follows travel as declared.
+  const guidance = (p.guidance as GuidanceDeclaration[] | null) ?? [];
   // Never export another package's source-link: the installing pod stamps
   // its own. Every other metadata key (e.g. the propose-only governance
   // marker) travels.
@@ -774,6 +779,7 @@ export function playbookRowToPackagePlaybook(
     ...(stages.length > 0 ? { stages } : {}),
     ...(criteria.length > 0 ? { criteria } : {}),
     ...(expectedOutputs.length > 0 ? { expectedOutputs } : {}),
+    ...(guidance.length > 0 ? { guidance } : {}),
     ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
 }

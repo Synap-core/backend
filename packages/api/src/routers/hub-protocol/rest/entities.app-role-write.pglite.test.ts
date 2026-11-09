@@ -1221,6 +1221,135 @@ describe("a role write never edits the record itself", () => {
   });
 });
 
+// ─── The one exception: a lead's LinkedIn profile, proposed ────────────────
+//
+// Decision 3632f045 (a default the founder may override; CRM "Find their
+// LinkedIn", founder 2026-11-07): an app limited to CRM may PROPOSE, never
+// apply, ONLY the reach fields (linkedinUrl, linkedinProviderId) on a pod-wide
+// person or company that wears a role in CRM (utils/reach-field-grant.ts). The
+// pinned refusal above (a pod-wide record's other own fields: 403) stands.
+// Rules out: the exception applying the write (agent or person mode), filing it
+// outside CRM, reaching a record with no role in CRM or a role only in another
+// space, and riding another field (a title, another property) along.
+
+describe("a pod-wide lead's LinkedIn profile: proposed in the role's space, never applied", () => {
+  const REACH_P = randomUUID(); // pod-wide person, contact in CRM
+  const REACH_C = randomUUID(); // pod-wide company, contact in CRM
+  const REACH_NONE = randomUUID(); // pod-wide person, no role
+  const REACH_OTHER = randomUUID(); // pod-wide person, contact in OTHER only
+  const PROFILE = {
+    linkedinUrl: "https://www.linkedin.com/in/ada-lovelace",
+    linkedinProviderId: "ACoAAAda",
+  };
+  const proposed: string[] = [];
+
+  beforeAll(async () => {
+    for (const [id, kind, kindId] of [
+      [REACH_P, "person", PERSON_KIND],
+      [REACH_C, "company", COMPANY_KIND],
+      [REACH_NONE, "person", PERSON_KIND],
+      [REACH_OTHER, "person", PERSON_KIND],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+         values ($1,$2,null,$3,$4,'Ada','{"email":"ada@example.test"}'::jsonb,'{}'::jsonb)`,
+        [id, OWNER, kindId, kind]
+      );
+    }
+    for (const [entityId, ws] of [
+      [REACH_P, CRM],
+      [REACH_C, CRM],
+      [REACH_OTHER, OTHER],
+    ] as const) {
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, properties)
+         values ($1,$2,$3,$4,$5,null,'{}'::jsonb)`,
+        [randomUUID(), entityId, ROLE_CONTACT, OWNER, ws]
+      );
+    }
+  });
+
+  const patch = (key: KeyName, id: string, body: unknown) =>
+    send(key, "PATCH", `/entities/${id}`, body);
+
+  it("agent mode: the profile on a pod-wide person wearing a role in CRM is proposed, filed in CRM, nothing written", async () => {
+    const before = await coreOf(REACH_P);
+    const res = await patch("crm", REACH_P, { metadata: PROFILE });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(202);
+    expect(body.status).toBe("proposed");
+    proposed.push(String(body.proposalId));
+    expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
+    expect(await coreOf(REACH_P)).toEqual(before);
+  });
+
+  it("person mode too: the person's own token through the app proposes it, never applies it", async () => {
+    for (const id of [REACH_P, REACH_C]) {
+      const before = await coreOf(id);
+      const res = await patch("crmPerson", id, {
+        metadata: { linkedinUrl: PROFILE.linkedinUrl },
+      });
+      const body = await json(res);
+      expect(res.status, JSON.stringify(body)).toBe(202);
+      expect(body.status).toBe("proposed");
+      expect(await proposalSpace(String(body.proposalId))).toBe(CRM);
+      expect(await coreOf(id)).toEqual(before);
+    }
+  });
+
+  it("the person approves it: the profile lands on the pod-wide record, which stays pod-wide", async () => {
+    const proposalId = proposed[0]!;
+    const proposal = await (
+      h.db as {
+        query: {
+          proposals: { findFirst: (a: unknown) => Promise<unknown> };
+        };
+      }
+    ).query.proposals.findFirst({ where: eq(schema.proposals.id, proposalId) });
+    const result = await applyProposalApproval({
+      proposal: proposal as never,
+      userId: OWNER,
+      input: { proposalId },
+      ctx: { authenticated: true, userId: OWNER } as never,
+    });
+    expect(result.success, JSON.stringify(result)).toBe(true);
+    const after = await coreOf(REACH_P);
+    expect(after!.workspace_id).toBeNull();
+    expect(after!.properties).toMatchObject({
+      ...PROFILE,
+      email: "ada@example.test",
+    });
+  });
+
+  it("a pod-wide record with no role in CRM, or a role only in another space: 404 (not in the app's reach), nothing filed", async () => {
+    for (const id of [REACH_NONE, REACH_OTHER]) {
+      const before = await coreOf(id);
+      const count = await proposalCount();
+      const res = await patch("crm", id, { metadata: PROFILE });
+      expect(res.status, id).toBe(404);
+      expect(await proposalCount()).toBe(count);
+      expect(await coreOf(id)).toEqual(before);
+    }
+  });
+
+  it("a mixed patch is refused whole: the profile with a title, or with another property", async () => {
+    for (const body of [
+      { title: "Renamed", metadata: PROFILE },
+      { metadata: { ...PROFILE, email: "other@example.test" } },
+      { metadata: PROFILE, deleteProperties: ["email"] },
+    ]) {
+      const before = await coreOf(REACH_P);
+      const count = await proposalCount();
+      for (const key of ["crm", "crmPerson"] as const) {
+        const res = await patch(key, REACH_P, body);
+        expect(res.status, `${key} ${JSON.stringify(body)}`).toBe(403);
+      }
+      expect(await proposalCount()).toBe(count);
+      expect(await coreOf(REACH_P)).toEqual(before);
+    }
+  });
+});
+
 // ─── Unchanged: keys not limited to spaces, members ─────────────────────────
 
 describe("unchanged for a key that is not limited to spaces, and for a member", () => {

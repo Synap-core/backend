@@ -57,6 +57,8 @@ const h = vi.hoisted(() => ({
   channels: [] as Array<Record<string, unknown>>,
   /** The accounts Unipile lists right now. */
   accounts: [] as Array<Record<string, unknown>>,
+  /** What the LinkedIn profile lookup answers right now. */
+  found: null as unknown,
   /** Every provider call (method, params) — a post must never be among them. */
   calls: [] as Array<{ method: string; params: Record<string, unknown> }>,
   noopEvents: () =>
@@ -141,6 +143,7 @@ vi.mock(
       params: Record<string, unknown>
     ) => {
       h.calls.push({ method: spec.method, params });
+      if (spec.pathTemplate === "/linkedin/find-profile") return h.found;
       if (spec.method === "GET")
         return spec.pathTemplate === "/accounts"
           ? { items: h.accounts }
@@ -321,6 +324,8 @@ const KEYS = {
     "capability.request_connection.run",
     "entity.*.read",
   ]),
+  /** The CRM looking up a person's LinkedIn profile (enrich_entity, 0410). */
+  finder: app(["capability.enrich_entity.run", "entity.*.read"]),
   /** A poster used only to exhaust the per-intent cap. */
   busy: app(["capability.publish_post.run"]),
   /** The CRM reading its sends waiting for approval. */
@@ -1577,5 +1582,238 @@ describe("an app sends to a person it names: the pod finds the address", () => {
     expect(
       (await send("operator", "GET", "/proposals?recipient=marie")).status
     ).toBe(400);
+  });
+});
+
+// ─── enrich_entity (0410): an app looks a person up with the person's tool ──
+//
+// CRM "Find their LinkedIn" (founder 2026-11-07: "for actions that are just
+// an API with a parameter ... it should just launch the underlying tool, no
+// need for ai"). The intent's input is migration 0410's, run as shipped; the
+// lookup verb maps it the way the catalog's linkedin_find_profile does. Rules
+// out: an app offered no lookup (no input shape, the state before 0410), the
+// lookup filed as a proposal or its result withheld (enrich_entity is a read:
+// the app gets the answer inline), the verb's parameters or an extra field
+// taken from the app, and the company the verb needs left optional.
+// Cannot see: the real verb's sandboxed code (here a provider call answers
+// for it), a real Unipile.
+
+describe("an app looks a person up with the person's tool (enrich_entity)", () => {
+  const PEOPLE = randomUUID(); // the lookup tool
+  const PEOPLE_ACCOUNTS = randomUUID(); // people_list_accounts: account source
+  const FIND = randomUUID(); // linkedin_find_profile: enrich_entity, mapped
+  const LI = { id: "acc-li", name: "Antoine Servant", type: "LINKEDIN" };
+  const MATCH = {
+    matched: true,
+    profile: {
+      name: "Jean-Luc Le Noguès",
+      headline: "CEO at Acme",
+      url: "https://www.linkedin.com/in/jlln",
+    },
+    properties: {
+      linkedinUrl: "https://www.linkedin.com/in/jlln",
+      linkedinProviderId: "ACoAAJLLN",
+    },
+  };
+
+  beforeAll(async () => {
+    await q(
+      `insert into capability_intents (slug, effect, statement, synonyms) values ('enrich_entity','read','Add known facts to a person or company we already have','{}')`
+    );
+    await h.client!.exec(
+      readFileSync(
+        fileURLToPath(
+          new URL(
+            "../../../../../database/migrations/0410_intent_input_enrich_entity.sql",
+            import.meta.url
+          )
+        ),
+        "utf8"
+      )
+    );
+    await q(
+      `insert into tools (id, name, kind, approved, created_by, workspace_id) values ($1,'people_lookup','api',true,$2,null)`,
+      [PEOPLE, OWNER]
+    );
+    const skill = async (
+      id: string,
+      name: string,
+      intent: string,
+      inputMap: unknown,
+      parameters: unknown,
+      providerSpec: unknown
+    ) => {
+      await q(
+        `insert into skills (id, user_id, name, kind, scope, status, approved, intent, input_map, parameters, provider_spec, metadata)
+         values ($1,$2,$3,'declarative','pod','active',true,$4,$5::jsonb,$6::jsonb,$7::jsonb,'{"readOnly":true}'::jsonb)`,
+        [
+          id,
+          OWNER,
+          name,
+          intent,
+          inputMap === null ? null : JSON.stringify(inputMap),
+          JSON.stringify(parameters),
+          JSON.stringify(providerSpec),
+        ]
+      );
+      await q(
+        `insert into links (id, from_type, from_id, to_type, to_id, link_type) values ($1,'skill',$2,'tool',$3,'requires')`,
+        [randomUUID(), id, PEOPLE]
+      );
+    };
+    await skill(
+      PEOPLE_ACCOUNTS,
+      "people_list_accounts",
+      "list_records",
+      null,
+      {},
+      {
+        tool: "people_lookup",
+        method: "GET",
+        pathTemplate: "/accounts",
+        responseShape: {
+          collectionPath: "items",
+          item: { id: "id", name: "name", type: "type" },
+        },
+      }
+    );
+    // The catalog's map for linkedin_find_profile (app-bases
+    // unipile-linkedin.capability.json), on an account source of its tool.
+    await skill(
+      FIND,
+      "linkedin_find_profile",
+      "enrich_entity",
+      {
+        params: {
+          fullName: "$.name",
+          company: "$.company",
+          accountId: "$account.id",
+        },
+        accounts: {
+          verb: "people_list_accounts",
+          id: "id",
+          label: "name",
+          provider: "type",
+        },
+      },
+      { fullName: "string", company: "string", accountId: "string" },
+      {
+        tool: "people_lookup",
+        method: "GET",
+        pathTemplate: "/linkedin/find-profile",
+      }
+    );
+    h.registry = [
+      ...h.registry,
+      {
+        kind: "tool",
+        id: PEOPLE,
+        name: "people_lookup",
+        description: "people_lookup",
+        enabled: true,
+        governance: "auto",
+        catalogOnly: false,
+        verbs: [
+          verb("people_list_accounts", "List accounts", "list_records", "read"),
+          // The registry projects the skill's authored `metadata.readOnly`
+          // (the catalog's linkedin_find_profile declares it): the gate runs a
+          // declared read at once, so the door says `auto` (run-posture.ts).
+          {
+            ...verb(
+              "linkedin_find_profile",
+              "Find their LinkedIn profile",
+              "enrich_entity",
+              "read"
+            ),
+            declaredReadOnly: true,
+          },
+        ],
+      },
+    ];
+  }, 120_000);
+
+  beforeEach(() => {
+    h.accounts = [LI];
+    h.found = MATCH;
+  });
+
+  const lookups = () => actionsOf("finder", CRM, "enrich_entity");
+  const lookup = (actionId: string, input: unknown) =>
+    run("finder", {
+      workspaceId: CRM,
+      intent: "enrich_entity",
+      actionId,
+      input,
+    });
+
+  it("lists the lookup for an app granted enrich_entity: its input is { name, company }", async () => {
+    const actions = await lookups();
+    expect(
+      actions.map((a) => [a.label, a.connection?.account, a.governance])
+    ).toEqual([["Find their LinkedIn profile", LI.name, "auto"]]);
+    const [find] = actions;
+    expect(Object.keys(find!.input.properties).sort()).toEqual([
+      "company",
+      "name",
+    ]);
+    // The verb needs the company: its action requires it, the intent does not.
+    expect([...find!.input.required].sort()).toEqual(["company", "name"]);
+    expect(JSON.stringify(find)).not.toMatch(/fullName|accountId|skill/);
+  });
+
+  it("runs the lookup at once and hands the app its answer: no proposal, no AI", async () => {
+    const [find] = await lookups();
+    const before = await q<{ n: number }>(
+      `select count(*)::int as n from proposals`
+    );
+    const res = await lookup(find!.id, {
+      name: "Jean-Luc Le Noguès",
+      company: "Acme",
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("run");
+    expect(JSON.stringify(body.result)).toContain(
+      MATCH.properties.linkedinProviderId
+    );
+    const calls = h.calls.filter((c) => "fullName" in c.params);
+    expect(calls).toEqual([
+      {
+        method: "GET",
+        params: {
+          fullName: "Jean-Luc Le Noguès",
+          company: "Acme",
+          accountId: LI.id,
+        },
+      },
+    ]);
+    const after = await q<{ n: number }>(
+      `select count(*)::int as n from proposals`
+    );
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+  });
+
+  it("refuses a lookup with no company, or a field the action does not read", async () => {
+    const [find] = await lookups();
+    for (const input of [
+      { name: "Jean-Luc Le Noguès" },
+      {
+        name: "Jean-Luc Le Noguès",
+        company: "Acme",
+        linkedinUrl: "https://x",
+      },
+    ]) {
+      const res = await lookup(find!.id, input);
+      const body = await json(res);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(body.code).toBe("INVALID_INPUT");
+    }
+    expect(h.calls.filter((c) => "fullName" in c.params)).toEqual([]);
+  });
+
+  it("an app not granted enrich_entity is refused (GRANT_DENIED)", async () => {
+    const res = await list("crm", `workspaceId=${CRM}&intent=enrich_entity`);
+    expect(res.status).toBe(403);
+    expect((await json(res)).code).toBe("GRANT_DENIED");
   });
 });

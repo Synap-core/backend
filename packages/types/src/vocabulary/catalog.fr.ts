@@ -132,6 +132,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "kind.api_key.other": "Clés API",
   "kind.ssh_key.one": "Clé SSH",
   "kind.ssh_key.other": "Clés SSH",
+  "kind.intelligence_service.one": "Service d’IA",
+  "kind.intelligence_service.other": "Services d’IA",
+  "kind.secret.one": "Secret",
+  "kind.secret.other": "Secrets",
   "kind.env_variable.one": "Variable d’environnement",
   "kind.env_variable.other": "Variables d’environnement",
   "kind.url.one": "Page",
@@ -571,6 +575,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.title.noVerb": "Demande\u00a0: {obj}",
   "vocabulary.title.noVerb.named": "Demande\u00a0: {obj} «\u00a0{name}\u00a0»",
   "vocabulary.title.lead": "{verb}\u00a0: {name}",
+  "vocabulary.title.onComputer": "{verb} «\u00a0{name}\u00a0» sur {computer}",
+  "vocabulary.title.fromComputer": "{verb} «\u00a0{name}\u00a0» de {computer}",
+  "vocabulary.title.addAndInstallOn":
+    "Ajouter «\u00a0{name}\u00a0» depuis la marketplace et l’installer sur {computer}",
   "vocabulary.title.verbOnly.named": "{verb} «\u00a0{name}\u00a0»",
   "vocabulary.title.imperative":
     "{verb} {objG, select, f {{objV, select, yes {l’{obj}} other {la {obj}}}} m {{objV, select, yes {l’{obj}} other {le {obj}}}} other {l’élément {Obj}}}",
@@ -636,6 +644,12 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.templateNoun.work.other": "Modèles de travail",
   "vocabulary.templateNoun.space.one": "Modèle d’espace",
   "vocabulary.templateNoun.space.other": "Modèles d’espace",
+  "vocabulary.packageNoun.template.one": "Modèle",
+  "vocabulary.packageNoun.template.other": "Modèles",
+  "vocabulary.packageNoun.pack.one": "Pack",
+  "vocabulary.packageNoun.pack.other": "Packs",
+  "vocabulary.grant.packageInstall":
+    "Ajouter des packs et des modèles à votre pod",
   "vocabulary.needsYou.count.uncurated":
     "{n, plural, one {# {noun}} many {# de {nouns}} other {# {nouns}}}",
 };
@@ -711,6 +725,8 @@ export const vocabularyFrNouns: Readonly<Record<NounSlug, FrenchNounGrammar>> =
     mcp: { gender: "m", elides: false },
     api_key: { gender: "f", elides: false },
     ssh_key: { gender: "f", elides: false },
+    intelligence_service: { gender: "m", elides: false },
+    secret: { gender: "m", elides: false },
     env_variable: { gender: "f", elides: false },
     url: { gender: "f", elides: false },
     proactive: { gender: "f", elides: true },

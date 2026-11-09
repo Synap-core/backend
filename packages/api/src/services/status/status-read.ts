@@ -88,6 +88,10 @@ import {
   type StatusOfSignal,
   type UnitTone,
   type WaitingOnMark,
+  type WaitingOnSource,
+  type ThingBlocker,
+  deriveThingBlocker,
+  deriveWaitingOn,
 } from "@synap-core/types/units";
 import { isStatusSignal } from "@synap-core/types/lifecycle";
 import {
@@ -125,7 +129,7 @@ import {
 import {
   holdWaitingOnRef,
   lastTransitionAt,
-  readWaitingOnFor,
+  readWaitingOnSourcesFor,
   runStatusCategory,
   sessionWaitingOnQuestion,
   type WaitingOnQuestion,
@@ -188,6 +192,12 @@ export interface StatusOf {
   /** Present only when its step declares a stuck rule and it is past it. */
   stuck?: { afterDays: number; forDays: number };
   waitingOn: WaitingOnMark[] | Unavailable;
+  /**
+   * Things only: what stands between it and its next status (plan e7f753db
+   * §9, `deriveThingBlocker`) — read from the same waits as `waitingOn`. A
+   * hold never blocks: a pause is the status, and `hold` says what it waits on.
+   */
+  blocker?: ThingBlocker | Unavailable;
   /**
    * Its CURRENT hold — what the pause waits on and how it resumes — when it
    * stands in a paused status under one (`listHolds`); absent otherwise.
@@ -431,7 +441,9 @@ export async function readStatusOf(
   const questions = new Map<string, WaitingOnQuestion>();
   for (const t of things) {
     questions.set(t.id, {
-      owed: { subject: { kind: "entities", entityIds: [t.id] } },
+      // Every slot holding the thing up (plan e7f753db §9): a person's owed
+      // slot on a session about it or naming it, an agent's slot declaring it.
+      owed: { blocking: [t.id] },
       proposals: { targetIds: [t.id] },
       blockedNodes: [{ kind: "entity", id: t.id }],
       holds: [{ subjectType: "entity", subjectId: t.id }],
@@ -444,12 +456,25 @@ export async function readStatusOf(
   ])) {
     questions.set(`session:${sid}`, sessionWaitingOnQuestion(sid));
   }
-  const waiting = questions.size
-    ? readWaitingOnFor({ userId }, questions)
-    : Promise.resolve(new Map<string, WaitingOnMark[]>());
-  waiting.catch(() => undefined);
+  // The SOURCES, once: the marks fold them (`deriveWaitingOn`, what
+  // `readWaitingOnFor` does) and a thing's blocker reads them apart
+  // (`deriveThingBlocker`), so the two can never disagree.
+  const waitSources = questions.size
+    ? readWaitingOnSourcesFor({ userId }, questions)
+    : Promise.resolve(new Map<string, WaitingOnSource[]>());
+  waitSources.catch(() => undefined);
   const waitingOf = (key: string) =>
-    orUnavailable(waiting.then((m) => m.get(key) ?? []));
+    orUnavailable(waitSources.then((m) => deriveWaitingOn(m.get(key) ?? [])));
+  const blockerOf = (
+    key: string,
+    lifecycle: { readonly options: readonly LifecycleOption[] } | null,
+    status: string | null
+  ) =>
+    orUnavailable(
+      waitSources.then((m) =>
+        deriveThingBlocker(m.get(key) ?? [], lifecycle, status)
+      )
+    );
 
   // The current hold of everything asked about, one read; shown only for a
   // thing in a paused status (a hold is current only while it stands there).
@@ -841,6 +866,11 @@ export async function readStatusOf(
             ? { afterDays, forDays }
             : undefined;
         const waitingOn = await waitingOf(t.id);
+        const blocker = await blockerOf(
+          t.id,
+          lifecycle ?? null,
+          t.status ?? null
+        );
         const held = await holdOf(`entity:${t.id}`, category);
         return {
           id: t.id,
@@ -850,6 +880,7 @@ export async function readStatusOf(
           ...since,
           ...(stuck ? { stuck } : {}),
           waitingOn,
+          blocker,
           ...held,
           ...(lifecycle
             ? {

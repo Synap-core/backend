@@ -89,9 +89,12 @@ export interface KratosUiNode {
    * Presentation metadata. For an oidc method button Kratos puts the provider's
    * configured `label` here (e.g. "Synap Cloud") — NOT in `attributes.label` —
    * so the caller must read this to show a human name instead of the raw
-   * provider id.
+   * provider id. A passkey's remove button carries its `display_name` and
+   * `added_at` in `context` (Kratos v1.3.1 `NewInfoSelfServiceRemovePasskey`).
    */
-  meta?: { label?: { text?: string; id?: number } };
+  meta?: {
+    label?: { text?: string; id?: number; context?: Record<string, unknown> };
+  };
 }
 
 export interface KratosUi {

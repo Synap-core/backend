@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
   switches: new Map<string, (on: boolean) => void>(),
 }));
 
-vi.mock("../../../../lib/trpc", () => {
+vi.mock("../../../../lib/trpc", async () => {
   const query = (data: () => unknown) => ({
     useQuery: () => ({
       data: data(),
@@ -34,6 +34,9 @@ vi.mock("../../../../lib/trpc", () => {
   });
   return {
     trpc: {
+      presence: (
+        await import("../../presence/__tests__/trpc-double")
+      ).presenceTrpcDouble(),
       useUtils: () => ({}),
       capabilities: {
         containers: {

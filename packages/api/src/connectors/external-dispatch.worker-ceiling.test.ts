@@ -29,6 +29,15 @@ const sendMessage = vi.fn(async () => undefined);
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
+  const where = () => ({
+    limit: async () => [],
+    orderBy: () => ({ limit: async () => [] }),
+    then: (resolve: (v: unknown) => unknown) => resolve([]),
+  });
+  const fakeDb = {
+    query: { channels: { findFirst: async () => null } },
+    select: () => ({ from: () => ({ where }) }),
+  };
   return {
     ...actual,
     workerAutomationOfSession: async () => {
@@ -43,17 +52,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       h.reads.push("sends");
       return h.sent + h.pending;
     },
-    db: {
-      query: { channels: { findFirst: async () => null } },
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: async () => [],
-            then: (resolve: (v: unknown) => unknown) => resolve([]),
-          }),
-        }),
-      }),
-    },
+    db: fakeDb,
+    // The send door's trial-run check and guidance stamp read the session's
+    // row and run through getDb(): no rows = not a trial, no run.
+    getDb: async () => fakeDb,
   };
 });
 

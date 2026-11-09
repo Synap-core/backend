@@ -63,10 +63,25 @@ export interface NeedsYouContextFrom {
   step: NeedsYouContextStep | null;
 }
 
+/**
+ * The THING a need-you card holds up (plan e7f753db §9): which thing, the
+ * status it stands on now and the status it cannot reach until the person
+ * answers. Resolved by the pod on the owed slot (`OwedSlot.blockedThing`,
+ * the signal's `blocks`), under the reader's entity floor; a status the pod
+ * cannot name is `null`.
+ */
+export interface NeedsYouBlocks {
+  thing: { id: string; name: string | null };
+  statusNow: { key: string; label: string } | null;
+  statusNext: { key: string; label: string } | null;
+}
+
 /** A line whose read FAILED — distinct from a line whose fact is absent. */
 export type NeedsYouContextLine = "unblocks" | "meanwhile" | "from";
 
 export interface NeedsYouContext {
+  /** The thing this ask holds up; `null` when the slot names none. */
+  blocks: NeedsYouBlocks | null;
   unblocks: NeedsYouContextUnblocks | null;
   meanwhile: string | null;
   /** Capped at {@link LOOKED_AT_ROW_CAP}; `lookedAtTotal` counts them all. */
@@ -133,6 +148,8 @@ export interface OwedSlotContextInput {
   /** The owed slot (from `pendingExpected` / `inputs`). */
   slot: {
     label: string;
+    /** The thing it holds up, as the pod resolved it (the signal's `blocks`). */
+    blocks?: NeedsYouBlocks | null;
     ask?: {
       lookedAt?: ReadonlyArray<{
         kind: string;
@@ -276,6 +293,7 @@ export function needsYouContextFromOwedSlot(
   }));
 
   return {
+    blocks: input.slot.blocks ?? null,
     unblocks,
     meanwhile: meanwhile.value,
     lookedAt: refs.slice(0, LOOKED_AT_ROW_CAP),
@@ -339,6 +357,9 @@ export function needsYouContextFromProposal(
     : null;
 
   return {
+    // A proposal holds up no thing of its own here: the thing it targets is
+    // its own door. (Its blocker reaches the thing's card, not this strip.)
+    blocks: null,
     unblocks,
     meanwhile: meanwhile.value,
     lookedAt: [],

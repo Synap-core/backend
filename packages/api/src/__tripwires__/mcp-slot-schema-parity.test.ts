@@ -24,8 +24,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 import { BLOCKED_REASONS } from "@synap/playbooks";
-import { ASK_MODES, ASK_PROVIDE_KINDS, AskSchema } from "@synap-core/types/ask";
+import {
+  ASK_MODES,
+  ASK_PROVIDE_KINDS,
+  AskOptionSchema,
+  AskSchema,
+} from "@synap-core/types/ask";
 import { tools } from "../routers/mcp/tools/index.js";
+import { buildAskWireSchema } from "../routers/mcp/tools/ask-wire-schema.js";
 
 const HUB_TYPES = resolve(
   import.meta.dirname,
@@ -142,12 +148,37 @@ describe("tripwire: MCP slot schemas derive from their one source", () => {
   it.each([
     ["live tools.list()", TOOL_LIST],
     ["committed manifest", MANIFEST_TOOLS],
-  ])("every advertised ask IS z.toJSONSchema(AskSchema) (%s)", (_, tree) => {
+  ])("every advertised ask IS the ONE compact wire ask (%s)", (_, tree) => {
     const found = propertiesNamed("ask", tree);
+    // Prose may differ per door; the structure is the one shared definition.
+    const WIRE = withoutDescription(buildAskWireSchema());
     for (const p of found) {
-      expect(withoutDescription(p.schema), p.path).toEqual(DERIVED_ASK);
-      // The prose is there — a model is told what each mode means.
+      expect(withoutDescription(p.schema), p.path).toEqual(WIRE);
       expect(typeof p.schema.description, p.path).toBe("string");
+    }
+  });
+
+  it("the compact wire ask offers every field the strict AskSchema accepts, and the same enums", () => {
+    // Loose on the wire, strict on the server: the wire may not lag the parse.
+    const branches = (DERIVED_ASK.oneOf ?? []) as Array<{
+      properties: Record<string, Record<string, unknown>>;
+    }>;
+    expect(branches.length).toBe(ASK_MODES.length);
+    const strictKeys = new Set(
+      branches.flatMap((b) => Object.keys(b.properties))
+    );
+    const wire = buildAskWireSchema() as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    expect([...strictKeys].sort()).toEqual(Object.keys(wire.properties).sort());
+    expect(wire.properties.mode!.enum).toEqual([...ASK_MODES]);
+    for (const k of ["risk", "stakes", "urgency"]) {
+      const strictEnum = branches[0]!.properties[k]!.enum;
+      expect(wire.properties[k]!.enum, k).toEqual(strictEnum);
+    }
+    // The provide kinds are taught in the description: none may be missing.
+    for (const kind of ASK_PROVIDE_KINDS) {
+      expect(String(wire.properties.provide!.description)).toContain(kind);
     }
   });
 
@@ -157,5 +188,31 @@ describe("tripwire: MCP slot schemas derive from their one source", () => {
     expect(hubUnionLiterals("HubSlotAsk", "kind")).toEqual([
       ...ASK_PROVIDE_KINDS,
     ]);
+  });
+
+  it("the option mirrors (playbooks SlotAskOption, hub HubSlotAskOption) carry every AskOption field", () => {
+    const optionKeys = Object.keys(AskOptionSchema.shape).sort();
+    expect(optionKeys).toContain("media");
+    expect(optionKeys).toContain("caution");
+    const mirrors: Array<[string, string, RegExp]> = [
+      [
+        "hub-rest-client HubSlotAskOption",
+        readFileSync(HUB_TYPES, "utf8"),
+        /export interface HubSlotAskOption \{([\s\S]*?)\n\}/,
+      ],
+      [
+        "playbooks SlotAskOption",
+        readFileSync(
+          resolve(import.meta.dirname, "../../../playbooks/src/index.ts"),
+          "utf8"
+        ),
+        /export interface SlotAskOption \{([\s\S]*?)\n\}/,
+      ],
+    ];
+    for (const [name, src, re] of mirrors) {
+      const body = re.exec(src)?.[1] ?? "";
+      const declared = [...body.matchAll(/^ {2}(\w+)\??:/gm)].map((m) => m[1]!);
+      expect(declared.sort(), name).toEqual(optionKeys);
+    }
   });
 });

@@ -73,7 +73,7 @@ import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
 import type { Exit } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { PageHeader, PageShell } from "../components/page-header";
-import { RecoveryCodesNudge } from "../components/recovery-codes-nudge";
+import { SecurityNudge } from "../components/recovery-codes-nudge";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -121,7 +121,7 @@ export default function HomePage() {
         <StartUnavailableBand />
       </Suspense>
 
-      <RecoveryCodesNudge />
+      <SecurityNudge />
 
       <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <MorningBriefCard />

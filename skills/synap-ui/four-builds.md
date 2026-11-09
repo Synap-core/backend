@@ -23,4 +23,5 @@
      1. `create_cell` a frame that reads what the kind's own page reads, through the bridge's intent reads: `lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list` (params and shapes: `synap` skill, ViewFrame Cells → "Intent reads"). Never pre-fetch rows into the source.
      2. `promote_cell_to_renderer({ profileSlug: "post", slot: "dashboard", cellKey })`. `dashboard` is the `entity-profile` content kind. It is governed, so `proposed` is success.
      - On a kind with a lifecycle the cell fills the **Dashboard** tab and the Pipeline tab stays the board (its moves and card frame are the kind's). On a kind without one, the cell is the page.
+     - An app that is not a frame (a board, a thing's page) reads `flow.of` for the kind; a cell reads `lifecycle.board`, the board lens `flow.of` is built on. Either way no status list or stage list is written by hand.
      - A saved view can take the same slot from the app (Keep → Become renderer of… → Whole profile dashboard). Any view type renders there.

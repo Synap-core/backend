@@ -93,6 +93,21 @@ const NODE_TYPE_DOCS: Record<(typeof FLOW_NODE_TYPES)[number], NodeTypeDoc> = {
           content: "string (template)",
         },
       },
+      // Drive a focus session (governed like every write). A stage the
+      // session's process does not declare is refused on the step.
+      session_update: {
+        fields: {
+          sessionId:
+            "string (template) — or subjectEntityId: the active session about that entity",
+          currentStage:
+            "string (optional) — a stage key the session's process declares; any other key is refused",
+          whenPlaybookId:
+            "string (optional) — act only on a session FOLLOWING this playbook; any other session is a reported no-op",
+          grantStatus: "unknown (optional) — merged into metadata.grantStatus",
+          addOutput:
+            "{ kind, label, icon? } (optional) — appends a pending outcome",
+        },
+      },
       // Session outcome verbs (plan v5 T2) — governed like every write: an
       // agent-produced trigger PROPOSES, never writes ungoverned.
       complete_outcome: {

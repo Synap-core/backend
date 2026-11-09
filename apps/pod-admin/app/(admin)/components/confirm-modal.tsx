@@ -53,9 +53,11 @@ interface ConfirmModalProps {
   /**
    * Tone of the confirm button. `danger` for anything irreversible; `warning`
    * for a reversible-but-consequential act — workspace archive is the one that
-   * needs it, and rendering it red would overstate what it does.
+   * needs it, and rendering it red would overstate what it does; `primary`
+   * for a protective act that only asks first (turning approvals in person
+   * on), which no warning colour should dress as a risk.
    */
-  confirmColor?: "danger" | "warning";
+  confirmColor?: "danger" | "warning" | "primary";
   /**
    * Blocks the confirm without blocking the dialog — for a gate the operator
    * must clear first. Only workspace delete uses it, for its type-the-name

@@ -78,6 +78,7 @@
  * build a second index.
  */
 
+import type { CatalogPlacement } from "../installations/request-installation.js";
 import { listIntentSlugs } from "./intent-registry.js";
 
 import {
@@ -178,13 +179,18 @@ export interface AbstractIntentMatch {
   termCoverage: { hit: number; of: number };
 }
 
-/** One marketplace capability package a caller can install. */
-export interface MarketplaceCapabilityMatch {
+/**
+ * One marketplace capability package a caller can install, with where it
+ * runs (`catalogPlacementReader`, the same projection `market.search`
+ * applies): for a capability that runs on a computer, its systems, licence
+ * and the person's computers that can take it.
+ */
+export type MarketplaceCapabilityMatch = {
   slug: string;
   name: string;
   description: string | null;
   kind: string;
-}
+} & CatalogPlacement;
 
 /**
  * Marketplace follow-up for an intent the pod does not serve.
@@ -375,24 +381,33 @@ function marketplaceEntryServesIntent(
  * Catalog-cache read. A throw becomes `error` and does not fail the find —
  * the intent matches are already on the result.
  */
-async function lookupMarketplace(slug: string): Promise<FindMarketplace> {
+async function lookupMarketplace(
+  slug: string,
+  userId: string
+): Promise<FindMarketplace> {
   try {
     const { queryCatalogCache } = await import("./catalog-cache-query.js");
+    const { catalogPlacementReader } =
+      await import("../installations/request-installation.js");
+    const placementOf = catalogPlacementReader(userId);
     const entries = await queryCatalogCache({
       query: marketplaceQueryFor(slug),
       kind: "capability",
       limit: MARKETPLACE_LIMIT,
     });
     return {
-      matches: entries
-        .filter((entry) => marketplaceEntryServesIntent(entry, slug))
-        .slice(0, MARKETPLACE_LIMIT)
-        .map((entry) => ({
-          slug: entry.slug,
-          name: entry.name,
-          description: entry.description,
-          kind: entry.kind,
-        })),
+      matches: await Promise.all(
+        entries
+          .filter((entry) => marketplaceEntryServesIntent(entry, slug))
+          .slice(0, MARKETPLACE_LIMIT)
+          .map(async (entry) => ({
+            slug: entry.slug,
+            name: entry.name,
+            description: entry.description,
+            kind: entry.kind,
+            ...(await placementOf(entry)),
+          }))
+      ),
     };
   } catch (err) {
     return {
@@ -609,7 +624,7 @@ export async function findByIntent(
       note: `Routing only — an intent resolves to CONCRETE verb ids that synap_run_capability then governs exactly as before. An intent with verbs: [] means nothing visible declares it; ${verbsDeclaringIntent} of ${verbs} verb catalog entries declare an intent at all, so this axis cannot see the rest. When a returned intent has no verbs, or the best intent missed a query term, marketplace lists up to 3 capability packages — or marketplace.error if that catalog read failed.`,
     };
     const slug = marketplaceSlugFor(result.intents.matches);
-    if (slug) result.marketplace = await lookupMarketplace(slug);
+    if (slug) result.marketplace = await lookupMarketplace(slug, input.userId);
   }
 
   // ── Catalog 3: the pod's own processes ────────────────────────────────────

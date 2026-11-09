@@ -28,12 +28,21 @@ export const RUNNER_HEADER = "x-synap-runner";
 /** The runner value of the CLI worker (`synap worker`). */
 export const WORKER_RUNNER = "synap-worker";
 
+/**
+ * The runner value of a computer's WAKER (`synap waker`, plan v2 slice 4): a
+ * process on the COMPUTER's key that starts its agents on demand. Its stamp
+ * on the computer's key is the computer's wake lease (`computer-waker.ts`).
+ */
+export const WAKER_RUNNER = "synap-waker";
+
+const RUNNERS: ReadonlySet<string> = new Set([WORKER_RUNNER, WAKER_RUNNER]);
+
 const STAMP_THROTTLE_MS = 60_000;
 const lastStampAt = new Map<string, number>();
 
 /**
- * The worker's version when `header` names the CLI worker
- * (`synap-worker/<version>`, or bare `synap-worker` → `null` version);
+ * The runner's version when `header` names the CLI worker or a computer's
+ * waker (`synap-worker/<version>` / `synap-waker/<version>`, bare → `null`);
  * `undefined` for any other runner, or no header. A version that is not a
  * short plain token is dropped, never stored.
  */
@@ -43,13 +52,14 @@ export function workerRunnerVersion(
   const value = header?.trim();
   if (!value) return undefined;
   const [runner, version, ...rest] = value.split("/");
-  if (runner !== WORKER_RUNNER || rest.length > 0) return undefined;
+  if (!RUNNERS.has(runner) || rest.length > 0) return undefined;
   if (version === undefined) return null;
   return /^[0-9A-Za-z.+-]{1,64}$/.test(version) ? version : null;
 }
 
 /**
- * Stamp `worker_served_at` on `keyId` when `header` names the CLI worker.
+ * Stamp `worker_served_at` on `keyId` when `header` names the CLI worker (an
+ * agent's key) or a computer's waker (the computer's key: its wake lease).
  * Resolves `true` when it wrote, `false` when there was nothing to write
  * (another runner, no header, or throttled). Never rejects.
  */

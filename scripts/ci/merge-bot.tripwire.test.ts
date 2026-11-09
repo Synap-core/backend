@@ -37,6 +37,7 @@ import {
   MAX_TOGGLES_PER_SWEEP,
   RERUN_CHECK_NAME,
   commitCarriers,
+  descendantNumbers,
   dependabotOnly,
   dependsState,
   enqueueDecision,
@@ -1786,6 +1787,73 @@ describe(
       expect(
         calls.filter((c) => /pulls\/\d+\/commits/.test(c.args[3] ?? ""))
       ).toEqual([]);
+    });
+    it("a Depends-On onto the PR that carries these commits does not wedge the ancestor", () => {
+      // #722 was branched from #719, and #719's body says Depends-On #722.
+      // The queue will not take #722 while #719 is open, so holding #719
+      // for #722 never ends. #719 is enqueued; #722 still waits.
+      const C719 = "c719" + "a".repeat(36);
+      const ancestor = pr({ number: 719, ...commitsOf(C719) });
+      const child = pr({ number: 722, ...commitsOf(C719, "c722") });
+      const carriers = commitCarriers([ancestor, child]);
+      expect(descendantNumbers(ancestor, carriers)).toEqual([722]);
+      expect(sharedCommitOf(child, carriers)).toEqual({
+        owner: 719,
+        oid: C719,
+      });
+      const waiting = [waitingOn(722)];
+      expect(
+        dependsState(waiting, {
+          repo: BACKEND,
+          queued: new Map(),
+          waive: descendantNumbers(ancestor, carriers),
+        })
+      ).toEqual({ state: "landed", behind: [], waived: [722] });
+      // A real other dependency is not waived with it.
+      expect(
+        dependsState([waitingOn(722), waitingOn(9)], {
+          repo: BACKEND,
+          queued: new Map(),
+          waive: [722],
+        }).state
+      ).toBe("waiting");
+      // A blocked line is never treated as landed.
+      expect(
+        dependsState([{ ...waitingOn(722), status: "blocked" }], {
+          repo: BACKEND,
+          queued: new Map(),
+          waive: [722],
+        }).state
+      ).toBe("blocked");
+    });
+    it("a sweep enqueues the ancestor and holds the descendant that carries its commit", async () => {
+      const C719 = "c719" + "b".repeat(36);
+      const { r, out } = await bot({
+        prs: [
+          pr({
+            number: 719,
+            id: "PR_719",
+            headRefOid: sha("a"),
+            ...commitsOf(C719),
+          }),
+          pr({
+            number: 722,
+            id: "PR_722",
+            headRefOid: sha("b"),
+            ...commitsOf(C719, "c722"),
+          }),
+        ],
+        checks: {
+          [sha("a")]: greenOn(sha("a")),
+          [sha("b")]: greenOn(sha("b")),
+        },
+        depends: { 719: [waitingOn(722)] },
+      });
+      expect(r).toMatchObject({ code: 0, enqueued: [719] });
+      expect(out).toMatch(
+        /#719 Depends-On #722 carries this PR's commits, so that wait is skipped/
+      );
+      expect(out).toMatch(/#722 not enqueued: carries #719's commit c719bbbb/);
     });
     it("a PR's own CI run (judged alone) still sees the other open PRs' commits", async () => {
       const { r, out } = await bot(sharedData(), {

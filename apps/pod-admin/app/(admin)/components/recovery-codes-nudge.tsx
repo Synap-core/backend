@@ -1,16 +1,20 @@
 "use client";
 
 /**
- * "Save your recovery codes" — founder decision R3 (2026-10-04): skippable,
- * with a persistent ⚠ until saved.
+ * The security nudge — what Home's card and the top bar's ⚠ ask for, from
+ * the ONE rule (`securityNudge`, `_lib/presence/ways-in/ways-in-model.ts`;
+ * founder, 7 Nov 2026, session 539e519b): under `enforce`, a first or a
+ * second way to confirm it's you; otherwise recovery codes (founder decision
+ * R3, 2026-10-04). Skippable, with a persistent ⚠ until done.
  *
- *   - `RecoveryCodesNudge` — the card on Overview after sign-in. "Skip for now"
- *     hides the CARD on this browser only.
- *   - `useRecoveryCodesState` — feeds the top bar's ⚠ mark, which stays until
- *     codes exist (it is never dismissible).
+ *   - `SecurityNudge` — the card on Home. "Skip for now" hides the CARD for
+ *     that ask on this browser only.
+ *   - `useSecurityNudge` — feeds the top bar's ⚠ mark, which stays until the
+ *     ask is met (it is never dismissible).
+ *   - `useRecoveryCodesState` — the recovery codes' cached status.
  *
- * A failed status read shows nothing here: this is a nudge, not the door. The
- * door (`/settings/security`) shows the failure with a Retry.
+ * A failed read shows nothing here: this is a nudge, not the door. The door
+ * (`/settings/security`) shows the failure with a Retry.
  */
 
 import { useEffect, useState } from "react";
@@ -18,10 +22,24 @@ import { Button } from "@heroui/react";
 import { ShieldAlert } from "lucide-react";
 import { CREATE_RECOVERY_CODES_LABEL } from "@synap-core/types/account-recovery";
 import { recoveryApi } from "../../../lib/account-recovery";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { en, fr } from "../../_lib/presence/ways-in/copy";
+import { useWaysIn } from "../../_lib/presence/ways-in/use-ways-in";
+import {
+  securityNudge,
+  type RecoveryCodesState,
+  type SecurityNudge as SecurityNudgeKind,
+} from "../../_lib/presence/ways-in/ways-in-model";
 
-export type RecoveryCodesState = "unknown" | "set" | "not_set";
+export type { RecoveryCodesState } from "../../_lib/presence/ways-in/ways-in-model";
 
-const SKIP_KEY = "pod-admin.recovery-codes-nudge.skipped";
+const CATALOGS = { en, fr };
+
+/** Per ask: skipping the codes card does not hide a later "second way" one. */
+const skipKey = (kind: NonNullable<SecurityNudgeKind>) =>
+  kind === "codes"
+    ? "pod-admin.recovery-codes-nudge.skipped"
+    : `pod-admin.security-nudge.${kind}.skipped`;
 
 /**
  * The shared status read behind the card and the top bar's mark.
@@ -92,20 +110,32 @@ export function useRecoveryCodesState(): RecoveryCodesState {
   return state;
 }
 
-function skipped(): boolean {
+/** What the top bar's ⚠ and Home's card ask for right now, or null. */
+export function useSecurityNudge(): SecurityNudgeKind {
+  const codes = useRecoveryCodesState();
+  const { state } = useWaysIn();
+  return securityNudge(state, codes);
+}
+
+function skipped(kind: NonNullable<SecurityNudgeKind>): boolean {
   try {
-    return window.localStorage.getItem(SKIP_KEY) === "1";
+    return window.localStorage.getItem(skipKey(kind)) === "1";
   } catch {
     return false;
   }
 }
 
-export function RecoveryCodesNudge() {
-  const state = useRecoveryCodesState();
-  const [hidden, setHidden] = useState(true);
-  useEffect(() => setHidden(skipped()), []);
+export function SecurityNudge() {
+  const t = useT(CATALOGS);
+  const kind = useSecurityNudge();
+  // Hidden until mounted: localStorage is a browser read.
+  const [mounted, setMounted] = useState(false);
+  const [skippedNow, setSkippedNow] = useState<string[]>([]);
+  useEffect(() => setMounted(true), []);
 
-  if (state !== "not_set" || hidden) return null;
+  if (!mounted || !kind || skippedNow.includes(kind) || skipped(kind)) {
+    return null;
+  }
 
   return (
     <div
@@ -115,11 +145,10 @@ export function RecoveryCodesNudge() {
       <ShieldAlert className="h-5 w-5 shrink-0 text-warning" strokeWidth={2} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <p className="text-[13.5px] font-medium text-foreground">
-          Save your recovery codes
+          {t(`nudge.${kind}.title`)}
         </p>
         <p className="text-[12.5px] text-foreground/65">
-          If you lose your password and Synap Cloud, they are the only way back
-          in without the server.
+          {t(`nudge.${kind}.line`)}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -129,23 +158,27 @@ export function RecoveryCodesNudge() {
           radius="md"
           onPress={() => {
             try {
-              window.localStorage.setItem(SKIP_KEY, "1");
+              window.localStorage.setItem(skipKey(kind), "1");
             } catch {
               /* private window: the card just comes back next visit */
             }
-            setHidden(true);
+            setSkippedNow([...skippedNow, kind]);
           }}
         >
-          Skip for now
+          {t("nudge.skip")}
         </Button>
         <Button
           as="a"
-          href="/settings/security#recovery-codes"
+          href={
+            kind === "codes"
+              ? "/settings/security#recovery-codes"
+              : "/settings/security#ways-in"
+          }
           color="primary"
           size="sm"
           radius="md"
         >
-          {CREATE_RECOVERY_CODES_LABEL}
+          {kind === "codes" ? CREATE_RECOVERY_CODES_LABEL : t("nudge.open")}
         </Button>
       </div>
     </div>

@@ -306,6 +306,7 @@ describe("the method a binding door returns", () => {
       playbookId: PLAYBOOK,
       stageKey: res.session.currentStage ?? null,
       stages: res.session.stages,
+      userId: USER,
     });
     expect(method).toMatchObject({
       status: "ok",
@@ -325,6 +326,7 @@ describe("the method a binding door returns", () => {
       playbookId: PLAYBOOK,
       stageKey: null,
       stages: [],
+      userId: USER,
     });
     if (method.status !== "ok") throw new Error(method.status);
     expect(method.text).toContain(HOW_TO);

@@ -124,7 +124,9 @@ describe("the priority ranks inside the ONE triage order (orderNeedsYouByBlockin
       count: 1,
       notificationType: "track.review_ready",
     };
-    const decision = row("decide", { blockedReason: "decision" });
+    // A decision is a proposal-shaped row (an access request here); an owed
+    // slot is always a question, whatever it is blocked on.
+    const decision = { ...row("decide"), kind: "access-request" };
     expect(ids([judgement, decision, row("due", { priority: "P0" })])).toEqual([
       "due",
       "judge",
@@ -147,7 +149,7 @@ describe("the priority ranks inside the ONE triage order (orderNeedsYouByBlockin
     expect(
       ids([
         row("question", { priority: "P1" }),
-        row("decision", { priority: "P2", blockedReason: "decision" }),
+        { ...row("decision", { priority: "P2" }), kind: "access-request" },
       ])
     ).toEqual(["decision", "question"]);
   });

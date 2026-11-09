@@ -2,6 +2,7 @@
 
 import { createContext, type ReactNode } from "react";
 import type {
+  EmbedCellInstanceRead,
   EmbedCellRead,
   EmbedEntityRead,
   ObjectRefRead,
@@ -19,6 +20,12 @@ export interface EmbedHost {
   useEntity: (id: string) => EmbedEntityRead;
   /** A hook: called once per block cell embed that names a key. */
   useCell?: (cellKey: string) => EmbedCellRead;
+  /**
+   * A hook: called once per cell embed that names only an instance — its
+   * name and type, on the viewer's own floor. Without it the embed is a
+   * chip the directive alone names ("Card").
+   */
+  useCellInstance?: (instanceId: string) => EmbedCellInstanceRead;
   /**
    * A hook: called once per reference in prose (a marker or a bare id) —
    * what the id is, its name and its kind, on the viewer's own floor.

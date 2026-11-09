@@ -361,8 +361,9 @@ describe("an agent's template update of an installed space", () => {
       operation: "template_update",
       source: "packages.apply",
     });
+    // Two playbooks: several objects, so a pack (founder, 2026-11-05).
     expect(buildProposalSummary("workspace", "update", data)).toBe(
-      'Update Space "Builder" to the latest template'
+      'Update Space "Builder" to the latest pack'
     );
   });
 

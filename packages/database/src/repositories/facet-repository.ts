@@ -524,7 +524,14 @@ export class FacetRepository extends BaseRepository<
     });
   }
 
-  private async findLiveMatch(
+  /**
+   * The live facet on the unique index's key (entity, role, context, STORED
+   * workspace), or null. `attach` falls back to it on a unique violation; the
+   * `entities.attachFacet` door reads it BEFORE governance so a role the entity
+   * already wears answers `exists` instead of filing a proposal that writes
+   * nothing. One key derivation for both.
+   */
+  async findLiveMatch(
     entityId: string,
     profileId: string,
     contextEntityId: string | null,

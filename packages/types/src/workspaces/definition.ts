@@ -34,6 +34,8 @@ export interface LifecycleAuthoring {
 export interface WorkspaceIntentDefinition {
   label: string;
   produces?: { profile: string }[];
+  /** The ONE output the space produces: one of `produces` (decision 3). */
+  primary?: string;
 }
 
 /**

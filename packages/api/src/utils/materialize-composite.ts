@@ -1679,18 +1679,25 @@ export async function materializeCompositeGraph(
             });
             const facetId = (attached as { facetId?: unknown } | undefined)
               ?.facetId;
+            const attachStatus = (attached as { status?: string } | undefined)
+              ?.status;
+            // `exists`: the entity already wore this role, and the door wrote
+            // nothing. Not recorded as a facet THIS write created (its revert
+            // must never detach a role the entity had before); still advanced
+            // below when the op opted in.
             if (
-              (attached as { status?: string } | undefined)?.status ===
-                "attached" &&
+              (attachStatus === "attached" || attachStatus === "exists") &&
               typeof facetId === "string"
             ) {
-              facetResults.push({
-                opIndex,
-                ...(ref ? { ref } : {}),
-                entityId: realId,
-                facetId,
-                profileSlug: facetOp.profileSlug,
-              });
+              if (attachStatus === "attached") {
+                facetResults.push({
+                  opIndex,
+                  ...(ref ? { ref } : {}),
+                  entityId: realId,
+                  facetId,
+                  profileSlug: facetOp.profileSlug,
+                });
+              }
               // A role the entity already wore came back unchanged; an
               // opted-in op moves it FORWARD only (never backwards).
               const facetRow = (attached as { facet?: unknown }).facet;

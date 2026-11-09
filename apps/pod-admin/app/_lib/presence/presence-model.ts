@@ -30,6 +30,7 @@ import {
   sensitiveApprovalReason,
   type PresenceProof,
   type PresenceRequestKind,
+  type PresenceSensitivityChoice,
   type PresenceRefusalCode,
   type SensitiveActionPath,
 } from "@synap-core/types/presence";
@@ -64,7 +65,7 @@ export type PresenceChallengeSubject =
  *    proposal is named by its own heading.
  *  - `doing`: what the person is DOING when it is a change of their own, not
  *    an approval (a sensitive action, a passkey change, the mode switched
- *    off): "To {doing}, confirm with your passkey". Only this browser can
+ *    off), as its title: "Confirm “{doing}” with your passkey". Only this browser can
  *    prove it (Relay approves requests, it cannot sign this page's call), so
  *    the dialog offers no Relay.
  */
@@ -118,20 +119,48 @@ export type ProvePresence = (
  * Clients prove such a request UP FRONT, so `report` mode already runs the
  * proof path that `enforce` will require (review bf96d410, lane A).
  */
-export function needsPresence(proposal: {
-  targetType?: string | null;
-  proposalType?: string | null;
-  data?: unknown;
-}): boolean {
+export function needsPresence(
+  proposal: {
+    targetType?: string | null;
+    proposalType?: string | null;
+    data?: unknown;
+  },
+  /**
+   * W5: what this pod asks a passkey for (`presence.sensitivity`). A row a
+   * pod admin switched off is not proved up front; null (not read yet, or a
+   * failed read) = the lists as written, so the client asks rather than
+   * skips. The pod decides either way: a refusal still asks.
+   */
+  choice?: PresenceSensitivityChoice | null
+): boolean {
   const data = proposal.data as { asPerson?: unknown } | null | undefined;
   if (data?.asPerson === true) return true;
   if (!proposal.targetType || !proposal.proposalType) return false;
   return (
-    sensitiveApprovalReason({
-      targetType: proposal.targetType,
-      proposalType: proposal.proposalType,
-    }) !== null
+    sensitiveApprovalReason(
+      {
+        targetType: proposal.targetType,
+        proposalType: proposal.proposalType,
+      },
+      choice
+    ) !== null
   );
+}
+
+/**
+ * Is this subject proved UP FRONT (W5)? Every subject is, except a sensitive
+ * action a pod admin switched off (`presence.sensitivity`): that call goes
+ * without a proof, and a refusal from the pod (a choice changed since it was
+ * read) still asks. A request kind is decided by its door: always asked.
+ */
+export function asksUpFront(
+  subject: PresenceChallengeSubject,
+  choice?: PresenceSensitivityChoice | null
+): boolean {
+  if ("action" in subject && choice) {
+    return !choice.actionsOff.includes(subject.action.path);
+  }
+  return true;
 }
 
 const PRESENCE_CODES: ReadonlySet<string> = new Set([
@@ -287,4 +316,19 @@ export async function approveEachWithPresence<R>(args: {
     }
   }
   return out;
+}
+
+/**
+ * The typed code as a proof: six digits are a 2FA app's code, anything else
+ * a recovery code (16 Crockford symbols, typed with or without dashes).
+ */
+export function typedProof(
+  challengeId: string,
+  typed: string
+): PresenceProof | null {
+  const code = typed.replace(/\s+/g, "");
+  if (!code) return null;
+  return /^\d{6}$/.test(code)
+    ? { kind: "totp", challengeId, code }
+    : { kind: "recovery_code", challengeId, code: code.slice(0, 64) };
 }

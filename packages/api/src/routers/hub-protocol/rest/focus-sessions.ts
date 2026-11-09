@@ -123,7 +123,9 @@ import {
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import { sessionTargetsSchema } from "../../../services/focus-sessions/session-targets-wire.js";
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
+import type { StageSubjectStatusOutcome } from "../../../services/focus-sessions/stage-subject-status.js";
 import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
+import { refuseUndeclaredStage } from "@synap/jobs/utils/stage-declared.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
   answerDoorInputIssue,
@@ -1978,6 +1980,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // own agent, not the capture-path remap above: a person's start (or a
         // capture they made) is never re-shaped by a guessed template.
         matchTemplate: !!ctxAgentUserId,
+        // Facts bind for an agent's start, as on the MCP door (d01–d03).
+        bindOnFacts: !!ctxAgentUserId,
         // The same start offers the MCP door hands back (goals, near sessions,
         // and `homes` for a start that landed in no project) — suggestions
         // only, for an agent's start, so the CLI sees what MCP sees (S5).
@@ -2047,6 +2051,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(result.offers ? { offers: result.offers } : {}),
         ...(result.adopted ? { adopted: true } : {}),
         ...(result.targets ? { targets: result.targets } : {}),
+        // Born into a stage that moves the subject: what the move did.
+        ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
       });
     } catch (err) {
       // An agent's start that declares no criterion: a refusal, not a fault.
@@ -2309,6 +2315,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           toStage: patch.currentStage,
         });
         if (refusal) return c.json({ error: refusal }, 409);
+      }
+
+      // Step 3b: DECLARED STAGES ONLY — the advance door's rule
+      // (`stage-declared.ts`), asked after the gate floor (its 409 names the
+      // approval) and before this door's own multi-field UPDATE: a key the session's process does not declare is refused.
+      if (patch.currentStage !== undefined) {
+        const undeclared = await refuseUndeclaredStage(
+          existing,
+          patch.currentStage
+        );
+        if (undeclared) return c.json({ error: undeclared.reason }, 400);
       }
 
       // Step 2d: AGENT HAND-OFF — an agent putting ANOTHER agent on the roster
@@ -2688,6 +2705,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
       // `agentUserId` is threaded so the gate proposal carries agent provenance,
       // exactly as the MCP door does.
+      let subjectMove: StageSubjectStatusOutcome | undefined;
       if (updated && patch.currentStage !== undefined) {
         const { advanceSessionStage } =
           await import("../../../services/focus-sessions/advance-stage.js");
@@ -2709,6 +2727,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Report the status the ROW now holds — see the MCP door for why a
         // caller told "active" past an open gate is the dangerous answer.
         if (advance.paused) updated = { ...updated, status: "paused" };
+        // What the advance did to the subject (the MCP door's `subjectMove`).
+        const { reportedSubjectMove } =
+          await import("../../../services/focus-sessions/stage-subject-status.js");
+        subjectMove = reportedSubjectMove(advance.subjectStatus);
       }
 
       // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
@@ -2826,6 +2848,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(nudges ? { nudges } : {}),
         // What `targets` did: which were added, which already were.
         ...(targetsWrite ? { targets: targetsWrite } : {}),
+        // What a stage advance did to the subject, when the stage asked for a
+        // move: moved, waiting on a person, skipped or failed, with why.
+        ...(subjectMove ? { subjectMove } : {}),
         // What the follow DID — which playbook, which stage, how much
         // structure merged. Without it the caller must infer an attach from a
         // `playbookId` that appeared, and can never see a release's note.
@@ -3076,6 +3101,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ? { closedNotDone: result.closedNotDone }
           : {}),
         ...(result.waiting ? { waiting: result.waiting } : {}),
+        // What the end moved (`subjectProfile.onEnd`), each with why.
+        ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
@@ -3813,6 +3840,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               400
             );
           case "ref_unreachable":
+          case "ask_refused":
             // Named, never defaulted: the `default` below is the SUCCESS arm,
             // so an unhandled refusal would answer 200 with no label at all.
             return c.json({ error: result.reason }, 400);

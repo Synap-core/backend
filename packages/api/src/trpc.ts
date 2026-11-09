@@ -11,13 +11,18 @@
 
 import { TRPCError } from "@trpc/server";
 import { t } from "./init-trpc.js";
-import { assertFreshAuthentication } from "./utils/device-session.js";
+import {
+  assertFreshAuthentication,
+  runAsBrowserPerson,
+} from "./utils/device-session.js";
 import {
   presenceProofSchema,
   sensitiveActionReason,
   type PresenceProof,
+  type SensitiveActionPath,
 } from "@synap-core/types/presence";
 import { requireUserId } from "./utils/user-scoped.js";
+import type { PresencePass } from "./services/presence/pass.js";
 import { createLogger } from "@synap-core/core";
 import { db, eq, and } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
@@ -149,6 +154,18 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
 });
 
 /**
+ * A person's Kratos session (pod admin in a browser) runs in the scope that
+ * lets a typed presence code count (`runAsBrowserPerson`). Only
+ * `createContext` sets `sessionKind: "kratos"`; a Hub caller, a key or a
+ * device token never does.
+ */
+const browserPersonMiddleware = t.middleware((opts) =>
+  opts.ctx.authenticated && opts.ctx.sessionKind === "kratos"
+    ? runAsBrowserPerson(() => opts.next())
+    : opts.next()
+);
+
+/**
  * Public procedure (no auth required)
  * Base error-catching middleware applied to all procedures, then guest
  * containment: every procedure is built from this one, so a signed-in guest's
@@ -157,7 +174,8 @@ export const errorCatchingMiddleware = t.middleware(async ({ next }) => {
  */
 export const publicProcedure = t.procedure
   .use(errorCatchingMiddleware)
-  .use(guestContainmentMiddleware);
+  .use(guestContainmentMiddleware)
+  .use(browserPersonMiddleware);
 
 /**
  * Protected procedure (auth required)
@@ -201,13 +219,19 @@ export const protectedProcedure = publicProcedure
  *
  * A SENSITIVE ACTION (`SENSITIVE_ACTIONS`, keyed by this procedure's path; W3
  * slice 3, founder decision 1) also needs a proof of presence bound to THIS
- * call (`assertPresenceForAction`: the path and a digest of the raw input).
+ * call (`passPresenceForAction`: the path and a digest of the raw input).
  * A valid proof is a stronger step-up than a recent sign-in, so it satisfies
  * the step-up too. One mechanism: a door becomes sensitive by being listed;
  * the tripwire `presence-gate-every-door` classifies every credential door.
+ * The gate's PASS rides on `ctx.presencePass`: the service behind the act
+ * (`issueKey`, `setAppWriteMode`…) refuses to run without one, so its Hub
+ * twins must ask the same gate (`rest/_presence.ts`).
  */
 export const requireFreshAuthentication = t.middleware(async (opts) => {
-  if (sensitiveActionReason(opts.path)) {
+  const path = opts.path;
+  // The pass the service behind a sensitive act asks for (null elsewhere).
+  let presencePass: PresencePass | null = null;
+  if (isSensitiveActionPath(path)) {
     const userId = opts.ctx.userId;
     if (!userId) {
       throw new TRPCError({
@@ -230,21 +254,37 @@ export const requireFreshAuthentication = t.middleware(async (opts) => {
     }
     // Loaded only for a sensitive path: every router imports this module,
     // and the gate's graph (proof checks, Kratos) is theirs only when needed.
-    const { assertPresenceForAction } =
+    const { passPresenceForAction } =
       await import("./services/presence/gate.js");
-    const verdict = await assertPresenceForAction({
+    const { verdict, pass } = await passPresenceForAction({
       userId,
-      path: opts.path,
+      path,
       input: raw,
       proof,
+      keyCaller: isKeyCaller(opts.ctx),
     });
-    if (verdict) return opts.next();
+    presencePass = pass;
+    // A checked proof stands for the step-up; with none (`report`), the
+    // step-up still holds.
+    if (!verdict) assertFreshAuthentication(opts.ctx);
+  } else {
+    assertFreshAuthentication(opts.ctx);
   }
-  assertFreshAuthentication(opts.ctx);
-  // `next()` with no ctx: the procedure keeps the context its builder narrowed
-  // (`userId: string` after protectedProcedure).
-  return opts.next();
+  // Only this key is added: the procedure keeps the context its builder
+  // narrowed (`userId: string` after protectedProcedure).
+  return opts.next({ ctx: { presencePass } });
 });
+
+/** Is this path a sensitive action (`SENSITIVE_ACTIONS`)? */
+function isSensitiveActionPath(path: string): path is SensitiveActionPath {
+  return sensitiveActionReason(path) !== null;
+}
+
+/** A caller authenticated by a key (Bearer), not by a person's session. */
+function isKeyCaller(ctx: unknown): boolean {
+  const c = ctx as { apiKeyId?: unknown; keyType?: unknown } | null;
+  return typeof c?.apiKeyId === "string" || typeof c?.keyType === "string";
+}
 
 /** A credential door for any signed-in caller: {@link requireFreshAuthentication}. */
 export const credentialProcedure = protectedProcedure.use(

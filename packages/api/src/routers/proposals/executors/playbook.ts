@@ -17,6 +17,7 @@ import {
 import { createLinks } from "../../../services/links/links-service.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
+import type { GuidanceDeclaration } from "@synap-core/types/guidance";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import {
@@ -166,6 +167,10 @@ export function registerPlaybookExecutors(): void {
         // materializes with an empty requirement list — the agent's declaration
         // is silently dropped on the one path a human explicitly approved.
         requiredIntents: innerData.requiredIntents as string[] | undefined,
+        // The rules the playbook follows. Re-validated by `playbooks.create`
+        // (`playbookGuidanceSchema`); read back so an approved playbook keeps
+        // the guidance its proposal declared.
+        guidance: innerData.guidance as GuidanceDeclaration[] | undefined,
         subjectProfile: innerData.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: innerData.schedule,
@@ -296,6 +301,7 @@ export function registerPlaybookExecutors(): void {
         "stages",
         "criteria",
         "requiredIntents",
+        "guidance",
         "subjectProfile",
         // The process declarations. The update door FOLDS them into
         // `subjectProfile` before its gate, so a proposal carries them there;
@@ -740,6 +746,14 @@ export function registerPlaybookExecutors(): void {
           ...(typeof inner.parentSessionId === "string"
             ? { parentSessionId: inner.parentSessionId }
             : {}),
+          // A detour that blocks its parent: replayed with the parent, so an
+          // approved run waits the parent exactly as a direct run does (never
+          // a bare slice). Meaningless without a parent, so only with one.
+          ...(typeof inner.parentSessionId === "string" &&
+          typeof inner.suspendedIntent === "string" &&
+          inner.suspendedIntent.trim() !== ""
+            ? { suspendedIntent: inner.suspendedIntent }
+            : {}),
           // Filing: the project/track the run was proposed INTO. Re-validated
           // by the replay (`resolveTrackFiling` inside `runPlaybook`), so a
           // track archived since the proposal refuses rather than files.
@@ -774,6 +788,15 @@ export function registerPlaybookExecutors(): void {
             : {}),
           // Synap AI asked for this run stays Synap AI once approved.
           ...(inner.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+          // A trial (the rule lab) stays a trial once approved: re-validated
+          // by the run door's own schema.
+          ...(inner.trial && typeof inner.trial === "object"
+            ? {
+                trial: inner.trial as {
+                  guidanceOverride: Record<string, string>;
+                },
+              }
+            : {}),
         });
       let batch: BatchRunReceipt | undefined;
       // What this approval started — EVERY approval, not only a batch: the
@@ -993,6 +1016,75 @@ export function registerPlaybookExecutors(): void {
         userId
       );
       return { success: true };
+    },
+  });
+
+  // ── playbook / set_run_choice ─────────────────────────────────────────────
+  // An agent or a third-party app asked to remember who runs a playbook for
+  // the person (run choice v3, decision D7). Approving saves it FOR THAT
+  // PERSON, so only they may approve it. Replayed through
+  // `playbooksRouter.setRunChoice` as the approver with `governanceProposalId`
+  // set: the visibility load, the key grant and the "Synap AI cannot run an
+  // agents-only process" refusal all run again, and the write applies once.
+  // Idempotent: the assignment edge is one per person per playbook.
+  registerProposalExecutor({
+    key: "playbook/set_run_choice",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const playbookId = inner.playbookId;
+      const choice = inner.choice as
+        { executor?: unknown; agentUserId?: unknown } | undefined;
+      if (typeof playbookId !== "string" || !choice) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This run-choice proposal is missing its playbook or choice.",
+        });
+      }
+      if (typeof inner.ownerId === "string" && inner.ownerId !== userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "This is another person's choice of who runs their process: only they can approve it.",
+        });
+      }
+      const { playbooksRouter } = await import("../../playbooks.js");
+      const caller = playbooksRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        governanceProposalId: proposal.id,
+      } as unknown as Context);
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      assertApplied(
+        await caller.setRunChoice({
+          playbookId,
+          choice:
+            choice.executor === "external-agent" &&
+            typeof choice.agentUserId === "string"
+              ? { executor: "external-agent", agentUserId: choice.agentUserId }
+              : { executor: "is-agent" },
+        })
+      );
+
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: playbookId };
     },
   });
 }

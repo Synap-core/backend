@@ -493,8 +493,8 @@ describe("the facets an app reads are those a member of its spaces reads (B7)", 
 
   it("GET /entities/:id/connections: the neighbour's facetSlugs carry no Brand role", async () => {
     const slugsOf = async (key: KeyName) => {
-      // No lens: a workspace lens drops pod-wide neighbours for everyone
-      // (entityConnectionVisibilityWhere has no role lens).
+      // No lens: the facets read is the point here, not the lens (the lens
+      // is covered by entities.connections-works-at.pglite.test.ts).
       const res = await get(key, `/entities/${DEAL}/connections`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as {

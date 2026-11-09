@@ -14,6 +14,8 @@
  */
 
 import { z } from "zod";
+import type { Catalog, Locale } from "../i18n/index.js";
+import { buildObjectActionTitle, type VerbMood } from "../vocabulary/index.js";
 
 /** The first line of every signed presence message (its version). */
 export const PRESENCE_MESSAGE_VERSION = "synap-presence-v1" as const;
@@ -44,6 +46,14 @@ export const PRESENCE_REFUSAL_CODES = [
 
 export type PresenceRefusalCode = (typeof PRESENCE_REFUSAL_CODES)[number];
 
+/**
+ * A passkey removal refused because it is the person's last passkey while the
+ * proof of presence is on (W5): pod admin proves only with a passkey, so the
+ * person would lose the way to approve here. Not a presence refusal (no proof
+ * would change it): it is never in `PRESENCE_REFUSAL_CODES`.
+ */
+export const PRESENCE_LAST_PASSKEY = "PRESENCE_LAST_PASSKEY" as const;
+
 /** Is `code` (an error's `data.reasonCode`, a Hub `code`) a presence refusal? */
 export function isPresenceCode(code: unknown): code is PresenceRefusalCode {
   return (PRESENCE_REFUSAL_CODES as readonly unknown[]).includes(code);
@@ -72,6 +82,8 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   // on through skills/tools.setApproved, which then trust this proof).
   "capability.enable": "setup",
   "apiKey/create": "setup",
+  // Rotating a key mints a new secret (its executor replays apiKeys.rotate).
+  "apiKey/update": "setup",
   "vault/grant": "setup",
   "vault/vault.request": "setup",
   // Governance: who or what may do what on the pod.
@@ -109,17 +121,126 @@ export const SENSITIVE_PROPOSAL_TYPE_PREFIXES: Readonly<
 };
 
 /**
- * Is approving this proposal sensitive, and why? Exact `targetType/proposalType`
- * first, then the `proposalType` alone, then a prefix: the registry's own
- * lookup order, so a proposal never escapes by being typed one way or the other.
+ * What a pod admin switched OFF of the sensitive lists (W5, founder 6 Nov
+ * 2026: "pod settings (pod admin) should enable the user to select what is
+ * considered sensitive & what is not"). Stored per pod
+ * (`pod_settings.settings.presenceSensitivity`), written only by
+ * `presence.setSensitivity`. Absent or empty = every row on: today's lists.
+ * Only a row of `SENSITIVE_APPROVALS` / `SENSITIVE_PROPOSAL_TYPE_PREFIXES` /
+ * `SENSITIVE_ACTIONS` can be switched: a request filed AS the person and the
+ * requests a door decides (`PRESENCE_REQUEST_KINDS`) always ask.
  */
-export function sensitiveApprovalReason(proposal: {
+export interface PresenceSensitivityChoice {
+  /** Keys of `SENSITIVE_APPROVALS` or `SENSITIVE_PROPOSAL_TYPE_PREFIXES` switched off. */
+  approvalsOff: readonly string[];
+  /** Paths of `SENSITIVE_ACTIONS` switched off. */
+  actionsOff: readonly string[];
+}
+
+/** The default: nothing switched off, so the lists above hold as written. */
+export const DEFAULT_PRESENCE_SENSITIVITY: PresenceSensitivityChoice = {
+  approvalsOff: [],
+  actionsOff: [],
+};
+
+/** One switchable row of "What asks for your passkey". */
+export interface PresenceSensitivityRow {
+  /** An approval (`<targetType>/<proposalType>`, a type, or a type prefix) or an action (a tRPC path). */
+  kind: "approval" | "action";
+  key: string;
+  reason: SensitiveReason;
+  /** A type prefix (`governance.`): every proposal type that starts with it. */
+  prefix?: true;
+}
+
+/** Every switchable row, derived from the lists, in their order. */
+export function presenceSensitivityRows(): PresenceSensitivityRow[] {
+  return [
+    ...Object.entries(SENSITIVE_APPROVALS).map(([key, reason]) => ({
+      kind: "approval" as const,
+      key,
+      reason,
+    })),
+    ...Object.entries(SENSITIVE_PROPOSAL_TYPE_PREFIXES).map(
+      ([key, reason]) => ({
+        kind: "approval" as const,
+        key,
+        reason,
+        prefix: true as const,
+      })
+    ),
+    ...Object.entries(SENSITIVE_ACTIONS).map(([key, reason]) => ({
+      kind: "action" as const,
+      key,
+      reason: reason as SensitiveReason,
+    })),
+  ];
+}
+
+/**
+ * A choice as the pod stores it: only keys of the lists, each once, sorted.
+ * An unknown key (a row removed from the lists since) is dropped, never kept
+ * to switch off a row that may come back meaning something else.
+ */
+export function normalizePresenceSensitivity(
+  choice: Partial<PresenceSensitivityChoice> | null | undefined
+): PresenceSensitivityChoice {
+  const approvals = new Set([
+    ...Object.keys(SENSITIVE_APPROVALS),
+    ...Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES),
+  ]);
+  const actions = new Set(Object.keys(SENSITIVE_ACTIONS));
+  const keep = (keys: readonly string[] | undefined, known: Set<string>) =>
+    [...new Set(keys ?? [])].filter((k) => known.has(k)).sort();
+  return {
+    approvalsOff: keep(choice?.approvalsOff, approvals),
+    actionsOff: keep(choice?.actionsOff, actions),
+  };
+}
+
+/**
+ * Does `next` switch OFF a row `current` asks for? That change lets a
+ * session alone do more, so it needs a proof of presence in every mode;
+ * switching rows back ON only takes power away.
+ */
+export function sensitivityLoosens(
+  current: PresenceSensitivityChoice,
+  next: PresenceSensitivityChoice
+): boolean {
+  const was = (list: readonly string[]) => new Set(list);
+  const approvals = was(current.approvalsOff);
+  const actions = was(current.actionsOff);
+  return (
+    next.approvalsOff.some((k) => !approvals.has(k)) ||
+    next.actionsOff.some((k) => !actions.has(k))
+  );
+}
+
+/**
+ * The request id a proof for a sensitivity change names
+ * (`presence_sensitivity:<id>`): hex SHA-256 of the normalized new choice, so
+ * the proof is bound to exactly the rows the person saw switched off.
+ */
+export function presenceSensitivityId(
+  choice: PresenceSensitivityChoice
+): Promise<string> {
+  return sha256Hex(canonicalJson(normalizePresenceSensitivity(choice)));
+}
+
+/** The wire shape of a choice (`presence.setSensitivity`). */
+export const presenceSensitivitySchema = z.object({
+  approvalsOff: z.array(z.string().min(1).max(200)).max(200),
+  actionsOff: z.array(z.string().min(1).max(200)).max(200),
+});
+
+/** The row of the approval lists this proposal falls under, or null. */
+function sensitiveApprovalRow(proposal: {
   targetType: string;
   proposalType: string;
-}): SensitiveReason | null {
+}): { key: string; reason: SensitiveReason } | null {
   const composite = `${proposal.targetType}/${proposal.proposalType}`;
   if (Object.prototype.hasOwnProperty.call(SENSITIVE_APPROVALS, composite)) {
-    return SENSITIVE_APPROVALS[composite]!;
+    return { key: composite, reason: SENSITIVE_APPROVALS[composite]! };
   }
   if (
     Object.prototype.hasOwnProperty.call(
@@ -127,14 +248,38 @@ export function sensitiveApprovalReason(proposal: {
       proposal.proposalType
     )
   ) {
-    return SENSITIVE_APPROVALS[proposal.proposalType]!;
+    return {
+      key: proposal.proposalType,
+      reason: SENSITIVE_APPROVALS[proposal.proposalType]!,
+    };
   }
   for (const [prefix, reason] of Object.entries(
     SENSITIVE_PROPOSAL_TYPE_PREFIXES
   )) {
-    if (proposal.proposalType.startsWith(prefix)) return reason;
+    if (proposal.proposalType.startsWith(prefix))
+      return { key: prefix, reason };
   }
   return null;
+}
+
+/**
+ * Is approving this proposal sensitive, and why? Exact `targetType/proposalType`
+ * first, then the `proposalType` alone, then a prefix: the registry's own
+ * lookup order, so a proposal never escapes by being typed one way or the other.
+ * With the pod's `choice`, a row a pod admin switched off is not sensitive;
+ * the row that matched decides (a switched-off composite never falls through
+ * to its type alone).
+ */
+export function sensitiveApprovalReason(
+  proposal: {
+    targetType: string;
+    proposalType: string;
+  },
+  choice?: PresenceSensitivityChoice | null
+): SensitiveReason | null {
+  const row = sensitiveApprovalRow(proposal);
+  if (!row) return null;
+  return choice?.approvalsOff.includes(row.key) ? null : row.reason;
 }
 
 /**
@@ -166,14 +311,18 @@ export function enrollmentSubject(challengeId: string): string {
 /** How the audit names the approver: "Antoine (approved with Face ID on iPhone, requested from MacBook-Pro)". */
 export function presenceActorLabel(parts: {
   person: string;
-  method: "passkey" | "device_key";
+  method: PresenceProofKind;
   deviceLabel?: string | null;
   requestedFrom?: string | null;
 }): string {
   const how =
     parts.method === "passkey"
       ? "approved with a passkey"
-      : `approved with Face ID or the passcode on ${parts.deviceLabel ?? "a device"}`;
+      : parts.method === "totp"
+        ? "approved with a code from an authenticator app"
+        : parts.method === "recovery_code"
+          ? "approved with a recovery code"
+          : `approved with Face ID or the passcode on ${parts.deviceLabel ?? "a device"}`;
   const from = parts.requestedFrom
     ? `, requested from ${parts.requestedFrom}`
     : "";
@@ -211,7 +360,43 @@ export const presenceProofSchema = z.discriminatedUnion("kind", [
       authenticatorAttachment: z.string().nullish(),
     }),
   }),
+  // A code the person TYPES (recovery ladder, founder, 6 Nov 2026): only in
+  // pod admin's presence dialog, a person's browser session. The pod refuses
+  // it from a key or a Synap app's device session.
+  z.object({
+    kind: z.literal("totp"),
+    challengeId: z.string().uuid(),
+    code: z.string().regex(/^\d{6}$/, "six digits"),
+  }),
+  z.object({
+    kind: z.literal("recovery_code"),
+    challengeId: z.string().uuid(),
+    code: z.string().min(1).max(64),
+  }),
 ]);
+
+/** Every kind of proof. */
+export type PresenceProofKind = PresenceProof["kind"];
+
+/**
+ * The proofs a person TYPES instead of signing (an authenticator app code, a recovery
+ * code). Accepted only from a person's browser session (pod admin's dialog),
+ * never from a key or a Synap app's device session, and limited to
+ * `PRESENCE_TYPED_FAILURES_MAX` wrong codes per person in
+ * `PRESENCE_TYPED_FAILURE_WINDOW_SECONDS`.
+ */
+export const PRESENCE_TYPED_PROOF_KINDS = ["totp", "recovery_code"] as const;
+export type PresenceTypedProofKind =
+  (typeof PRESENCE_TYPED_PROOF_KINDS)[number];
+
+export function isTypedPresenceProof(
+  kind: PresenceProofKind
+): kind is PresenceTypedProofKind {
+  return (PRESENCE_TYPED_PROOF_KINDS as readonly string[]).includes(kind);
+}
+
+export const PRESENCE_TYPED_FAILURES_MAX = 5;
+export const PRESENCE_TYPED_FAILURE_WINDOW_SECONDS = 15 * 60;
 
 /**
  * What an approval carries to prove the person is there: the wire schema's
@@ -269,6 +454,24 @@ export const PRESENCE_REQUEST_KINDS = {
   passkey_change: "setup",
   /** presence.setMode back to `report`: switching the proof off. The id is `report`. */
   presence_mode: "governance",
+  /**
+   * presence.setSensitivity when it switches a row OFF (W5): what asks for a
+   * passkey, chosen by a pod admin. The id is `presenceSensitivityId` of the
+   * new choice.
+   */
+  presence_sensitivity: "governance",
+  /**
+   * presence.totp.confirm when the person already has a factor (recovery
+   * ladder): an existing factor approves the new 2FA app. The id is the
+   * pending factor's id.
+   */
+  totp_enroll: "setup",
+  /**
+   * New recovery codes (`POST /api/account-recovery/codes`) when the person
+   * already has a factor: recovery codes prove presence, so a new batch is a
+   * new factor. The id is the person's own user id.
+   */
+  recovery_codes: "setup",
 } as const satisfies Record<string, SensitiveReason>;
 
 export type PresenceRequestKind = keyof typeof PRESENCE_REQUEST_KINDS;
@@ -348,9 +551,12 @@ export const SENSITIVE_ACTIONS = {
   "intelligenceRegistry.update": "setup",
   "intelligenceRegistry.rotateKey": "setup",
   "intelligence.registerCustomService": "setup",
-  // A computer's key: how long it lives, whether it runs scripts, whose it is.
+  // A computer's key: how long it lives, whether it runs scripts or installs
+  // from the pod, whose it is.
   "machines.setKeyTtl": "setup",
   "machines.setRunsScripts": "setup",
+  "machines.setHostsServices": "setup",
+  "machines.setWakesAgents": "setup",
   "machines.setBelongsTo": "setup",
   // A secret's value, shown to the session.
   "secretsVault.reveal": "setup",
@@ -373,10 +579,200 @@ export const SENSITIVE_ACTIONS = {
 
 export type SensitiveActionPath = keyof typeof SENSITIVE_ACTIONS;
 
-/** Is this tRPC path a sensitive action? */
-export function sensitiveActionReason(path: string): SensitiveReason | null {
-  return (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[path] ?? null;
+/**
+ * Is this tRPC path a sensitive action? With the pod's `choice`, a path a pod
+ * admin switched off is not (the step-up's fresh sign-in still holds).
+ */
+export function sensitiveActionReason(
+  path: string,
+  choice?: PresenceSensitivityChoice | null
+): SensitiveReason | null {
+  if (!Object.prototype.hasOwnProperty.call(SENSITIVE_ACTIONS, path)) {
+    return null;
+  }
+  if (choice?.actionsOff.includes(path)) return null;
+  return (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[path]!;
 }
+
+/**
+ * What confirming each sensitive action does, as vocabulary TOKENS: the title
+ * door (`buildObjectActionTitle`) turns them into words, in either mood and
+ * language, so no client keeps a label map of its own. Typed over every path:
+ * a path added to `SENSITIVE_ACTIONS` fails the build here until it is named.
+ */
+export const SENSITIVE_ACTION_TOKENS = {
+  "apiKeys.create": { action: "create", objectKind: "api_key" },
+  "apiKeys.rotate": { action: "rotate", objectKind: "api_key" },
+  "apiKeys.setGrants": { action: "update", objectKind: "api_key" },
+  "apiKeys.connectIntegration": { action: "connect", objectKind: "app" },
+  "apiKeys.beginMcpConnect": { action: "connect", objectKind: "agent" },
+  "apiKeys.createSystemKey": { action: "create", objectKind: "api_key" },
+  "apiKeys.adminCreateServiceKey": { action: "create", objectKind: "api_key" },
+  "apiKeys.createForWorkspace": { action: "create", objectKind: "api_key" },
+  "apiKeys.setMachineDefaults": { action: "update", objectKind: "machine" },
+  "apps.issueKey": { action: "create", objectKind: "api_key" },
+  "apps.setWriteMode": { action: "update", objectKind: "app" },
+  "apps.setRedirectUris": { action: "update", objectKind: "app" },
+  "apps.setSignInPolicy": { action: "update", objectKind: "app" },
+  "intelligenceRegistry.register": {
+    action: "connect",
+    objectKind: "intelligence_service",
+  },
+  "intelligenceRegistry.update": {
+    action: "update",
+    objectKind: "intelligence_service",
+  },
+  "intelligenceRegistry.rotateKey": { action: "rotate", objectKind: "api_key" },
+  "intelligence.registerCustomService": {
+    action: "connect",
+    objectKind: "intelligence_service",
+  },
+  "machines.setKeyTtl": { action: "update", objectKind: "machine" },
+  "machines.setRunsScripts": { action: "update", objectKind: "machine" },
+  "machines.setHostsServices": { action: "update", objectKind: "machine" },
+  "machines.setWakesAgents": { action: "update", objectKind: "machine" },
+  "machines.setBelongsTo": { action: "update", objectKind: "machine" },
+  "secretsVault.reveal": { action: "see", objectKind: "secret" },
+  "agentUsers.create": { action: "create", objectKind: "agent" },
+  "agentUsers.update": { action: "update", objectKind: "agent" },
+  "agentUsers.setPosture": { action: "update", objectKind: "agent" },
+  "connectors.setKeepSyncing": { action: "update", objectKind: "connection" },
+  "trustedIssuers.adminRegister": { action: "add", objectKind: "issuer" },
+  "governanceRules.create": { action: "create", objectKind: "rule" },
+  "governanceRules.widenCell": { action: "widen_scopes", objectKind: "agent" },
+  "governanceRules.proposeNextRung": {
+    action: "widen_scopes",
+    objectKind: "agent",
+  },
+  "governanceRules.setReversibleDefault": {
+    action: "update",
+    objectKind: "rule",
+  },
+  "governanceRules.setOwnOrganiseDefault": {
+    action: "update",
+    objectKind: "rule",
+  },
+  "governanceRules.setActionMode": { action: "update", objectKind: "rule" },
+  "govConfig.set": { action: "update", objectKind: "rule" },
+} as const satisfies Record<
+  SensitiveActionPath,
+  { action: string; objectKind: string }
+>;
+
+/**
+ * A sensitive action's title through the one title door: imperative (what
+ * confirming it WILL do, "Create API key") by default, past for history.
+ */
+export function sensitiveActionTitle(
+  path: SensitiveActionPath,
+  opts: { mood?: VerbMood; locale?: Locale } = {}
+): string {
+  const tokens = SENSITIVE_ACTION_TOKENS[path];
+  return buildObjectActionTitle({
+    action: tokens.action,
+    objectKind: tokens.objectKind,
+    mood: opts.mood ?? "imperative",
+    ...(opts.locale ? { locale: opts.locale } : {}),
+  });
+}
+
+/**
+ * The ways a person can prove presence, counted for the "two ways in" rule
+ * (recovery ladder, founder, 6 Nov 2026): a pod in `enforce` must not rest on
+ * ONE thing the person can lose. What counts as one way is what is lost
+ * together:
+ *  - every passkey together (they sync in one password manager, and a lost
+ *    manager loses them all: the 6 Nov lockout);
+ *  - each device key on its own (it never leaves its device);
+ *  - the 2FA app;
+ *  - the recovery codes, while one is unused.
+ */
+export interface PresenceFactorCounts {
+  passkeys: number;
+  deviceKeys: number;
+  totp: boolean;
+  recoveryCodes: number;
+}
+
+export function presenceWaysIn(f: PresenceFactorCounts): number {
+  return (
+    (f.passkeys > 0 ? 1 : 0) +
+    f.deviceKeys +
+    (f.totp ? 1 : 0) +
+    (f.recoveryCodes > 0 ? 1 : 0)
+  );
+}
+
+/** How many ways in `enforce` needs: to turn it on, and to stay in it when one is removed. */
+export const PRESENCE_ENFORCE_MIN_WAYS = 2;
+
+/** The refusal code of a change that would leave fewer than two ways in under `enforce`. */
+export const PRESENCE_NEEDS_TWO_WAYS = "PRESENCE_NEEDS_TWO_WAYS" as const;
+
+/**
+ * "I lost my passkey" (recovery ladder): a request to clear the person's
+ * proof factors. Every device of theirs is told; any of their signed-in
+ * sessions can cancel it for this long; after it, the person (signed in AT the
+ * pod within `PRESENCE_ENROLL_FRESH_SECONDS`) finishes it and enrols a first
+ * factor again. An email is never a proof: a mailbox an AI reads only starts
+ * this wait.
+ */
+export const PRESENCE_RECOVERY_DELAY_SECONDS = 24 * 3600;
+
+/**
+ * The ONE recovery door is a pod admin page, `CONSOLE_PAGES.presenceRecovery`
+ * (`@synap-core/types/console`). Every presence dialog (pod admin, Relay, the
+ * desktop app, the web app) links to it with
+ * `consoleHref(origin, { page: "presenceRecovery" })`; no surface runs its own.
+ */
+
+/** The state of a person's recovery request, as every surface reads it. */
+export type PresenceRecoveryStatus = "pending" | "cancelled" | "completed";
+
+/**
+ * The ONE wording of proof of presence that every client shows (pod admin,
+ * Relay, the desktop app), as a catalog of the i18n door: English is the
+ * source and the type.
+ *  - `setting`: the pod setting's name;
+ *  - `on` / `off`: its state. Off is "Off" everywhere (the pod still records
+ *    each approval made without a proof; the setting's own line says so);
+ *  - `refused`: the title of a refusal for want of a proof;
+ *  - `sensitive`: what needs it;
+ *  - `where`: where the person can give it.
+ * DRAFT French ("vous"), awaiting the founder's review.
+ */
+export const presenceWordsEn = {
+  "presence.setting": "Approvals need you in person",
+  "presence.on": "On",
+  "presence.off": "Off",
+  "presence.refused": "Needs you in person",
+  "presence.sensitive":
+    "Connecting an AI or an app, changing keys and rules, deploys and deletions",
+  "presence.where":
+    "You approve in pod admin with a passkey, in Relay with Face ID, or in the desktop app with Touch ID.",
+  "presence.lost": "I lost my passkey",
+  "presence.useCode": "Use a code instead",
+  "presence.twoWays":
+    "Keep two ways in, so losing one never locks you out: a passkey and an authenticator app, or a passkey and recovery codes.",
+} as const;
+
+export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
+  "presence.setting": "Les approbations demandent votre présence",
+  "presence.on": "Activé",
+  "presence.off": "Désactivé",
+  "presence.refused": "Demande votre présence",
+  "presence.sensitive":
+    "Connecter une IA ou une app, modifier des clés et des règles, les déploiements et les suppressions",
+  "presence.where":
+    "Vous approuvez dans l’administration du pod avec une clé d’accès, dans Relay avec Face ID, ou dans l’app de bureau avec Touch ID.",
+  "presence.lost": "J’ai perdu ma clé d’accès",
+  "presence.useCode": "Utiliser un code",
+  "presence.twoWays":
+    "Gardez deux moyens d’accès, pour qu’en perdre un ne vous bloque jamais : une clé d’accès et une app d’authentification, ou une clé d’accès et des codes de récupération.",
+};
+
+/** The shared presence words, per catalog language (`useT` / `createT`). */
+export const PRESENCE_WORDS = { en: presenceWordsEn, fr: presenceWordsFr };
 
 /**
  * JSON with object keys sorted at every level, so the client and the pod
@@ -419,3 +815,5 @@ export async function presenceActionDigest(
 export function presenceActionSubject(path: string, digest: string): string {
   return `action:${path}:${digest}`;
 }
+
+export * from "./authenticators.js";

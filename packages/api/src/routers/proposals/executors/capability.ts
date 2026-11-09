@@ -656,7 +656,7 @@ export function registerCapabilityExecutors(): void {
         // by applyProposalApproval, so setApproved does not ask again.
         presenceChecked: "applyProposalApproval",
         workspaceId: proposal.workspaceId ?? null,
-      } as unknown as Context);
+      });
       for (const id of skillIds) {
         await caller.setApproved({ id, approved: true });
       }
@@ -672,7 +672,7 @@ export function registerCapabilityExecutors(): void {
           // by applyProposalApproval, so setApproved does not ask again.
           presenceChecked: "applyProposalApproval",
           workspaceId: proposal.workspaceId ?? null,
-        } as unknown as Context);
+        });
         for (const id of toolIds) {
           await toolsCaller.setApproved({ id, approved: true });
         }
@@ -985,12 +985,31 @@ export function registerCapabilityExecutors(): void {
       // bare insert throw 23505 BEFORE the status update below — an opaque 500
       // on a proposal that could then never be approved. Resolving the address
       // first turns an approved duplicate into a reuse.
+      // The declared container config the person approved (computer blocks
+      // included): dropping it materialized a container no installation
+      // request could use (NOT_INSTALLABLE, dogfood 2026-11-08).
+      const metadata =
+        inner.metadata &&
+        typeof inner.metadata === "object" &&
+        !Array.isArray(inner.metadata)
+          ? (inner.metadata as Record<string, unknown>)
+          : undefined;
+
       await resolveOrCreateContainer(db, {
         workspaceId: wsLens,
         createdBy: proposal.agentUserId ?? userId,
         name,
         description: (inner.description as string | null) ?? undefined,
         templateKey,
+        // The column is the address; its metadata twin never disagrees.
+        ...(metadata
+          ? {
+              metadata: {
+                ...metadata,
+                ...(templateKey ? { templateKey } : {}),
+              },
+            }
+          : {}),
       });
 
       await transitionProposal(db, {

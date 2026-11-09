@@ -23,6 +23,21 @@ const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
 const M0376 = read("0376_status_signal_raised.sql");
 const BASELINE = read("0000_baseline_schema.sql");
+/**
+ * This migration's own baseline block, up to the next block's header: a
+ * later block (one that names tables this test does not stand up) must not
+ * run here.
+ */
+function ownBlock(header: string): string {
+  const from = BASELINE.indexOf(header);
+  const rest = BASELINE.slice(from + header.length);
+  // The next block starts with its own `-- 0NNN:` header line.
+  const next = rest.search(/\n-- 0\d{3}[a-z]?:/);
+  return BASELINE.slice(
+    from,
+    next === -1 ? undefined : from + header.length + next
+  );
+}
 
 let pg: PGlite;
 beforeAll(async () => {
@@ -48,7 +63,7 @@ describe("migration 0376 — status signal claims", () => {
     );
     expect((await columns(pg)).sort()).toEqual([...declared].sort());
     const base = new PGlite();
-    const block = BASELINE.slice(BASELINE.indexOf("-- 0376"));
+    const block = ownBlock("-- 0376");
     await base.exec(block);
     expect((await columns(base)).sort()).toEqual([...declared].sort());
     await base.close();

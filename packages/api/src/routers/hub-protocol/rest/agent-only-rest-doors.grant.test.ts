@@ -30,6 +30,20 @@ vi.mock("../../../services/agent-identity-service.js", async (orig) => ({
   },
 }));
 
+// Proof of presence (backend#874): POST /agent-users asks the gate, tested in
+// services/presence. Here the gate lets the call through as `report` does, so
+// this file keeps reading what the GRANT decides.
+vi.mock("../../../services/presence/gate.js", async () => {
+  const { mintPresencePass } =
+    await import("../../../services/presence/pass.js");
+  return {
+    passPresenceForAction: async (args: { path: never; userId: string }) => ({
+      verdict: null,
+      pass: mintPresencePass(args.path, args.userId, false),
+    }),
+  };
+});
+
 import { runWithGrant, type KeyGrant } from "@synap/database";
 import type { HubHono, HubVariables } from "./_shared.js";
 import { registerConnectorsRoutes } from "./connectors.js";

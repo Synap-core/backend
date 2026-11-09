@@ -189,7 +189,7 @@ describe("the read: owed slot → row", () => {
 });
 
 describe("mcp-slot-schema-parity: every advertised slot schema offers it", () => {
-  it("start/update expectedOutputs, update addOutput and outcomes", async () => {
+  it("start/update outcomes (the aliases are advertised loose, parsed strictly)", async () => {
     const list = await tools.list();
     const props = (name: string, path: string[]) => {
       const tool = list.find((t) => t.name === name)!;
@@ -197,19 +197,8 @@ describe("mcp-slot-schema-parity: every advertised slot schema offers it", () =>
       for (const step of path) node = (node as never)[step] as never;
       return Object.keys(node);
     };
-    const item = ["properties", "expectedOutputs", "items", "properties"];
+    const item = ["properties", "outcomes", "items", "properties"];
     expect(props("synap_start_session", item)).toContain("unblocks");
     expect(props("synap_update_session", item)).toContain("unblocks");
-    expect(
-      props("synap_update_session", ["properties", "addOutput", "properties"])
-    ).toContain("unblocks");
-    expect(
-      props("synap_update_session", [
-        "properties",
-        "outcomes",
-        "items",
-        "properties",
-      ])
-    ).toContain("unblocks");
   });
 });

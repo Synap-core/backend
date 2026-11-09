@@ -46,6 +46,13 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
   };
 });
+// The refresh door is not about Synap AI's ceiling: the delegation names no personal agent here.
+vi.mock("../../../services/synap-ai-ceiling.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../services/synap-ai-ceiling.js")
+  >()),
+  resolveSynapAiCeiling: async () => ({ status: "not-applicable" }),
+}));
 vi.mock("@synap/intelligence-client", () => ({
   isIntelligenceServiceOrigin: async (origin: string) =>
     knownOrigins.has(origin),

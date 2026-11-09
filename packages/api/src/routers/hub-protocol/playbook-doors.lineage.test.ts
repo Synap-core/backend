@@ -57,4 +57,30 @@ describe("runPlaybookDoor — lineage", () => {
     expect(run).toHaveBeenCalledOnce();
     expect(run.mock.calls[0]![0]).not.toHaveProperty("parentSessionId");
   });
+
+  it("an explicit parentSessionId wins over the bound session and carries suspendedIntent", async () => {
+    await runPlaybookDoor(
+      { ...IDENTITY, sessionId: "sess-a" },
+      {
+        playbookId: "pb-1",
+        parentSessionId: "sess-b",
+        suspendedIntent: "resume the launch",
+        source: "mcp",
+      }
+    );
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionId: "sess-b",
+        suspendedIntent: "resume the launch",
+      })
+    );
+  });
+
+  it("passes no suspendedIntent when none was asked for", async () => {
+    await runPlaybookDoor(
+      { ...IDENTITY, sessionId: "sess-a" },
+      { playbookId: "pb-1", source: "mcp" }
+    );
+    expect(run.mock.calls[0]![0]).not.toHaveProperty("suspendedIntent");
+  });
 });

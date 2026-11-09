@@ -15,6 +15,15 @@
  * status in `reportedStatuses()`, decided after the cursor. Every decision
  * door stamps `reviewed_at` (approve, reject, approval_failed).
  *
+ * SCOPED TO THE CALLING SESSION (reply shaping, 2026-11-05). A call that
+ * carries a session is told only the decisions on proposals FILED UNDER that
+ * session (`proposals.session_id`). Lanes of one wave share one agent identity,
+ * so the agent-wide read handed every new session the last 10 minutes of its
+ * peers' decisions (measured: an unrelated list of 6 approved proposals on a
+ * lane's own `start_session` reply; the digest rode on 25–33 % of write
+ * replies at ~110–130 tokens). A call with no session (a read: reads are never
+ * attributed) keeps the agent-wide read, on its own cursor.
+ *
  * THE CURSOR is process memory, one per (agent, person, session), so two
  * sessions are each told once. `reviewed_at` is an APP clock stamped before
  * its row commits, so it is not monotonic in commit order: a decision stamped
@@ -26,9 +35,9 @@
  * a decision just before the restart can be told twice); several API
  * processes keep one cursor each. A failed read does NOT move the cursor.
  *
- * Bounded at `PROPOSAL_UPDATES_MAX`, oldest first; when more were decided, the
- * cursor stops at the last one reported, so the rest arrive on the next call
- * instead of being dropped.
+ * Bounded at `PROPOSAL_UPDATES_MAX` (3) per call, oldest first; when more were
+ * decided, the cursor stops at the last one reported, so the rest arrive on the
+ * next calls instead of being dropped.
  */
 import {
   and,
@@ -47,7 +56,7 @@ import { openLink } from "../../utils/deep-links.js";
 
 const logger = createLogger({ module: "proposal-updates-digest" });
 
-export const PROPOSAL_UPDATES_MAX = 10;
+export const PROPOSAL_UPDATES_MAX = 3;
 /** A cursor's first look back (no call seen yet in this process). */
 export const FIRST_CALL_LOOKBACK_MS = 10 * 60 * 1000;
 /** How far each read looks back behind its cursor (late commits). */
@@ -148,6 +157,7 @@ export async function takeProposalUpdates(
         and(
           eq(proposals.agentUserId, agentUserId),
           eq(proposals.subjectUserId, userId),
+          sessionId ? eq(proposals.sessionId, sessionId) : undefined,
           inArray(proposals.status, reportedStatuses()),
           gt(proposals.reviewedAt, since),
           lte(proposals.reviewedAt, now),

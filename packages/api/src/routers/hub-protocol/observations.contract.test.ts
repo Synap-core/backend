@@ -75,12 +75,20 @@ const resolver = vi.hoisted(() => ({
   session: null as string | null,
   fail: false,
   asked: [] as unknown[],
+  /** What `sessionsInDeploy` answers for a `dev.deployed` fact. */
+  deploySessions: [] as string[],
+  deployAsked: [] as unknown[],
 }));
 vi.mock("../../services/dev-loop/pr-session-resolver.js", async () => ({
   sessionForDevLoopFact: async (input: unknown) => {
     resolver.asked.push(input);
     if (resolver.fail) throw new Error("db down");
     return resolver.session;
+  },
+  sessionsInDeploy: async (input: unknown) => {
+    resolver.deployAsked.push(input);
+    if (resolver.fail) throw new Error("db down");
+    return resolver.deploySessions;
   },
 }));
 
@@ -685,6 +693,56 @@ describe("observations.append — the resolved session is stamped before automat
       resolver.fail = false;
     }
     expect(appended[0].data.sessionId).toBeUndefined();
+  });
+
+  it("a deploy names the sessions whose PR its build carries — on the row AND the trigger (finding 8c08b138)", async () => {
+    appended.length = 0;
+    triggerSends.length = 0;
+    resolver.deployAsked.length = 0;
+    const A = "11111111-1111-4111-8111-111111111111";
+    const B = "22222222-2222-4222-8222-222222222222";
+    resolver.deploySessions = [A, B];
+    try {
+      await callAppend([
+        {
+          type: "dev.deployed",
+          subjectId: "pod-update:u-1",
+          subjectType: "deploy",
+          data: {
+            target: "pod.example",
+            sha: "a".repeat(40),
+            repo: "Synap-core/backend",
+          },
+        },
+      ]);
+    } finally {
+      resolver.deploySessions = [];
+    }
+    expect(resolver.deployAsked[0]).toMatchObject({
+      userId: "user-1",
+      data: { sha: "a".repeat(40), repo: "Synap-core/backend" },
+    });
+    expect(appended[0].data.sessionIds).toEqual([A, B]);
+    const hop = triggerSends.find(([q]) => q === "automation-trigger-match");
+    expect(hop![1].data.sessionIds).toEqual([A, B]);
+  });
+
+  it("a producer's own sessionIds on a deploy is dropped, never trusted", async () => {
+    appended.length = 0;
+    resolver.deploySessions = [];
+    await callAppend([
+      {
+        type: "dev.deployed",
+        subjectId: "pod-update:u-2",
+        subjectType: "deploy",
+        data: {
+          target: "pod.example",
+          sha: "b".repeat(40),
+          sessionIds: ["33333333-3333-4333-8333-333333333333"],
+        },
+      },
+    ]);
+    expect(appended[0].data.sessionIds).toBeUndefined();
   });
 
   it("asks nothing for a fact outside the dev-loop contract", async () => {

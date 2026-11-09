@@ -8,7 +8,16 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("external durable chat_turns wiring (tripwire)", () => {
+  // The wiring lives in the ONE shared handler; the external route and the
+  // Hub (app) door both call it, which the next test pins.
   const chatSource = readFileSync(
+    new URL(
+      "../../services/chat-turns/stream-chat-request.ts",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  const externalRouteSource = readFileSync(
     new URL("./chat.ts", import.meta.url),
     "utf8"
   );
@@ -42,6 +51,10 @@ describe("external durable chat_turns wiring (tripwire)", () => {
     const fetchIdx = chatSource.indexOf("fetch(`${isUrl}/api/chat/stream`");
     expect(beginIdx).toBeGreaterThan(0);
     expect(fetchIdx).toBeGreaterThan(beginIdx);
+  });
+
+  it("the external route runs the shared durable-turn handler", () => {
+    expect(externalRouteSource).toContain("handleChatStream");
   });
 
   it("external doors reopen failed turns under same requestId (D5)", () => {

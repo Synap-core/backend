@@ -102,6 +102,40 @@ export type AskProvideKind = (typeof ASK_PROVIDE_KINDS)[number];
 // ─── Options (capture's chip, minus capture's own apply semantics) ──────────
 
 /**
+ * An http(s) URL and nothing else: `javascript:`, `data:`, `file:` and the rest
+ * are refused. Same stance as `MediaRef` (presentation): an external URL is
+ * drawn as a link chip, never an `<img>`; this only keeps a script-capable
+ * scheme out of storage.
+ */
+const HTTP_URL = /^https?:\/\//i;
+
+/**
+ * A media ref on an option. Exactly one ref shape: a url, an uploaded asset,
+ * or a pod entity.
+ *
+ * `assetId` and `entityId` are ids only. Nothing here checks the object exists
+ * or is visible to whoever answers: a surface MUST resolve either under the
+ * VIEWER's own access (as it does for any stored file or entity) and draw
+ * nothing when it cannot, never trust the writer's say-so.
+ */
+export const AskOptionMediaSchema = z.object({
+  kind: z.enum(["image", "video", "audio"]),
+  ref: z.union([
+    z.strictObject({
+      url: z
+        .string()
+        .url()
+        .max(2000)
+        .refine((u) => HTTP_URL.test(u), { message: "url must be http(s)" }),
+    }),
+    z.strictObject({ assetId: z.string().uuid() }),
+    z.strictObject({ entityId: z.string().uuid() }),
+  ]),
+  alt: z.string().max(200).optional(),
+});
+export type AskOptionMedia = z.infer<typeof AskOptionMediaSchema>;
+
+/**
  * One offered answer. The base of capture's `FollowUpChipSchema`, which extends
  * it with the capture-only apply fields (`action`, `entityId`, `propertyKey`)
  * and makes `value` required — so the two can never disagree on a label bound
@@ -125,6 +159,11 @@ export const AskOptionSchema = z.object({
    * a warning chip.
    */
   caution: z.string().min(1).max(ASK_LIMITS.optionCautionMaxChars).optional(),
+  /**
+   * What the person looks at before picking it (a shot, a take). Persisted and
+   * passed through on read; no surface is required to draw it yet.
+   */
+  media: AskOptionMediaSchema.optional(),
 });
 export type AskOption = z.infer<typeof AskOptionSchema>;
 
@@ -588,6 +627,28 @@ export function isAskInstant(value: unknown): value is string {
     !Number.isNaN(Date.parse(value))
   );
 }
+
+/**
+ * Is this `answerBy` already past at the moment the ask is WRITTEN? Every
+ * write door refuses such an ask (review 5 Nov 2026, reviews backend #1 /
+ * oversight 2): a deadline in the past is not a deadline, and the pod reads
+ * "overdue" as P0, the level whose push breaks through the person's Focus.
+ * Read-time stays lenient: a stored ask that went past its time is simply
+ * overdue. Anything that is not an instant is not "past" here (the schema
+ * refuses it on its own).
+ */
+export function isAskAnswerByPast(
+  answerBy: unknown,
+  now: Date | number = Date.now()
+): boolean {
+  if (!isAskInstant(answerBy)) return false;
+  const at = now instanceof Date ? now.getTime() : now;
+  return Date.parse(answerBy) <= at;
+}
+
+/** The refusal every write door gives for {@link isAskAnswerByPast}. */
+export const ASK_ANSWER_BY_PAST_MESSAGE =
+  "answerBy is already past: give the time the answer is still useful, in the future, or leave answerBy out.";
 
 /**
  * Shared by every mode, like `stakes`: what makes one ask a TICKET the pod can
@@ -1578,6 +1639,7 @@ export {
   answerProvenanceMark,
   ASK_MODES_ENDING_WITH_SESSION,
   askCardView,
+  askCardDue,
   askEndsWithSession,
   askFate,
   isAskReviewLater,
@@ -1598,6 +1660,7 @@ export {
   type RoomQuestionConfirmDoor,
   type AskCardAnswer,
   type AskCardAsker,
+  type AskCardDue,
   type AskCardSlot,
   type AskCardView,
   type AskCardViewOptions,

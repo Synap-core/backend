@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import type { SendGuidanceStamp } from "../../../services/playbooks/playbook-guidance.js";
 import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -378,6 +379,11 @@ async function executeChannelSend(args: {
         sessionId: proposal.sessionId ?? null,
         proposalId: input.proposalId,
         subject: typeof data.subject === "string" ? data.subject : null,
+        // The rules the drafting run used, as the pod stamped them at filing.
+        guidance:
+          data.guidance && typeof data.guidance === "object"
+            ? (data.guidance as SendGuidanceStamp)
+            : null,
         draftedBy:
           data.draftedBy && typeof data.draftedBy === "object"
             ? (data.draftedBy as {

@@ -12,7 +12,9 @@ import MarkdownView from "./markdown-view";
 import { EmbedHostContext } from "./embed-context";
 import {
   cellEmbedRead,
+  cellInstanceEmbedRead,
   cellIsHtmlPage,
+  type EmbedCellInstanceRead,
   type EmbedCellRead,
 } from "./markdown-model";
 
@@ -177,6 +179,193 @@ describe("the read's states are distinct", () => {
     expect(iframes(out)).toHaveLength(0);
     expect(out).toContain("The console runs pages up to");
     expect(out).toContain('href="/open/cell/generated%3Afleet-report"');
+  });
+});
+
+// ─── A cell embed that names only an instance ───────────────────────────────
+
+const INSTANCE = "5b0c3f1e-8d2a-4c6b-9e7f-1a2b3c4d5e6f";
+const instanceBlock = (attrs = `instanceId="${INSTANCE}"`) =>
+  [`:::synap-cell{${attrs}}`, "Read the summary below.", ":::"].join("\n");
+
+/** The read a `cellInstances.get` answer comes back as, through the real model. */
+const instanceOf = (data: unknown) =>
+  cellInstanceEmbedRead({ isLoading: false, error: null, data });
+
+function drawInstance(
+  source: string,
+  instance: EmbedCellInstanceRead,
+  cell: EmbedCellRead,
+  asked: { instances: string[]; cells: string[] } = {
+    instances: [],
+    cells: [],
+  }
+) {
+  return renderToStaticMarkup(
+    <EmbedHostContext.Provider
+      value={{
+        useEntity: () => ({ state: "unresolved" }),
+        useCell: (key) => {
+          asked.cells.push(key);
+          return cell;
+        },
+        useCellInstance: (id) => {
+          asked.instances.push(id);
+          return instance;
+        },
+      }}
+    >
+      <MarkdownView source={source} measure="wide" />
+    </EmbedHostContext.Provider>
+  );
+}
+
+const REACT_CELL = readOf({ rendererType: "frame", rendererSource: REACT });
+
+describe("an embedded card by instance shows its real name and card, never 'Card'", () => {
+  it("asks for the instance, then for its type as a keyed cell", () => {
+    const asked = { instances: [] as string[], cells: [] as string[] };
+    drawInstance(
+      instanceBlock(),
+      instanceOf({ name: "Q3 pipeline", cellType: "cell:crm:deal-board" }),
+      REACT_CELL,
+      asked
+    );
+    expect(asked.instances).toEqual([INSTANCE]);
+    expect(asked.cells).toEqual(["cell:crm:deal-board"]);
+  });
+
+  it("an HTML page instance runs in the isolated frame", () => {
+    const out = drawInstance(
+      instanceBlock(),
+      instanceOf({ name: "Fleet", cellType: KEY }),
+      readOf({ rendererType: "iframe", rendererSource: PAGE })
+    );
+    expect(iframes(out)).toHaveLength(1);
+    expect(attr(iframes(out)[0]!, "sandbox")).toBe(CELL_FRAME_SANDBOX);
+    expect(unescape(attr(iframes(out)[0]!, "srcdoc")!)).toContain(
+      "<h1>Fleet report</h1>"
+    );
+  });
+
+  it("any other instance is the door to its type, named by the instance", () => {
+    const out = drawInstance(
+      instanceBlock(),
+      instanceOf({ name: "Q3 pipeline", cellType: "cell:crm:deal-board" }),
+      REACT_CELL
+    );
+    expect(iframes(out)).toHaveLength(0);
+    expect(out).toMatch(
+      /<a [^>]*href="\/open\/cell\/cell%3Acrm%3Adeal-board"[^>]*>(?:(?!<\/a>).)*Q3 pipeline(?:(?!<\/a>).)*<\/a>/
+    );
+    expect(out).not.toMatch(/>Card</);
+  });
+
+  it("an unnamed instance is named by its type; a built-in type is a door, not 'not visible'", () => {
+    const out = drawInstance(
+      instanceBlock(),
+      instanceOf({ name: null, cellType: "entity-list" }),
+      readOf(null)
+    );
+    expect(out).toContain("Entity list");
+    expect(out).toContain('href="/open/cell/entity-list"');
+    expect(out).not.toContain("isn’t visible to you");
+  });
+
+  it("inline in a sentence it is the named door, never a frame", () => {
+    const asked = { instances: [] as string[], cells: [] as string[] };
+    const out = drawInstance(
+      `See :synap-cell{instanceId="${INSTANCE}"} here.`,
+      instanceOf({ name: "Fleet", cellType: KEY }),
+      readOf({ rendererType: "iframe", rendererSource: PAGE }),
+      asked
+    );
+    expect(iframes(out)).toHaveLength(0);
+    expect(asked.cells).toEqual([]);
+    expect(out).toMatch(
+      /<a [^>]*href="\/open\/cell\/generated%3Afleet-report"[^>]*>(?:(?!<\/a>).)*Fleet(?:(?!<\/a>).)*<\/a>/
+    );
+  });
+
+  it("the authored label still wins", () => {
+    const out = drawInstance(
+      instanceBlock(`instanceId="${INSTANCE}" label="Pipeline"`),
+      instanceOf({ name: "Q3 pipeline", cellType: "cell:crm:deal-board" }),
+      REACT_CELL
+    );
+    expect(out).toContain("Pipeline");
+    expect(out).not.toContain("Q3 pipeline");
+  });
+
+  it("an instance not visible to the reader says so, and asks for no cell", () => {
+    const asked = { instances: [] as string[], cells: [] as string[] };
+    const hidden = cellInstanceEmbedRead({
+      isLoading: false,
+      error: { data: { code: "NOT_FOUND" } },
+      data: undefined,
+    });
+    expect(hidden.state).toBe("hidden");
+    const out = drawInstance(instanceBlock(), hidden, REACT_CELL, asked);
+    expect(out).toContain("isn’t visible to you");
+    expect(asked.cells).toEqual([]);
+  });
+
+  it("a failed read shows the error and a retry, never 'Card' and never 'not visible'", () => {
+    const failed = cellInstanceEmbedRead({
+      isLoading: false,
+      error: { data: { code: "INTERNAL_SERVER_ERROR" } },
+      data: undefined,
+      retry: () => {},
+    });
+    expect(failed.state).toBe("failed");
+    const out = drawInstance(instanceBlock(), failed, REACT_CELL);
+    expect(out).toContain("couldn’t be loaded");
+    expect(out).toContain("Try again");
+    expect(out).not.toContain("isn’t visible to you");
+    expect(out).not.toMatch(/>Card</);
+  });
+
+  it("loading is a busy mark, not the word 'Card'", () => {
+    const out = drawInstance(
+      instanceBlock(),
+      cellInstanceEmbedRead({ isLoading: true, error: null, data: undefined }),
+      REACT_CELL
+    );
+    expect(out).toContain('aria-busy="true"');
+    expect(out).not.toMatch(/>Card</);
+  });
+});
+
+describe("cellInstanceEmbedRead — empty and failed are different facts", () => {
+  it("a NOT_FOUND / FORBIDDEN answer is hidden; any other error is failed", () => {
+    for (const code of ["NOT_FOUND", "FORBIDDEN", "BAD_REQUEST"]) {
+      expect(
+        cellInstanceEmbedRead({
+          isLoading: false,
+          error: { data: { code } },
+          data: undefined,
+        }).state
+      ).toBe("hidden");
+    }
+    expect(
+      cellInstanceEmbedRead({
+        isLoading: false,
+        error: { data: null },
+        data: undefined,
+      }).state
+    ).toBe("failed");
+  });
+
+  it("an answer without a type is a broken read, not an empty one", () => {
+    expect(instanceOf({ name: "x", cellType: "" }).state).toBe("failed");
+    expect(instanceOf({ name: "x" }).state).toBe("failed");
+  });
+
+  it("a ready instance carries its name and type", () => {
+    expect(instanceOf({ name: 3, cellType: "entity-list" })).toEqual({
+      state: "ready",
+      instance: { name: null, cellType: "entity-list" },
+    });
   });
 });
 

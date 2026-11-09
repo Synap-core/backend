@@ -43,6 +43,7 @@ import { libraryGroups } from "../schema/library-groups.js";
 import { documentPassages } from "../schema/document-passages.js";
 import { statusWaitEpisode } from "../schema/status-wait-episode.js";
 import { agentConfigs } from "../schema/agent-configs.js";
+import { agentTemplates } from "../schema/agent-templates.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -176,6 +177,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "status_wait_episode",
     column: "ref_key",
     addedBy: "0386_status_wait_episode.sql",
+  },
+  // The status a thing waited in and the blocker's name (0408). The episode
+  // writer inserts both, so without them every watcher tick fails its write.
+  {
+    table: "status_wait_episode",
+    column: "status",
+    addedBy: "0408_wait_episode_blocker.sql",
+  },
+  {
+    table: "status_wait_episode",
+    column: "blocker_key",
+    addedBy: "0408_wait_episode_blocker.sql",
   },
   // A living document's scope and refresher (0387). Every document read
   // selects the row, so without them every document get and list 500s.
@@ -762,6 +775,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbooks",
     column: "required_intents",
     addedBy: "0291_playbook_required_intents.sql",
+  },
+  // The rules a playbook follows (0411): without it every playbook read and
+  // write that selects the column fails.
+  {
+    table: "playbooks",
+    column: "guidance",
+    addedBy: "0411_playbook_guidance.sql",
   },
 
   // Backup run ledger (0295). The backup container writes it with psql and
@@ -1384,6 +1404,28 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "presence_challenges",
     column: "redeemed_at",
     addedBy: "0401_presence_redeemed.sql",
+  },
+  // The recovery ladder (0405): every typed proof and every recovery request
+  // reads these; absence means each one would 42P01.
+  {
+    table: "presence_totp_factors",
+    column: "last_used_step",
+    addedBy: "0405_presence_recovery.sql",
+  },
+  {
+    table: "presence_proof_failures",
+    column: "method",
+    addedBy: "0405_presence_recovery.sql",
+  },
+  {
+    table: "presence_recovery_requests",
+    column: "matures_at",
+    addedBy: "0405_presence_recovery.sql",
+  },
+  {
+    table: "presence_disowned_passkeys",
+    column: "credential_id",
+    addedBy: "0405_presence_recovery.sql",
   },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
@@ -2096,6 +2138,30 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0356_box_runs.sql",
   },
 
+  // Installations (0409) — capabilities installed on the person's computers.
+  // Absence means every host-job lease, report and installation read would
+  // throw (42P01).
+  {
+    table: "installations",
+    column: "manifest",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "installation_bindings",
+    column: "auth_applied",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "host_jobs",
+    column: "lease_id",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "intent_defaults",
+    column: "constraints_hash",
+    addedBy: "0409_installations.sql",
+  },
+
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every
   // passage job and sweep tick would fail (42P01).
@@ -2296,6 +2362,26 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbook_runs",
     column: "run_on",
     addedBy: "0403_playbook_runs_run_on.sql",
+  },
+  {
+    table: "users",
+    column: "agent_template_slug",
+    addedBy: "0404_agent_templates.sql",
+  },
+  {
+    table: "agent_templates",
+    column: "wake",
+    addedBy: "0404_agent_templates.sql",
+  },
+  {
+    table: "agent_templates",
+    column: "metadata",
+    addedBy: "0404_agent_templates.sql",
+  },
+  {
+    table: "agent_templates",
+    column: "tool_groups",
+    addedBy: "0407_agent_template_tool_surface.sql",
   },
   {
     table: "automation_runs",
@@ -2851,6 +2937,9 @@ const REQUIRED_INDEX_TABLES = [
   // Presets (0390): the preset upsert conflicts on the partial unique index
   // `agent_configs_user_preset_unique`, which IS "one preset per key per agent".
   agentConfigs,
+  // Agent templates (0404): the install conflicts on `agent_templates_slug_unique`
+  // (ON CONFLICT DO NOTHING), which IS "one installed template per slug".
+  agentTemplates,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

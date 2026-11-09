@@ -17,7 +17,8 @@ const insertChannelMessage = vi.fn(async (_args: { content: string }) => ({
 }));
 
 const CONTEXT_SKILL = "Read the brief first. Never ship on Friday.";
-// The context-skill lookup answers one approved instruction skill.
+// The context-skill lookup answers one approved instruction skill; the
+// playbook's guidance read answers a playbook that declares none.
 const db = {
   select: () => ({
     from: () => ({
@@ -26,8 +27,10 @@ const db = {
           orderBy: () => ({ limit: async () => [{ body: CONTEXT_SKILL }] }),
         }),
       }),
+      where: () => ({ limit: async () => [{ guidance: [] }] }),
     }),
   }),
+  update: () => ({ set: () => ({ where: async () => undefined }) }),
 };
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -80,6 +83,28 @@ describe("renderPlaybookMethod", () => {
     expect(text).toContain("Expected outputs: Draft document");
     expect(text).toContain("Suggested tasks: Outline, Write");
     expect(text).toContain("- Keep it under a page.");
+  });
+
+  it("puts the rules this playbook follows after the how-to and before the goal", () => {
+    const rules =
+      "## Rules this playbook follows\n### Voice\n- Do: Cite the signal.";
+    expect(
+      renderPlaybookMethod({
+        contextSkill: CONTEXT_SKILL,
+        guidance: rules,
+        body: "do the thing",
+        stage: STAGE,
+      })
+    ).toBe(
+      [
+        `${PLAYBOOK_HOW_TO_HEADING}\n${CONTEXT_SKILL}`,
+        rules,
+        "do the thing",
+        buildStageSection(STAGE),
+      ].join("\n\n")
+    );
+    // No guidance declared ⇒ no section, not an empty heading.
+    expect(renderPlaybookMethod({ guidance: "", body: "do it" })).toBe("do it");
   });
 
   it("omits what the playbook does not declare: no skill, no stage ⇒ empty", () => {

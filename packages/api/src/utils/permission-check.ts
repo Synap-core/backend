@@ -11,6 +11,10 @@
  */
 
 import {
+  trialStampOf,
+  TRIAL_RUN_WRITE_REFUSED_REASON,
+} from "@synap/capability-gate";
+import {
   describeBoxDeclaration,
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
@@ -97,12 +101,15 @@ import {
   resolveActionLabel,
   resolveObjectNoun,
   resolveObjectNounPlural,
+  resolvePackageNoun,
   humanizeToken,
 } from "@synap-core/types/vocabulary";
 import { buildProjectFilingSummary } from "../services/projects/project-filing-summary.js";
 import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
 import { buildTrackParticipantSummary } from "../services/tracks/track-participant-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
+import { packageObjectCount } from "../services/package-contents-summary.js";
+import { installationTitleOf } from "../services/installations/installation-title.js";
 import {
   defaultApprovalSentence,
   isLikelyUUID,
@@ -149,7 +156,10 @@ import type { RaiseProposalCapRequest } from "../services/proposals/recommend-ra
 import { propertyLinkLevel } from "./profile-schema-write-access.js";
 import { profileOwnershipRequirement } from "./profile-pod-wide-fields.js";
 import { isPodAdmin } from "./workspace-role.js";
-import { grantWriteDenial } from "./grant-write-check.js";
+import {
+  grantWriteDenial,
+  type NamedGrantPermission,
+} from "./grant-write-check.js";
 import {
   decideAgentPolicy,
   findMatchingPattern,
@@ -302,6 +312,7 @@ async function loadSessionGovernanceContext(
     )?.governance as { forceProposeWrites?: unknown } | undefined;
     return {
       forceProposeWrites: governance?.forceProposeWrites === true,
+      trial: trialStampOf(session?.metadata) !== null,
       expectedOutputs: Array.isArray(session?.expectedOutputs)
         ? (session.expectedOutputs as ExpectedOutput[])
         : [],
@@ -311,13 +322,18 @@ async function loadSessionGovernanceContext(
       { err, sessionId },
       "Failed to load session governance context — proceeding without it"
     );
-    return { forceProposeWrites: false, expectedOutputs: [] };
+    return { forceProposeWrites: false, trial: false, expectedOutputs: [] };
   }
 }
 
 /** What the ONE session read above yields: a governance flag and the slots. */
 interface SessionGovernanceContext {
   forceProposeWrites: boolean;
+  /**
+   * A TRIAL run's session (the rule lab, design b199a3a4 slice 1b,
+   * `metadata.trial`): every AI write in it is refused.
+   */
+  trial: boolean;
   expectedOutputs: ExpectedOutput[];
 }
 
@@ -1006,6 +1022,15 @@ export interface PermissionCheckBaseOpts {
    */
   grantWorkspaceId?: string | null;
   /**
+   * A NAMED permission that also permits this write at rung 0 (the key's
+   * grant), when the door's act is narrower than its gate subject/action:
+   * `package.install` for a template apply (`workspace.create` /
+   * `workspace.update`), set by `proposeTemplateApply`. Rung 0 only: every
+   * rung after it runs unchanged, so a person's key applies and an agent's
+   * proposes (`grant-write-check.ts` `namedPermissionPermits`).
+   */
+  grantNamedPermission?: NamedGrantPermission;
+  /**
    * The workspace a proposal or auto-approve receipt is FILED in, when it is
    * not the governance home: a shared role's row names no space, so its write
    * is filed in the space the key's grant was checked in. RECORD ONLY: no rung
@@ -1157,12 +1182,16 @@ export interface PermissionCheckBaseOpts {
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
    * / 2.86 (other moves: execute once attributed). `atSessionEnd`: a session
-   * END move, which skips 2.85 (governance-policy `lifecycleMove`).
+   * END move, which skips 2.85; `atSessionBirth` + `outOfTerminal`: a session
+   * BIRTH move reopening a done/lost thing, which always proposes (2.076)
+   * (governance-policy `lifecycleMove`).
    */
   lifecycleMove?: {
     intoTerminal: boolean;
     humanOnly: boolean;
     atSessionEnd?: boolean;
+    outOfTerminal?: boolean;
+    atSessionBirth?: boolean;
   };
   /**
    * An AGENT's write its key's grant does not permit is filed as a PENDING
@@ -1335,7 +1364,13 @@ interface AnonymousPolicyFacts {
   possibleDuplicate: boolean;
   /** rungs 2.075/2.85/2.86 — a lifecycle move, classified by the moveStatus door. */
   lifecycleMove:
-    | { intoTerminal: boolean; humanOnly: boolean; atSessionEnd?: boolean }
+    | {
+        intoTerminal: boolean;
+        humanOnly: boolean;
+        atSessionEnd?: boolean;
+        outOfTerminal?: boolean;
+        atSessionBirth?: boolean;
+      }
     | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
   podAdminSchemaChange: boolean;
@@ -1580,6 +1615,7 @@ async function evaluatePermission(
       opts.grantWorkspaceId !== undefined ? opts.grantWorkspaceId : workspaceId,
     projectId,
     data: data as Record<string, unknown> | undefined,
+    namedPermission: opts.grantNamedPermission,
   });
   const beyondGrant =
     !!grantDenied && !!opts.proposeBeyondGrant && !!agentUserId;
@@ -1977,6 +2013,20 @@ async function evaluatePermission(
       isAiWrite && sessionId
         ? await loadSessionGovernanceContext(sessionId)
         : null;
+    // A TRIAL run (the rule lab): nothing it writes may land, whatever a rule
+    // or a floor would say. Its session's OWN row (stage, progress, close) is
+    // its bookkeeping, not an output, and goes on. The capability gate and the
+    // send door refuse its runs and sends on their own read, which fails
+    // closed; this read stays best-effort like the stamp above.
+    if (
+      sessionGovernance?.trial &&
+      !(
+        subjectType === "focus_session" &&
+        (data as { id?: unknown } | undefined)?.id === sessionId
+      )
+    ) {
+      return { denied: true, reason: TRIAL_RUN_WRITE_REFUSED_REASON };
+    }
     // A LOOSENING settings change (raise a ceiling, widen a rule to auto,
     // guideline posture:auto, or revoke any guard) is a hard floor — it must
     // always be a human decision, so it can never auto-apply via DEFAULT_
@@ -3299,6 +3349,14 @@ export function buildProposalSummary(
   action: string,
   data: Record<string, unknown>
 ): string {
+  // A capability asked for one of the person's computers: "Add ffmpeg and
+  // install it on Mac", never the door's "Request Installation". Stored, so
+  // activity, session titles and notifications read the same words as the
+  // card (`installation-title.ts`).
+  if (subjectType === "installation" && action === "request") {
+    const title = installationTitleOf(data);
+    if (title) return title;
+  }
   // A slug-idempotent define that CHANGES an existing kind/role's name,
   // description, icon or default values — "Update Role "X": description",
   // never the generic "Create Kind" of the define door it rides.
@@ -3320,7 +3378,24 @@ export function buildProposalSummary(
       objectName:
         payloadName(data.targetName) ?? payloadName(data.name) ?? undefined,
     });
-    return `${head} to the latest template`;
+    return `${head} to the latest ${resolvePackageNoun(
+      packageObjectCount(data.contents)
+    ).toLowerCase()}`;
+  }
+  // A fresh template install (Hub `/packages/apply`): "Add pack "Content OS""
+  // or "Add template "…"", the noun derived from what it holds, never the
+  // "Create Space" its gate subject reads as (founder, 2026-11-05).
+  if (
+    subjectType === "workspace" &&
+    action === "create" &&
+    data.source === "packages.apply" &&
+    data.contents
+  ) {
+    const noun = resolvePackageNoun(
+      packageObjectCount(data.contents)
+    ).toLowerCase();
+    const name = payloadName(data.name);
+    return name ? `Add ${noun} "${name}"` : `Add a ${noun}`;
   }
   // An agent's Library organisation (`library/organize`): the door wrote the
   // one-line summary from the ops and the names it resolved.

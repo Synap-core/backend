@@ -34,6 +34,9 @@ describe("package update words (one mark, every surface)", () => {
   it("names a field for a person, and never leaks an unknown token", () => {
     expect(resolvePackageFieldLabel("body")).toBe("Instructions");
     expect(resolvePackageFieldLabel("flowDefinition")).toBe("Steps");
+    expect(resolvePackageFieldLabel("wake")).toBe("How a computer starts it");
+    expect(resolvePackageFieldLabel("harness")).toBe("Agent type");
+    expect(resolvePackageFieldLabel("practices")).toBe("Skills its agents get");
     expect(resolvePackageFieldStateLabel("rolling-back")).toBe("Rolling back");
   });
 });

@@ -8,17 +8,27 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
 import { toolError } from "../tool-errors.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
-import { toViewDigest, VIEWS_DIGEST_NOTE } from "./read-lean.js";
+import {
+  PLAYBOOKS_DIGEST_NOTE,
+  toPlaybookDigest,
+  toViewDigest,
+  VIEWS_DIGEST_NOTE,
+} from "./read-lean.js";
 import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
+import {
+  CellPlacementSchema,
+  checkCellPlacement,
+} from "../../../services/cells/place-cell-on-view.js";
 import type {
   RendererSlot,
   RendererScope,
@@ -51,6 +61,7 @@ import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
   createPlaybookDoor,
+  getPlaybookDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
   updatePlaybookDoor,
@@ -164,6 +175,8 @@ export const buildHandlers: McpHandlerMap = {
          * Enum built from the `CONTENT_KINDS` runtime SSOT, never retyped.
          */
         contentKind: z.enum(CONTENT_KINDS).optional(),
+        /** Place the cell as a tile on this bento view when it is defined. */
+        placeOn: CellPlacementSchema.optional(),
       })
       .safeParse(args);
     if (!parsed.success) {
@@ -184,6 +197,17 @@ export const buildHandlers: McpHandlerMap = {
       rendererSource: parsed.data.rendererSource,
       workspaceId: cellWorkspaceId,
     });
+    // A placement that cannot land is refused now, before it becomes a
+    // proposal a person approves and then sees fail. The view's name rides in
+    // the proposal so the reviewer sees where the tile lands; whether the
+    // APPROVER may write that view is checked again when it is approved.
+    const placeOn = parsed.data.placeOn
+      ? await checkCellPlacement(parsed.data.placeOn, {
+          cellWorkspaceId,
+          userId,
+          permission: "read",
+        })
+      : undefined;
     // Route through the governance gate — it owns RBAC (workspace membership +
     // role, or the agent-join proposal for a non-member) AND the agent
     // propose/execute decision. No manual membership check: that would
@@ -214,6 +238,9 @@ export const buildHandlers: McpHandlerMap = {
         ...(parsed.data.contentKind
           ? { contentKind: parsed.data.contentKind }
           : {}),
+        // Where approving places the cell: the executor defines it AND adds
+        // its tile to this view, in one act.
+        ...(placeOn ? { placeOn } : {}),
       },
     });
     if ("denied" in perm && perm.denied) {
@@ -249,6 +276,7 @@ export const buildHandlers: McpHandlerMap = {
       description: parsed.data.description,
       viewTypes: parsed.data.viewTypes,
       contentKind: parsed.data.contentKind,
+      placeOn: parsed.data.placeOn,
       userId,
     });
     return ok({ status: result.changeType, ...result });
@@ -296,6 +324,24 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // ONE playbook, in full: the get door (`playbooks.get`, the same one Hub
+    // GET /playbooks/:id reaches), on the same user floor as the list.
+    const playbookId =
+      typeof args.playbookId === "string" && args.playbookId.trim()
+        ? args.playbookId.trim()
+        : null;
+    if (playbookId) {
+      const one = await getPlaybookDoor(playbookDoorIdentity(ctx), playbookId);
+      if (one.kind !== "result") {
+        return ok({
+          error:
+            "error" in one
+              ? one.error
+              : `Playbook ${playbookId} not found among your visible playbooks.`,
+        });
+      }
+      return ok(one.result);
+    }
     // User-floor catalog (member workspaces + pod-wide) through the shared list
     // door. Narrow only on an explicit/confined workspaceId — not advisory
     // focus (focus is a write default; catalog stays full user floor).
@@ -314,12 +360,19 @@ export const buildHandlers: McpHandlerMap = {
       playbookIds: result.playbooks.map((p) => p.id),
       userId: ctx.userId,
     });
+    const rows = result.playbooks.map((p) => {
+      const compact = compactScorecard(scorecards[p.id]!);
+      return compact ? { ...p, scorecard: compact } : p;
+    });
+    // DEFAULT = the digest (founder's rule: a list returns what picks one; the
+    // full object comes from a get). detail:'full' keeps the complete rows.
+    if (args.detail === "full") return ok({ ...result, playbooks: rows });
     return ok({
       ...result,
-      playbooks: result.playbooks.map((p) => {
-        const compact = compactScorecard(scorecards[p.id]!);
-        return compact ? { ...p, scorecard: compact } : p;
-      }),
+      playbooks: rows.map((p) =>
+        toPlaybookDigest(p as unknown as Record<string, unknown>)
+      ),
+      note: PLAYBOOKS_DIGEST_NOTE,
     });
   },
   synap_match_playbooks: async (
@@ -502,6 +555,15 @@ export const buildHandlers: McpHandlerMap = {
             >[1]["expectedOutputs"],
           }
         : {}),
+      // The rules it follows, by ref: validated by `playbooks.create` with
+      // `playbookGuidanceSchema`, so a bad ref is refused, never dropped.
+      ...(args.guidance !== undefined
+        ? {
+            guidance: args.guidance as Parameters<
+              typeof createPlaybookDoor
+            >[1]["guidance"],
+          }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -544,6 +606,7 @@ export const buildHandlers: McpHandlerMap = {
       "expectedOutputs",
       "activators",
       "humanOnlyStatuses",
+      "guidance",
       "status",
       "scope",
     ] as const satisfies ReadonlyArray<keyof Patch>) {
@@ -825,7 +888,7 @@ export const buildHandlers: McpHandlerMap = {
       const parsedAsk = AskSchema.safeParse(args.ask);
       if (!parsedAsk.success) {
         return toolError(
-          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.`
+          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.${ASK_SKILL_HINT}`
         );
       }
       ask = parsedAsk.data as SlotAsk;
@@ -962,6 +1025,28 @@ export const buildHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const trimmed = (v: unknown) =>
       typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+    // Advisory schema: say in words what the pod would otherwise reject as a
+    // uuid / length error (same refusal as synap_start_session).
+    const parentArg = trimmed(args.parentSessionId);
+    if (parentArg && !isUuid(parentArg)) {
+      return ok({
+        error:
+          "parentSessionId must be a session UUID (the id of a session you own that you are running this playbook FROM).",
+      });
+    }
+    const intentArg = trimmed(args.suspendedIntent);
+    if (intentArg && intentArg.length > 400) {
+      return ok({
+        error:
+          "suspendedIntent must be at most 400 characters — ONE line naming what you were about to do.",
+      });
+    }
+    if (intentArg && !parentArg) {
+      return ok({
+        error:
+          "suspendedIntent needs parentSessionId: it is the line the parent waits on.",
+      });
+    }
     // The shared run door (`hub-protocol/playbook-doors.ts`) — the same one Hub
     // REST `POST /playbooks/:id/run` calls. Name resolution, the write-home
     // ladder and the governed `playbooks.run` delegation live there once.
@@ -977,6 +1062,8 @@ export const buildHandlers: McpHandlerMap = {
       projectId: trimmed(args.projectId),
       trackId: trimmed(args.trackId),
       handToAgentId: trimmed(args.handToAgentId),
+      parentSessionId: trimmed(args.parentSessionId),
+      suspendedIntent: trimmed(args.suspendedIntent),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);

@@ -86,8 +86,14 @@ const DOORS: Record<string, RegExp> = {
     /\bskills\s*\.\s*create\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.setMode":
     /\bpresence\s*\.\s*setMode\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // W5: what asks for a passkey; switching a row off takes a proof.
+  "tRPC presence.setSensitivity":
+    /\bpresence\s*\.\s*setSensitivity\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.authorizePasskeyChange":
     /\bpresence\s*\.\s*authorizePasskeyChange\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // The recovery ladder (6 Nov): a 2FA app added by a person who holds a factor.
+  "tRPC presence.totp.confirm":
+    /\bpresence\s*\.\s*totp\s*\.\s*confirm\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.devices.enroll":
     /\bdevices\s*\.\s*enroll\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
 };
@@ -98,8 +104,8 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /**
  * Each sensitive action, derived: its tRPC accessor (the last two segments,
  * `governanceRules.create.useMutation`) or its full path in quotes that is not
- * an object key (a proxy route's procedure name; `action-words.ts` keys its
- * words by path, which is not a call).
+ * an object key (a proxy route's procedure name; a table keyed by path is
+ * not a call).
  */
 for (const path of SENSITIVE_PATHS) {
   const [router, proc] = path.split(".").slice(-2) as [string, string];
@@ -170,16 +176,37 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   },
   // Slice 3: presence.setMode (back to report), presence.authorizePasskeyChange
   // and presence.devices.enroll (a second factor) take a proof themselves.
+  // The recovery ladder (6 Nov): presence.totp.confirm (a 2FA app added by a
+  // person who already holds a factor) takes one too.
   "presence.ts": {
-    inputs: 3,
+    inputs: 5,
     doors: [
       "tRPC presence.setMode",
+      "tRPC presence.setSensitivity",
       "tRPC presence.authorizePasskeyChange",
       "tRPC presence.devices.enroll",
+      "tRPC presence.totp.confirm",
     ],
   },
   "tools.ts": { inputs: 1, doors: ["tRPC tools.setApproved"] },
   "trusted-issuers.ts": { inputs: 1, doors: ["tRPC trustedIssuers.approve"] },
+  // Review of 6 Nov (backend#874): the Hub twins of sensitive actions take
+  // the proof of the SAME action (`action:<tRPC path>:<digest>`). Pod admin
+  // calls the tRPC doors, through use-sensitive-actions.
+  "hub-protocol/rest/_presence.ts": {
+    inputs: 1,
+    doors: [
+      "action apps.issueKey",
+      "action apps.setRedirectUris",
+      "action apps.setWriteMode",
+      "action agentUsers.create",
+      "action agentUsers.setPosture",
+    ],
+  },
+  "hub-protocol/services.ts": {
+    inputs: 1,
+    doors: ["action intelligenceRegistry.register"],
+  },
 };
 
 function walk(dir: string, keep: (name: string) => boolean): string[] {
@@ -237,6 +264,10 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         // W3 slice 3: the mode switched off, a passkey change.
         "tRPC presence.setMode",
         "tRPC presence.authorizePasskeyChange",
+        // W5: what asks for a passkey (switching a row off takes a proof).
+        "tRPC presence.setSensitivity",
+        // The recovery ladder (6 Nov): a 2FA app added with a factor's proof.
+        "tRPC presence.totp.confirm",
         // W3 slice 3: the sensitive actions pod admin calls (derived doors).
         "action agentUsers.setPosture",
         "action apiKeys.adminCreateServiceKey",
@@ -255,6 +286,8 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "action governanceRules.widenCell",
         "action machines.setKeyTtl",
         "action machines.setRunsScripts",
+        "action machines.setHostsServices",
+        "action machines.setWakesAgents",
         "action machines.setBelongsTo",
       ].sort()
     );

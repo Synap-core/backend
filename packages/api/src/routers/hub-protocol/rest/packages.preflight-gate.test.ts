@@ -110,16 +110,47 @@ vi.mock("../../../utils/permission-check.js", () => ({
 vi.mock("../../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 
 // The one-space verdict reads the DB; it is proven on PGlite
-// (one-space-per-domain.pglite.test.ts). This suite is about the preflight gate.
+// (one-space-per-domain.pglite.test.ts). This suite is about the preflight gate
+// (and, below, that an app's install answers that verdict before governance).
+const oneSpace = vi.hoisted(() => ({
+  verdict: vi.fn(async (..._a: unknown[]): Promise<unknown> => ({
+    action: "create",
+  })),
+}));
 vi.mock(
   "../../../services/workspace-creation-service.js",
   async (importOriginal) => ({
     ...(await importOriginal<
       typeof import("../../../services/workspace-creation-service.js")
     >()),
-    checkOneSpacePerDomain: async () => ({ action: "create" }),
+    checkOneSpacePerDomain: (...a: unknown[]) => oneSpace.verdict(...a),
   })
 );
+
+// "Add to my pod" routing (`routeNamedInstall`) reads which space holds a
+// slug and the official catalog; both are proven on PGlite
+// (propose.beyond-grant.pglite.test.ts). Here: no space holds a slug, and the
+// catalog holds `creator-pack`.
+const catalogPack = vi.hoisted(() => ({
+  _meta: { slug: "creator-pack", version: "creator-pack-2" },
+  workspaceName: "Creator pack",
+  profiles: [{ slug: "client", displayName: "Client", profileKind: "kind" }],
+}));
+vi.mock("../../../services/installed-template-space.js", () => ({
+  installedTemplateSpace: async () => null,
+}));
+vi.mock("../../../services/capabilities/resolve-workspace-template.js", () => ({
+  resolveWorkspaceTemplate: async (slug: string) =>
+    slug === "creator-pack"
+      ? {
+          source: "cache",
+          version: "creator-pack-2",
+          dependencies: [],
+          packageDefinition: catalogPack,
+          workspaceDefinition: catalogPack,
+        }
+      : null,
+}));
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerPackagesRoutes } from "./packages.js";
@@ -336,5 +367,143 @@ describe("POST /packages/{preflight,apply} — a body the schema refuses", () =>
       body: '{"_meta":',
     });
     expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * L7 "Add to my pod": an app that may ask to install a package
+ * (`package.install`, pinned to a space as every app grant is) previews what
+ * it asks for. It gets what the package brings, and the pod's parts (the
+ * target space, the kinds it would reuse, the rows an update would change)
+ * said withheld, never read. A key that reads them still gets the whole
+ * answer (the other rows of this file run with no grant).
+ */
+describe("POST /packages/preflight — an app holding package.install", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("answers what the package brings, and withholds the pod's parts without reading them", async () => {
+    const { grantOfScope, runWithGrant } = await import("@synap/database");
+    const appGrant = grantOfScope({
+      permissions: ["entity.read", "package.install"],
+      workspaceIds: ["w1"],
+    });
+    const res = await runWithGrant(appGrant, () =>
+      buildApp().request("/packages/preflight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          _meta: { slug: "creator-pack" },
+          profiles: [
+            { slug: "client", displayName: "Client", profileKind: "kind" },
+          ],
+        }),
+      })
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.pod).toMatchObject({ status: "withheld" });
+    expect(json.contents).toBeTruthy();
+    expect(json).not.toHaveProperty("profiles");
+    expect(json).not.toHaveProperty("apply");
+    expect(json).not.toHaveProperty("dataChanges");
+    // Nothing of the pod was read for it.
+    expect(mockComposeTarget).not.toHaveBeenCalled();
+    expect(mockPreflight).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * L7: a fresh install an app asks for (`package.install`) answers the one
+ * space per domain rule like every caller: a live space already holding the
+ * pack's domain is the typed `exists` (409), never a second space and never a
+ * proposal. The verdict itself is proven on PGlite for any caller
+ * (one-space-per-domain.pglite.test.ts, "a live DOMAIN TWIN the caller cannot
+ * adopt is REFUSED"); this pins that the app's request meets it BEFORE the
+ * gate.
+ */
+describe("POST /packages/apply — an app's install meets one space per domain first", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("answers the existing space (409, status exists) and never reaches the gate", async () => {
+    const existing = {
+      status: "exists",
+      workspaceId: "ws-existing",
+      guidance: "This domain already has a space: use it.",
+    };
+    oneSpace.verdict.mockResolvedValueOnce({
+      action: "refuse",
+      reply: existing,
+    });
+    const { grantOfScope, runWithGrant } = await import("@synap/database");
+    const res = await runWithGrant(
+      grantOfScope({
+        permissions: ["entity.read", "package.install"],
+        workspaceIds: ["w1"],
+      }),
+      () =>
+        apply(buildApp(), {
+          _meta: { slug: "creator-pack" },
+          profiles: [
+            { slug: "client", displayName: "Client", profileKind: "kind" },
+          ],
+        })
+    );
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject(existing);
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockMaterialize).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * L7, review finding 6: what a person-acting app (no agent) holding only
+ * `package.install` hands the gate. A catalog reference reaches it as the
+ * CATALOG's definition with no untrusted issuer (the person's click may
+ * apply it); content the app wrote reaches it with an untrusted issuer, so
+ * the gate files one proposal (its rung 4b, proven on PGlite).
+ */
+describe("POST /packages/apply — a person-acting app's install is fixed by the catalog", () => {
+  beforeEach(() => vi.clearAllMocks());
+  const appGrant = async () =>
+    (await import("@synap/database")).grantOfScope({
+      permissions: ["entity.read", "package.install"],
+      workspaceIds: ["w1"],
+    });
+
+  async function applyAsApp(body: Record<string, unknown>) {
+    mockPreflight.mockResolvedValue(okReport);
+    mockCheckPermission.mockResolvedValue({ proposalId: "p-1" });
+    const { runWithGrant } = await import("@synap/database");
+    return runWithGrant(await appGrant(), () => apply(buildApp(), body));
+  }
+  const gateCall = () =>
+    mockCheckPermission.mock.calls[0]![0] as {
+      issuer?: { trusted: boolean };
+      data: { definition: Record<string, unknown> };
+    };
+
+  it("a catalog reference reaches the gate as the catalog's own definition", async () => {
+    const res = await applyAsApp({
+      _meta: { slug: "creator-pack", version: "creator-pack-2" },
+    });
+    expect(res.status).toBe(202);
+    const call = gateCall();
+    expect(call.issuer).toBeUndefined();
+    expect(call.data.definition).toMatchObject({
+      workspaceName: "Creator pack",
+      profiles: catalogPack.profiles,
+    });
+  });
+
+  it("content the app wrote reaches the gate as an untrusted issuer (one proposal)", async () => {
+    const res = await applyAsApp({
+      _meta: { slug: "creator-pack" },
+      workspaceName: "Mine now",
+      profiles: [{ slug: "lead", displayName: "Lead", profileKind: "kind" }],
+    });
+    expect(res.status).toBe(202);
+    const call = gateCall();
+    expect(call.issuer).toEqual({ kind: "connector", trusted: false });
+    expect(call.data.definition).toMatchObject({ workspaceName: "Mine now" });
   });
 });

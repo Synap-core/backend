@@ -127,6 +127,17 @@ export const CONSOLE_PAGES = {
     focus: false,
     verb: "manage",
   },
+  /**
+   * "I lost my passkey" (`@synap-core/types/presence`): the ONE door that
+   * clears a person's proof factors after a 24 h wait any of their devices can
+   * cancel. Signed in. Every presence dialog links here.
+   */
+  presenceRecovery: {
+    path: "/recovery/presence",
+    audience: "member",
+    focus: false,
+    verb: "manage",
+  },
 } as const satisfies Record<string, ConsolePage>;
 
 export type ConsolePageId = keyof typeof CONSOLE_PAGES;

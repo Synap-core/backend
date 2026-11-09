@@ -1,5 +1,9 @@
 # Synap design
 
+## Apps are views of pod state
+
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+
 Load this when you design, review or build any Synap UI, or a UI for a user's pod: a screen, page,
 panel, section, card, component, empty state or dashboard. It is the one place the design rules live
 for every agent. For views, bento dashboards and workspaces over pod data, also load `synap-ui`.

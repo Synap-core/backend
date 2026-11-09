@@ -11,6 +11,7 @@ import { sql } from "@synap/database";
 import { intelligenceHubClient } from "../../clients/intelligence-hub.js";
 import { config } from "@synap-core/core";
 import { withoutUnlistableEntityHits } from "../../services/retrieval/listable-search-hits.js";
+import { withinGrantSearchHits } from "../../services/retrieval/grant-bounded-search-hits.js";
 
 export const searchRouter = router({
   /**
@@ -56,7 +57,14 @@ export const searchRouter = router({
         limit: input.limit,
         page: input.page,
       });
-      return await withoutUnlistableEntityHits(response);
+      // THE grant bound: a key whose grant narrows anything keeps only the
+      // entity hits its grant reads (re-read through the entity floor) and no
+      // count, facet or non-entity hit (grant-bounded-search-hits.ts). An
+      // unfenced caller is answered unchanged.
+      return await withinGrantSearchHits(
+        await withoutUnlistableEntityHits(response),
+        ctx.userId as string
+      );
     }),
 
   /**

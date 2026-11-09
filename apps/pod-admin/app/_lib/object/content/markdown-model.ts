@@ -30,6 +30,7 @@ import {
 import { isHtmlPageSource } from "@synap-core/types/renderables";
 import {
   resolveObjectNoun,
+  type EmbedCellInstance,
   type ProfileIdentityInput,
 } from "@synap-core/types/vocabulary";
 import { openIn } from "../../../../lib/open-in";
@@ -369,6 +370,51 @@ export function cellEmbedRead(query: {
     bytes,
     tooLarge: bytes > CELL_FRAME_MAX_BYTES,
     workspaceId: typeof def.workspaceId === "string" ? def.workspaceId : null,
+  };
+}
+
+/**
+ * What a cell embed that names only an instance (`:::synap-cell{instanceId}`)
+ * may say about it, from the reader's own `cellInstances.get` (the viewer's
+ * floor; NOT_FOUND for an instance not visible to them or gone). `ready`
+ * carries its name and its type: the key the embed then runs or opens.
+ *
+ *   hidden  not visible to you, or gone — the pod does not say which
+ *   failed  a broken read, retryable — never "hidden", never "Card"
+ */
+export type EmbedCellInstanceRead =
+  | { state: "loading" }
+  | { state: "ready"; instance: EmbedCellInstance }
+  | { state: "hidden" }
+  | { state: "failed"; retry?: () => void };
+
+export function cellInstanceEmbedRead(query: {
+  isLoading: boolean;
+  error: { data?: { code?: string | null } | null } | null | undefined;
+  data: unknown;
+  retry?: () => void;
+}): EmbedCellInstanceRead {
+  const failed: EmbedCellInstanceRead = {
+    state: "failed",
+    ...(query.retry ? { retry: query.retry } : {}),
+  };
+  if (query.error) {
+    const code = query.error.data?.code;
+    return code && HIDDEN_CODES.has(code) ? { state: "hidden" } : failed;
+  }
+  if (query.isLoading) return { state: "loading" };
+  const row = query.data as
+    { name?: unknown; cellType?: unknown } | null | undefined;
+  if (!row) return { state: "hidden" };
+  // An answer without a type is not an instance the console can name or
+  // open: a broken read, not an empty one.
+  if (typeof row.cellType !== "string" || !row.cellType.trim()) return failed;
+  return {
+    state: "ready",
+    instance: {
+      name: typeof row.name === "string" ? row.name : null,
+      cellType: row.cellType,
+    },
   };
 }
 

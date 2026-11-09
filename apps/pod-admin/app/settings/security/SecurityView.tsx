@@ -1,22 +1,28 @@
 "use client";
 
 /**
- * Security — your sign-in methods and your way back in, for THIS pod.
+ * Security — your ways to confirm it's you, and how you sign in, for THIS
+ * pod. Two sections (founder, 7 Nov 2026, session 539e519b; finding
+ * 020455d5: they were spread over four places under two names):
  *
- *   1. Recovery codes — the pod-held way back in (shown once, copy/download).
- *   2. Password — the Kratos settings flow's password group.
- *   3. Passkeys — the settings flow's passkey group; "Add a passkey" runs the
- *      ceremony (`lib/passkey.ts`). With a passkey already, it first confirms
- *      with it (`presence.authorizePasskeyChange`, W3 slice 3): Kratos'
- *      guard refuses a new one without that grant (`passkey-add-model.ts`).
- *      The invite page's Done screen sends a Synap-Cloud-only joiner here
- *      (`#passkeys`).
- *   4. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`, the CP's
- *      claim-access hop), for a member who joined another way. OMITTED when
- *      Cloud sign-in is not wired here or the owner turned it off.
- *   5. Signed-in devices — your other sessions; "Sign out other devices".
- *   6. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
- *      sign-in is not wired on this pod).
+ *   Ways to confirm it's you (`WaysInSection`, also the onboarding step's
+ *   body): how many the person holds out of the two `enforce` keeps, then
+ *   each way with its own Add and Remove.
+ *     1. Your passkeys — the ONE passkeys card (`app/_lib/passkeys/`). The
+ *        invite page's Done screen sends a Synap-Cloud-only joiner here
+ *        (`#passkeys`).
+ *     2. Phones and computers — Face ID and Touch ID keys, removable here.
+ *     3. Authenticator app (`#two-factor`).
+ *     4. Recovery codes — the pod-held way back in (shown once, copy or
+ *        download); they also confirm it's you.
+ *   Signing in:
+ *     5. Password — the Kratos settings flow's password group.
+ *     6. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`), for
+ *        a member who joined another way. OMITTED when Cloud sign-in is not
+ *        wired here or the owner turned it off.
+ *     7. Signed-in devices — your other sessions; "Sign out other devices".
+ *     8. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
+ *        sign-in is not wired on this pod).
  *
  * Every refusal is shown as what it is: a sign-in that is too old
  * (`reauth_required` → "Sign in again"), a Cloud-only session that may not
@@ -52,20 +58,13 @@ import {
 import { invalidateRecoveryCodesState } from "../../(admin)/components/recovery-codes-nudge";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import {
-  collectErrorMessages,
   createBrowserFlow,
   fetchFlow,
   listOtherSessions,
-  nodeValue,
   revokeOtherSessions,
   submitSelfServiceFlow,
   type KratosFlow,
 } from "../../../lib/kratos-flow";
-import {
-  createPasskey,
-  isPasskeySupported,
-  PasskeyCancelled,
-} from "../../../lib/passkey";
 import {
   recoveryApi,
   recoveryCallDetail,
@@ -74,15 +73,14 @@ import {
 } from "../../../lib/account-recovery";
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { initialFieldValues, KratosFields } from "../../_lib/kratos-fields";
+import { PasskeysCard } from "../../_lib/passkeys/passkeys-card";
 import { CopyButton, errorDetail } from "../../_lib/copy-button";
 import { trpc } from "../../../lib/trpc";
-import { useT } from "../../../lib/i18n/locale-provider";
 import { PresenceDeclined } from "../../_lib/presence/presence-model";
-import { useAuthorizePasskeyChange } from "../../_lib/presence/use-factor-doors";
-import { en as securityEn, fr as securityFr } from "./copy";
-import { passkeyAddStep } from "./passkey-add-model";
-
-const SECURITY_CATALOGS = { en: securityEn, fr: securityFr };
+import { useGenerateRecoveryCodes } from "../../_lib/presence/use-factor-doors";
+import { TwoFactorCard } from "./two-factor-card";
+import { WaysInHeader } from "../../_lib/presence/ways-in/ways-in-header";
+import { DeviceKeysCard } from "../../_lib/presence/ways-in/device-keys-card";
 
 const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/security")}`;
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
@@ -114,30 +112,9 @@ export function SecurityView({
   initialFlowId: string | null;
   email: string | null;
 }) {
-  const [status, setStatus] = useState<Load<AccountRecoveryStatus>>({
-    kind: "loading",
-  });
+  const { status, setStatus, loadStatus } =
+    useAccountRecoveryStatus("/settings/security");
   const [recovered, setRecovered] = useState(false);
-
-  const loadStatus = useCallback(async () => {
-    setStatus({ kind: "loading" });
-    const r = await recoveryApi.status();
-    if (!r.ok && r.status === 401) {
-      window.location.assign(
-        `/login?return=${encodeURIComponent("/settings/security")}`
-      );
-      return;
-    }
-    setStatus(
-      r.ok
-        ? { kind: "ready", data: r.data }
-        : { kind: "failed", detail: recoveryCallDetail(r) }
-    );
-  }, []);
-
-  useEffect(() => {
-    void loadStatus();
-  }, [loadStatus]);
 
   const s = status.kind === "ready" ? status.data : null;
   const onRecovered = useCallback(() => setRecovered(true), []);
@@ -176,36 +153,40 @@ export function SecurityView({
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-5">
-        {/* Keyed so a reorder MOVES the cards instead of remounting the flow. */}
-        {securityCardOrder(recovered).map((card) =>
-          card === "password" ? (
-            <PasswordCard
-              key="password"
-              initialFlowId={initialFlowId}
-              onRecovered={onRecovered}
-              focus={recovered}
-            />
+      <div className="flex flex-col gap-10">
+        {/* Keyed so a reorder MOVES the sections instead of remounting the flow. */}
+        {securitySectionOrder(recovered).map((section) =>
+          section === "sign-in" ? (
+            <section key="sign-in" className="flex flex-col gap-5">
+              <h2 className="text-[15px] font-semibold text-foreground">
+                Signing in
+              </h2>
+              <PasswordCard
+                initialFlowId={initialFlowId}
+                onRecovered={onRecovered}
+                focus={recovered}
+              />
+              {s && s.cloud.available && s.cloud.trust !== "off" ? (
+                <LinkCloudCard />
+              ) : null}
+              <DevicesCard />
+              {s && s.cloud.available ? (
+                <CloudTrustCard
+                  status={s}
+                  onChanged={(next) => setStatus({ kind: "ready", data: next })}
+                />
+              ) : null}
+            </section>
           ) : (
-            <RecoveryCodesCard
-              key="codes"
+            <WaysInSection
+              key="ways-in"
+              returnTo="/settings/security"
               status={status}
-              onChanged={loadStatus}
+              onCodesChanged={loadStatus}
               email={email}
             />
           )
         )}
-        <PasskeysCard />
-        {s && s.cloud.available && s.cloud.trust !== "off" ? (
-          <LinkCloudCard />
-        ) : null}
-        <DevicesCard />
-        {s && s.cloud.available ? (
-          <CloudTrustCard
-            status={s}
-            onChanged={(next) => setStatus({ kind: "ready", data: next })}
-          />
-        ) : null}
       </div>
     </div>
   );
@@ -217,11 +198,74 @@ export function SecurityView({
 export const RECOVERED_COPY =
   "You're back in. Set a new password within 15 minutes.";
 
-/** Just recovered ⇒ the password comes first: it is the one job left. */
-export function securityCardOrder(
+/**
+ * Just recovered ⇒ signing in comes first: a new password is the one job
+ * left. Otherwise the ways to confirm it's you lead the page.
+ */
+export function securitySectionOrder(
   recovered: boolean
-): Array<"password" | "codes"> {
-  return recovered ? ["password", "codes"] : ["codes", "password"];
+): Array<"sign-in" | "ways-in"> {
+  return recovered ? ["sign-in", "ways-in"] : ["ways-in", "sign-in"];
+}
+
+/**
+ * The person's account recovery status (`recoveryApi.status`): the recovery
+ * codes card and the Cloud cards read it. A 401 sends them to sign in and
+ * back to `returnTo`; a failed read is its own state.
+ */
+export function useAccountRecoveryStatus(returnTo: string) {
+  const [status, setStatus] = useState<Load<AccountRecoveryStatus>>({
+    kind: "loading",
+  });
+  const loadStatus = useCallback(async () => {
+    setStatus({ kind: "loading" });
+    const r = await recoveryApi.status();
+    if (!r.ok && r.status === 401) {
+      window.location.assign(`/login?return=${encodeURIComponent(returnTo)}`);
+      return;
+    }
+    setStatus(
+      r.ok
+        ? { kind: "ready", data: r.data }
+        : { kind: "failed", detail: recoveryCallDetail(r) }
+    );
+  }, [returnTo]);
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus]);
+  return { status, setStatus, loadStatus };
+}
+
+/**
+ * "Ways to confirm it's you": the count, then each way with its own Add and
+ * Remove. The person's Security page and the onboarding step
+ * (`/start/access`) draw this same section; `returnTo` is where a sign-in
+ * brings them back.
+ */
+export function WaysInSection({
+  returnTo,
+  status,
+  onCodesChanged,
+  email,
+}: {
+  returnTo: string;
+  status: Load<AccountRecoveryStatus>;
+  onCodesChanged: () => Promise<void>;
+  email: string | null;
+}) {
+  return (
+    <section className="flex flex-col gap-5">
+      <WaysInHeader />
+      <PasskeysCard returnTo={`${returnTo}#passkeys`} />
+      <DeviceKeysCard />
+      <TwoFactorCard />
+      <RecoveryCodesCard
+        status={status}
+        onChanged={onCodesChanged}
+        email={email}
+      />
+    </section>
+  );
 }
 
 function LoadFailed({
@@ -262,6 +306,8 @@ function refusalSentence(error: string): string {
       return "A Synap Cloud sign-in can't change this. Sign in with your pod password.";
     case "forbidden":
       return "Only the pod owner can change this.";
+    case "presence_required":
+      return "Not changed: new recovery codes need you to confirm it is you, with your passkey, Face ID, your authenticator app or one of your current recovery codes.";
     case "owner_needs_pod_sign_in":
       return "An owner signs in only with Synap Cloud. Each owner needs a password or passkey on this pod before Synap Cloud sign-in can be turned off.";
     default:
@@ -324,16 +370,36 @@ function RecoveryCodesCard({
   const [refusal, setRefusal] = useState<RefusalView | null>(null);
   const [fresh, setFresh] = useState<GeneratedRecoveryCodes | null>(null);
 
+  const generateCodes = useGenerateRecoveryCodes();
+  const utils = trpc.useUtils();
+  const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const generate = async () => {
+    const userId = me.data?.id;
+    if (!userId) return;
     setBusy(true);
     setRefusal(null);
-    const r = await recoveryApi.generateCodes();
-    setBusy(false);
+    // The confirm closes first: the proof dialog never opens over it.
     setConfirm(false);
+    let r: Awaited<ReturnType<typeof recoveryApi.generateCodes>>;
+    try {
+      r = await generateCodes(userId);
+    } catch (err) {
+      setBusy(false);
+      // Declining the proof changes nothing and says nothing more.
+      if (err instanceof PresenceDeclined) return;
+      setRefusal({
+        error: "presence_required",
+        detail: errorDetail(err),
+      });
+      return;
+    }
+    setBusy(false);
     if (r.ok) {
       setFresh(r.data);
-      // The top bar's ⚠ and the Overview nudge read a cached status.
+      // The top bar's ⚠ and the Overview nudge read a cached status, and the
+      // count of ways in reads `presence.factors`: codes are one way.
       invalidateRecoveryCodesState();
+      void utils.presence.factors.invalidate();
     } else setRefusal(refusalOf(r));
   };
 
@@ -344,7 +410,7 @@ function RecoveryCodesCard({
     <div id="recovery-codes">
       <SectionCard
         title="Recovery codes"
-        hint="One-time codes that get you back in without email, Synap Cloud or the server"
+        hint="One-time codes that get you back in without email, Synap Cloud or the server, and confirm it’s you when an approval needs you in person"
         actions={
           mark ? (
             <StatusPill kind={TONE_TO_PILL[mark.tone]} label={mark.label} />
@@ -615,251 +681,6 @@ function PasswordCard({
         </div>
       )}
     </SectionCard>
-  );
-}
-
-// ─── 3. Passkeys ─────────────────────────────────────────────────────────
-
-/** Existing passkeys = the flow's remove buttons (one per credential). */
-export function passkeyCount(flow: KratosFlow): number {
-  return flow.ui.nodes.filter(
-    (n) => n.group === "passkey" && n.attributes?.name === "passkey_remove"
-  ).length;
-}
-
-function PasskeysCard() {
-  const t = useT(SECURITY_CATALOGS);
-  const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
-  const [busy, setBusy] = useState(false);
-  // A passkey change needs a grant from an existing factor (W3 slice 3).
-  const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
-  const devices = trpc.presence.devices.list.useQuery(undefined, {
-    retry: false,
-  });
-  const authorize = useAuthorizePasskeyChange();
-  const [grantedUntil, setGrantedUntil] = useState<number | null>(null);
-  /** A fixed sentence; a caught error's own text goes behind "Copy details". */
-  const [error, setError] = useState<{
-    message: string;
-    detail?: string;
-  } | null>(null);
-  const [needsReauth, setNeedsReauth] = useState(false);
-
-  const start = useCallback(async () => {
-    setLoad({ kind: "loading" });
-    try {
-      const r = await createBrowserFlow("settings");
-      if ("flow" in r) setLoad({ kind: "ready", flow: r.flow });
-      else
-        window.location.assign(
-          `/login?return=${encodeURIComponent("/settings/security#passkeys")}`
-        );
-    } catch (err) {
-      setLoad({ kind: "failed", detail: errorDetail(err) });
-    }
-  }, []);
-
-  useEffect(() => {
-    void start();
-  }, [start]);
-
-  // Step 1 when the person has a passkey: confirm with it; the pod holds the
-  // grant for one change. The new passkey is created on the next press.
-  const confirmFirst = async () => {
-    const userId = me.data?.id;
-    if (!userId) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const grant = await authorize(userId);
-      setGrantedUntil(Date.now() + grant.expiresInSeconds * 1000);
-    } catch (err) {
-      if (!(err instanceof PresenceDeclined))
-        setError({
-          message: t("passkeys.grant.failed"),
-          detail: errorDetail(err),
-        });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const add = async () => {
-    if (load.kind !== "ready") return;
-    const flow = load.flow;
-    const createData = nodeValue(flow, "passkey_create_data");
-    if (!createData) return;
-    setBusy(true);
-    setError(null);
-    setNeedsReauth(false);
-    try {
-      const register = await createPasskey(createData);
-      // The guard redeems the grant whatever happens next: one proof, one try.
-      setGrantedUntil(null);
-      const r = await submitSelfServiceFlow(flow, {
-        method: "passkey",
-        csrf_token: nodeValue(flow, "csrf_token") ?? "",
-        passkey_settings_register: register,
-      });
-      if (r.kind === "refresh_required") setNeedsReauth(true);
-      else if (r.kind === "flow") {
-        setLoad({ kind: "ready", flow: r.flow });
-        const errors = collectErrorMessages(r.flow);
-        if (errors.length) setError({ message: errors.join(" ") });
-        else if (r.flow.state === "success")
-          addToast({ title: "Passkey added", color: "default" });
-      } else if (r.kind === "redirect") window.location.assign(r.to);
-      else setError({ message: "Couldn't add the passkey. Try again." });
-    } catch (err) {
-      if (!(err instanceof PasskeyCancelled)) {
-        setError({
-          message: "Couldn't add the passkey. Try again.",
-          detail: errorDetail(err),
-        });
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const count = load.kind === "ready" ? passkeyCount(load.flow) : 0;
-  const step = passkeyAddStep({
-    passkeys: count,
-    deviceKeys: devices.isError ? null : (devices.data?.length ?? 0),
-    granted: grantedUntil !== null && Date.now() < grantedUntil,
-  });
-  const canAdd =
-    load.kind === "ready" &&
-    nodeValue(load.flow, "passkey_create_data") !== null &&
-    isPasskeySupported();
-
-  return (
-    <div id="passkeys" className="scroll-mt-6">
-      <SectionCard
-        title="Passkeys"
-        hint="Sign in with this device's lock, no password"
-        actions={
-          load.kind === "ready" ? (
-            <StatusPill
-              kind={count > 0 ? "healthy" : "unknown"}
-              label={
-                count === 0
-                  ? "None"
-                  : count === 1
-                    ? "1 passkey"
-                    : `${count} passkeys`
-              }
-            />
-          ) : null
-        }
-      >
-        {load.kind === "loading" || devices.isLoading ? (
-          <div className="h-12 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
-        ) : load.kind === "failed" ? (
-          <LoadFailed
-            message="Couldn't load passkey settings."
-            detail={load.detail}
-            onRetry={() => void start()}
-          />
-        ) : nodeValue(load.flow, "passkey_create_data") === null ? (
-          <p className="text-[12.5px] text-foreground/65">
-            Passkeys aren&apos;t enabled on this pod.
-          </p>
-        ) : (
-          <div className="flex flex-col items-start gap-3">
-            {needsReauth ? <Refusal error="reauth_required" /> : null}
-            {error ? (
-              <div className="flex flex-col items-start gap-1">
-                <p
-                  role="alert"
-                  className="flex items-start gap-2 text-[12.5px] text-status-down"
-                >
-                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  {error.message}
-                </p>
-                {error.detail ? (
-                  <CopyButton
-                    text={error.detail}
-                    label="Copy details"
-                    variant="light"
-                    ariaLabel="Copy the technical details of this error"
-                  />
-                ) : null}
-              </div>
-            ) : null}
-            {!canAdd ? (
-              <p className="text-[12.5px] text-foreground/65">
-                This browser can&apos;t create a passkey. Open this page on a
-                device that can.
-              </p>
-            ) : step === "devicesFailed" ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <p className="text-[12.5px] text-status-down">
-                  {t("passkeys.devicesFailed")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="flat"
-                  radius="md"
-                  onPress={() => void devices.refetch()}
-                >
-                  {t("passkeys.retry")}
-                </Button>
-              </div>
-            ) : step === "relayOnly" ? (
-              <p className="text-[12.5px] text-foreground/65">
-                {t("passkeys.relayOnly")}
-              </p>
-            ) : step === "create" ? (
-              <div className="flex flex-col items-start gap-2">
-                <p className="text-[12.5px] text-foreground/65">
-                  {t("passkeys.grant.ready")}
-                </p>
-                <Button
-                  size="sm"
-                  radius="md"
-                  color="primary"
-                  startContent={<KeyRound className="h-3.5 w-3.5" />}
-                  isLoading={busy}
-                  onPress={() => void add()}
-                >
-                  {t("passkeys.grant.create")}
-                </Button>
-              </div>
-            ) : step === "authorize" ? (
-              <div className="flex flex-col items-start gap-2">
-                <p className="text-[12.5px] text-foreground/65">
-                  {t("passkeys.grant.why")}
-                </p>
-                <Button
-                  size="sm"
-                  radius="md"
-                  variant="flat"
-                  startContent={<KeyRound className="h-3.5 w-3.5" />}
-                  isLoading={busy}
-                  isDisabled={!me.data?.id}
-                  onPress={() => void confirmFirst()}
-                >
-                  Add a passkey
-                </Button>
-              </div>
-            ) : (
-              <Button
-                size="sm"
-                radius="md"
-                variant="solid"
-                color="primary"
-                startContent={<KeyRound className="h-3.5 w-3.5" />}
-                isLoading={busy}
-                onPress={() => void add()}
-              >
-                Add a passkey
-              </Button>
-            )}
-          </div>
-        )}
-      </SectionCard>
-    </div>
   );
 }
 

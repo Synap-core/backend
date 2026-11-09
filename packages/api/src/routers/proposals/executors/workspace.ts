@@ -1484,12 +1484,18 @@ export function registerWorkspaceExecutors(): void {
       }
 
       const { apiKeysRouter } = await import("../../api-keys.js");
+      // A sub-router caller's path is relative ("create", not
+      // "apiKeys.create"), so the step-up middleware cannot see the act: the
+      // proof is the approval's, checked by applyProposalApproval
+      // (`apiKey/*` is in SENSITIVE_APPROVALS). Said here, pinned by the
+      // tripwire `presence-gate-every-door`.
       const apiKeyCaller = apiKeysRouter.createCaller({
         db,
         authenticated: true as const,
         userId,
         workspaceId: keyWorkspaceId,
         workspaceRole: membership?.role,
+        presenceChecked: "applyProposalApproval",
       } as unknown as Context);
 
       // The replay must APPLY, never re-propose — see `assertApplied`.
@@ -1611,12 +1617,18 @@ export function registerWorkspaceExecutors(): void {
       }
 
       const { apiKeysRouter } = await import("../../api-keys.js");
+      // A sub-router caller's path is relative ("create", not
+      // "apiKeys.create"), so the step-up middleware cannot see the act: the
+      // proof is the approval's, checked by applyProposalApproval
+      // (`apiKey/*` is in SENSITIVE_APPROVALS). Said here, pinned by the
+      // tripwire `presence-gate-every-door`.
       const apiKeyCaller = apiKeysRouter.createCaller({
         db,
         authenticated: true as const,
         userId,
         workspaceId: keyWorkspaceId,
         workspaceRole: membership?.role,
+        presenceChecked: "applyProposalApproval",
       } as unknown as Context);
 
       const hubId = (inner.hubId ?? raw.hubId) as string | undefined;
@@ -1735,12 +1747,18 @@ export function registerWorkspaceExecutors(): void {
       }
 
       const { apiKeysRouter } = await import("../../api-keys.js");
+      // A sub-router caller's path is relative ("create", not
+      // "apiKeys.create"), so the step-up middleware cannot see the act: the
+      // proof is the approval's, checked by applyProposalApproval
+      // (`apiKey/*` is in SENSITIVE_APPROVALS). Said here, pinned by the
+      // tripwire `presence-gate-every-door`.
       const apiKeyCaller = apiKeysRouter.createCaller({
         db,
         authenticated: true as const,
         userId,
         workspaceId: keyWorkspaceId,
         workspaceRole: membership?.role,
+        presenceChecked: "applyProposalApproval",
       } as unknown as Context);
 
       // The replay must APPLY, never re-propose — see `assertApplied`.

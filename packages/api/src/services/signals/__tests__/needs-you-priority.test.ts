@@ -96,3 +96,27 @@ describe("signal.priority on the needs-you read", () => {
     ).toBe("P1");
   });
 });
+
+describe("the person's Later reaches the signal (founder D3, 5 Nov 2026)", () => {
+  it("a set-aside ask carries laterUntil (future) and sits in Review later", () => {
+    const s = signalOf({
+      ...ask(),
+      laterUntil: inMinutes(60),
+    } as ExpectedOutput);
+    expect(s.laterUntil).toBe(inMinutes(60));
+    expect(s.needsYouClass).toBe("review_later");
+  });
+
+  it("a returned ask still carries its (past) laterUntil, so a surface can mark it Back", () => {
+    const s = signalOf({
+      ...ask(),
+      laterUntil: inMinutes(-5),
+    } as ExpectedOutput);
+    expect(s.laterUntil).toBe(inMinutes(-5));
+    expect(s.needsYouClass).toBe("needs_you");
+  });
+
+  it("an ask never set aside carries none", () => {
+    expect(signalOf(ask())).not.toHaveProperty("laterUntil");
+  });
+});

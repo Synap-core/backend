@@ -60,6 +60,7 @@ import {
   events,
   messages,
   sessionEvaluations,
+  playbookRuns,
   eq,
 } from "@synap/database";
 import { readSessionsReadyToClose } from "../../discover/loose-ends.js";
@@ -191,6 +192,8 @@ beforeAll(async () => {
     events,
     messages,
     sessionEvaluations,
+    // The agent-opened predicate reads who opened a playbook session here.
+    playbookRuns,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

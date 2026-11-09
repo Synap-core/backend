@@ -65,6 +65,7 @@ import {
   needsYouPriority,
   type NeedsYouPriority,
   isSetAside,
+  type NeedsYouBlocks,
 } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
@@ -78,6 +79,7 @@ import type {
   ExpectedOutput,
   OutputRef,
   SlotAsk,
+  SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
@@ -347,6 +349,14 @@ export interface Signal {
    */
   keptOwedAt?: string;
   /**
+   * The person's Later on an `owed-slot` (`ExpectedOutput.laterUntil`, an ISO
+   * instant), carried as it is stored: in the future, the ask is set aside
+   * (its row is in Review later); past, it came BACK from Later and a surface
+   * may mark it so (founder, 5 Nov 2026, D3). Absent when never set aside, and
+   * on every other kind.
+   */
+  laterUntil?: string;
+  /**
    * A param slot's param (`ExpectedOutput.paramName`) — carried so a surface
    * hands the whole row to the one card adapter (`askCardSlotOf`) and names
    * the cause the same way the session page does. Absent on every other slot
@@ -412,10 +422,34 @@ export interface Signal {
    */
   priority?: NeedsYouPriority;
   /**
+   * `proposal-cluster`: the kind of object the proposal acts on (the cluster's
+   * `targetType`: "tool", a profile slug, ...), so the Inbox row wears that
+   * kind's own icon instead of the same decision mark on every row. Absent when
+   * the proposal names no target kind. A token, never a label: surfaces resolve
+   * its glyph and noun through the vocabulary.
+   */
+  subjectKind?: string;
+  /**
    * `owed-slot`: WHAT MOVES when the person answers — the card's "Unblocks"
    * line (decision E; `effectiveSlotUnblocks`). Absent when nothing says.
    */
   unblocks?: string;
+  /**
+   * `owed-slot`: the thing the ask's session is ABOUT (`focus_sessions.
+   * subject_entity_id`) — what lets a card be placed on its thing (plan
+   * e7f753db §9). An id only: its name travels in `blocks`, floored.
+   */
+  subjectEntityId?: string;
+  /**
+   * `owed-slot`: the THING the ask holds up, its status now and the status
+   * it cannot reach until the person answers (plan e7f753db §9;
+   * `OwedSlot.blockedThing`, resolved under the reader's entity floor).
+   */
+  blocks?: NeedsYouBlocks;
+  /** `owed-slot`: the blocker's domain name (`not_connected`), as declared. */
+  blockerKey?: string;
+  /** `owed-slot`: what clears the blocker, as declared (`SlotClearedBy`). */
+  clearedBy?: SlotClearedBy;
   /**
    * WHERE the row came from — the small provenance door (lens grammar §5: a
    * source is shown only when it differs from the page's scope; the client
@@ -577,6 +611,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "ask",
   "pendingRelay",
   "keptOwedAt",
+  "laterUntil",
   "paramName",
   "class",
   "lifetimeHours",
@@ -584,6 +619,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "blocksOpenPr",
   "needsYouClass",
   "priority",
+  "subjectKind",
   "unblocks",
   "source",
   "by",
@@ -602,6 +638,10 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "convertible",
   "package",
   "waitKind",
+  "subjectEntityId",
+  "blocks",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
 type _SignalFieldsClassified =
@@ -914,6 +954,9 @@ export function signalFromCluster(
       ? "older"
       : ageBucketOf(cluster.latestAt, now),
     ...(cluster.reviewLater ? { reviewLater: true as const } : {}),
+    ...(cluster.targetType?.trim()
+      ? { subjectKind: cluster.targetType.trim() }
+      : {}),
     ...(cluster.needsYouClass
       ? {
           needsYouClass: cluster.needsYouClass,
@@ -1091,6 +1134,13 @@ export interface OwedSlotSignalInput {
   needsYouClass?: NeedsYouSlotClass;
   /** What the answer unblocks, straight from `listOwedSlots`. */
   unblocks?: string;
+  /** The session's subject, straight from `listOwedSlots`. */
+  subjectEntityId?: string | null;
+  /** The thing it holds up, resolved by `listOwedSlots` (`blockedThing`). */
+  blockedThing?: NeedsYouBlocks;
+  /** The declared blocker's name and door, straight from `listOwedSlots`. */
+  blockerKey?: string;
+  clearedBy?: SlotClearedBy;
 }
 
 /**
@@ -1135,6 +1185,9 @@ export interface OwedSlotSignalInput {
  *                                      awaiting the tap: the row's Confirm.
  *   keptOwedAt                      → `keptOwedAt` — kept past its session:
  *                                      the card's fate reads it.
+ *   laterUntil                      → `laterUntil` — the person's Later: its
+ *                                      class reads it, and a returned ask
+ *                                      (past) wears a "Back" mark (D3).
  *   paramName                       → `paramName` — the param a param slot
  *                                      asks for; the card adapter reads it.
  *   askedBy, askedByName            → `by` — the asker as a named mark, only
@@ -1143,6 +1196,17 @@ export interface OwedSlotSignalInput {
  *                                      agent did, the card's door
  *   blocksOpenPr                    → `blocksOpenPr` — the ask blocks an open
  *                                      PR: ordered first, never aged out
+ *   subjectEntityId                 → `subjectEntityId` — the thing the
+ *                                      session is about, so a card is placed
+ *                                      on its thing (plan e7f753db §9). It
+ *                                      was withheld while the session was the
+ *                                      only door; an id the reader's own
+ *                                      session already carries.
+ *   blockedThing                    → `blocks` — the thing the ask holds up,
+ *                                      its status now and after (plan §9),
+ *                                      named under the reader's entity floor
+ *   blockerKey, clearedBy           → carried straight through: the card
+ *                                      says what clears it
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -1158,11 +1222,9 @@ export interface OwedSlotSignalInput {
  *                     never from a kind string — undrawn context, not a hole.
  *                     (`kind` was withheld under this same reasoning until it
  *                     turned out to decide the VERB, not the icon.)
- *   subjectEntityId → the thing the session is about. A signal's door is the
- *                     session (`target`), and the kind lens already narrows
- *                     by thing in SQL (`subject`); its reader is the owed door
- *                     a pod app reads (`GET /focus-sessions/owed`), which
- *                     places each ask on its thing's own page.
+ *   blocks         → the blocker as declared; the card reads it RESOLVED,
+ *                     as `blockedThing` (above): an id the reader may not
+ *                     read must not reach it unnamed-but-present.
  */
 const _PROJECTED_OWED_SLOT_FIELDS = [
   "sessionId",
@@ -1187,16 +1249,20 @@ const _PROJECTED_OWED_SLOT_FIELDS = [
   "keptOwedAt",
   "paramName",
   "blocksOpenPr",
+  // Read by the slot's class (`owedSlotClassOf`) AND carried: a returned ask
+  // (the time is past) wears a "Back" mark on the phone (founder D3).
+  "laterUntil",
+  "subjectEntityId",
+  "blockedThing",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const _WITHHELD_OWED_SLOT_FIELDS = [
-  // Read by the slot's class only (`owedSlotClassOf`): a set-aside ask
-  // reaches the signal as its Review later fold, never as a second field.
-  "laterUntil",
   "sessionStatus",
   "workspaceId",
   "icon",
-  "subjectEntityId",
+  "blocks",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 /**
@@ -1287,6 +1353,12 @@ const _WITHHELD_DRAFT_ASK_FIELDS = [
   // The person's Later is read by a started session's slot class only
   // (`owedSlotClassOf`): a draft's ask reaches no class to fold it.
   "laterUntil",
+  // The thing each ask holds up belongs to the ask's own row, like its why:
+  // one draft row stands for N asks.
+  "blocks",
+  "blockedThing",
+  "blockerKey",
+  "clearedBy",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 type _DraftAskFieldsClassified =
@@ -1438,6 +1510,7 @@ export function signalFromOwedSlot(
     ...(row.ask ? { ask: row.ask } : {}),
     ...(row.pendingRelay ? { pendingRelay: row.pendingRelay } : {}),
     ...(row.keptOwedAt ? { keptOwedAt: row.keptOwedAt } : {}),
+    ...(row.laterUntil ? { laterUntil: row.laterUntil } : {}),
     ...(row.paramName ? { paramName: row.paramName } : {}),
     ...(row.askedBy && row.askedByName
       ? {
@@ -1450,6 +1523,10 @@ export function signalFromOwedSlot(
       : {}),
     ...(row.askCause ? { askCause: row.askCause } : {}),
     ...(row.unblocks ? { unblocks: row.unblocks } : {}),
+    ...(row.subjectEntityId ? { subjectEntityId: row.subjectEntityId } : {}),
+    ...(row.blockedThing ? { blocks: row.blockedThing } : {}),
+    ...(row.blockerKey ? { blockerKey: row.blockerKey } : {}),
+    ...(row.clearedBy ? { clearedBy: row.clearedBy } : {}),
     ...sessionSource(row.sessionId, row.sessionTitle),
     groupKey: sessionGroupKey(row.sessionId),
     // Review later wins over Older, like a cluster's: a client that predates

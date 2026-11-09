@@ -106,6 +106,9 @@ export * from "./place-words.js";
 /** The MCP OAuth scopes in words (`resolveOAuthScopeLabel`), for consent. */
 export * from "./oauth-scope-words.js";
 
+/** Template or pack, from what a package holds; `package.install` in words. */
+export * from "./package-words.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately
@@ -902,6 +905,10 @@ const OBJECT_NOUN_ROWS = {
   mcp: "MCP server",
   api_key: "API key",
   ssh_key: "SSH key",
+  // An AI service registered on the pod (`intelligenceRegistry`), and a
+  // vault secret: named by the presence words (`SENSITIVE_ACTION_TOKENS`).
+  intelligence_service: "AI service",
+  secret: "Secret",
   env_variable: "Environment variable",
   url: "Page",
   // Humanizing this event domain to "Proactive" loses its subject — the AI is
@@ -989,6 +996,8 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   mcp: "MCP servers",
   api_key: "API keys",
   ssh_key: "SSH keys",
+  intelligence_service: "AI services",
+  secret: "Secrets",
   env_variable: "Environment variables",
   url: "Pages",
   proactive: "Proactive AIs",
@@ -1304,6 +1313,52 @@ export function buildObjectActionTitle(params: {
     name,
     ...nounParams(resolveNoun(kind, locale)),
   });
+}
+
+/**
+ * The title of a capability asked for one of the person's computers
+ * (`installation/request`): what it does, to which capability, on which
+ * computer. `Install "ffmpeg on your computer" on Mac`, `Remove "…" from
+ * Mac`, and `Add "…" from the marketplace and install it on Mac` when
+ * approving also adds the capability to the pod. The verb comes from the
+ * action door (`resolveActionLabel`); the capability and the computer are
+ * names, never tokens. Without a computer name it falls back to the
+ * generic door.
+ */
+export function buildInstallationTitle(params: {
+  /** `install`, `update`, `verify` or `remove`. */
+  action: string;
+  /** The capability's display name, else its catalog key. */
+  name: string;
+  computer?: string | null;
+  /** Approving it also adds the capability to the pod from the catalog. */
+  addsFromCatalog?: boolean;
+  locale?: Locale;
+}): string {
+  const locale = catalogLocaleOf(params.locale);
+  const t = sentences(locale);
+  const name = params.name.trim();
+  const computer = (params.computer ?? "").trim();
+  if (!computer)
+    return buildObjectActionTitle({
+      action: params.action,
+      objectName: name,
+      locale,
+    });
+  if (params.addsFromCatalog && params.action === "install")
+    return t("vocabulary.title.addAndInstallOn", { name, computer });
+  // A check is the action door's `check` (no `verify` verb exists).
+  const verb = resolveActionLabel(
+    params.action === "verify" ? "check" : params.action,
+    "imperative",
+    locale
+  );
+  return t(
+    params.action === "remove"
+      ? "vocabulary.title.fromComputer"
+      : "vocabulary.title.onComputer",
+    { verb, name, computer }
+  );
 }
 
 /** The title preposition an action takes, or "" for none. */
@@ -2828,6 +2883,16 @@ const PACKAGE_FIELD_LABELS: Readonly<Record<string, string>> = {
   query: "Query",
   executionMode: "Run mode",
   timeoutSeconds: "Time limit",
+  // An agent template's fields (`agent_templates`, catalog kind `agent`).
+  harness: "Agent type",
+  aliases: "Other agent types",
+  worker: "Takes handed work",
+  tried: "Tried on a computer",
+  detect: "How it is found on a computer",
+  wake: "How a computer starts it",
+  practices: "Skills its agents get",
+  toolProfile: "Tools its agents start with",
+  toolGroups: "Tool groups its agents start with",
 };
 
 export function resolvePackageFieldLabel(key: string): string {
@@ -3625,6 +3690,7 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     "arbitrary-execution": "Running code on the pod",
     "human-only-status": "A status only a person sets",
     "lifecycle-terminal": "Closing it (done or lost)",
+    "lifecycle-reopen": "Reopening it by starting work",
     "host-asks-first": "Its computer asks first",
   };
 
@@ -3797,6 +3863,40 @@ export function resolveAgentWakeRefusalLabel(
 }
 
 /**
+ * What a person does about each reason an agent can't be woken (`wake.why`),
+ * one plain sentence each: the fix, never the fault. A surface adds the door
+ * the sentence names (the computer's page, the command with the agent's
+ * name). `agents/wake.ts` holds the floor that a new reason ships with its fix.
+ */
+export const AGENT_WAKE_REFUSAL_FIXES = {
+  paused: "It is paused. Resume it to let it take work again.",
+  binding_broken:
+    "The connector it is set up with does not work. Fix that connector, or set it up again.",
+  no_template:
+    "No agent template matches its type. Install its program from the Marketplace's Agents tab.",
+  no_template_wake:
+    "Its program cannot be started by a computer. It works when someone opens it.",
+  no_computer:
+    "It is on no computer. Run the Synap worker for it on the computer that has its program.",
+  no_waker:
+    "Nothing on its computer starts agents yet. Run the Synap worker for it on that computer.",
+  computer_offline:
+    "Its computer is offline. Turn it on, or start Synap on it.",
+  wakes_off:
+    "Waking agents is turned off on its computer. Turn it back on there.",
+} as const;
+
+/** A wake refusal's fix; an unknown reason gets none rather than a guess. */
+export function resolveAgentWakeRefusalFix(
+  why: string | null | undefined
+): string | null {
+  if (!why) return null;
+  return (
+    (AGENT_WAKE_REFUSAL_FIXES as Readonly<Record<string, string>>)[why] ?? null
+  );
+}
+
+/**
  * The pod's own AI, as a person picks it from "who runs this" (a run choice of
  * `is-agent`, `@synap-core/types/agents` run-choice). ONE name everywhere a
  * surface offers it beside the person's agents.
@@ -3823,6 +3923,45 @@ export function resolveRunChoiceViaLabel(
     (RUN_CHOICE_VIA_LABELS as Readonly<Record<string, string>>)[via] ??
     humanizeToken(via)
   );
+}
+
+/**
+ * Whose key Synap AI runs on (`RunChoiceProvider.key`), in brackets after the
+ * provider's name: "Synap AI · using Anthropic (your key)". A pod-wide key is
+ * the person's own pod, so it reads as theirs too. `agents/run-choice.ts`
+ * holds the floor that a new key ships with its words.
+ */
+export const RUN_CHOICE_PROVIDER_KEY_LABELS = {
+  person: "your key",
+  space: "this space's key",
+  pod: "your key",
+  synap: "",
+} as const;
+
+/** What Synap AI runs on when the pod has no AI provider of its own. */
+export const SYNAP_CREDITS_LABEL = "Synap credits";
+
+/**
+ * The Synap AI option's label with the provider it uses now:
+ * "Synap AI · using Anthropic (your key)", "Synap AI · using Synap credits".
+ */
+export function resolveSynapAiProviderLabel(provider: {
+  name: string;
+  key: string;
+}): string {
+  const whose =
+    (RUN_CHOICE_PROVIDER_KEY_LABELS as Readonly<Record<string, string>>)[
+      provider.key
+    ] ?? humanizeToken(provider.key);
+  return whose
+    ? `${SYNAP_AI_LABEL} · using ${provider.name} (${whose})`
+    : `${SYNAP_AI_LABEL} · using ${provider.name}`;
+}
+
+/** The line under the options when some agents cannot run it now. */
+export function resolveRunChoiceHiddenLabel(count: number): string | null {
+  if (count <= 0) return null;
+  return `${count} more can't run now`;
 }
 
 /**

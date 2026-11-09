@@ -20,7 +20,8 @@ vi.mock("@synap/storage", () => ({
   StorageUploadUnavailableError: class extends Error {},
   storage: { upload: vi.fn(), delete: vi.fn() },
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: { query: { workspaces: { findFirst: h.findWorkspace } } },
   getWorkspaceMembership: h.getMembership,
   workspaces: { id: "id" },

@@ -90,3 +90,23 @@ describe.each(["v3", "v4"] as const)(
     });
   }
 );
+
+describe("isAskAnswerByPast — a deadline already past is refused at write", () => {
+  const NOW = Date.parse("2026-11-05T12:00:00Z");
+
+  it("past or now: refused; future: fine", async () => {
+    const { isAskAnswerByPast } = await import("./index.js");
+    expect(isAskAnswerByPast("2026-11-05T11:59:00Z", NOW)).toBe(true);
+    expect(isAskAnswerByPast("2026-11-05T12:00:00Z", NOW)).toBe(true);
+    expect(isAskAnswerByPast("2026-11-05T12:01:00Z", NOW)).toBe(false);
+    expect(isAskAnswerByPast("2026-11-05T13:00:00.000+01:00", NOW)).toBe(true);
+  });
+
+  it("no answerBy, or a value that is not an instant, is not 'past' (the schema refuses the latter)", async () => {
+    const { isAskAnswerByPast, ASK_ANSWER_BY_PAST_MESSAGE } =
+      await import("./index.js");
+    expect(isAskAnswerByPast(undefined, NOW)).toBe(false);
+    expect(isAskAnswerByPast("yesterday", NOW)).toBe(false);
+    expect(ASK_ANSWER_BY_PAST_MESSAGE).toMatch(/already past/);
+  });
+});

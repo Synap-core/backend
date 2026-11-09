@@ -13,6 +13,7 @@ import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import type { DocumentContent } from "./document-model";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import { HtmlPageSection } from "./html-frame";
+import { useCellInstance } from "./use-cell-instance";
 import { useEmbedCell } from "./use-embed-cell";
 import { useEmbedEntity } from "./use-embed-entity";
 import { useObjectRef } from "./use-object-ref";
@@ -104,13 +105,14 @@ export function ContentBlock({
   openInApp?: ReactNode;
   measure?: ContentMeasure;
 }) {
-  // Embeds read a record or a cell, and references look up what an id
-  // names, on the viewer's own floor; embeds offer the object's own "Open in
-  // app" (`embed-view`).
+  // Embeds read a record, a cell or a cell instance, and references look up
+  // what an id names, on the viewer's own floor; embeds offer the object's
+  // own "Open in app" (`embed-view`).
   const host = useMemo<EmbedHost>(
     () => ({
       useEntity: useEmbedEntity,
       useCell: useEmbedCell,
+      useCellInstance,
       useObjectRef,
       openInApp,
     }),

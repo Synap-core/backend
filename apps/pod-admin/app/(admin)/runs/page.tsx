@@ -35,7 +35,8 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../components/resource-row";
-import { SectionCard } from "../components/section-card";
+import { ListCard } from "../components/list-page";
+import { statusOption } from "../components/filter-options";
 import { useFocusRow } from "../components/use-focus-row";
 import { FilterChip, FilterRow } from "../components/filter-chip";
 import {
@@ -100,7 +101,7 @@ function RunsInner() {
             param="filter"
             value={filter === "all" ? null : filter}
             options={RUN_FILTERS.flatMap((f) =>
-              f.key === "all" ? [] : [{ id: f.key, label: f.label }]
+              f.key === "all" ? [] : [statusOption(f.key, { label: f.label })]
             )}
           />
         }
@@ -169,56 +170,49 @@ function FlowBoard({
   useFocusRow({ ready: !loading });
 
   return (
-    <SectionCard
+    <ListCard
       title={failingOnly ? "Failing flows" : "Flows"}
       hint="Rules and templates, newest run first. Tap one for its runs."
+      loading={loading}
+      isError={groups.isError}
+      onRetry={() => void groups.refetch()}
+      errorMessage="Couldn't load runs."
+      rowCount={rows.length}
+      emptyMessage={
+        failingOnly
+          ? "Nothing failed this week."
+          : "Nothing has run yet. Rules and templates show here once they run."
+      }
+      skeletonRows={4}
+      pagination={
+        failingOnly
+          ? undefined
+          : {
+              kind: "more",
+              hasNext: groups.hasNextPage ?? false,
+              isFetchingNext: groups.isFetchingNextPage,
+              onLoadMore: () => void groups.fetchNextPage(),
+            }
+      }
+      footer={
+        failingOnly && drain.capped ? (
+          <p className="px-1 pt-3 text-[12px] text-foreground/65">
+            Showing failing flows among the {loaded.length} most recently run —
+            there may be more further back.
+          </p>
+        ) : undefined
+      }
     >
-      {loading && rows.length === 0 ? (
-        <ResourceRowSkeleton count={4} />
-      ) : groups.isError ? (
-        <ResourceRowError
-          message="Couldn't load runs."
-          onRetry={() => void groups.refetch()}
-        />
-      ) : rows.length === 0 ? (
-        <ResourceRowEmpty
-          message={
-            failingOnly
-              ? "Nothing failed this week."
-              : "Nothing has run yet. Rules and templates show here once they run."
-          }
-        />
-      ) : (
-        <div className="-mx-2 divide-y divide-foreground/[0.05]">
-          {rows.map((g) => (
-            <FlowRow
-              key={`${g.flowType}:${g.flowId}`}
-              group={g}
-              onOpen={onOpen}
-            />
-          ))}
-        </div>
-      )}
-      {failingOnly && drain.capped && (
-        <p className="px-1 pt-3 text-[12px] text-foreground/65">
-          Showing failing flows among the {loaded.length} most recently run —
-          there may be more further back.
-        </p>
-      )}
-      {!failingOnly && groups.hasNextPage && (
-        <div className="px-1 pt-3">
-          <Button
-            size="sm"
-            variant="light"
-            radius="md"
-            isLoading={groups.isFetchingNextPage}
-            onPress={() => void groups.fetchNextPage()}
-          >
-            Load more
-          </Button>
-        </div>
-      )}
-    </SectionCard>
+      <div className="-mx-2 divide-y divide-foreground/[0.05]">
+        {rows.map((g) => (
+          <FlowRow
+            key={`${g.flowType}:${g.flowId}`}
+            group={g}
+            onOpen={onOpen}
+          />
+        ))}
+      </div>
+    </ListCard>
   );
 }
 
@@ -413,7 +407,7 @@ function RunFeed({
   const isChat = filter === "chat";
 
   return (
-    <SectionCard
+    <ListCard
       title={heading?.title ?? (isChat ? "Failed AI turns" : "Running now")}
       hint={
         heading?.hint ??
@@ -421,55 +415,42 @@ function RunFeed({
           ? "Chat turns that failed — Companion, Discord, external agents"
           : "Every run still going, across rules, templates, sessions and tools")
       }
+      loading={feed.isLoading || isAuthRedirecting}
+      isError={feed.isError}
+      onRetry={() => void feed.refetch()}
+      errorMessage="Couldn't load runs."
+      rowCount={runs.length}
+      emptyMessage={
+        heading?.empty ??
+        (isChat ? "No failed AI turns." : "Nothing is running.")
+      }
+      skeletonRows={3}
+      pagination={{
+        kind: "more",
+        hasNext: feed.hasNextPage ?? false,
+        isFetchingNext: feed.isFetchingNextPage,
+        onLoadMore: () => void feed.fetchNextPage(),
+      }}
     >
-      {feed.isLoading || isAuthRedirecting ? (
-        <ResourceRowSkeleton count={3} />
-      ) : feed.isError ? (
-        <ResourceRowError
-          message="Couldn't load runs."
-          onRetry={() => void feed.refetch()}
-        />
-      ) : runs.length === 0 ? (
-        <ResourceRowEmpty
-          message={
-            heading?.empty ??
-            (isChat ? "No failed AI turns." : "Nothing is running.")
-          }
-        />
-      ) : (
-        <div className="-mx-2 divide-y divide-foreground/[0.05]">
-          {runs.map((run) => (
-            <ResourceRow
-              key={`${run.flowType}:${run.id}`}
-              Icon={kindIcon(run.flowType)}
-              primary={run.flowName}
-              secondary={`${flowNoun(run.flowType)} · ${runRowSecondary(run)}`}
-              status={statusPillFor(run.status) ?? undefined}
-              onSelect={() =>
-                onOpen({
-                  flowType: run.flowType,
-                  id: run.id,
-                  flowName: run.flowName,
-                })
-              }
-              wrap
-            />
-          ))}
-        </div>
-      )}
-      {feed.hasNextPage && (
-        <div className="px-1 pt-3">
-          <Button
-            size="sm"
-            variant="light"
-            radius="md"
-            isLoading={feed.isFetchingNextPage}
-            onPress={() => void feed.fetchNextPage()}
-          >
-            Load more
-          </Button>
-        </div>
-      )}
-    </SectionCard>
+      <div className="-mx-2 divide-y divide-foreground/[0.05]">
+        {runs.map((run) => (
+          <ResourceRow
+            key={`${run.flowType}:${run.id}`}
+            Icon={kindIcon(run.flowType)}
+            primary={run.flowName}
+            secondary={`${flowNoun(run.flowType)} · ${runRowSecondary(run)}`}
+            status={statusPillFor(run.status) ?? undefined}
+            onSelect={() =>
+              onOpen({
+                flowType: run.flowType,
+                id: run.id,
+                flowName: run.flowName,
+              })
+            }
+            wrap
+          />
+        ))}
+      </div>
+    </ListCard>
   );
 }

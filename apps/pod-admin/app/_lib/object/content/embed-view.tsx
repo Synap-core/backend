@@ -13,7 +13,10 @@
  *   cell-frame      an HTML page cell RUNS, in the isolated frame of
  *                   `html-frame`, its source read on the viewer's own floor
  *                   (`widgetDefinitions.get`); any other cell is a chip that
- *                   opens its `/open/cell/<key>` card (handed to the app)
+ *                   opens its `/open/cell/<key>` card (handed to the app).
+ *                   One that names only an instance is first read
+ *                   (`cellInstances.get`): its name and type, then the same
+ *                   as a keyed cell
  *   chart-live, cell-builtin, unknown
  *                   a quiet chip naming it + the object's "Open in app"
  *   broken          says the embed names nothing
@@ -31,9 +34,14 @@ import Link from "next/link";
 import { AlertTriangle, BarChart3, Lock, type LucideIcon } from "lucide-react";
 import type { Embed } from "@synap-core/markdown-core";
 import { CELL_FRAME_MAX_BYTES } from "@synap-core/types/cell-bridge";
-import { describeEmbed, type EmbedModel } from "@synap-core/types/renderables";
+import {
+  cellKeyName,
+  describeEmbed,
+  type EmbedModel,
+} from "@synap-core/types/renderables";
 import {
   nounInSentence,
+  resolveCellInstanceWords,
   resolveEmbedWords,
   type EmbedWords,
 } from "@synap-core/types/vocabulary";
@@ -43,6 +51,7 @@ import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import { HtmlFrame } from "./html-frame";
 import {
   objectPage,
+  type EmbedCellInstanceRead,
   type EmbedCellRead,
   type EmbedEntityRead,
 } from "./markdown-model";
@@ -306,53 +315,82 @@ function CellDoor({
   );
 }
 
+function CellBusy({ noun }: { noun: string }) {
+  return (
+    <span
+      role="status"
+      aria-busy="true"
+      aria-label={`Loading ${noun}…`}
+      className={`${CHIP} w-40`}
+    >
+      <span className="h-3 w-full rounded bg-foreground/[0.07] shimmer-pulse" />
+    </span>
+  );
+}
+
+function CellHidden({ inline }: { inline: boolean }) {
+  const words = "This isn’t visible to you, or no longer exists.";
+  return inline ? (
+    <span className={CHIP}>
+      <Lock aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+      {words}
+    </span>
+  ) : (
+    <Note icon={Lock}>{words}</Note>
+  );
+}
+
+function CellFailed({ noun, retry }: { noun: string; retry?: () => void }) {
+  return (
+    <span className={`${CHIP} flex-wrap`}>
+      <AlertTriangle
+        aria-hidden="true"
+        className="h-3.5 w-3.5 shrink-0 text-danger"
+      />
+      This {noun} couldn’t be loaded.
+      {retry && (
+        <button
+          type="button"
+          onClick={retry}
+          className={`font-medium text-foreground ${DOOR}`}
+        >
+          Try again
+        </button>
+      )}
+    </span>
+  );
+}
+
 function CellFrameBody({
   model,
   words,
   read,
+  ofVisibleInstance = false,
 }: {
   model: CellFrameModel;
   words: EmbedWords;
   read: EmbedCellRead;
+  /**
+   * The key is a visible instance's type. A type with no stored cell (a
+   * built-in one, `entity-list`) is not something hidden from the reader:
+   * the console just does not run it, so it is the door.
+   */
+  ofVisibleInstance?: boolean;
 }) {
   const noun = nounInSentence(words.noun);
   switch (read.state) {
     case "loading":
-      return (
-        <span
-          role="status"
-          aria-busy="true"
-          aria-label={`Loading ${noun}…`}
-          className={`${CHIP} w-40`}
-        >
-          <span className="h-3 w-full rounded bg-foreground/[0.07] shimmer-pulse" />
-        </span>
-      );
+      return <CellBusy noun={noun} />;
     case "hidden":
       // Neither its source nor which (gone / not yours): the pod answers
       // `null` for both.
-      return (
-        <Note icon={Lock}>This isn’t visible to you, or no longer exists.</Note>
+      return ofVisibleInstance ? (
+        <CellDoor model={model} words={words} inline={false} />
+      ) : (
+        <CellHidden inline={false} />
       );
     case "failed":
-      return (
-        <span className={`${CHIP} flex-wrap`}>
-          <AlertTriangle
-            aria-hidden="true"
-            className="h-3.5 w-3.5 shrink-0 text-danger"
-          />
-          This {noun} couldn’t be loaded.
-          {read.retry && (
-            <button
-              type="button"
-              onClick={read.retry}
-              className={`font-medium text-foreground ${DOOR}`}
-            >
-              Try again
-            </button>
-          )}
-        </span>
-      );
+      return <CellFailed noun={noun} retry={read.retry} />;
     case "page":
       if (read.tooLarge) {
         return (
@@ -390,9 +428,63 @@ function CellFrameRead({
   cellKey: string;
   model: CellFrameModel;
   words: EmbedWords;
+  ofVisibleInstance?: boolean;
 }) {
   const read = useCell(cellKey);
   return <CellFrameBody {...props} read={read} />;
+}
+
+/**
+ * A cell embed that names only an instance. The directive alone cannot name
+ * it ("Card"): the pod says its name and its type, and from there it is a
+ * keyed cell — its page runs, else it is the door to its type, named.
+ * Hidden and failed are different facts: a broken read is never "Card".
+ */
+function CellInstanceFrame({
+  useCellInstance,
+  instanceId,
+  model,
+  words,
+  inline,
+}: {
+  useCellInstance: (instanceId: string) => EmbedCellInstanceRead;
+  instanceId: string;
+  model: CellFrameModel;
+  words: EmbedWords;
+  inline: boolean;
+}) {
+  const host = useContext(EmbedHostContext);
+  const read = useCellInstance(instanceId);
+  const noun = nounInSentence(words.noun);
+  switch (read.state) {
+    case "loading":
+      return <CellBusy noun={noun} />;
+    case "hidden":
+      return <CellHidden inline={inline} />;
+    case "failed":
+      return <CellFailed noun={noun} retry={read.retry} />;
+    case "ready": {
+      const { cellType } = read.instance;
+      const keyed: CellFrameModel = {
+        ...model,
+        cellKey: cellType,
+        keyName: cellKeyName(cellType),
+      };
+      const named = resolveCellInstanceWords(model, read.instance);
+      if (inline || !host?.useCell) {
+        return <CellDoor model={keyed} words={named} inline={inline} />;
+      }
+      return (
+        <CellFrameRead
+          useCell={host.useCell}
+          cellKey={cellType}
+          model={keyed}
+          words={named}
+          ofVisibleInstance
+        />
+      );
+    }
+  }
 }
 
 /**
@@ -410,6 +502,17 @@ function CellFrame({
   inline: boolean;
 }) {
   const host = useContext(EmbedHostContext);
+  if (!model.cellKey && model.instanceId && host?.useCellInstance) {
+    return (
+      <CellInstanceFrame
+        useCellInstance={host.useCellInstance}
+        instanceId={model.instanceId}
+        model={model}
+        words={words}
+        inline={inline}
+      />
+    );
+  }
   if (inline || !model.cellKey || !host?.useCell) {
     return <CellDoor model={model} words={words} inline={inline} />;
   }

@@ -18,6 +18,9 @@
  *    guardrail, so the done/lost default floor of a stage move does not apply
  *    (founder, 2026-11-05; governance `lifecycleMove.atSessionEnd`);
  *  - a subject already at the value is left alone (no second transition);
+ *  - a subject or target already in a done or lost status is NEVER moved out
+ *    of it, by a person's close or an agent's (`already_settled`, finding
+ *    8f1c774f): an end move that skipped the done/lost floor reopened it;
  *  - a ROLE process moves the role's facet, not the entity;
  *  - a target still open at the close moves; one the session already
  *    settled does not;
@@ -481,6 +484,78 @@ describe("governance: the status door decides each end move", () => {
       reason: "already_set",
     });
     expect(await transitionsOf(finding)).toEqual([]);
+  });
+});
+
+describe("an end move never takes a thing out of done or lost", () => {
+  it("a person's cancel leaves a subject already done where it is", async () => {
+    const finding = await seedFinding("fixed");
+    const sessionId = await sessionOn(finding, { cancelled: "open" });
+    const res = await completeFocusSession({
+      sessionId,
+      userId: USER,
+      terminalStatus: "cancelled",
+    });
+    expect(res?.session.status).toBe("cancelled");
+    expect(res?.endMoves?.moves).toEqual([
+      {
+        entityId: finding,
+        as: "subject",
+        outcome: { status: "skipped", reason: "already_settled" },
+      },
+    ]);
+    expect(await statusOf(finding)).toBe("fixed");
+    expect(await transitionsOf(finding)).toEqual([]);
+  });
+
+  it("an agent's failed end leaves a subject already lost where it is, with no proposal", async () => {
+    const finding = await seedFinding("wont_fix");
+    const sessionId = await sessionOn(finding, { failed: "open" });
+    const res = await completeFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      terminalStatus: "failed",
+    });
+    expect(res?.endMoves?.moves[0]?.outcome).toEqual({
+      status: "skipped",
+      reason: "already_settled",
+    });
+    expect(await statusOf(finding)).toBe("wont_fix");
+    expect(await pendingProposalsOf(sessionId)).toEqual([]);
+  });
+
+  it("a target still open on the session but done by its status is left alone; an active one moves", async () => {
+    const active = await seedFinding("fixing");
+    const done = await seedFinding("fixed");
+    const sessionId = await sessionOn(null, { cancelled: "open" });
+    for (const entityId of [active, done]) {
+      await q(
+        `insert into links (from_type, from_id, to_type, to_id, link_type, metadata)
+         values ('session', $1, 'entity', $2, 'targets', $3::jsonb)`,
+        [sessionId, entityId, JSON.stringify({ role: "worker_target" })]
+      );
+    }
+    const res = await completeFocusSession({
+      sessionId,
+      userId: USER,
+      terminalStatus: "cancelled",
+    });
+    expect(await statusOf(active)).toBe("open");
+    expect(await statusOf(done)).toBe("fixed");
+    expect(res?.endMoves?.moves).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityId: active,
+          outcome: expect.objectContaining({ status: "written" }),
+        }),
+        {
+          entityId: done,
+          as: "target",
+          outcome: { status: "skipped", reason: "already_settled" },
+        },
+      ])
+    );
   });
 });
 

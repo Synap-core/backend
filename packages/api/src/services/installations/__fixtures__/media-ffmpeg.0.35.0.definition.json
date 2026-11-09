@@ -1,0 +1,1441 @@
+{
+  "key": "media-ffmpeg",
+  "name": "ffmpeg on your computer",
+  "skills": [
+    {
+      "code": "# Run an ffmpeg recipe on this computer\n\nThis capability is ffmpeg, installed and checked on a computer, plus a library of named recipes (spec.recipes). Use a recipe instead of writing an ffmpeg command: each one carries the settings that avoid the usual mistakes (colour range, loudness, safe zones, pixel format).\n\n1. Check the tool is here: `synap tools verify media-ffmpeg`. If it is not installed, ask the person before installing (`synap tools install media-ffmpeg`).\n2. Pick the recipe by name. Read its `gotchas` before you run it.\n3. Fill its `params`: every required one, and change a default only for a reason you can say.\n4. Run its `steps` in order, in one scratch folder (`{workdir}`), with the ffmpeg this capability pinned (`install.<os>.bins`), never whichever ffmpeg is first on PATH. A `python` step runs the recipe's helper script, written to disk only if its sha256 matches.\n5. If the recipe lists `needs`, check them first: `ffmpeg -hide_banner -filters` must show each filter, `ffmpeg -hide_banner -encoders` each encoder.\n\nWork in intermediates at high quality (`-crf 12 -preset veryfast` or ProRes) and encode for a platform once, at the end, with an `export-*` recipe.\n\nA typical Reel from a landscape talking-head take: audio-extract, then transcribe (media-transcribe); silence-cut, then transcribe again; reframe-crop; lut-grade; captions-burn-in; loudness-normalize; export-reels.\n",
+      "kind": "instruction",
+      "name": "run-ffmpeg-recipe",
+      "scope": "pod",
+      "description": "How to run one of this capability's ffmpeg recipes on the computer that has it: check the tool, fill the params, run the steps with the pinned ffmpeg."
+    }
+  ],
+  "verify": {
+    "linux": {
+      "smoke": {
+        "expect": {
+          "exitCode": 0,
+          "stdoutContains": "libass"
+        },
+        "command": [
+          "ffmpeg",
+          "-hide_banner",
+          "-h",
+          "filter=subtitles"
+        ]
+      },
+      "expect": {
+        "exitCode": 0,
+        "stdoutMatches": "^ffmpeg version n?(\\d+\\.\\d+(?:\\.\\d+)?)"
+      },
+      "command": [
+        "ffmpeg",
+        "-hide_banner",
+        "-version"
+      ],
+      "captureVersion": 1
+    },
+    "win32": {
+      "smoke": {
+        "expect": {
+          "exitCode": 0,
+          "stdoutContains": "libass"
+        },
+        "command": [
+          "ffmpeg",
+          "-hide_banner",
+          "-h",
+          "filter=subtitles"
+        ]
+      },
+      "expect": {
+        "exitCode": 0,
+        "stdoutMatches": "^ffmpeg version n?(\\d+\\.\\d+(?:\\.\\d+)?)"
+      },
+      "command": [
+        "ffmpeg",
+        "-hide_banner",
+        "-version"
+      ],
+      "captureVersion": 1
+    },
+    "darwin": {
+      "smoke": {
+        "expect": {
+          "exitCode": 0,
+          "stdoutContains": "libass"
+        },
+        "command": [
+          "ffmpeg",
+          "-hide_banner",
+          "-h",
+          "filter=subtitles"
+        ]
+      },
+      "expect": {
+        "exitCode": 0,
+        "stdoutMatches": "^ffmpeg version n?(\\d+\\.\\d+(?:\\.\\d+)?)"
+      },
+      "command": [
+        "ffmpeg",
+        "-hide_banner",
+        "-version"
+      ],
+      "captureVersion": 1
+    },
+    "timeoutSec": 30,
+    "reverifyEvery": "P7D"
+  },
+  "install": {
+    "linux": {
+      "bins": {
+        "ffmpeg": "{tools}/ffmpeg/bin/ffmpeg",
+        "ffprobe": "{tools}/ffmpeg/bin/ffprobe"
+      },
+      "steps": [
+        {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz",
+          "arch": [
+            "x64"
+          ],
+          "dest": "{tools}/ffmpeg",
+          "kind": "download",
+          "what": "archive",
+          "sha256": "73e29a56974ae5a651133a04584c7483b21afe941e17dc91d79814a758b608d3",
+          "sizeMb": 140,
+          "stripComponents": 1
+        },
+        {
+          "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-linuxarm64-gpl-9.0.tar.xz",
+          "arch": [
+            "arm64"
+          ],
+          "dest": "{tools}/ffmpeg",
+          "kind": "download",
+          "what": "archive",
+          "sha256": "6cad88ae5bcec356cfc5d7979a036cc4007128201928a0cf243df3db483276cc",
+          "sizeMb": 130,
+          "stripComponents": 1
+        }
+      ]
+    },
+    "win32": {
+      "bins": {
+        "ffmpeg": "ffmpeg.exe",
+        "ffprobe": "ffprobe.exe"
+      },
+      "steps": [
+        {
+          "id": "Gyan.FFmpeg",
+          "kind": "winget"
+        }
+      ]
+    },
+    "darwin": {
+      "bins": {
+        "ffmpeg": "{brewPrefix}/opt/ffmpeg-full/bin/ffmpeg",
+        "ffprobe": "{brewPrefix}/opt/ffmpeg-full/bin/ffprobe"
+      },
+      "steps": [
+        {
+          "kind": "brew",
+          "package": "ffmpeg-full"
+        }
+      ]
+    },
+    "elevation": "never",
+    "diskFreeMb": 600
+  },
+  "licence": "GPL-2.0-or-later",
+  "recipes": [
+    {
+      "name": "reframe-crop",
+      "needs": {
+        "filters": [
+          "crop",
+          "scale",
+          "setsar"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vf",
+            "crop=ih*{width}/{height}:ih:(iw-ih*{width}/{height})*{xFrac}:0,scale={width}:{height}:flags=lanczos,setsar=1",
+            "-c:a",
+            "copy",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "width": {
+          "type": "integer",
+          "default": 1080,
+          "description": "Output width in pixels."
+        },
+        "xFrac": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Where the subject sits across the frame: 0 = left edge, 0.5 = centre, 1 = right edge."
+        },
+        "height": {
+          "type": "integer",
+          "default": 1920,
+          "description": "Output height in pixels."
+        }
+      },
+      "gotchas": [
+        "A 1080p source cropped to 9:16 is only 608x1080 before scaling: shoot 4K for vertical output, or accept the softness.",
+        "A fixed crop cannot follow a subject who moves.",
+        "The source must be wider than the target frame (landscape in, vertical or square out)."
+      ],
+      "description": "Crop a landscape video to a vertical or square frame (9:16 by default; 1080x1350 for 4:5, 1080x1080 for 1:1)."
+    },
+    {
+      "name": "reframe-vertical-blur-pad",
+      "needs": {
+        "filters": [
+          "boxblur",
+          "eq",
+          "overlay"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-filter_complex",
+            "[0:v]split=2[b][f];[b]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=20:2,scale=1080:1920,eq=brightness={brightness}:saturation=1.1[bg];[f]scale=1080:-2:flags=lanczos[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+            "-c:a",
+            "copy",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "brightness": {
+          "type": "number",
+          "default": -0.06,
+          "description": "How much the blurred fill is darkened (-1 to 1)."
+        }
+      },
+      "gotchas": [
+        "The fill is blurred at quarter size then scaled up: about 10x faster than a full-size blur and it looks the same.",
+        "Darken the fill a little so it does not compete with the content."
+      ],
+      "description": "Fit a landscape video inside a 9:16 frame over a blurred, darkened copy of itself (screen recordings, slides)."
+    },
+    {
+      "name": "loudness-normalize",
+      "needs": {
+        "filters": [
+          "loudnorm"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "{script:loudnorm2pass.py}",
+            "{bin:ffmpeg}",
+            "{in}",
+            "{out}",
+            "{target}",
+            "{truePeak}",
+            "{lra}"
+          ],
+          "program": "python"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "lra": {
+          "type": "number",
+          "default": 11,
+          "description": "Loudness range target."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "target": {
+          "type": "number",
+          "default": -14,
+          "description": "Integrated loudness target in LUFS."
+        },
+        "truePeak": {
+          "type": "number",
+          "default": -1.5,
+          "description": "True-peak ceiling in dBTP."
+        }
+      },
+      "gotchas": [
+        "loudnorm resamples to 192 kHz inside: the script sets 48 kHz on the output.",
+        "Normalise after the mix (voice plus music), as the last audio step.",
+        "If the summary says Dynamic, the target could not be reached under the peak limit: lower the target."
+      ],
+      "scripts": [
+        {
+          "name": "loudnorm2pass.py",
+          "sha256": "0e884b91836477b9a9970629ccbc9f09a9f0cf79160a4e067882ed415b706ee1",
+          "source": "#!/usr/bin/env python3\n# loudnorm2pass.py FFMPEG IN OUT TARGET_I TRUE_PEAK LRA\n# Two-pass loudnorm: measure, then normalise linearly to the target (video copied, audio AAC 48 kHz).\nimport json, re, subprocess, sys\nffmpeg, inp, out, i, tp, lra = sys.argv[1:7]\nbase = f\"loudnorm=I={i}:TP={tp}:LRA={lra}\"\nlog = subprocess.run([ffmpeg, \"-hide_banner\", \"-nostats\", \"-i\", inp, \"-af\", base + \":print_format=json\", \"-f\", \"null\", \"-\"],\n                     capture_output=True, text=True).stderr\nm = re.search(r\"\\{[^{}]*\\\"input_i\\\"[^{}]*\\}\", log)\nif not m:\n    sys.exit(\"loudnorm2pass: the first pass printed no measurement\")\nln = json.loads(m.group(0))\nsecond = (f\"{base}:measured_I={ln['input_i']}:measured_TP={ln['input_tp']}:measured_LRA={ln['input_lra']}\"\n          f\":measured_thresh={ln['input_thresh']}:offset={ln['target_offset']}:linear=true:print_format=summary\")\nsubprocess.run([ffmpeg, \"-y\", \"-i\", inp, \"-af\", second, \"-ar\", \"48000\", \"-c:v\", \"copy\", \"-c:a\", \"aac\", \"-b:a\", \"192k\", out], check=True)\n"
+        }
+      ],
+      "description": "Two-pass loudness normalisation to -14 LUFS (YouTube, Spotify, social); -16 for podcasts."
+    },
+    {
+      "name": "silence-cut",
+      "needs": {
+        "filters": [
+          "silencedetect",
+          "trim",
+          "atrim",
+          "concat",
+          "afade"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "{script:silencecut.py}",
+            "{bin:ffmpeg}",
+            "{bin:ffprobe}",
+            "{in}",
+            "{out}",
+            "{noiseDb}",
+            "{minSilence}",
+            "{pad}"
+          ],
+          "program": "python"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "pad": {
+          "type": "number",
+          "default": 0.12,
+          "description": "Seconds kept around speech."
+        },
+        "noiseDb": {
+          "type": "number",
+          "default": -35,
+          "description": "Below this level (dB) counts as silence; measure the room, usually -30 to -40."
+        },
+        "minSilence": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Shortest silence to cut, in seconds (0.5 to 0.7 sounds natural)."
+        }
+      },
+      "gotchas": [
+        "Too high a noise level cuts soft word endings.",
+        "A minimum silence under 0.35 s makes speech feel breathless.",
+        "Transcribe again after the cut, so word timings match the new file."
+      ],
+      "scripts": [
+        {
+          "name": "silencecut.py",
+          "sha256": "1fcf74c96c1605d98a12c7137b1a21f09dfb6bb681258868f0ffe0e77676ea63",
+          "source": "#!/usr/bin/env python3\n# silencecut.py FFMPEG FFPROBE IN OUT NOISE_DB MIN_SILENCE PAD\n# Cuts the silences out of a take: keeps PAD seconds around speech, 10 ms fades at each joint.\nimport re, subprocess, sys\nffmpeg, ffprobe, inp, out = sys.argv[1:5]\nnoise = f\"{float(sys.argv[5])}dB\"\ndmin, pad = float(sys.argv[6]), float(sys.argv[7])\ndur = float(subprocess.check_output([ffprobe, \"-v\", \"error\", \"-show_entries\", \"format=duration\", \"-of\", \"csv=p=0\", inp]))\nlog = subprocess.run([ffmpeg, \"-hide_banner\", \"-nostats\", \"-i\", inp, \"-af\", f\"silencedetect=noise={noise}:d={dmin}\",\n                      \"-f\", \"null\", \"-\"], capture_output=True, text=True).stderr\nstarts = [max(0.0, float(x)) for x in re.findall(r\"silence_start: (-?[\\d.]+)\", log)]\nends = [float(x) for x in re.findall(r\"silence_end: ([\\d.]+)\", log)]\nif len(ends) < len(starts):\n    ends.append(dur)\nkeep, t = [], 0.0\nfor s, e in zip(starts, ends):\n    a, b = t, min(s + pad, dur)\n    if b - a > 0.05:\n        keep.append((a, b))\n    t = max(e - pad, 0.0)\nif dur - t > 0.05:\n    keep.append((t, dur))\nif not keep:\n    sys.exit(\"silencecut: nothing but silence at this noise level\")\nparts, labels = [], \"\"\nfor i, (a, b) in enumerate(keep):\n    d = b - a\n    parts.append(f\"[0:v]trim={a:.3f}:{b:.3f},setpts=PTS-STARTPTS[v{i}];\"\n                 f\"[0:a]atrim={a:.3f}:{b:.3f},asetpts=PTS-STARTPTS,afade=t=in:d=0.01,afade=t=out:st={d-0.01:.3f}:d=0.01[a{i}]\")\n    labels += f\"[v{i}][a{i}]\"\ngraph = out + \".graph\"\nwith open(graph, \"w\") as f:\n    f.write(\";\".join(parts) + f\";{labels}concat=n={len(keep)}:v=1:a=1[v][a]\")\nsubprocess.run([ffmpeg, \"-y\", \"-i\", inp, \"-/filter_complex\", graph, \"-map\", \"[v]\", \"-map\", \"[a]\",\n                \"-c:v\", \"libx264\", \"-crf\", \"16\", \"-preset\", \"medium\", \"-c:a\", \"aac\", \"-b:a\", \"192k\", out], check=True)\n"
+        }
+      ],
+      "description": "Cut the silences out of a talking-head take (jump cuts), keeping a little air around speech."
+    },
+    {
+      "name": "captions-burn-in",
+      "needs": {
+        "filters": [
+          "ass"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "{script:words2ass.py}",
+            "{words}",
+            "{workdir}/captions.ass",
+            "{wordsPerCard}",
+            "{font}",
+            "{fontSize}",
+            "{marginV}",
+            "{highlight}"
+          ],
+          "program": "python"
+        },
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vf",
+            "ass={workdir}/captions.ass:fontsdir={fontsDir}",
+            "-c:a",
+            "copy",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The 9:16 (1080x1920) video."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "font": {
+          "type": "string",
+          "default": "Inter",
+          "description": "The font's family name (its internal name, not the file name)."
+        },
+        "words": {
+          "type": "file",
+          "required": true,
+          "description": "The transcript JSON with word timings (segments[].words[]), from media-transcribe."
+        },
+        "marginV": {
+          "type": "integer",
+          "default": 680,
+          "description": "Distance from the bottom edge in pixels; 680 keeps the text above the platform buttons and caption."
+        },
+        "fontSize": {
+          "type": "integer",
+          "default": 84,
+          "description": "Font size on the 1080x1920 canvas."
+        },
+        "fontsDir": {
+          "type": "file",
+          "required": true,
+          "description": "A folder holding the caption font files (the brand font), so the render never depends on system fonts."
+        },
+        "highlight": {
+          "type": "color",
+          "default": "FFD700",
+          "description": "Colour of the spoken word."
+        },
+        "wordsPerCard": {
+          "type": "integer",
+          "default": 3,
+          "description": "Words shown at once."
+        }
+      },
+      "gotchas": [
+        "Safe zone on Reels, TikTok and Shorts: keep about 270 px at the top, 670 px at the bottom and 65 px at the sides free (third-party summaries of Meta's guidance; check once against an overlay).",
+        "Review the transcript text first: a burned-in typo cannot be fixed.",
+        "The fonts folder path is spliced into the filter: copy it to a simple path with no spaces or colons.",
+        "Needs ffmpeg built with libass (ffmpeg-full on a Mac; core ffmpeg has no ass filter)."
+      ],
+      "scripts": [
+        {
+          "name": "words2ass.py",
+          "sha256": "d2cc3eefb42343e196dc9e9ccb962adf5bcc544e37a66cdffbd04c3727c04bad",
+          "source": "#!/usr/bin/env python3\n# words2ass.py WHISPER_JSON OUT_ASS WORDS_PER_CARD FONT FONT_SIZE MARGIN_V HIGHLIGHT_HEX\n# Word-by-word captions (Reels style) from whisper word timings (segments[].words[]: word, start, end).\n# 1080x1920 canvas; MARGIN_V from the bottom keeps the text inside the safe zone (680 = baseline near y 1240).\nimport json, sys\nsrc, out = sys.argv[1], sys.argv[2]\nn, font, size, margin_v, hi = int(sys.argv[3]), sys.argv[4], int(sys.argv[5]), int(sys.argv[6]), sys.argv[7].lstrip(\"#\")[-6:]\nwords = [w for s in json.load(open(src, encoding=\"utf-8\"))[\"segments\"] for w in s.get(\"words\", [])]\nif not words:\n    sys.exit(\"words2ass: the transcript has no word timings (transcribe with word timestamps)\")\ndef ts(t):\n    return f\"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}\"\nhead = f\"\"\"[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Cap,{font},{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,7,0,2,100,100,{margin_v},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\"\"\"\nbgr = hi[4:6] + hi[2:4] + hi[0:2]\non, off = \"{\\\\c&H\" + bgr + \"&}\", \"{\\\\c&HFFFFFF&}\"\nevents = []\nfor i in range(0, len(words), n):\n    card = words[i:i + n]\n    for j, w in enumerate(card):\n        end = card[j + 1][\"start\"] if j + 1 < len(card) else w[\"end\"]\n        text = \" \".join(on + x[\"word\"].strip() + off if k == j else x[\"word\"].strip() for k, x in enumerate(card))\n        events.append(f\"Dialogue: 0,{ts(w['start'])},{ts(end)},Cap,,0,0,0,,{text}\")\nwith open(out, \"w\", encoding=\"utf-8\") as f:\n    f.write(head + \"\\n\".join(events) + \"\\n\")\n"
+        }
+      ],
+      "description": "Burn word-by-word captions (Reels style, the spoken word highlighted) into a 9:16 video, from whisper word timings, inside the safe zone."
+    },
+    {
+      "name": "lut-grade",
+      "needs": {
+        "filters": [
+          "lut3d"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vf",
+            "lut3d=file={lut}:interp=tetrahedral,format=yuv420p",
+            "-c:a",
+            "copy",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "lut": {
+          "type": "file",
+          "required": true,
+          "description": "The .cube LUT file."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        }
+      },
+      "gotchas": [
+        "A creative LUT expects Rec.709 input: log footage needs its camera's conversion LUT first.",
+        "The LUT path is spliced into the filter: copy it to a simple path with no spaces or colons."
+      ],
+      "description": "Apply a colour look from a .cube LUT."
+    },
+    {
+      "name": "hdr-to-sdr",
+      "needs": {
+        "filters": [
+          "zscale",
+          "tonemap"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vf",
+            "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-c:a",
+            "copy",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        }
+      },
+      "gotchas": [
+        "Needs zscale (zimg): ffmpeg-full has it, core ffmpeg does not.",
+        "Always tag the output bt709, or it can be read as bt601."
+      ],
+      "description": "Tone-map iPhone HDR (HLG or Dolby Vision) to SDR Rec.709, so edited footage does not look washed out or neon."
+    },
+    {
+      "name": "crossfade-join",
+      "needs": {
+        "filters": [
+          "xfade",
+          "acrossfade"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "{script:xfade.py}",
+            "{bin:ffmpeg}",
+            "{bin:ffprobe}",
+            "{out}",
+            "{duration}",
+            "{transition}",
+            "{clips}"
+          ],
+          "program": "python"
+        }
+      ],
+      "params": {
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "clips": {
+          "type": "files",
+          "required": true,
+          "description": "The clips, in order (same size, frame rate and pixel format)."
+        },
+        "duration": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Length of each transition in seconds."
+        },
+        "transition": {
+          "type": "enum",
+          "default": "fade",
+          "options": [
+            "fade",
+            "fadeblack",
+            "dissolve",
+            "wipeleft",
+            "slideup",
+            "smoothleft",
+            "circleopen",
+            "zoomin"
+          ],
+          "description": "The transition."
+        }
+      },
+      "gotchas": [
+        "Every clip must have the same size, fps, pixel format and timebase, or xfade fails: normalise them first.",
+        "The script probes each clip's real video duration; the container's can differ by a frame or two.",
+        "Every clip needs an audio track."
+      ],
+      "scripts": [
+        {
+          "name": "xfade.py",
+          "sha256": "05b25f1a5013e047e2013e2635599ea49979976e8214552de8a640110c2ad9dd",
+          "source": "#!/usr/bin/env python3\n# xfade.py FFMPEG FFPROBE OUT DURATION TRANSITION CLIP1 CLIP2 [CLIP...]\n# Joins clips with a video crossfade and an audio crossfade. Every clip must share size, fps and pixel format\n# (run the normalise recipe first).\nimport subprocess, sys\nffmpeg, ffprobe, out, d, transition = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5]\nclips = sys.argv[6:]\nif len(clips) < 2:\n    sys.exit(\"xfade: give at least two clips\")\ndef duration(p):\n    return float(subprocess.check_output([ffprobe, \"-v\", \"error\", \"-select_streams\", \"v:0\", \"-show_entries\",\n                                          \"stream=duration\", \"-of\", \"csv=p=0\", p]).decode().strip().split(\"\\n\")[0])\ndurs = [duration(c) for c in clips]\nparts, v, a, total = [], \"[0:v]\", \"[0:a]\", durs[0]\nfor k in range(1, len(clips)):\n    off = total - d\n    parts.append(f\"{v}[{k}:v]xfade=transition={transition}:duration={d}:offset={off:.3f}[v{k}]\")\n    parts.append(f\"{a}[{k}:a]acrossfade=d={d}[a{k}]\")\n    v, a, total = f\"[v{k}]\", f\"[a{k}]\", total + durs[k] - d\nargs = [ffmpeg, \"-y\"]\nfor c in clips:\n    args += [\"-i\", c]\nargs += [\"-filter_complex\", \";\".join(parts) + f\";{v}format=yuv420p[v]\", \"-map\", \"[v]\", \"-map\", a,\n         \"-c:v\", \"libx264\", \"-crf\", \"16\", \"-c:a\", \"aac\", \"-b:a\", \"192k\", out]\nsubprocess.run(args, check=True)\n"
+        }
+      ],
+      "description": "Join clips with a crossfade between each (video and audio)."
+    },
+    {
+      "name": "overlay-alpha",
+      "needs": {
+        "filters": [
+          "overlay"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-c:v",
+            "libvpx-vp9",
+            "-i",
+            "{overlay}",
+            "-filter_complex",
+            "[0:v][1:v]overlay=x={x}:y={y}:format=auto:eof_action=pass:enable='between(t,{start},{end})',format=yuv420p[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "0:a?",
+            "-c:a",
+            "copy",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "x": {
+          "type": "integer",
+          "default": 0,
+          "description": "Left edge of the overlay in pixels."
+        },
+        "y": {
+          "type": "integer",
+          "default": 0,
+          "description": "Top edge of the overlay in pixels."
+        },
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "end": {
+          "type": "number",
+          "default": 86400,
+          "description": "Second the overlay disappears."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "start": {
+          "type": "number",
+          "default": 0,
+          "description": "Second the overlay appears."
+        },
+        "overlay": {
+          "type": "file",
+          "required": true,
+          "description": "The overlay: a VP9 .webm with alpha."
+        }
+      },
+      "gotchas": [
+        "The libvpx decoder is forced on the overlay: ffmpeg's own vp9 decoder silently drops the alpha.",
+        "On 9:16, keep overlays out of the top-right and bottom platform areas."
+      ],
+      "description": "Lay an animated overlay with transparency (a title, lower third or sticker, VP9 .webm with alpha) over a video."
+    },
+    {
+      "name": "background-replace",
+      "needs": {
+        "filters": [
+          "alphamerge",
+          "colorlevels",
+          "gblur",
+          "overlay"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{fg}",
+            "-i",
+            "{matte}",
+            "-stream_loop",
+            "-1",
+            "-i",
+            "{background}",
+            "-i",
+            "{audio}",
+            "-filter_complex",
+            "[1:v]format=gray,scale={width}:{height},colorlevels=rimin=0.04:rimax=0.96,boxblur=1:1[m];[0:v]scale={width}:{height},format=rgba[f];[f][m]alphamerge[fa];[2:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma={blur},eq=brightness=-0.03[bg];[bg][fa]overlay=shortest=1:format=auto,format=yuv420p[v]",
+            "-map",
+            "[v]",
+            "-map",
+            "3:a?",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "16",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "fg": {
+          "type": "file",
+          "required": true,
+          "description": "The person: the matte tool's foreground video, or the original take."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "blur": {
+          "type": "number",
+          "default": 6,
+          "description": "Background blur (gaussian sigma): a little fake depth of field."
+        },
+        "audio": {
+          "type": "file",
+          "required": true,
+          "description": "The original take, for its sound."
+        },
+        "matte": {
+          "type": "file",
+          "required": true,
+          "description": "The matte video (white = the person), same frame count and fps as fg."
+        },
+        "width": {
+          "type": "integer",
+          "default": 1080,
+          "description": "Output width in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "default": 1920,
+          "description": "Output height in pixels."
+        },
+        "background": {
+          "type": "file",
+          "required": true,
+          "description": "The new background, a still image or a video (looped)."
+        }
+      },
+      "gotchas": [
+        "A matte stored as yuv420p is limited range and never reaches pure black or white: colorlevels restores both, or the edge looks fake.",
+        "Match the background's colour temperature and brightness to the person; a sharp, bright stock background behind a softly lit person reads as fake.",
+        "Foreground and matte must come from the same source, with the same frame count and fps.",
+        "fg and matte must already have the output's shape (reframe first): they are scaled, not cropped."
+      ],
+      "description": "Put a new background behind a person using a matte (from media-matte): fixed matte range, 1 px feather, a slightly blurred background."
+    },
+    {
+      "name": "carousel-slideshow",
+      "needs": {
+        "filters": [
+          "zoompan",
+          "afade"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "{script:slideshow.py}",
+            "{bin:ffmpeg}",
+            "{workdir}",
+            "{out}",
+            "{seconds}",
+            "{size}",
+            "{music}",
+            "{images}"
+          ],
+          "program": "python"
+        }
+      ],
+      "params": {
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "size": {
+          "type": "enum",
+          "default": "1080x1350",
+          "options": [
+            "1080x1350",
+            "1080x1080",
+            "1080x1920"
+          ],
+          "description": "Output size."
+        },
+        "music": {
+          "type": "file",
+          "default": "none",
+          "description": "A music file, or none for a silent video."
+        },
+        "images": {
+          "type": "files",
+          "required": true,
+          "description": "The slides, in order."
+        },
+        "seconds": {
+          "type": "number",
+          "default": 3,
+          "description": "Seconds per slide."
+        }
+      },
+      "gotchas": [
+        "zoompan rounds to whole pixels and jitters: the script upscales each image 4x first.",
+        "Slides should already have the output's aspect ratio."
+      ],
+      "scripts": [
+        {
+          "name": "slideshow.py",
+          "sha256": "aeb9cf2300193feedec7da0397506eaf7f7e5f286e294f33ebbc35233b5068b3",
+          "source": "#!/usr/bin/env python3\n# slideshow.py FFMPEG WORKDIR OUT SECONDS SIZE MUSIC IMAGE1 [IMAGE...]\n# A Ken Burns slideshow from carousel images (upscaled 4x first so zoompan does not jitter).\n# MUSIC is a file, or \"none\" for a silent video.\nimport os, subprocess, sys\nffmpeg, work, out, sec, size, music = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5], sys.argv[6]\nimages = sys.argv[7:]\nif not images:\n    sys.exit(\"slideshow: give at least one image\")\nfps = 30\nframes = int(fps * sec)\nw = int(size.split(\"x\")[0])\nsegs = []\nfor i, img in enumerate(images):\n    seg = os.path.join(work, f\"seg_{i:03d}.mp4\")\n    vf = (f\"scale={w * 4}:-2,zoompan=z='min(zoom+0.0007,1.10)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'\"\n          f\":d={frames}:s={size}:fps={fps},format=yuv420p\")\n    subprocess.run([ffmpeg, \"-y\", \"-loop\", \"1\", \"-i\", img, \"-vf\", vf, \"-frames:v\", str(frames), \"-c:v\", \"libx264\", \"-crf\", \"16\", seg], check=True)\n    segs.append(seg)\nlst = os.path.join(work, \"slides.txt\")\nwith open(lst, \"w\") as f:\n    f.writelines(f\"file '{os.path.abspath(s)}'\\n\" for s in segs)\ntotal = len(images) * sec\nargs = [ffmpeg, \"-y\", \"-f\", \"concat\", \"-safe\", \"0\", \"-i\", lst]\nif music != \"none\":\n    args += [\"-i\", music, \"-filter_complex\", f\"[1:a]afade=t=out:st={max(total - 1.5, 0):.2f}:d=1.5[a]\", \"-map\", \"0:v\", \"-map\", \"[a]\",\n             \"-shortest\", \"-c:a\", \"aac\", \"-b:a\", \"192k\"]\nargs += [\"-c:v\", \"copy\", \"-movflags\", \"+faststart\", out]\nsubprocess.run(args, check=True)\n"
+        }
+      ],
+      "description": "Turn carousel images into a video with a slow zoom on each (Ken Burns), with optional music."
+    },
+    {
+      "name": "gif-export",
+      "needs": {
+        "filters": [
+          "palettegen",
+          "paletteuse"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vf",
+            "fps={fps},scale={width}:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+            "-loop",
+            "0",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "fps": {
+          "type": "integer",
+          "default": 15,
+          "description": "Frames per second."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "width": {
+          "type": "integer",
+          "default": 720,
+          "description": "Width in pixels."
+        }
+      },
+      "gotchas": [
+        "Keep GIFs short and small: size grows fast with width and fps."
+      ],
+      "description": "Export a short clip as a GIF with its own palette (clean, no banding)."
+    },
+    {
+      "name": "webp-export",
+      "needs": {
+        "encoders": [
+          "libwebp_anim"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vf",
+            "fps={fps},scale={width}:-1:flags=lanczos",
+            "-c:v",
+            "libwebp_anim",
+            "-lossless",
+            "0",
+            "-q:v",
+            "70",
+            "-loop",
+            "0",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "fps": {
+          "type": "integer",
+          "default": 20,
+          "description": "Frames per second."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "width": {
+          "type": "integer",
+          "default": 720,
+          "description": "Width in pixels."
+        }
+      },
+      "gotchas": [
+        "Needs ffmpeg built with libwebp (check ffmpeg -encoders)."
+      ],
+      "description": "Export a short clip as an animated WebP (smaller than a GIF)."
+    },
+    {
+      "name": "keyframes",
+      "steps": [
+        {
+          "args": [
+            "-skip_frame",
+            "nokey",
+            "-i",
+            "{in}",
+            "-fps_mode",
+            "vfr",
+            "-q:v",
+            "3",
+            "{workdir}/key_%04d.jpg"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        }
+      },
+      "gotchas": [
+        "The frames land in the run's folder as key_0001.jpg, key_0002.jpg\u2026",
+        "-vsync is deprecated: -fps_mode is used."
+      ],
+      "description": "Pull every keyframe of a video as JPEGs (fast; good for picking a thumbnail)."
+    },
+    {
+      "name": "contact-sheet",
+      "needs": {
+        "filters": [
+          "tile"
+        ]
+      },
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vf",
+            "fps=1/{interval},scale=320:-2,tile={columns}x{rows}:padding=8:margin=8:color=white",
+            "-frames:v",
+            "1",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        },
+        "rows": {
+          "type": "integer",
+          "default": 4,
+          "description": "Rows."
+        },
+        "columns": {
+          "type": "integer",
+          "default": 5,
+          "description": "Frames per row."
+        },
+        "interval": {
+          "type": "number",
+          "default": 10,
+          "description": "Seconds between sampled frames."
+        }
+      },
+      "gotchas": [
+        "Pick the interval from the length: a 10-minute video with 20 tiles wants 30 s."
+      ],
+      "description": "One image showing a grid of frames sampled across the video."
+    },
+    {
+      "name": "audio-extract",
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        }
+      },
+      "gotchas": [
+        "Do not normalise loudness here: whisper does not need it."
+      ],
+      "description": "Extract the sound as 16 kHz mono WAV, the input transcription wants."
+    },
+    {
+      "name": "export-reels",
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "high",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "slow",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-r",
+            "30",
+            "-g",
+            "60",
+            "-crf",
+            "19",
+            "-maxrate",
+            "15M",
+            "-bufsize",
+            "30M",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        }
+      },
+      "gotchas": [
+        "A bitrate above the platform's own ladder gains nothing: the platform transcodes again.",
+        "Keep the source frame rate unless the platform caps it: 25 fps footage forced to 30 fps judders.",
+        "Instagram and TikTok publish no primary spec: 1080x1920 H.264 + AAC at 30 fps is what third-party guides agree on."
+      ],
+      "description": "Final export for Instagram Reels, TikTok and YouTube Shorts (1080x1920, 30 fps)."
+    },
+    {
+      "name": "export-youtube-1080",
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "high",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "slow",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-bf",
+            "2",
+            "-g",
+            "15",
+            "-crf",
+            "18",
+            "-maxrate",
+            "10M",
+            "-bufsize",
+            "20M",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-b:a",
+            "384k",
+            "-movflags",
+            "+faststart",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        }
+      },
+      "gotchas": [
+        "A bitrate above the platform's own ladder gains nothing: the platform transcodes again.",
+        "Keep the source frame rate unless the platform caps it: 25 fps footage forced to 30 fps judders.",
+        "For 60 fps footage, YouTube's guidance wants a GOP of 30 and about 15 Mbps."
+      ],
+      "description": "Final export for YouTube at 1080p (keeps the source frame rate)."
+    },
+    {
+      "name": "export-youtube-4k",
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "high",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "slow",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-bf",
+            "2",
+            "-g",
+            "15",
+            "-crf",
+            "18",
+            "-maxrate",
+            "45M",
+            "-bufsize",
+            "90M",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-b:a",
+            "384k",
+            "-movflags",
+            "+faststart",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        }
+      },
+      "gotchas": [
+        "A bitrate above the platform's own ladder gains nothing: the platform transcodes again.",
+        "Keep the source frame rate unless the platform caps it: 25 fps footage forced to 30 fps judders.",
+        "The source must already be 3840x2160."
+      ],
+      "description": "Final export for YouTube at 4K (3840x2160)."
+    },
+    {
+      "name": "export-linkedin",
+      "steps": [
+        {
+          "args": [
+            "-y",
+            "-i",
+            "{in}",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "high",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "slow",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-r",
+            "30",
+            "-g",
+            "60",
+            "-crf",
+            "20",
+            "-maxrate",
+            "10M",
+            "-bufsize",
+            "20M",
+            "-c:a",
+            "aac",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+            "{out}"
+          ],
+          "program": "ffmpeg"
+        }
+      ],
+      "params": {
+        "in": {
+          "type": "file",
+          "required": true,
+          "description": "The video to work on."
+        },
+        "out": {
+          "type": "output",
+          "required": true,
+          "description": "Where the result is written."
+        }
+      },
+      "gotchas": [
+        "A bitrate above the platform's own ladder gains nothing: the platform transcodes again.",
+        "Keep the source frame rate unless the platform caps it: 25 fps footage forced to 30 fps judders.",
+        "LinkedIn caps video at 30 fps."
+      ],
+      "description": "Final export for LinkedIn (30 fps at most)."
+    }
+  ],
+  "provides": [],
+  "placement": {
+    "prefer": [
+      "computer"
+    ],
+    "runsOn": [
+      "computer"
+    ],
+    "requires": {
+      "runtimes": {
+        "python": ">=3.9"
+      }
+    },
+    "platforms": [
+      {
+        "os": "darwin",
+        "arch": [
+          "arm64",
+          "x64"
+        ]
+      },
+      {
+        "os": "linux",
+        "arch": [
+          "x64",
+          "arm64"
+        ]
+      },
+      {
+        "os": "win32",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
+  },
+  "uninstall": {
+    "win32": {
+      "steps": [
+        {
+          "id": "Gyan.FFmpeg",
+          "kind": "winget",
+          "action": "uninstall"
+        }
+      ]
+    },
+    "darwin": {
+      "steps": [
+        {
+          "kind": "brew",
+          "action": "uninstall",
+          "package": "ffmpeg-full"
+        }
+      ]
+    },
+    "keepUserData": true
+  },
+  "contentHash": "f735ae04da7f31b809d770a1897aba40e2cd216e78a17b71d043f9924fc47b68",
+  "description": "ffmpeg with libass, freetype, fribidi and zimg (captions, text, HDR tone-mapping), installed on a computer and pinned to its path, plus the recipe library (spec.recipes): each recipe is typed params and argv steps the computer fills, never a shell line. Mac: Homebrew ffmpeg-full (keg-only, next to any core ffmpeg; core ffmpeg has no libass). Linux: the BtbN static GPL build of 9.0.2, pinned to the month-end build of 31 Oct 2026 by its sha256 (BtbN keeps month-end builds), unpacked in Synap's tools folder (no sudo). Windows: winget Gyan.FFmpeg (the full build). The check prints the ffmpeg version and proves libass is there.",
+  "permissions": {
+    "devices": [],
+    "network": [],
+    "filesystem": [
+      {
+        "path": "{workdir}",
+        "access": "rw"
+      }
+    ]
+  }
+}

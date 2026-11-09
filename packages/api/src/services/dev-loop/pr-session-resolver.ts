@@ -20,7 +20,14 @@
  * A failed read THROWS: "no session" and "could not look" are different facts.
  */
 
-import { and, db, drizzleSql, eq, focusSessions } from "@synap/database";
+import {
+  and,
+  db,
+  drizzleSql,
+  eq,
+  focusSessions,
+  inArray,
+} from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
   DEV_LOOP_EVENT_TYPES,
@@ -30,7 +37,9 @@ import {
   samePullRequest,
   type PullRequestRef,
 } from "@synap-core/types";
+import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { deriveSlotKeys } from "../focus-sessions/slot-keys.js";
+import { pullRequestsInDeploy } from "./pr-state.js";
 
 export type PrSessionVia = "outcome_ref" | "pr_body";
 
@@ -190,4 +199,79 @@ export async function sessionForDevLoopFact(input: {
   });
   const ids = new Set(matches.map((m) => m.sessionId));
   return ids.size === 1 ? [...ids][0]! : null;
+}
+
+/** Every PR a session's slots point at (`ref.url`), any slot kind. Pure. */
+export function pullRequestsOfSlots(
+  slots: readonly ExpectedOutput[]
+): PullRequestRef[] {
+  const out: PullRequestRef[] = [];
+  for (const slot of slots) {
+    const ref = slot?.ref;
+    if (!ref || !("url" in ref) || typeof ref.url !== "string") continue;
+    const pr = parsePullRequestRef(ref.url);
+    if (pr && !out.some((o) => samePullRequest(o, pr))) out.push(pr);
+  }
+  return out;
+}
+
+/**
+ * The OPEN sessions (`OPEN_SESSION_STATUSES`) of `userId` whose recorded PR
+ * (an outcome whose `ref.url` is the PR — join 1 above) THIS deploy contains,
+ * to stamp on a `dev.deployed` fact as `data.sessionIds` before automations
+ * match it — so "the pod deploys a build containing this session's PR → its
+ * stage is verified" is stored config (a `loop` over `trigger.data.sessionIds`
+ * into `session_update`). Containment is the fold's (`pullRequestsInDeploy`),
+ * never a second check. A deploy contains every older merge too, so a session
+ * already moved is listed again: the advance is then a no-op.
+ *
+ * Sorted ids; `[]` when the payload is not a deploy or nothing matches.
+ * OWNER-FLOORED like the PR resolver. A failed read THROWS.
+ */
+export async function sessionsInDeploy(input: {
+  userId: string;
+  data: Record<string, unknown>;
+  occurredAt?: Date;
+}): Promise<string[]> {
+  const { data } = input;
+  if (typeof data.sha !== "string" || data.sha.length === 0) return [];
+  const repo = typeof data.repo === "string" ? data.repo : null;
+  const candidates = await db
+    .select({
+      id: focusSessions.id,
+      expectedOutputs: focusSessions.expectedOutputs,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.userId, input.userId),
+        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+        drizzleSql`${focusSessions.expectedOutputs}::text ILIKE ${"%/pull/%"}`
+      )
+    );
+  const prsBySession = new Map<string, PullRequestRef[]>();
+  for (const row of candidates) {
+    const prs = pullRequestsOfSlots(readSlots(row.expectedOutputs)).filter(
+      // A build of one repo carries only that repo's merges.
+      (pr) => !repo || samePullRequest(pr, { repo, number: pr.number })
+    );
+    if (prs.length > 0) prsBySession.set(row.id, prs);
+  }
+  if (prsBySession.size === 0) return [];
+  const contained = await pullRequestsInDeploy(
+    [...prsBySession.values()].flat(),
+    {
+      type: DEV_LOOP_EVENT_TYPES.deployed,
+      timestamp: input.occurredAt ?? new Date(),
+      data,
+    },
+    { userId: input.userId, roster: false }
+  );
+  if (contained.length === 0) return [];
+  return [...prsBySession]
+    .filter(([, prs]) =>
+      prs.some((pr) => contained.some((c) => samePullRequest(c, pr)))
+    )
+    .map(([id]) => id)
+    .sort();
 }

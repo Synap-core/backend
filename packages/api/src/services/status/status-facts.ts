@@ -46,6 +46,7 @@ import {
   type WaitingOnReason,
   type WaitingOnRef,
   type WaitingOnSource,
+  type ThingBlockerClearedBy as WaitingOnSourceClearedBy,
 } from "@synap-core/types/units";
 import {
   holdDevRefNamed,
@@ -69,7 +70,6 @@ import { grantReadPredicate } from "../../access/grant-read.js";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import type { EventReader } from "../../access/event-visibility.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
-import type { SessionSubject } from "../focus-sessions/session-subject-where.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { isUuid } from "@synap-core/types/property-render";
@@ -205,6 +205,28 @@ export async function countMovesSince(
   return out;
 }
 
+/**
+ * One owed slot as a waiting-on source: its class of blocker, whose it is and
+ * the blocker it declares (plan e7f753db §9), so a thing's blocker
+ * (`deriveThingBlocker`) and a wait episode read the same fields.
+ */
+export function owedSlotSource(s: {
+  owner: "human" | "agent";
+  blockedReason?: string | null;
+  blocks?: { entityId?: string; to?: string } | null;
+  blockerKey?: string | null;
+  clearedBy?: WaitingOnSourceClearedBy | null;
+}): WaitingOnSource {
+  return {
+    kind: "owed_slot",
+    blockedReason: s.blockedReason ?? null,
+    ...(s.owner === "agent" ? { owner: "agent" as const } : {}),
+    ...(s.blocks ? { blocks: s.blocks } : {}),
+    ...(s.blockerKey ? { blockerKey: s.blockerKey } : {}),
+    ...(s.clearedBy ? { clearedBy: s.clearedBy } : {}),
+  };
+}
+
 /** One waiting-on question: the facts that count for one set of things. */
 export interface WaitingOnQuestion {
   /**
@@ -216,11 +238,18 @@ export interface WaitingOnQuestion {
    * own session floor.
    */
   container?: boolean;
-  /** Owed slots: of these sessions, of sessions about these things, or in a scope. */
+  /**
+   * Owed slots: of these sessions, in a scope, or — `blocking` — every slot
+   * that HOLDS UP these things (plan e7f753db §9, `listBlockingSlots`): a
+   * person's owed slot on a session about the thing or naming it, and an
+   * agent's slot that declares it blocks it. `blocking` questions are read
+   * ONCE for every question, never one by one. (It replaced the per-thing
+   * `subject` question, one read per thing.)
+   */
   owed?:
     | { sessionIds: string[] }
-    | { subject: SessionSubject }
-    | { scope: ResolvedScope };
+    | { scope: ResolvedScope }
+    | { blocking: string[] };
   /** Pending proposals filed by these sessions or targeting these things. */
   proposals?: { sessionIds?: string[]; targetIds?: string[] };
   /** Nodes whose open `blocked_by` blockers count. */
@@ -291,15 +320,19 @@ export async function readWaitingOn(
  * status read (statusOf, the goal facts, the rollups) asks it; nothing else
  * collects waiting-on sources. The session-id sources are read once for every
  * question (per floor: the reader's own, and the container's when a question
- * is one); an owed question by subject or scope is its own read (statusOf
- * asks one per thing, at most its 10); the PR states are one more read, and
- * which sessions the reader may read, one after.
+ * is one); every `blocking` question (the slots holding things up) is ONE
+ * read for all of them (`listBlockingSlots`); an owed question by scope is
+ * its own read; the PR states are one more read, and which sessions the
+ * reader may read, one after.
  *
  *   · owed slots — THE needs-you lens (`listNeedsYouOwed`), so a draft's
  *     ask-less slots never count here when needs-you leaves them out. Every
  *     slot in the lens counts, whatever its class: a stopped or older ask
  *     still holds the work up, it only leaves the needs-you headline. At most
  *     {@link WAITING_READ_CAP} per session;
+ *   · the slots holding a thing up (`blocking`, plan e7f753db §9): the same
+ *     lens for a person's slots, plus an agent's slot ONLY when it declares
+ *     `blocks` (`listBlockingSlots`); at most {@link WAITING_READ_CAP} each;
  *   · pending proposals, under THE proposal user floor;
  *   · open `blocked_by` blockers (THE dependency read);
  *   · the current hold of a paused thing (`listHolds`, `HOLD_ON_WAITING_ON`);
@@ -354,6 +387,9 @@ export async function readWaitingOnSourcesFor<K>(
   ];
   const owedIdsOf = (q: WaitingOnQuestion) =>
     q.owed && "sessionIds" in q.owed ? q.owed.sessionIds : undefined;
+  const blockingIdsOf = (q: WaitingOnQuestion) =>
+    q.owed && "blocking" in q.owed ? q.owed.blocking : undefined;
+  const blockingThingIds = union(blockingIdsOf);
   const owedSessionIds = union(owedIdsOf, false);
   const owedContainerIds = union(owedIdsOf, true);
   const proposalSessionIds = union((q) => q.proposals?.sessionIds);
@@ -376,12 +412,17 @@ export async function readWaitingOnSourcesFor<K>(
   const stepIds = union((q) => q.steps?.map((st) => st.subjectId));
 
   // Loaded late: these reach the router layer, the event floor or the packet.
-  const [{ readDependencyFacts }, { proposalUserFloor }, { listNeedsYouOwed }] =
-    await Promise.all([
-      import("../links/dependency-links.js"),
-      import("../../routers/proposals/scope-conditions.js"),
-      import("../signals/needs-you-owed.js"),
-    ]);
+  const [
+    { readDependencyFacts },
+    { proposalUserFloor },
+    { listNeedsYouOwed },
+    { listBlockingSlots },
+  ] = await Promise.all([
+    import("../links/dependency-links.js"),
+    import("../../routers/proposals/scope-conditions.js"),
+    import("../signals/needs-you-owed.js"),
+    import("../focus-sessions/owed-outputs.js"),
+  ]);
   const unscoped: ResolvedScope = {
     workspaceLens: undefined,
     projectLens: undefined,
@@ -398,12 +439,15 @@ export async function readWaitingOnSourcesFor<K>(
           limit: Number.MAX_SAFE_INTEGER,
           // Every owed slot is a wait, whatever its class: no PR read here.
           withoutOpenPrFact: true,
+          // No need-you card is drawn from here.
+          withoutBlockedThings: true,
         })
       : Promise.resolve([]);
   const [
     owedBySessions,
     owedByContainers,
     owedByQuestion,
+    blockingSlots,
     pending,
     deps,
     holds,
@@ -413,20 +457,22 @@ export async function readWaitingOnSourcesFor<K>(
   ] = await Promise.all([
     owedOf(owedSessionIds, false),
     owedOf(owedContainerIds, true),
-    // A subject or a scope is its own question (one read each).
+    // A scope is its own question (one read each).
     Promise.all(
       asked.map(([, q]) =>
-        q.owed && !("sessionIds" in q.owed)
+        q.owed && "scope" in q.owed
           ? listNeedsYouOwed({
               userId,
-              scope: "scope" in q.owed ? q.owed.scope : unscoped,
+              scope: q.owed.scope,
               limit: WAITING_READ_CAP,
               withoutOpenPrFact: true,
-              ...("subject" in q.owed ? { subject: q.owed.subject } : {}),
+              withoutBlockedThings: true,
             })
           : Promise.resolve(null)
       )
     ),
+    // Every `blocking` question in ONE read (plan e7f753db §9).
+    listBlockingSlots({ userId, thingIds: blockingThingIds }),
     proposalSessionIds.length + proposalTargetIds.length > 0
       ? db
           .select({
@@ -494,10 +540,7 @@ export async function readWaitingOnSourcesFor<K>(
         return n <= WAITING_READ_CAP;
       });
     for (const s of owed) {
-      const source: WaitingOnSource = {
-        kind: "owed_slot",
-        blockedReason: s.blockedReason ?? null,
-      };
+      const source = owedSlotSource({ ...s, owner: "human" });
       sources.push(
         !q.container || readable.has(s.sessionId)
           ? {
@@ -506,6 +549,21 @@ export async function readWaitingOnSourcesFor<K>(
             }
           : unnamed(source)
       );
+    }
+    // The slots holding up this question's things: the reader's own sessions
+    // (the owner floor), so each is named. Capped per question like the
+    // per-session owed read, so one thing's history never floods a card.
+    const blockingIds = new Set(blockingIdsOf(q) ?? []);
+    if (blockingIds.size > 0) {
+      let n = 0;
+      for (const s of blockingSlots) {
+        if (!s.thingIds.some((id) => blockingIds.has(id))) continue;
+        if (++n > WAITING_READ_CAP) break;
+        sources.push({
+          ...owedSlotSource(s),
+          ref: { kind: "slot", id: s.sessionId, label: s.label },
+        });
+      }
     }
     const bySession = new Set(q.proposals?.sessionIds ?? []);
     const byTarget = new Set(q.proposals?.targetIds ?? []);

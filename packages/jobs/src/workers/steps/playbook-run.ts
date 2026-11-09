@@ -17,6 +17,7 @@ import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_SKIP_REASONS,
+  skippedByOnly,
   skippedByUnless,
 } from "@synap-core/types/workers";
 import {
@@ -277,6 +278,17 @@ export async function executePlaybookRun(
       status: "skipped",
       reason: WORKER_SKIP_REASONS.unlessProperty,
       property: data.worker.unless.property,
+    };
+  }
+
+  // ── ONLY: the worker keeps this thing only for one of its values. ──────────
+  // Same place as unless: a thing whose value is not listed files nothing and
+  // starts nothing (Content OS: Produce a video only for a video post).
+  if (data.worker?.only && skippedByOnly(data.worker.only, subjectProperties)) {
+    return {
+      status: "skipped",
+      reason: WORKER_SKIP_REASONS.onlyValues,
+      property: data.worker.only.property,
     };
   }
 

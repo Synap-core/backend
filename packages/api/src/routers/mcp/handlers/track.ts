@@ -41,6 +41,9 @@ import {
 import {
   ok,
   requireScope,
+  pageSlice,
+  LIST_PAGE_DEFAULT,
+  LIST_PAGE_MAX,
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
@@ -120,7 +123,13 @@ export const trackHandlers: McpHandlerMap = {
         includeArchived: ctx.args.includeArchived === true,
       });
       if (!rows) return { error: "Project not found" };
-      return { items: await loadTrackViews(rows, ctx) };
+      const { page, paging } = pageSlice(
+        rows,
+        ctx.args,
+        LIST_PAGE_DEFAULT,
+        LIST_PAGE_MAX
+      );
+      return { items: await loadTrackViews(page, ctx), ...paging };
     });
   },
 

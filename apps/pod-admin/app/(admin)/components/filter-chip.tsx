@@ -35,6 +35,7 @@ import {
   filterSelectedKeys,
   filterSelectionFromKeys,
   writeFilterParam,
+  FILTER_TONE_CLASS,
   type FilterOption,
 } from "./filter-chip-model";
 
@@ -75,6 +76,23 @@ interface MultipleProps<K extends string> extends CommonProps<K> {
   selectionMode: "multiple";
   values: readonly K[];
   onValuesChange?: (next: K[]) => void;
+}
+
+/** A filter value's glyph: tone class for a status, token colour for a kind. */
+function OptionMark({
+  icon,
+  tone,
+  color,
+}: Pick<FilterOption, "icon" | "tone" | "color">) {
+  if (!icon) return null;
+  const Icon = icon;
+  return (
+    <Icon
+      aria-hidden
+      className={`h-3.5 w-3.5 shrink-0 ${tone ? FILTER_TONE_CLASS[tone] : "text-foreground/55"}`}
+      style={color ? { color } : undefined}
+    />
+  );
 }
 
 export type FilterChipProps<K extends string> =
@@ -158,6 +176,7 @@ export function FilterChip<K extends string>(props: FilterChipProps<K>) {
               />
             }
           >
+            {face.mark && <OptionMark {...face.mark} />}
             <span
               className={face.isSet ? "text-foreground" : "text-foreground/75"}
             >
@@ -195,6 +214,7 @@ export function FilterChip<K extends string>(props: FilterChipProps<K>) {
                 key={item.id}
                 textValue={item.label}
                 description={item.description}
+                startContent={<OptionMark {...item} />}
                 endContent={
                   item.count === null ? null : (
                     <span className="tabular text-[11px] text-foreground/55">

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   documentContent,
+  isHtmlPageMime,
   documentFormat,
   isLivingDocument,
 } from "./document-model";
@@ -217,5 +218,56 @@ describe("documentContent — a body the pod left in storage", () => {
       kind: "file",
       mimeType: null,
     });
+  });
+});
+
+describe("an HTML page kept as a file runs (founder, 5 Nov: entity 539a8a8d drew a download card)", () => {
+  it("an uploaded file whose type is text/html is a page, not markdown text", () => {
+    const out = documentContent(null, {
+      document: {
+        type: "file",
+        mimeType: "text/html; charset=utf-8",
+        storageKey: "k",
+        storageUrl: null,
+        workspaceId: "ws-1",
+      },
+      content: "<title>Wave review</title><p>Hi</p>",
+    });
+    expect(out.kind).toBe("page");
+  });
+
+  it("any other uploaded text file stays text", () => {
+    const out = documentContent(null, {
+      document: {
+        type: "file",
+        mimeType: "text/plain",
+        storageKey: "k",
+        storageUrl: null,
+        workspaceId: null,
+      },
+      content: "<title>not a page</title>",
+    });
+    expect(out.kind).toBe("content");
+  });
+
+  it("isHtmlPageMime: html and xhtml, with or without parameters; nothing else", () => {
+    for (const m of [
+      "text/html",
+      "TEXT/HTML",
+      "text/html; charset=utf-8",
+      "application/xhtml+xml",
+    ]) {
+      expect(isHtmlPageMime(m), m).toBe(true);
+    }
+    for (const m of [
+      "text/plain",
+      "text/htmlx",
+      "image/png",
+      "",
+      null,
+      undefined,
+    ]) {
+      expect(isHtmlPageMime(m), String(m)).toBe(false);
+    }
   });
 });

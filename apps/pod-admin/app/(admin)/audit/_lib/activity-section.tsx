@@ -36,6 +36,12 @@ import {
   ResourceRowSkeleton,
 } from "../../components/resource-row";
 import { useFocusRow } from "../../components/use-focus-row";
+import { useT } from "../../../../lib/i18n/locale-provider";
+import { CATALOGS } from "./copy";
+import {
+  presenceMissingQuery,
+  type PresenceMissingLens,
+} from "./presence-missing-link";
 import {
   type ActorSummary,
   type AuditFilters,
@@ -80,11 +86,14 @@ function subjectTypeLabel(subjectType: string): string {
 
 export function ActivitySection({
   filters,
+  lens,
   onAvailableSubjectTypes,
   onAvailableActors,
   onAvailableWorkspaces,
 }: {
   filters: AuditFilters;
+  /** The "went through without a proof" lens, from the address; `null` = off. */
+  lens: PresenceMissingLens | null;
   onAvailableSubjectTypes: (types: string[]) => void;
   onAvailableActors: (actors: ActorSummary[]) => void;
   onAvailableWorkspaces: (ws: WorkspaceSummary[]) => void;
@@ -100,6 +109,7 @@ export function ActivitySection({
   const actionForBackend = filters.actions[0];
 
   const [page, setPage] = useState(0);
+  const t = useT(CATALOGS);
 
   const queryInput = useMemo(
     () => ({
@@ -111,6 +121,7 @@ export function ActivitySection({
       toDate: filters.toDate,
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
+      presenceMissing: presenceMissingQuery(lens),
     }),
     [
       wsForBackend,
@@ -120,6 +131,7 @@ export function ActivitySection({
       filters.fromDate,
       filters.toDate,
       page,
+      lens,
     ]
   );
 
@@ -133,6 +145,7 @@ export function ActivitySection({
     actionForBackend,
     filters.fromDate,
     filters.toDate,
+    lens,
   ]);
 
   const auditQuery = trpc.system.listAuditLogs.useQuery(queryInput, {
@@ -213,7 +226,13 @@ export function ActivitySection({
             onRetry={() => void auditQuery.refetch()}
           />
         ) : filtered.length === 0 ? (
-          <ResourceRowEmpty message="No audit events match the current filters." />
+          <ResourceRowEmpty
+            message={
+              lens
+                ? t("lens.empty")
+                : "No audit events match the current filters."
+            }
+          />
         ) : (
           <ol className="divide-y divide-foreground/[0.05]">
             {filtered.map((ev) => (

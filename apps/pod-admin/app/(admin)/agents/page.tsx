@@ -42,9 +42,13 @@ import { en as shellEn, fr as shellFr } from "../components/copy";
 import { useAgentPeople } from "../../_lib/object/views/agent-object";
 import {
   agentReviewHref,
+  agentWakeLine,
+  agentWakeSource,
+  agentWakeView,
   buildAgentRoster,
   standingLine,
   type AgentRowView,
+  type AgentWakeSource,
 } from "./_lib/agent-roster";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import { useT } from "../../../lib/i18n/locale-provider";
@@ -78,6 +82,12 @@ function AgentsInner() {
   const standings = trpc.diagnose.agents.useQuery(undefined, {
     staleTime: 60_000,
   });
+  // Whether each agent can be woken, and its template: the pod's one wake
+  // read (`agentUsers.roster`). A failed read is said above the lists.
+  const rosterRead = trpc.agentUsers.roster.useQuery(undefined, {
+    staleTime: 30_000,
+  });
+  const wakes = agentWakeSource(rosterRead);
   const { viewerId } = useAgentPeople();
 
   useEffect(() => {
@@ -147,6 +157,13 @@ function AgentsInner() {
           </Link>
         )}
 
+        {wakes.status === "failed" && (
+          <ResourceRowError
+            message="Couldn't load whether these agents can be woken."
+            onRetry={() => void rosterRead.refetch()}
+          />
+        )}
+
         <SectionCard
           title="Connected agents"
           hint="Agents people brought to this pod"
@@ -180,7 +197,7 @@ function AgentsInner() {
               }
             />
           ) : (
-            <AgentRows views={connected} onSelect={openAgent} />
+            <AgentRows views={connected} wakes={wakes} onSelect={openAgent} />
           )}
         </SectionCard>
 
@@ -189,7 +206,7 @@ function AgentsInner() {
             title="The pod's own agents"
             hint="The twin, capture agents and Intelligence personas"
           >
-            <AgentRows views={podOwn} onSelect={openAgent} />
+            <AgentRows views={podOwn} wakes={wakes} onSelect={openAgent} />
           </SectionCard>
         )}
       </div>
@@ -199,15 +216,18 @@ function AgentsInner() {
 
 function AgentRows({
   views,
+  wakes,
   onSelect,
 }: {
   views: AgentRowView[];
+  wakes: AgentWakeSource;
   onSelect: (id: string) => void;
 }) {
   return (
     <div className="-mx-2 divide-y divide-foreground/[0.05]">
       {views.map((v) => {
         const standing = standingLine(v.standing);
+        const wake = agentWakeLine(agentWakeView(v.row, wakes));
         return (
           <div
             key={v.row.id}
@@ -217,7 +237,13 @@ function AgentRows({
             <ResourceRow
               Icon={Bot}
               primary={v.row.name ?? v.row.email ?? "Unnamed agent"}
-              secondary={standing ? `${v.sentence} ${standing}.` : v.sentence}
+              secondary={[
+                v.sentence,
+                wake ? `${wake}.` : null,
+                standing ? `${standing}.` : null,
+              ]
+                .filter(Boolean)
+                .join(" ")}
               status={v.status}
               onSelect={() => onSelect(v.row.id)}
               wrap

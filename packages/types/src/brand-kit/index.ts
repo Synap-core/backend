@@ -304,8 +304,13 @@ function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** JSON with object keys sorted at every depth — stable regardless of key order. */
-function canonicalJson(value: unknown): string {
+/**
+ * JSON with object keys sorted at every depth, `undefined` dropped: stable
+ * regardless of key order. Exported for the
+ * other content hashes that must hash "the way the brand kit does"
+ * (`@synap-core/types/guidance`).
+ */
+export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
@@ -355,7 +360,7 @@ function canonicalBrandKit(input: BrandKitInput): BrandKitInput {
 }
 
 /** cyrb53 — a small, well-distributed, dependency-free 53-bit string hash. */
-function cyrb53(text: string, seed = 0): string {
+export function cyrb53(text: string, seed = 0): string {
   let h1 = 0xdeadbeef ^ seed;
   let h2 = 0x41c6ce57 ^ seed;
   for (let i = 0; i < text.length; i++) {

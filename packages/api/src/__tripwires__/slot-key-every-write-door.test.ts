@@ -29,9 +29,23 @@ import { join, relative } from "node:path";
 
 const SRC = join(__dirname, "..");
 
-/** A keying door: the stamp itself, or a function that stamps on its way. */
+/**
+ * A keying door: the stamp itself, or a function that stamps on its way. The
+ * last two are THE session row writer (`@synap/database`
+ * `insert-focus-session.ts`), outside this scan's root: that they really key
+ * is asserted on the writer's own source below.
+ */
 const KEYS_SLOTS =
-  /\b(stampSlotKeys|carrySlotKeys|updateExpectedOutputsLocked|mergeExpectedOutputs|applyOutputMutations)\b/;
+  /\b(stampSlotKeys|carrySlotKeys|updateExpectedOutputsLocked|mergeExpectedOutputs|applyOutputMutations|insertFocusSessionRow|sessionDefinitionColumns)\b/;
+const ROW_WRITER = join(
+  SRC,
+  "..",
+  "..",
+  "database",
+  "src",
+  "utils",
+  "insert-focus-session.ts"
+);
 // Since status-flow W2 a session row is also written through the one session
 // status write (`setSessionStatus` / `writeSessionPatch`, @synap/database),
 // whose `set` carries the caller's other columns — expected_outputs included.
@@ -114,6 +128,19 @@ describe("every expected_outputs write door keys its slots", () => {
         "(stampSlotKeys / carrySlotKeys / a door that calls them). Key them, or — " +
         "if the write only spreads stored slots — classify it in PRESERVES with why."
     ).toEqual([]);
+  });
+
+  it("THE session row writer keys every slot it writes (reachability, not naming)", () => {
+    // `insertFocusSessionRow` spreads `sessionDefinitionColumns`, whose
+    // `expectedOutputs` is the stamp's output: both names above are keying
+    // doors only while this holds.
+    const writer = readFileSync(ROW_WRITER, "utf8");
+    expect(writer).toMatch(
+      /export function sessionDefinitionColumns\([\s\S]*?expectedOutputs: stampSlotKeys\(/
+    );
+    expect(writer).toMatch(
+      /export async function insertFocusSessionRow\([\s\S]*?\.\.\.sessionDefinitionColumns\(row\.playbook, row\.expectedOutputs\)/
+    );
   });
 
   it("no PRESERVES entry is stale", () => {

@@ -144,6 +144,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_get_entity",
     "cp-connector": "pod__get_entity",
   },
+  synap_get_flow: {
+    "pod-mcp": "synap_get_flow",
+    "cp-connector": "pod__get_flow",
+  },
   synap_get_graph: {
     "pod-mcp": "synap_get_graph",
     "cp-connector": "pod__get_graph",
@@ -203,6 +207,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_list_capabilities: {
     "pod-mcp": "synap_list_capabilities",
     "cp-connector": "pod__list_capabilities",
+  },
+  synap_list_installations: {
+    "pod-mcp": "synap_list_installations",
+    "cp-connector": "pod__list_installations",
   },
   synap_list_playbooks: {
     "pod-mcp": "synap_list_playbooks",
@@ -305,6 +313,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_request_deploy_approval",
     "cp-connector": "pod__request_deploy_approval",
   },
+  synap_request_installation: {
+    "pod-mcp": "synap_request_installation",
+    "cp-connector": "pod__request_installation",
+  },
   synap_request_upload: {
     "pod-mcp": "synap_request_upload",
     "cp-connector": null,
@@ -400,6 +412,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_update_entity: {
     "pod-mcp": "synap_update_entity",
     "cp-connector": "pod__update_entity",
+  },
+  synap_update_facet: {
+    "pod-mcp": "synap_update_facet",
+    "cp-connector": "pod__update_facet",
   },
   synap_update_playbook: {
     "pod-mcp": "synap_update_playbook",

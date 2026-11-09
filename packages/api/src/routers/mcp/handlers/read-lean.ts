@@ -18,6 +18,10 @@
  */
 
 import { ENTITY_STRING_CAP } from "../../../services/entity-lean-list.js";
+import {
+  activatorKey,
+  readPlaybookProcess,
+} from "../../../schemas/playbook-process.js";
 
 /** A long string cut to `cap` chars, its full length said after it. */
 function capString(value: string, cap: number): string {
@@ -186,3 +190,61 @@ export function toViewDigest(
 export const VIEWS_DIGEST_NOTE =
   "Digest: each view omits config (layout/blocks), query, snapshot and bookkeeping columns. " +
   "Pass detail:'full' for complete rows.";
+
+/**
+ * One playbook as the default `synap_list_playbooks` carries it (founder's
+ * rule: an AI-facing list returns the id, name, status and the kind's key
+ * fields; the full object comes from a get). Measured on the founder's pod
+ * (build 62da6fd2, 2026-11-05): 7 Content OS playbooks = 67,855 chars, 26
+ * fields each (stages, criteria, expected outputs, goal template, channel
+ * spec, scorecard…). An agent lists playbooks to pick one and launch it: it
+ * needs the id, what it is, whether it runs, who runs it by default and which
+ * params a run must answer. The whole definition comes back with
+ * `playbookId` (one, in full) or `detail: "full"`.
+ */
+const PLAYBOOK_DIGEST_KEYS = [
+  "id",
+  "name",
+  "status",
+  "executor",
+  "workspaceId",
+  "version",
+] as const;
+
+export function toPlaybookDigest(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const out = pick(row, PLAYBOOK_DIGEST_KEYS);
+  if (typeof row.description === "string" && row.description) {
+    out.description = capString(row.description, ENTITY_STRING_CAP);
+  }
+  // A run must answer its required params: names only, the required ones said.
+  const params = Array.isArray(row.params)
+    ? (row.params as Array<Record<string, unknown>>).filter(
+        (p) => p && typeof p === "object" && typeof p.name === "string"
+      )
+    : [];
+  if (params.length > 0) {
+    out.params = params.map((p) => p.name as string);
+    const required = params
+      .filter((p) => p.required === true)
+      .map((p) => p.name as string);
+    if (required.length > 0) out.requiredParams = required;
+  }
+  // The activators a worker can be switched on with (`synap_enable_worker`
+  // names one by key), never their full rules.
+  const activators = readPlaybookProcess(row.subjectProfile).activators;
+  if (activators.length > 0) {
+    out.activators = activators.map((a) => ({
+      key: activatorKey(a),
+      on: a.on,
+    }));
+  }
+  if (row.scorecard !== undefined) out.scorecard = row.scorecard;
+  return out;
+}
+
+export const PLAYBOOKS_DIGEST_NOTE =
+  "Digest: each playbook omits its goal template, stages, criteria, expected outputs, input strategy, " +
+  `channel spec, schedule and bookkeeping columns; description is capped at ${ENTITY_STRING_CAP} chars. ` +
+  "Pass playbookId for one playbook in full, or detail:'full' (with a small limit) for complete rows.";

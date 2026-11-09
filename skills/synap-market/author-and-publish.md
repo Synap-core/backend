@@ -124,37 +124,39 @@ views/entityLinks, missing view scope, entityLink predicates). A template that
 **declares `dependencies`** (compose/require another template) passes through
 this HTTP door **without** that validation — composition-aware server-side
 validation is not yet wired for ad-hoc publishes (official templates are
-validated corpus-wide from their YAML by the official publish
-(`synap market publish --official`) before it posts). Don't claim a composed publish was fully validated; say what actually ran.
+validated corpus-wide from their YAML by the official publish (CI on app-bases
+main, the one catalog lib) before it posts). Don't claim a composed publish was fully validated; say what actually ran.
 
 **Official templates — ONE catalog, ONE writer.** Every official template, of
 every kind, lives in ONE catalog package: `synap-app/packages/workspace-templates/`
 (npm `@synap-core/workspace-templates`; a rename to `packages/catalog` /
 `@synap-core/catalog` is planned, not done). By kind: workspaces in `src/*.yaml`,
-then `capabilities/`, `skills/`, `packs/`, `automations/`. Each file is one manifest
-`{apiVersion: synap/v1, kind, meta, spec, dependencies}`. Its `README.md` is the
-how-to. It has ONE writer: `synap catalog publish --official [--kind k] [slug...]`.
-That is the founder's command: its `synap login` session must own the
-`synap-official` vendor. It refuses a non-official account before the preview,
-validates the whole corpus, previews the diff against the live catalog, and asks
-before writing; `--dry-run` previews only. `synap market publish --official` is
-its alias for `--kind workspace`. Both go through the ONE lib
-`scripts/catalog-lib.mjs` → `POST /api/packages` (`publishPackageCore`).
-`synap catalog validate|diff` are the read-only verbs. `scripts/publish-official.mjs`
-is only the CI wrapper (`publish-official-templates.yml`): a read-only preview on
-PRs, and on main a live publish of the kinds in `SYNAP_CATALOG_LIVE_KINDS` (default
-`workspace`). The CP never reseeds on deploy, neither templates nor capabilities.
-`seed-templates.ts` and `seed-capability-templates.ts` are insert-only, by-hand
-bootstraps for an empty CP. A catalog change reaches pods only when that publish
-runs. A CP-door change ships CP-deploy first, then publish.
+then `capabilities/`, `skills/`, `packs/`, `automations/`, `views/`. Each file is one
+manifest `{apiVersion: synap/v1, kind, meta, spec, dependencies}`. Its `README.md`
+is the how-to. It has ONE writer, the lib `scripts/catalog-lib.mjs` →
+`POST /api/packages` (`publishPackageCore`), and its normal caller is CI:
+`publish-official-templates.yml` runs `scripts/publish-official.mjs` on every push
+to app-bases main and publishes EVERY kind, tombstones included (a read-only
+preview on PRs). **Landing the file on app-bases main IS the publish**: never hand
+anyone a publish step after a merge. Content that waits for the founder's review
+waits BEFORE it lands on main. `synap catalog publish --official [--kind k]
+[slug...]` is the same lib by hand, for an emergency republish when CI cannot run:
+its `synap login` session must own the `synap-official` vendor; it refuses a
+non-official account before the preview, validates the whole corpus, previews the
+diff against the live catalog, and asks before writing (`--dry-run` previews
+only); `synap market publish --official` is its alias for `--kind workspace`.
+`synap catalog validate|diff` are the read-only verbs. The CP never reseeds on
+deploy, neither templates nor capabilities. `seed-templates.ts` and
+`seed-capability-templates.ts` are insert-only, by-hand bootstraps for an empty CP.
+A catalog change reaches pods only once it is on main and CI has published it. A
+CP-door change ships CP-deploy first, then lands on main.
 `definition.sourcePackage` (the `mergeCatalog` winner signal) is official-only:
 the CP rejects it (403) from any other publisher, so never put it in an ad-hoc
 package. Official capability keys are reserved: an ad-hoc publish of a capability
 whose slug or `capability.key` matches an official one gets 409
 `OFFICIAL_CAPABILITY_KEY_RESERVED`. Pick your own key. Never pass the official
 `vendorId` to `market_publish` or publish an official slug ad-hoc — official
-content is authored in the catalog and published by the human with
-`synap catalog publish --official`.
+content is authored in the catalog, and landing it on app-bases main publishes it.
 
 ## Writing a process (a playbook that follows a kind's lifecycle)
 
@@ -179,24 +181,26 @@ start on it, and a person decides at the moments that commit the business. It ne
 The reference is Content OS "Produce Content" (`synap-app/packages/workspace-templates/src/content-os.yaml`).
 
 **Official vs pod-local.** An official template or capability lives ONLY in the catalog
-(`synap-app/packages/workspace-templates/`, by kind) and is published with
-`synap catalog publish --official` (CI on main). A playbook, kind or automation an agent creates on a pod
-(`synap_create_playbook`, `synap_define_kind`, …) is **pod-local**: it never reaches the catalog. To make it
-official, write it into the catalog file and publish.
+(`synap-app/packages/workspace-templates/`, by kind); landing it on app-bases main publishes it (CI). A
+playbook, kind or automation an agent creates on a pod (`synap_create_playbook`, `synap_define_kind`, …) is
+**pod-local**: it never reaches the catalog. To make it official, write it into the catalog file and land it
+on main. A pod draft proposal mirrored into the catalog is a second copy: once the file lands, withdraw the
+proposal; the review is the catalog commit.
 
-| Field                           | Where             | Rule                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `subjectProfile.profileSlug`    | playbook          | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                          |
-| `subjectProfile.statusProperty` | playbook          | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                         |
-| `stages[].subjectStatus`        | stage             | Entering the stage moves the subject to this option, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                                   |
-| `stages[].gate`                 | stage             | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                       |
-| `stages[].onFail`               | stage             | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                      |
-| `stages[].criteria`             | stage             | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                        |
-| `expectedOutputs[]`             | stage or playbook | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                         |
-| `activators[]` (workers)        | playbook          | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual`. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition. |
-| `humanOnlyStatuses`             | playbook          | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                        |
-| `goalTemplate`                  | playbook          | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                         |
-| `params`                        | playbook          | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                          |
+| Field                           | Where                          | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subjectProfile.profileSlug`    | playbook                       | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `subjectProfile.statusProperty` | playbook                       | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                                                  |
+| `stages[].subjectStatus`        | stage                          | Entering the stage moves the subject to this option, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                                                            |
+| `stages[].gate`                 | stage                          | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                                                |
+| `stages[].onFail`               | stage                          | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                                               |
+| `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                 |
+| `expectedOutputs[]`             | stage or playbook              | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                                                  |
+| Slot blocker fields             | session slot, not the playbook | An agent declares them on a session's outcome (`start_session` / `update_session`), not in an `expectedOutputs` entry: `blocks: {entityId?, to?}` (the thing held up, default the subject; the status it cannot reach yet, default its next), `blockerKey` (snake_case), `clearedBy` (exactly one of `{answer: true}` · `{intent}` · `{playbookId}` · `{capability}`). The thing stays in its status, marked blocked. Shapes: `asks`. |
+| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual`. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition.                          |
+| `humanOnlyStatuses`             | playbook                       | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                                                 |
+| `goalTemplate`                  | playbook                       | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                                                  |
+| `params`                        | playbook                       | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                                                   |
 
 Human moments use an `ask` on an owed slot: `confirm` / `choose` (one `recommended`) / `form` / `act` / `provide`
 (connection, file or secret through the vault). Never ask for a secret in a form.

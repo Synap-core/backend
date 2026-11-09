@@ -86,12 +86,11 @@ const ROUTED_THROUGH_DOOR: Record<
  * source that a reader can check in one grep.
  */
 const ACKNOWLEDGED: Record<string, string> = {
-  // MATERIALIZATION — seeds stages[0] at session birth. Nobody advanced INTO the
+  // MATERIALIZATION — the birth seed of stages[0] is no longer in this scan:
+  // every door that births a session goes through THE row writer
+  // (`insertFocusSessionRow`, @synap/database `insert-focus-session.ts`),
+  // which seeds `currentStage: firstStageKey(...)`. Nobody advanced INTO the
   // first stage; gating it would pause every run the instant it starts.
-  "api:services/focus-sessions/create-session.ts":
-    "materialization: firstStageKey(playbook?.stages) at INSERT",
-  "api:services/playbooks/playbook-lifecycle.ts":
-    "materialization: stages[0].key at run start",
 
   // APPROVAL RE-APPLY — a human has just answered. Re-gating would ask the same
   // person for the same advance twice.
@@ -110,6 +109,8 @@ const ACKNOWLEDGED: Record<string, string> = {
     "ctx.currentStage forwarded to an external agent payload, not a write",
   "api:routers/mcp/tools/index.ts":
     "JSON-schema property declaration for the MCP tool input",
+  "api:routers/hub-protocol/rest/automation-schema-doc.ts":
+    "doc string naming the session_update output's config field, not a write",
 
   // DECLARATION, NOT ADVANCE — `followPlaybookId` binds a LIVE session to a
   // playbook, and `followStageKey` names the stage the work is ALREADY in. The
@@ -153,15 +154,13 @@ const ACKNOWLEDGED: Record<string, string> = {
  * the call site.
  */
 const LEDGER_EXEMPT: Record<string, string> = {
-  "api:services/focus-sessions/create-session.ts":
-    "birth seed of stages[0]: nobody moved it (no backfill, effects change 4)",
-  "api:services/playbooks/playbook-lifecycle.ts":
-    "birth seed of stages[0] at run start",
   "api:services/focus-sessions/follow-playbook.ts":
     "declaration of the stage the work is ALREADY in, not a move",
   "api:services/event-end/run-event-end.ts":
     "argument to updateFocusSession (the door appends)",
   "api:routers/mcp/tools/index.ts": "JSON-schema property declaration",
+  "api:routers/hub-protocol/rest/automation-schema-doc.ts":
+    "doc string of the session_update config field",
   "api:services/tracks/tracks-service.ts":
     "project_tracks.current_stage: the track keeps its own ledger (0274)",
   "api:services/tracks/track-history.ts": "read projection, not a write",

@@ -18,6 +18,7 @@ export { apiKeyService } from "./services/api-keys.js";
 export { ImportOrchestrator } from "./services/import-orchestrator.js";
 // The background approval job (handler slot of @synap/jobs proposal-approve).
 export { runApprovalJob } from "./services/proposals/approval-runs.js";
+export { runAskLaterReturn } from "./services/focus-sessions/ask-later.js";
 // The store-first bulk import job (handler slot of @synap/jobs import-units).
 export { runImportUnitsJob } from "./services/import/import-units-job.js";
 // The Library light read: the job handler + hourly sweep the app registers in
@@ -128,6 +129,18 @@ export {
   type StandaloneKind,
   type DetachResult,
 } from "./services/capabilities/reconcile-standalone-configs-to-templates.js";
+// The catalog installs every official agent template on every pod (D8).
+export {
+  installOfficialAgentTemplates,
+  type OfficialAgentTemplatesReport,
+} from "./services/agent-templates/official.js";
+// Agents link to their template by themselves when it is clear, else the
+// person is asked once (D10).
+export {
+  selfHealAgentTemplateLinks,
+  registerAgentTemplateAnswerReactor,
+  type SelfHealReport,
+} from "./services/agent-templates/self-heal.js";
 export {
   orderWorkspacesByTemplateDependencies,
   type OrderableWorkspaceRow,
@@ -222,6 +235,28 @@ export {
   notifyFactorChanged,
 } from "./services/presence/factors.js";
 export { redeemPasskeyChangeGrant } from "./services/presence/passkey-change.js";
+// New recovery codes (`/api/account-recovery/codes`) are a new proof factor:
+// a person who holds one proves presence through the same gate.
+export { assertPresenceForRequest } from "./services/presence/gate.js";
+// The account-recovery door judges a first factor like presence.totp.begin
+// (a credential presented AT the pod, recently), and lets a typed code count
+// only in a person's browser session.
+export {
+  kratosCredentialTime,
+  runAsBrowserPerson,
+} from "./utils/device-session.js";
+
+// Recovery codes: generated, hashed and matched in ONE place, for the account
+// recovery doors (apps/api) and the presence proof (a recovery code proves
+// presence, the recovery ladder).
+export {
+  generateRecoveryCode,
+  generateRecoveryCodes,
+  hashRecoveryCode,
+  matchRecoveryCode,
+  newBatchSalt,
+  type CandidateCode,
+} from "./services/account-recovery/codes.js";
 
 // Export vault resolver utilities (used by ssh-proxy and other server-side consumers)
 export {

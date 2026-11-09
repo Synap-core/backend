@@ -31,6 +31,10 @@ You extend a user's Synap pod schema: new entity profiles, new properties on exi
 
 ---
 
+## Apps are views of pod state
+
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+
 ## Before you touch anything
 
 Always inventory first. Never assume the schema is empty.
@@ -362,8 +366,8 @@ Consumed by: `@synap/api` (`intent-registry`, `create-from-definition`,
 `schemas/playbook-definition.ts`), `synap-app/packages/workspace-templates`
 (`validate.ts` — the `taskIntents` check), and the CP's `seed-capability-templates.ts`
 (only the insert-only bootstrap of an empty CP — official capabilities are authored in
-the catalog, `synap-app/packages/workspace-templates/capabilities/`, and published with
-`synap catalog publish --official`).
+the catalog, `synap-app/packages/workspace-templates/capabilities/`; landing them on
+app-bases main publishes them).
 
 ### Which field on which surface
 

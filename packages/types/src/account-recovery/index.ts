@@ -11,7 +11,9 @@
  *                                           → 200 {@link RedeemRecoveryCodeSuccess}
  *                                           | 401/429/503 {@link AccountRecoveryError}
  *   GET  /api/account-recovery/status       session → {@link AccountRecoveryStatus}
- *   POST /api/account-recovery/codes        session, privileged → {@link GeneratedRecoveryCodes}
+ *   POST /api/account-recovery/codes        session, privileged, {@link GenerateRecoveryCodesRequest}
+ *                                           (a proof of presence when the person holds a factor)
+ *                                           → {@link GeneratedRecoveryCodes}
  *   PUT  /api/account-recovery/cloud-trust  session, privileged, pod admin,
  *                                           {@link SetCloudTrustRequest} → {@link AccountRecoveryStatus}
  *
@@ -158,12 +160,27 @@ export type AccountRecoveryErrorCode =
   | "cloud_session_not_allowed"
   | "forbidden"
   /** Turning Cloud sign-in off would lock out an owner who signs in only with Synap Cloud. */
-  | "owner_needs_pod_sign_in";
+  | "owner_needs_pod_sign_in"
+  /**
+   * New recovery codes when the person already holds a proof factor: they
+   * prove presence (`@synap-core/types/presence`, request `recovery_codes`,
+   * id = their user id) and send it as `presence` in the body. `reasonCode`
+   * says which presence refusal it is.
+   */
+  | "presence_required";
 
 export interface AccountRecoveryError {
   ok: false;
   error: AccountRecoveryErrorCode;
   message: string;
+  /** With `presence_required`: the presence refusal (`PRESENCE_REQUIRED`, `PRESENCE_INVALID`, …). */
+  reasonCode?: string;
+}
+
+/** `POST /api/account-recovery/codes`'s body. */
+export interface GenerateRecoveryCodesRequest {
+  /** A proof of presence for `recovery_codes:<user id>`, when the person holds a factor. */
+  presence?: unknown;
 }
 
 export interface AccountRecoveryStatus {

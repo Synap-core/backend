@@ -22,6 +22,7 @@ import {
   isUnboundedFullAccess,
   mcpToolAllowed,
   ownerWideDoorAllowed,
+  packagePreflightReadable,
   restDoorAllowed,
   sessionPacketReadable,
   TRPC_KEY_MUTATION_DOORS,
@@ -317,9 +318,31 @@ describe("POST reads declared in R1 (were open as writes)", () => {
   it("POST /packages/preflight reads what GET /workspaces reads (finding 634bbbfc)", () => {
     expect(hubRouteClass("POST", "/packages/preflight")).toBe("read");
     expect(restDoorAllowed("POST", "/packages/preflight", COMPUTER)).toBe(true);
+    expect(packagePreflightReadable(COMPUTER)).toBe(true);
     for (const grant of [PINNED, APP, DOC_ONLY, key({ permissions: [] })]) {
       expect(restDoorAllowed("POST", "/packages/preflight", grant)).toBe(false);
     }
+  });
+  // Rules out: an app that may ask to install a package refused the preview
+  // of what it asks for (L7 "Add to my pod"), and that app reading the pod's
+  // parts of it (the kinds, spaces and rows an install would touch).
+  it("POST /packages/preflight admits a key holding package.install, with the pod's parts withheld", () => {
+    const APP_INSTALL = key({
+      permissions: ["entity.read", "package.install"],
+      workspaceIds: ["w1"],
+    });
+    expect(restDoorAllowed("POST", "/packages/preflight", APP_INSTALL)).toBe(
+      true
+    );
+    expect(packagePreflightReadable(APP_INSTALL)).toBe(false);
+    // Another package verb is not the ask.
+    expect(
+      restDoorAllowed(
+        "POST",
+        "/packages/preflight",
+        key({ permissions: ["package.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(false);
   });
   it("POST /focus-sessions/:id/recall needs every subject recall reads, unnarrowed", () => {
     const path = `/focus-sessions/${U}/recall`;
@@ -990,7 +1013,6 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
     ],
     ["/discover", ["entity.read", "relation_def.read"]],
     ["/memory", ["entity.read", "preference.read"]],
-    ["/cells", ["widget.read"]],
     ["/widget-definitions", ["widget.read"]],
   ];
   it.each(AGGREGATE)("GET %s is open to the computer's key", (path) => {
@@ -1026,6 +1048,44 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
       expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
     }
   );
+  // The cells a pod app hosts (design b199a3a4, slice 4): the route reads
+  // through the `widget` grant clause, so a key pinned to spaces is admitted
+  // on `widget.read` and reads its spaces' cells
+  // (cells.app-reads.pglite.test.ts).
+  it.each(["/cells", "/cells/", "/cells/generated%3Ahealth", "/cells/x/"])(
+    "GET %s: a pinned key with widget.read is admitted, without it refused",
+    (path) => {
+      expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({ permissions: ["widget.read"], workspaceIds: ["w1"] })
+        )
+      ).toBe(true);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({
+            permissions: ["view.read", "entity.*.read"],
+            workspaceIds: ["w1"],
+          })
+        )
+      ).toBe(false);
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+  it("GET /cells/:typeKey is one segment: a deeper path is not admitted", () => {
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/cells/a/b",
+        key({ permissions: ["widget.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(false);
+  });
   it("GET /memory reads what POST /memory/search reads: one declaration", () => {
     for (const k of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY])
       expect(restDoorAllowed("GET", "/memory", k)).toBe(
@@ -1086,5 +1146,108 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
     expect(restDoorAllowed("GET", "/skills/system", PINNED)).toBe(true);
     // The pod's skill list is another door, still unclassified.
     expect(restDoorAllowed("GET", "/skills", COMPUTER)).toBe(false);
+  });
+});
+
+describe("Raycast's REST twins of MCP read tools: one rule per reader", () => {
+  // The live shape of the keys Raycast calls with: a computer's key and the
+  // Raycast agent's key are both one unpinned scope, the AI permissions.
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  const PINNED = key({
+    permissions: aiDefaultCapabilities(),
+    workspaceIds: ["w1"],
+  });
+  const DENY_ALL = key({ permissions: [] });
+  /** Each Hub route and the MCP tool that calls the same reader. */
+  const TWINS: ReadonlyArray<readonly [string, string, boolean]> = [
+    ["/orient", "synap_orient", true],
+    ["/profiles", "synap_list_profiles", true],
+    ["/automations", "synap_list_automations", true],
+    [`/threads/${U}/context`, "synap_get_thread_context", true],
+    // GET-or-create, classified with the MCP write tools.
+    ["/channels/personal", "synap_get_channel", false],
+  ];
+
+  it.each(TWINS)("GET %s is open to a computer's or agent's key", (path) => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", `${path}/`, COMPUTER)).toBe(true);
+  });
+
+  it.each(TWINS)(
+    "GET %s answers every key as MCP %s does",
+    (path, tool, readOnly) => {
+      for (const g of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY, AI])
+        expect(restDoorAllowed("GET", path, g)).toBe(
+          mcpToolAllowed(tool, readOnly, g)
+        );
+    }
+  );
+
+  it.each(TWINS)(
+    "GET %s stays refused to a pinned, deny-all or partial key",
+    (path) => {
+      expect(restDoorAllowed("GET", path, PINNED)).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+    }
+  );
+
+  it("each door needs the subjects IT reads", () => {
+    // The lens map reads sessions and goals too, not only records.
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/orient",
+        key({ permissions: ["entity.read", "project.read", "proposal.read"] })
+      )
+    ).toBe(false);
+    // One kind of record is not every kind.
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/profiles",
+        key({ permissions: ["entity.task.read"] })
+      )
+    ).toBe(false);
+    // A thread's context names the records and documents it links.
+    expect(
+      restDoorAllowed(
+        "GET",
+        `/threads/${U}/context`,
+        key({ permissions: ["channel.read"] })
+      )
+    ).toBe(false);
+  });
+
+  it("opens these routes only, never their siblings", () => {
+    for (const path of [
+      `/automations/${U}`,
+      "/automations/schema",
+      "/profiles/task/renderers",
+      "/threads/not-a-uuid/context",
+      "/property-defs",
+      "/briefs",
+    ])
+      expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
+  });
+});
+
+describe("a computer's waker poll: GET /computers/me/wakes", () => {
+  // The key `machine-connect.ts` mints at the device flow: a `user_pat` held
+  // by the computer, carrying the AI read & propose grant. It is fenced, so a
+  // REFUSED door refused every real computer's waker (backend#909).
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  it("the computer's own key passes the fence: the route admits only it", () => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", "/computers/me/wakes", COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", "/computers/me/wakes/", COMPUTER)).toBe(true);
+    expect(hubRouteClass("GET", "/computers/me/wakes")).toBe("read");
+  });
+  it("opens the poll only, never a sibling", () => {
+    expect(restDoorAllowed("GET", "/computers/me", COMPUTER)).toBe(false);
+    expect(restDoorAllowed("GET", "/computers/me/wakes/x", COMPUTER)).toBe(
+      false
+    );
   });
 });

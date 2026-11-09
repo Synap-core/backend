@@ -122,7 +122,10 @@ import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.j
 import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 // Straight from the package, not the shim: the shim is what unit tests mock.
-import { approvalRefusesRun } from "@synap/capability-gate";
+import {
+  approvalRefusesRun,
+  TRIAL_RUN_WRITE_REFUSED,
+} from "@synap/capability-gate";
 import { DENIED_BY_RULE } from "@synap/governance-policy";
 import { runSkill } from "../skills/run-skill.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
@@ -703,6 +706,8 @@ export async function executeCapability(input: {
     workspaceId,
     channelId: actingChannelId,
     issuer: "hub.capabilities-execute",
+    // A trial run's session refuses every write (the gate's trial rung).
+    sessionId: input.sessionId ?? null,
     readOnly: autoRuns,
     // An intent action proposes when it reaches outside the pod, whoever
     // asked (an app or an agent drafting for the person).
@@ -714,6 +719,18 @@ export async function executeCapability(input: {
   // lift it, so it carries no enable-link and files no enable request. It is
   // recorded for the person all the same, under its own reason and in the
   // person's words: the agent's sentence ("do not retry it…") is for the agent.
+  // A trial run's write (the rule lab): refused, nothing to enable, nothing
+  // recorded as a refused capability run.
+  if (
+    decision.decision === "deny" &&
+    decision.reasonCode === TRIAL_RUN_WRITE_REFUSED
+  ) {
+    return {
+      kind: "deny",
+      reason: decision.reason,
+      reasonCode: TRIAL_RUN_WRITE_REFUSED,
+    };
+  }
   if (decision.decision === "deny" && decision.reasonCode === DENIED_BY_RULE) {
     await recordRefusedCapabilityRun({
       userId,

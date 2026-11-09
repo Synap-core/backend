@@ -52,14 +52,21 @@ export type PackageUpdateNeeds = (typeof PACKAGE_UPDATE_NEEDS)[number];
 export type PackageFieldCounts = Record<PackageFieldState, number>;
 
 /** The kinds of installed row a plan compares field by field. */
-export type PackageUpdateRowKind = "view" | "skill" | "automation";
+export const PACKAGE_UPDATE_ROW_KINDS = [
+  "view",
+  "skill",
+  "automation",
+  "agent",
+] as const;
+export type PackageUpdateRowKind = (typeof PACKAGE_UPDATE_ROW_KINDS)[number];
 
 // ─── THE rule: does an installed package have an update? ────────────────────
 
 /**
  * Does the catalog hold a newer version of a package than the one the pod
  * last converged to? THE one rule, for every installed kind (workspace,
- * overlay pack, capability, view, skill, automation) and every surface (pod
+ * overlay pack, capability, view, skill, automation, agent template) and every
+ * surface (pod
  * admin's Updates, the CLI's `market update`, template health, MCP).
  *
  * A version is the Control Plane's CONTENT HASH of the published definition
@@ -112,13 +119,15 @@ export const INSTALLED_PACKAGE_KINDS = [
   "view",
   "skill",
   "automation",
+  "agent",
 ] as const;
 export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
 
 /**
  * How an update of a package is decided and applied:
  *   field   — row by row, field by field (`threeWayMergeFields`): view, skill,
- *             automation. The plan lists every field with its state.
+ *             automation, agent template. The plan lists every field with its
+ *             state.
  *   package — as a whole, through the kind's own template door (a space's
  *             template apply, a capability's reconcile), which adds what the
  *             new version brings and keeps the pod's edits. The plan has no
@@ -437,7 +446,7 @@ export const undoPackageUpdateInputSchema = z.object({
 });
 
 export const detachPackageInputSchema = z.object({
-  kind: z.enum(["view", "skill", "automation"]),
+  kind: z.enum(PACKAGE_UPDATE_ROW_KINDS),
   id: z.string().uuid(),
 });
 

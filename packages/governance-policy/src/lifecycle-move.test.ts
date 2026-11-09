@@ -169,6 +169,48 @@ describe("lifecycle move governance", () => {
     ).toBe("propose");
   });
 
+  // Finding 2d84febb: a session BIRTH (a session started into a playbook's
+  // first stage) on a thing already done or lost reopened it with no
+  // proposal. A birth that reopens always proposes, whatever the rule; a
+  // reopen that is not a birth, and a birth that reopens nothing, keep 2.86.
+  it("a session BIRTH move out of done/lost always proposes, and nothing else does", () => {
+    const birthReopen = {
+      intoTerminal: false,
+      humanOnly: false,
+      outOfTerminal: true,
+      atSessionBirth: true,
+    };
+    expect(
+      decideAgentPolicy({ ...base, lifecycleMove: birthReopen })
+    ).toMatchObject({ verdict: "propose", reasonCode: "LIFECYCLE_REOPEN" });
+    // no rule widens it, not even one naming the write
+    expect(
+      decideAgentPolicy({
+        ...base,
+        lifecycleMove: birthReopen,
+        governanceRuleVerdict: "auto",
+        governanceRuleId: "rule-explicit-transition",
+        governanceRuleNamesWrite: true,
+        isAgentOwnedWorkspace: true,
+      })
+    ).toMatchObject({ verdict: "propose", reasonCode: "LIFECYCLE_REOPEN" });
+    // a birth that reopens nothing executes (the first stage of an open thing)
+    expect(
+      decideAgentPolicy({
+        ...base,
+        lifecycleMove: { ...birthReopen, outOfTerminal: false },
+      })
+    ).toEqual({ verdict: "execute" });
+    // a reopen that is not a birth (an agent's own move, a stage advance)
+    // executes as before
+    expect(
+      decideAgentPolicy({
+        ...base,
+        lifecycleMove: { ...birthReopen, atSessionBirth: undefined },
+      })
+    ).toEqual({ verdict: "execute" });
+  });
+
   it("transition needs write permission", () => {
     expect(requiredPermissionFor("transition")).toBe("write");
   });

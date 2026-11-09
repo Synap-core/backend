@@ -696,6 +696,14 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   "dev.deploy_approval",
   "focus_session.plan_approval",
   "focus_session.deploy_approval",
+  // The direct doors are `focus_session/dev.plan_approval` and
+  // `focus_session/dev.deploy_approval`. A gate composes
+  // `${subjectType}.${action}`, so the event key is
+  // `focus_session.dev.deploy_approval`. That is the spelling a stored
+  // autoApproveFor row uses. The shorter keys above stay: this list never
+  // shrinks, and a call site that passes action `deploy_approval` still floors.
+  "focus_session.dev.plan_approval" satisfies DirectProposalEventKey,
+  "focus_session.dev.deploy_approval" satisfies DirectProposalEventKey,
   // A cleanup pack NEVER auto-applies (founder, 2026-09-14). Packs are filed
   // directly (`insertPendingProposal`, pod-hygiene cron) and never reach this
   // engine, so no rule matches one today; flooring the key is what makes
@@ -822,6 +830,10 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   // Editing a playbook can switch on its schedule, which materialises an ACTIVE
   // cron automation (services/playbooks/cron-automation.ts).
   "playbook/update": "floored",
+  // Choosing who runs a playbook for the person from now on (run choice v3,
+  // decision D7): an agent or a third-party app may ASK, the person approves it
+  // once; a person's own choice never reaches the engine.
+  "playbook/set_run_choice": "floored",
   // Promoting a cell to a kind's renderer changes how every entity of it renders.
   "profile/renderer.set": "floored",
   // The second writer of `widget_definitions` — a cell definition by another name.
@@ -939,6 +951,7 @@ export type KnownGovernanceAction =
   | "setState"
   | "execute"
   | "run"
+  | "set_run_choice"
   | "grant_capability"
   // An agent handing a session to ANOTHER agent (roster add ≠ itself).
   | "assign_agent"
@@ -1006,6 +1019,7 @@ export function requiredPermissionFor(
     action === "setState" ||
     action === "execute" ||
     action === "run" ||
+    action === "set_run_choice" ||
     action === "grant_capability" ||
     action === "assign_agent" ||
     action === "register" ||
@@ -1159,6 +1173,9 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // keeps permitting it (`grantRequestKeys`).
   "facet/attach": "create",
   "facet/detach": "delete",
+  // Choosing who runs a playbook is part of running it (run choice v3): the
+  // grant that may run it may ask to remember who does.
+  "playbook/set_run_choice": "run",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -1435,6 +1452,23 @@ export interface AgentPolicyInput {
      * holds. Set ONLY by the close door's writer (`moveStatus.atSessionEnd`).
      */
     atSessionEnd?: boolean;
+    /**
+     * The thing is CURRENTLY in a done or lost option and the move takes it
+     * to an open/active/paused one (a reopen). A fact the `moveStatus` door
+     * reads from the lifecycle's own option categories; on its own it decides
+     * nothing (an agent reopening a thing by hand applies, as before).
+     */
+    outOfTerminal?: boolean;
+    /**
+     * The move is a session BIRTH move: a session started into a playbook's
+     * first stage writes that stage's status onto its subject. With
+     * `outOfTerminal` it is a reopen nobody asked for — starting work on a
+     * finished thing may mean it regressed — so it ALWAYS proposes (rung
+     * 2.076, `LIFECYCLE_REOPEN`, above the rules store): the person confirms
+     * the reopen (finding 2d84febb). Set ONLY by the birth writer
+     * (`moveStatus.atSessionBirth`).
+     */
+    atSessionBirth?: boolean;
   };
   /**
    * The write adds a REQUIRED field or a DEFAULT to a kind the pod administrator
@@ -1846,6 +1880,22 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.HUMAN_ONLY_STATUS,
       reasonCode: "HUMAN_ONLY_STATUS",
+    };
+  }
+
+  // 2.076 A SESSION BIRTH THAT REOPENS → always propose; same placement and
+  // guarantees as 2.075. A session started into a playbook's first stage on a
+  // thing already done or lost would take it back to that stage's status:
+  // the person confirms the reopen, no rule widens it (finding 2d84febb).
+  // Stage advances and end moves never set `atSessionBirth`.
+  if (
+    input.lifecycleMove?.atSessionBirth === true &&
+    input.lifecycleMove.outOfTerminal === true
+  ) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.LIFECYCLE_REOPEN,
+      reasonCode: "LIFECYCLE_REOPEN",
     };
   }
 
@@ -2302,6 +2352,7 @@ export function nonWidenableFloorFor(eventKey: string): string | null {
 export const REVERSIBILITY_DOOR_CLASS = {
   "a2ai/join": "disruptive", // scope: an agent joins a room
   "agent/updateCapabilities": "disruptive", // scope (ADMIN)
+  "agentTemplate/update": "disruptive", // effect: what a computer runs, which skills agents get
   "aiProvider/create": "disruptive", // scope (ADMIN)
   "aiProvider/delete": "disruptive", // destroy / ADMIN
   "aiProvider/update": "disruptive", // scope (ADMIN)
@@ -2331,6 +2382,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "channel/merge_branch": "disruptive", // destroy (merge)
   "channel/unbind": "disruptive", // scope
   "command/execute": "disruptive", // effect: a shell (2.06)
+  "installation/request": "disruptive", // effect: install steps run on a person's computer
   "context/link": "reversible",
   "document/create": "reversible",
   "document/section_update": "reversible", // version history restores it
@@ -2370,6 +2422,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "playbook/create": "disruptive", // struct (2.09)
   "playbook/promote": "disruptive", // struct (2.09)
   "playbook/run": "disruptive", // effect: starts a process that fans out
+  "playbook/set_run_choice": "disruptive", // floored (D7): who runs the person's work is theirs to approve
   "playbook/update": "disruptive", // struct (2.09)
   "playbook_run/update": "reversible", // run orchestration
   "proactive/recap": "disruptive", // effect: a message is read, not undone
@@ -2559,6 +2612,11 @@ export type GovernedWriteCreator =
 export const GATE_WRITE_DOORS = {
   "a2ai/join": "gate",
   "agent/updateCapabilities": "gate",
+  // An installed agent template's fields (`agent_templates`), written by a
+  // package update (`services/agent-templates/update.ts`). Its `wake` and
+  // `harness` are a person's: an agent's change of either always proposes.
+  // Approved by `routers/proposals/executors/package-update.ts`.
+  "agentTemplate/update": "gate",
   // AI provider config. Writing one sets the baseUrl the IS sends every prompt
   // to, so these are credential-shaped writes in the same class as apiKey/*.
   "aiProvider/create": "gate",
@@ -2602,6 +2660,12 @@ export const GATE_WRITE_DOORS = {
   "channel/merge_branch": "gate",
   "channel/unbind": "gate",
   "command/execute": "gate",
+  // Ask for a capability on one of the person's computers: install, update
+  // or remove (reconciliation f75fbb48 §3.4). A person's ask applies; an
+  // agent's is a proposal the person approves, with a fresh sign-in
+  // (`routers/proposals/executors/installations.ts`). A verify or a repair at
+  // the approved version never reaches the gate.
+  "installation/request": "gate",
   "context/link": "gate",
   "document/create": "gate",
   // The session-document section write door (services/session-document). Two
@@ -2673,6 +2737,7 @@ export const GATE_WRITE_DOORS = {
   "playbook/create": "gate",
   "playbook/promote": "gate",
   "playbook/run": "gate",
+  "playbook/set_run_choice": "gate",
   "playbook/update": "gate",
   "playbook_run/update": "gate",
   "proactive/recap": "gate",

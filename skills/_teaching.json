@@ -1084,5 +1084,16 @@
       "cliBundle": true,
       "capability": null
     }
+  },
+  "synap/asks": {
+    "teachesTools": ["synap_ask_person", "synap_start_session", "synap_update_session"],
+    "skillGroup": "core",
+    "alwaysOn": false,
+    "summary": "Asks: the full shapes of an ask (confirm, choose with followUp and media, form, act, provide) and its shared fields, with examples.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   }
 }

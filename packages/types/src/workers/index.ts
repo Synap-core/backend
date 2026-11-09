@@ -102,6 +102,13 @@ export interface WorkerActivator {
    * files one proposal, not three. See {@link skippedByUnless}.
    */
   unless?: WorkerUnless;
+  /**
+   * A per-thing worker (`created` / `enters_status`) keeps only a thing whose
+   * property holds one of these values: e.g. Content OS proposes Produce a
+   * video only for a post whose `post-format` is a video format, and the text
+   * and image processes theirs. See {@link skippedByOnly}.
+   */
+  only?: WorkerOnly;
 }
 
 /**
@@ -127,6 +134,31 @@ export function skippedByUnless(
   if (typeof v === "string") return v.trim().length > 0;
   if (Array.isArray(v)) return v.length > 0;
   return true;
+}
+
+/**
+ * "Only a thing whose `property` is one of `in`": read off the thing when the
+ * worker fires, like {@link WorkerUnless}. Values compare trimmed and without
+ * case ("Short Video" = "short video"); a list property is kept when any of its
+ * items is listed. A thing with no value for it is left out.
+ */
+export interface WorkerOnly {
+  property: string;
+  in: string[];
+}
+
+/** Does `only` leave this thing out? Pure; `properties` is the thing's own. */
+export function skippedByOnly(
+  only: WorkerOnly | undefined,
+  properties: Record<string, unknown> | null | undefined
+): boolean {
+  if (!only) return false;
+  const wanted = new Set(only.in.map((v) => v.trim().toLowerCase()));
+  const v = properties?.[only.property];
+  const values = Array.isArray(v) ? v : [v];
+  return !values.some(
+    (x) => typeof x === "string" && wanted.has(x.trim().toLowerCase())
+  );
 }
 
 /**
@@ -271,6 +303,8 @@ export const WORKER_SKIP_REASONS = {
   volumeCeiling: "volume_ceiling",
   /** The thing carries the activator's `unless` property (see {@link skippedByUnless}). */
   unlessProperty: "unless_property",
+  /** The thing's property holds none of the activator's `only` values (see {@link skippedByOnly}). */
+  onlyValues: "only_values",
 } as const;
 export type WorkerSkipReason =
   (typeof WORKER_SKIP_REASONS)[keyof typeof WORKER_SKIP_REASONS];

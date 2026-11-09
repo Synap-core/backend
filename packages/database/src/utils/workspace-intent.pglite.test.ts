@@ -7,7 +7,8 @@
  * (api `__tripwires__/template-intent-install-doors.test.ts`).
  *
  * Pinned:
- *  (1) create projects `{label, produces: [slug], source: 'template'}`;
+ *  (1) create projects `{label, produces: [slug], source: 'template'}`,
+ *      and the `primary` output when it is one of `produces` (1b);
  *  (2) a reconcile onto a space installed before the template declared an
  *      intent writes it (every live pod, once the catalog gains it), and a
  *      changed intent converges;
@@ -142,6 +143,27 @@ describe("settings.intent — projected by the create and reconcile writers", ()
     });
   });
 
+  it("(1b) the primary output lands with it, trimmed (One model, decision 3)", async () => {
+    const r = await createWorkspaceFromDefinition({
+      definition: {
+        workspaceName: "Pipeline",
+        intent: {
+          label: "Sales",
+          produces: [{ profile: "lead" }, { profile: "deal" }],
+          primary: " deal ",
+        },
+      },
+      userId: USER,
+      createdBy: "provisioning",
+    });
+    expect((await settingsOf(r.workspaceId)).intent).toEqual({
+      label: "Sales",
+      produces: ["lead", "deal"],
+      primary: "deal",
+      source: "template",
+    });
+  });
+
   it("(2) a reconcile writes it onto an existing space, and converges a change", async () => {
     const { workspaceId } = await createWorkspaceFromDefinition({
       definition: { workspaceName: "Sales" },
@@ -246,6 +268,14 @@ describe("settings.intent — projected by the create and reconcile writers", ()
       projectTemplateIntent({ label: "Notes", produces: "finding" })
     ).toEqual({ label: "Notes", produces: [], source: "template" });
     expect(projectTemplateIntent("Research")).toBeNull();
+    // A primary that is not one of `produces` drops alone.
+    expect(
+      projectTemplateIntent({
+        label: "Sales",
+        produces: [{ profile: "deal" }],
+        primary: "invoice",
+      })
+    ).toEqual({ label: "Sales", produces: ["deal"], source: "template" });
     expect(projectTemplateIntent({ label: "Library" })).toEqual({
       label: "Library",
       produces: [],

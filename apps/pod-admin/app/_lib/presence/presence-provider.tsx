@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The proof-of-presence dialog (W3), mounted ONCE in `app/providers.tsx`.
+ * The proof-of-presence dialog, mounted ONCE in `app/providers.tsx`.
  * `usePresence().prove(subject, refusal)` opens it and resolves with a
  * `{kind: "passkey"}` proof, or rejects with `PresenceDeclined` when the
  * person does not confirm. The approve doors of this folder call it when the
@@ -12,10 +12,23 @@
  * and the click that sent the approval was spent on the first, refused, try.
  *
  * It names what is being approved (the request's heading, derived like its
- * page through `proposalHeading` and the vocabulary door) and why the browser
- * asks for Touch ID or a security key. With no passkey on this pod, or a
- * browser that cannot use one, it says so: add one under Security, or
- * approve in Relay with Face ID.
+ * page through `proposalHeading` and the vocabulary door); why the browser
+ * asks for Touch ID or a security key is one "Why?" away. With no passkey on
+ * this pod, or a browser that cannot use one, it says so: add one on the
+ * passkeys page (a new tab; the dialog then says to come back and press Try
+ * again), or approve in Relay with Face ID.
+ *
+ * Which prompt Confirm opens follows where the person's passkeys live and
+ * whether a password-manager extension took over WebAuthn in this page
+ * (`planAssertion`): a device passkey goes to the browser's own prompt past
+ * the extension. When a prompt does not sign, the other one is offered as a
+ * button, never run on its own (a NotAllowedError is also a closed prompt).
+ *
+ * The recovery ladder (founder, 6 Nov 2026): a person with a 2FA app or
+ * unused recovery codes may TYPE a code instead ("Use a code instead"; with
+ * no passkey it opens on the code). A code is typed only here, in pod admin.
+ * "I lost my passkey" opens the ONE recovery door
+ * (`CONSOLE_PAGES.presenceRecovery`) in a new tab.
  */
 
 import {
@@ -30,6 +43,7 @@ import {
 } from "react";
 import {
   Button,
+  Input,
   Modal,
   ModalBody,
   ModalContent,
@@ -39,6 +53,7 @@ import {
 import { Fingerprint } from "lucide-react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
+import { CONSOLE_PAGES } from "@synap-core/types/console";
 import {
   PRESENCE_EXPIRED,
   PRESENCE_INVALID,
@@ -52,13 +67,22 @@ import {
   PasskeyCancelled,
   getPasskeyAssertion,
   isPasskeyAssertionSupported,
+  otherRoute,
+  planAssertion,
+  webauthnErrorDetail,
+  webauthnTakenOver,
+  type AssertionPlan,
+  type PasskeyRoute,
 } from "../../../lib/passkey";
+import { CopyButton } from "../copy-button";
 import { proposalHeading } from "../../proposal/[id]/proposal-heading";
+import { PASSKEYS_PATH } from "../../settings/security/passkeys-path";
 import { presenceT } from "./copy";
-import { presenceDialogView } from "./dialog-model";
+import { failedPromptWord, presenceDialogView } from "./dialog-model";
 import {
   PresenceDeclined,
   challengeInput,
+  typedProof,
   type PresenceProgress,
   type PresenceSubject,
   type ProvePresence,
@@ -69,6 +93,14 @@ type PresenceChallenge = inferRouterOutputs<AppRouter>["presence"]["challenge"];
 
 /** A challenge this close to its end is read again before the prompt. */
 const CHALLENGE_MARGIN_MS = 15_000;
+
+/** The ONE recovery door ("I lost my passkey"), a page of pod admin. */
+const RECOVERY_PATH = CONSOLE_PAGES.presenceRecovery.path;
+
+/** Can this person type a code here (a 2FA app, or unused recovery codes)? */
+function canType(challenge: PresenceChallenge): boolean {
+  return challenge.typed.totp || challenge.typed.recoveryCode;
+}
 
 interface Ask {
   subject: PresenceSubject;
@@ -90,7 +122,15 @@ type Phase =
   | { kind: "reading" }
   /** The pod's own words, shown small under the headline (never the headline). */
   | { kind: "read-failed"; detail: string | null }
-  | { kind: "ready"; challenge: PresenceChallenge; note: string | null }
+  | {
+      kind: "ready";
+      challenge: PresenceChallenge;
+      note: string | null;
+      /** The other prompt to offer, once one did not sign. */
+      fallback?: PasskeyRoute | null;
+      /** The failed prompt's error, for "Copy details". */
+      copyDetail?: string | null;
+    }
   | { kind: "signing"; challenge: PresenceChallenge };
 
 interface PresenceContextValue {
@@ -106,6 +146,25 @@ const PresenceContext = createContext<PresenceContextValue>({
 /** The person's proof of presence, asked through the one dialog. */
 export function usePresence(): PresenceContextValue {
   return useContext(PresenceContext);
+}
+
+/** Which prompt to open for this challenge's passkeys, in this page. */
+function assertionPlan(challenge: PresenceChallenge): AssertionPlan {
+  return planAssertion(
+    // A challenge from a pod before holders: "unknown", so both prompts stay on offer.
+    (challenge.passkey?.allowCredentials ?? []).map(
+      (c) => c.holder ?? "unknown"
+    ),
+    webauthnTakenOver("get")
+  );
+}
+
+/** The name of the store holding one of the person's device passkeys, else of a passkey of unknown home. */
+function devicePasskeyName(challenge: PresenceChallenge): string | null {
+  const credentials = challenge.passkey?.allowCredentials ?? [];
+  const named = (holder: string) =>
+    credentials.find((c) => c.holder === holder && c.name)?.name ?? null;
+  return named("device") ?? named("unknown");
 }
 
 /** Why the pod asks again, in words; null for a first ask. */
@@ -193,6 +252,40 @@ function PresenceDialog({
   const mine = state.ask === ask;
   const phase: Phase = mine ? state.phase : { kind: "reading" };
   const shown = mine && state.shown;
+  // What the person opened in this ask's dialog: the "Why?" and the passkey
+  // tab. Each belongs to one ask, like its phase.
+  // `codeMode`: the person types a code instead; `code`: what they typed.
+  const [opened, setOpened] = useState<{
+    ask: Ask | null;
+    why: boolean;
+    addPasskey: boolean;
+    codeMode: boolean;
+    code: string;
+  }>({ ask: null, why: false, addPasskey: false, codeMode: false, code: "" });
+  const ours = opened.ask === ask;
+  const whyOpen = ours && opened.why;
+  const codeMode = ours && opened.codeMode;
+  const typedCode = ours ? opened.code : "";
+  const toggle = (part: "why" | "addPasskey" | "codeMode", value: boolean) =>
+    setOpened((prev) => ({
+      ask,
+      why: prev.ask === ask ? prev.why : false,
+      addPasskey: prev.ask === ask ? prev.addPasskey : false,
+      codeMode: prev.ask === ask ? prev.codeMode : false,
+      code: prev.ask === ask ? prev.code : "",
+      [part]: value,
+    }));
+  const setTypedCode = (code: string) =>
+    setOpened((prev) => ({
+      ask,
+      why: prev.ask === ask ? prev.why : false,
+      addPasskey: prev.ask === ask ? prev.addPasskey : false,
+      codeMode: true,
+      code,
+    }));
+  // The last proof this dialog handed over was a typed code: a refusal of it
+  // reopens on the code field, saying why.
+  const typedLast = useRef(false);
   // The ask the latest read belongs to: a late answer of a closed ask is dropped.
   const live = useRef<Ask | null>(null);
   const setPhase = (forAsk: Ask, next: Phase) => {
@@ -218,7 +311,8 @@ function PresenceDialog({
       const challenge = await readChallenge(challengeInput(current.subject));
       if (
         mayPass &&
-        (challenge.passkey === null || !isPasskeyAssertionSupported())
+        (challenge.passkey === null || !isPasskeyAssertionSupported()) &&
+        !canType(challenge)
       ) {
         if (live.current === current) settle({ proof: null });
         return;
@@ -239,11 +333,42 @@ function PresenceDialog({
 
   useEffect(() => {
     live.current = ask;
-    if (ask) void read.current(ask, againNote(ask.refusal), ask.upFront);
+    if (!ask) return;
+    const codeRefused = typedLast.current && againNote(ask.refusal) !== null;
+    typedLast.current = false;
+    if (codeRefused) {
+      setOpened({
+        ask,
+        why: false,
+        addPasskey: false,
+        codeMode: true,
+        code: "",
+      });
+    }
+    const note = codeRefused
+      ? ask.refusal === PRESENCE_INVALID
+        ? presenceT()("again.code")
+        : againNote(ask.refusal)
+      : againNote(ask.refusal);
+    void read.current(ask, note, ask.upFront);
   }, [ask]);
 
-  async function signWith(challenge: PresenceChallenge) {
+  async function submitCode(challenge: PresenceChallenge) {
+    if (!ask) return;
+    if (Date.parse(challenge.expiresAt) - Date.now() < CHALLENGE_MARGIN_MS) {
+      await read.current(ask, null);
+      return;
+    }
+    const proof = typedProof(challenge.challengeId, typedCode);
+    if (!proof) return;
+    typedLast.current = true;
+    settle({ proof });
+  }
+
+  async function signWith(challenge: PresenceChallenge, chosen?: PasskeyRoute) {
     if (!ask || !challenge.passkey) return;
+    const plan = assertionPlan(challenge);
+    const route = chosen ?? plan.route;
     // Read a fresh one rather than sign a challenge about to lapse; the
     // person clicks again (the prompt needs that click).
     if (Date.parse(challenge.expiresAt) - Date.now() < CHALLENGE_MARGIN_MS) {
@@ -252,7 +377,7 @@ function PresenceDialog({
     }
     setPhase(ask, { kind: "signing", challenge });
     try {
-      const credential = await getPasskeyAssertion(challenge.passkey);
+      const credential = await getPasskeyAssertion(challenge.passkey, route);
       settle({
         proof: {
           kind: "passkey",
@@ -261,13 +386,28 @@ function PresenceDialog({
         },
       });
     } catch (err) {
+      const cancelled = err instanceof PasskeyCancelled;
+      const offer = otherRoute(plan, route);
+      const { word, name } = failedPromptWord({
+        cancelled,
+        route,
+        offer,
+        deviceName: devicePasskeyName(challenge),
+        onMac:
+          typeof navigator !== "undefined" &&
+          /Macintosh/.test(navigator.userAgent),
+      });
       setPhase(ask, {
         kind: "ready",
         challenge,
-        note:
+        note: name ? t(word, { name }) : t(word),
+        fallback: offer,
+        // A closed prompt too: an extension's "no passkey found" is the
+        // evidence that tells it from a person closing the prompt.
+        copyDetail:
           err instanceof PasskeyCancelled
-            ? t("cancelled")
-            : t("ceremonyFailed"),
+            ? err.detail
+            : webauthnErrorDetail(err),
       });
     }
   }
@@ -290,11 +430,16 @@ function PresenceDialog({
             passkey: phase.challenge.passkey !== null,
             deviceKeys: phase.challenge.deviceKeys,
             note: phase.kind === "ready" ? phase.note : null,
+            fallback: phase.kind === "ready" ? phase.fallback : null,
+            copyDetail: phase.kind === "ready" ? phase.copyDetail : null,
           }
         : phase,
     passkeySupported: isPasskeyAssertionSupported(),
     progress,
     inBrowserOnly: doing !== null,
+    addPasskeyOpened: ours && opened.addPasskey,
+    typed: challenge ? canType(challenge) : false,
+    codeMode,
   });
   const reread = () => ask && void read.current(ask, null);
   const status = !view.status
@@ -332,7 +477,22 @@ function PresenceDialog({
           ) : (
             <p>{t("action.unnamed")}</p>
           )}
-          <p className="text-foreground/65">{t(doing ? "why.act" : "why")}</p>
+          <div className="flex flex-col items-start gap-1">
+            <button
+              type="button"
+              aria-expanded={whyOpen}
+              aria-controls="presence-dialog-why"
+              onClick={() => toggle("why", !whyOpen)}
+              className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+            >
+              {t("whyToggle")}
+            </button>
+            {whyOpen && (
+              <p id="presence-dialog-why" className="text-foreground/65">
+                {t(doing ? "why.act" : "why")}
+              </p>
+            )}
+          </div>
           {view.notice && (
             <div className="flex flex-col gap-1 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
               {view.notice === "noPasskey" && (
@@ -357,6 +517,32 @@ function PresenceDialog({
               {view.detail}
             </p>
           )}
+          {view.copyDetail && (
+            <div className="-mt-2">
+              <CopyButton
+                text={view.copyDetail}
+                label={t("copyDetails")}
+                variant="light"
+                ariaLabel={t("copyDetailsA11y")}
+              />
+            </div>
+          )}
+          {view.codeField && challenge && (
+            <Input
+              autoFocus
+              size="sm"
+              label={t("code.label")}
+              description={t("code.help")}
+              value={typedCode}
+              onValueChange={setTypedCode}
+              autoComplete="one-time-code"
+              isDisabled={view.busy}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submitCode(challenge);
+              }}
+              data-presence-code=""
+            />
+          )}
           {view.relayDevice !== null && (
             <p className="text-foreground/55">
               {view.relayDevice
@@ -364,6 +550,37 @@ function PresenceDialog({
                 : t("relay.any")}
             </p>
           )}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {view.useCode && (
+              <button
+                type="button"
+                onClick={() => toggle("codeMode", true)}
+                className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+              >
+                {t("presence.useCode")}
+              </button>
+            )}
+            {view.codeField && challenge?.passkey && (
+              <button
+                type="button"
+                onClick={() => toggle("codeMode", false)}
+                className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+              >
+                {t("usePasskey")}
+              </button>
+            )}
+            {phase.kind !== "reading" && (
+              <a
+                href={RECOVERY_PATH}
+                target="_blank"
+                rel="noopener"
+                className="inline-flex min-h-8 items-center text-[12.5px] text-foreground/60 underline-offset-2 hover:text-foreground hover:underline"
+                data-presence-lost=""
+              >
+                {t("presence.lost")}
+              </a>
+            )}
+          </div>
         </ModalBody>
         <ModalFooter>
           <Button
@@ -378,6 +595,32 @@ function PresenceDialog({
               {t("tryAgain")}
             </Button>
           )}
+          {(view.secondary === "useDevice" ||
+            view.secondary === "useManager") && (
+            <Button
+              variant="flat"
+              isDisabled={!challenge || phase.kind !== "ready"}
+              onPress={() =>
+                challenge &&
+                phase.kind === "ready" &&
+                phase.fallback &&
+                void signWith(challenge, phase.fallback)
+              }
+            >
+              {t(view.secondary)}
+            </Button>
+          )}
+          {view.secondary === "addPasskey" && (
+            <Button
+              as="a"
+              href={PASSKEYS_PATH}
+              target="_blank"
+              rel="noopener"
+              variant="flat"
+            >
+              {t("addPasskey")}
+            </Button>
+          )}
           {view.primary === "tryAgain" && (
             <Button color="primary" autoFocus onPress={reread}>
               {t("tryAgain")}
@@ -386,13 +629,24 @@ function PresenceDialog({
           {view.primary === "addPasskey" && (
             <Button
               as="a"
-              href="/settings/security#passkeys"
+              href={PASSKEYS_PATH}
               target="_blank"
               rel="noopener"
               color="primary"
               autoFocus
+              onPress={() => toggle("addPasskey", true)}
             >
               {t("addPasskey")}
+            </Button>
+          )}
+          {view.primary === "confirmCode" && (
+            <Button
+              color="primary"
+              isLoading={view.busy}
+              isDisabled={!challenge || !typedCode.trim()}
+              onPress={() => challenge && void submitCode(challenge)}
+            >
+              {t("confirmCode")}
             </Button>
           )}
           {view.primary === "confirm" && (

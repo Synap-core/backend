@@ -21,15 +21,6 @@
  * query string.
  */
 
-export type FormValue =
-  | string
-  | number
-  | boolean
-  | null
-  | undefined
-  | FormValue[]
-  | { [key: string]: FormValue };
-
 function walk(prefix: string, value: unknown, out: string[]): void {
   if (value === undefined) return;
   if (value === null) {

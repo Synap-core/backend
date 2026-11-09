@@ -38,7 +38,8 @@ export interface EntityPropertyDiff {
    */
   absentAfter?: string[];
   /**
-   * Entity COLUMNS an update changed (title; `preview` is the description).
+   * Entity COLUMNS an update changed (title; `preview` is the description;
+   * a pod-wide record's home space).
    * Revert restores one only while it still holds the written value.
    */
   fields?: {
@@ -48,10 +49,11 @@ export interface EntityPropertyDiff {
 }
 
 /** The entity columns an update can change and revert can restore. */
-export type EntityDiffField = "title" | "preview";
+export type EntityDiffField = "title" | "preview" | "homeWorkspaceId";
 export const ENTITY_DIFF_FIELDS: readonly EntityDiffField[] = [
   "title",
   "preview",
+  "homeWorkspaceId",
 ];
 
 /**
@@ -74,6 +76,11 @@ export interface EntityUndoSnapshot {
    * carry it.
    */
   documentId?: string | null;
+  /**
+   * A pod-wide record's home space (finding a70f910f). Optional for the same
+   * reason as `documentId`: diffed only when both sides carry it.
+   */
+  homeWorkspaceId?: string | null;
 }
 
 /** A body-link change a diff records, or null when it records none. */
@@ -162,9 +169,13 @@ export function computeEntityUpdateDiff(
   const fieldsBefore: Partial<Record<EntityDiffField, string | null>> = {};
   const fieldsAfter: Partial<Record<EntityDiffField, string | null>> = {};
   for (const field of ENTITY_DIFF_FIELDS) {
-    if (prior[field] === written[field]) continue;
-    fieldsBefore[field] = prior[field];
-    fieldsAfter[field] = written[field];
+    const before = prior[field];
+    const after = written[field];
+    // A side that did not read the column (an optional one) measures nothing.
+    if (before === undefined || after === undefined) continue;
+    if (before === after) continue;
+    fieldsBefore[field] = before;
+    fieldsAfter[field] = after;
   }
   if (Object.keys(fieldsAfter).length > 0) {
     diff.fields = { before: fieldsBefore, after: fieldsAfter };

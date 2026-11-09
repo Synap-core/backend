@@ -138,6 +138,18 @@ export function documentFormat(
   }
 }
 
+/**
+ * An HTML page's media type. A stored page is content that RUNS (in the
+ * isolated frame, `html-frame`), never a file to download, whatever door
+ * stored it: a `document` of type `html`, or an uploaded `file` whose type is
+ * `text/html` (an agent's HTML view kept as a file).
+ */
+export function isHtmlPageMime(mime: string | null | undefined): boolean {
+  return /^(?:text\/html|application\/xhtml\+xml)\s*(?:;|$)/i.test(
+    mime?.trim() ?? ""
+  );
+}
+
 export function documentContent(
   error: TrpcErrorLike,
   answer: DocumentReadAnswer | undefined
@@ -170,7 +182,10 @@ export function documentContent(
     };
   }
   if (!content.trim()) return { kind: "empty" };
-  if (document.type === "html") {
+  if (
+    document.type === "html" ||
+    (document.type === "file" && isHtmlPageMime(document.mimeType))
+  ) {
     const bytes = htmlByteLength(content);
     return {
       kind: "page",

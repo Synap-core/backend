@@ -969,6 +969,45 @@ describe("checkPermissionOrPropose — session force-propose governance", () => 
     expect((result as { proposalId: string }).proposalId).toBeDefined();
   });
 
+  it("a TRIAL run's session (the rule lab) refuses the SAME write, even an auto-approved one", async () => {
+    setupAgentSelectSequence({}, {});
+    mockFocusSessionFindFirst.mockResolvedValue({
+      metadata: { trial: { guidanceOverride: { a: "b" } } },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-drafter-1",
+      subjectType: "entity",
+      action: "update",
+      sessionId: "sess-trial",
+    });
+
+    expect(result).toMatchObject({ denied: true });
+    expect((result as { reason: string }).reason).toContain("trial run");
+  });
+
+  it("a trial session's OWN row (its progress, its close) is not refused as a trial write", async () => {
+    setupAgentSelectSequence({}, {});
+    mockFocusSessionFindFirst.mockResolvedValue({
+      metadata: { trial: { guidanceOverride: { a: "b" } } },
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-drafter-1",
+      subjectType: "focus_session",
+      action: "update",
+      sessionId: "sess-trial",
+      data: { id: "sess-trial", progress: 50 },
+    });
+
+    expect(
+      "denied" in result &&
+        (result as { reason?: string }).reason?.includes("trial run")
+    ).toBeFalsy();
+  });
+
   it("explicit forcePropose:true short-circuits the session lookup", async () => {
     setupAgentSelectSequence({}, {});
 

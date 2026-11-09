@@ -326,6 +326,14 @@ export const UpdateEntityRequestSchema = z
       .describe(
         "Required with documentId when the entity already has a body; without it the call is refused (409) naming that body."
       ),
+    homeWorkspaceId: z
+      .string()
+      .uuid()
+      .nullable()
+      .optional()
+      .describe(
+        "File a POD-WIDE record for a space (its home): that space's members, and a key limited to it, then read it. Refused (400) on a record that lives in a space (move it instead); refused (403) unless you can write in that space, and under your key's grant. null clears it. An agent's home is always a proposal."
+      ),
   })
   .openapi("UpdateEntityRequest");
 
@@ -495,6 +503,11 @@ export const UpdateEntityResponseSchema = z
         description: z.string().nullable(),
         properties: z.unknown(),
         documentId: z.string().nullable(),
+        homeWorkspaceId: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("The home space as the write left it, when it set one."),
       })
       .optional()
       .describe("The stored values after the write."),

@@ -47,6 +47,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  /** What the run-choice door asked the gate (D7 case below). */
+  runChoiceGate: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -84,6 +86,35 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
   const schema = await import("@synap/database/schema");
   return {
     ...actual,
+    // The run-choice door's ask (D7 case below): the REAL decision engine
+    // (`previewPermissionDecision`, the same ladder the gate runs), answered
+    // as the gate answers it. Filing the row itself goes through
+    // `@synap/database` helpers on the postgres-js client this harness has not
+    // (the same reason the agent cases above preview rather than file).
+    checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
+      if (opts.action !== "set_run_choice") {
+        return (actual.checkPermissionOrPropose as (o: unknown) => unknown)(
+          opts
+        );
+      }
+      h.runChoiceGate.push(opts);
+      const preview = (await (
+        actual.previewPermissionDecision as (o: unknown) => Promise<{
+          decision: string;
+          reason?: string;
+        }>
+      )(opts)) as { decision: string; reason?: string };
+      if (preview.decision === "propose") {
+        return {
+          proposalId: "00000000-0000-4000-8000-00000000d007",
+          proposalType: "set_run_choice",
+        };
+      }
+      if (preview.decision === "deny") {
+        return { denied: true, reason: preview.reason };
+      }
+      return { granted: true };
+    },
     createPendingProposal: async (
       input: Record<string, unknown>,
       tx?: unknown
@@ -140,6 +171,7 @@ import { resolveKeyIdentity } from "../access/key-identity.js";
 import { apiKeyService } from "./api-keys.js";
 import { attachGrantsOrRevoke } from "./key-grant.js";
 import { grantsForApprovedRequests, revokeApp } from "./app-connect.js";
+import { registerPlaybooksRoutes } from "../routers/hub-protocol/rest/playbooks.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const DOC = "/.well-known/synap-client.json";
@@ -170,9 +202,12 @@ const READ = "entity.person.read";
 const CREATE = "entity.person.create";
 const APPROVE = "proposal.approve";
 /** What every client's document declares (a review verb: Synap apps only). */
+/** Who runs a playbook (run choice v3): read the playbook, run it. */
+const PLAYBOOK_READ = "playbook.read";
+const PLAYBOOK_RUN = "playbook.run";
 const DECLARED: Record<string, string[]> = {
-  [VERIFIED]: [READ, CREATE, APPROVE],
-  [UNVERIFIED]: [READ, CREATE],
+  [VERIFIED]: [READ, CREATE, APPROVE, PLAYBOOK_READ, PLAYBOOK_RUN],
+  [UNVERIFIED]: [READ, CREATE, PLAYBOOK_READ, PLAYBOOK_RUN],
   [LOOKALIKE]: [READ, CREATE],
   [DEVPLANE]: [READ, CREATE, DECISIONS],
 };
@@ -221,6 +256,12 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // Not a proof-of-presence suite: this pod CHOSE `report` (a pod with no
+  // setting enforces, services/presence/mode.ts), so its sensitive approvals
+  // apply without a proof and are recorded. presence.pglite.test.ts owns the gate.
+  await h.client!.exec(
+    `insert into pod_settings (settings) values ('{"presence":{"mode":"report","changedBy":"test","changedAt":"2026-11-05T00:00:00.000Z"}}'::jsonb)`
+  );
   // The GC relies on it (0305: a key's grants go with it).
   await q(
     `alter table grants add foreign key (api_key_id) references api_keys(id) on delete cascade`
@@ -911,5 +952,99 @@ describe("a pod-wide read: asked in the document, ticked once, held with no spac
       "Content OS:entity.person.create",
       "Content OS:entity.person.read",
     ]);
+  });
+});
+
+// ─── who runs a playbook: the signed-in site is the person (run choice v3) ──
+
+describe("remembering who runs a playbook: a Synap site signed in as the person applies; an app on its own asks (D7)", () => {
+  const PLAYBOOK = randomUUID();
+  const RUN_CHOICE_GRANT = [
+    { permission: READ, workspaceId: CONTENT },
+    { permission: PLAYBOOK_READ, workspaceId: CONTENT },
+    { permission: PLAYBOOK_RUN, workspaceId: CONTENT },
+  ];
+  /** The real Hub door: auth, then the served PUT /playbooks/:id/run-choice. */
+  const putRunChoice = (bearer: string) => {
+    const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    hub.use("/*", hubAuthMiddleware as never);
+    registerPlaybooksRoutes(hub);
+    const root = new Hono();
+    root.route("/api/hub", hub);
+    return root.request(`/api/hub/playbooks/${PLAYBOOK}/run-choice`, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${bearer}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ choice: { executor: "is-agent" } }),
+    });
+  };
+  const choiceEdges = () =>
+    q(
+      `select from_type from links where link_type = 'assigned_to' and to_id = $1`,
+      [PLAYBOOK]
+    ).then((r) => r.rows);
+
+  beforeAll(async () => {
+    // The edge's unique key (ON CONFLICT in `createLink`), as the migrations make it.
+    await q(
+      `create unique index if not exists links_edge_uq on links (from_type, from_id, to_type, to_id, link_type)`
+    );
+    await q(
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, executor, status, metadata, params, input_strategy, channel_spec, expected_outputs, stages, criteria, created_at, updated_at)
+       values ($1, $2, $3, 'Package ideas', 'Package the bank', 'is-agent', 'active', '{}'::jsonb, '[]'::jsonb, '{"kind":"none"}'::jsonb, '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, now(), now())`,
+      [PLAYBOOK, CONTENT, OWNER]
+    );
+    // What a Synap AI choice is stored from: the IS agents registry row.
+    await q(
+      `insert into agents (id, name, agent_slug, active, owner_type) values ($1, 'Meta', 'meta', true, 'system')`,
+      [randomUUID()]
+    );
+  }, 60_000);
+
+  it("Content Studio signed in as the person (synap_acts_as person): the choice applies, no proposal", async () => {
+    const body = await connect(OWNER, VERIFIED, RUN_CHOICE_GRANT);
+    expect(body.synap_acts_as).toBe("person");
+    const res = await putRunChoice(body.access_token);
+    const answer = (await res.json()) as any;
+    expect(res.status, JSON.stringify(answer)).toBe(200);
+    expect(answer).toMatchObject({
+      status: "applied",
+      proposalId: null,
+      runChoice: { stored: { executor: "is-agent" }, ask: false },
+    });
+    expect(await choiceEdges()).toEqual([{ from_type: "agent" }]);
+    expect(h.runChoiceGate).toEqual([]);
+  });
+
+  it("an app acting on its own (its ask-first agent): a playbook/set_run_choice proposal, nothing stored", async () => {
+    await q(
+      `delete from links where link_type = 'assigned_to' and to_id = $1`,
+      [PLAYBOOK]
+    );
+    const body = await connect(OWNER, UNVERIFIED, RUN_CHOICE_GRANT);
+    expect(body.synap_acts_as).toBe("agent");
+    h.runChoiceGate.length = 0;
+    const res = await putRunChoice(body.access_token);
+    const answer = (await res.json()) as any;
+    expect(res.status, JSON.stringify(answer)).toBe(202);
+    expect(answer).toMatchObject({
+      status: "proposed",
+      proposalId: "00000000-0000-4000-8000-00000000d007",
+      runChoice: null,
+    });
+    // The door asked as the app's agent, for the floored door, and the
+    // engine said propose.
+    const conn = await connectionOf(OWNER, UNVERIFIED);
+    expect(h.runChoiceGate).toHaveLength(1);
+    expect(h.runChoiceGate[0]).toMatchObject({
+      userId: OWNER,
+      agentUserId: conn.agent_user_id,
+      workspaceId: CONTENT,
+      subjectType: "playbook",
+      action: "set_run_choice",
+    });
+    expect(await choiceEdges()).toEqual([]);
   });
 });

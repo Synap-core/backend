@@ -94,7 +94,7 @@ const RAW_SQL_PROFILE_WRITE_SITES: ReadonlyMap<string, string> = new Map([
     "the ontology conversion engine runs on raw postgres.js by design (migrate.ts contract). " +
       "Its one INSERT seeds a kind profile and asserts the reservation first; its UPDATEs " +
       "flip profile_kind / applicable_kinds / ui_hints / display_name, DEACTIVATE (is_active = false), or — " +
-      "in applyRenameProfile only — rename a slug after asserting the NEW slug is not " +
+      "in applyRenameProfile and applyRenameTemplateRows only — rename a slug after asserting the NEW slug is not " +
       "reserved. None revives a row.",
   ],
 ]);

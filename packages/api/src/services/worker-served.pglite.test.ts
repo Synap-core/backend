@@ -89,6 +89,9 @@ describe("workerRunnerVersion — which header names the CLI worker", () => {
       "1.0.0-beta.2"
     );
     expect(workerRunnerVersion("synap-worker")).toBeNull();
+    // A computer's waker (plan v2 slice 4) stamps the same way, on its computer's key.
+    expect(workerRunnerVersion("synap-waker/0.9.2")).toBe("0.9.2");
+    expect(workerRunnerVersion("synap-waker")).toBeNull();
     // A version that is not a short plain token is dropped, the runner kept.
     expect(workerRunnerVersion("synap-worker/<script>")).toBeNull();
     expect(workerRunnerVersion(`synap-worker/${"9".repeat(65)}`)).toBeNull();
@@ -99,6 +102,7 @@ describe("workerRunnerVersion — which header names the CLI worker", () => {
       "",
       "claude-code/2.1.0",
       "synap-workers/1.0.0",
+      "synap-wakers/1.0.0",
       "Synap-Worker/1.0.0",
       "synap-worker/1.0.0/extra",
     ]) {

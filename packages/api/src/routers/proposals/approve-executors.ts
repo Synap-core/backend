@@ -50,6 +50,7 @@ import { registerShareExecutors } from "../../services/sharing/share-executors.j
 import { registerCellExecutors } from "./executors/cell.js";
 import { registerWorkspaceExecutors } from "./executors/workspace.js";
 import { registerMessagingExecutors } from "./executors/messaging.js";
+import { registerInstallationExecutors } from "./executors/installations.js";
 import { registerCapabilityExecutors } from "./executors/capability.js";
 import { registerPackageUpdateExecutors } from "./executors/package-update.js";
 import { registerProviderExecutors } from "./executors/provider.js";
@@ -105,6 +106,7 @@ export function registerApproveExecutors(): void {
   registerCellExecutors();
   registerWorkspaceExecutors();
   registerMessagingExecutors();
+  registerInstallationExecutors();
   registerCapabilityExecutors();
   registerPackageUpdateExecutors();
   registerProviderExecutors();

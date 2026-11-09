@@ -6,8 +6,14 @@
  * wait gone closes it.
  *
  * WHICH SUBJECTS: what the tick already reads (the things it noticed a signal
- * on), every open session, every current hold, and every subject that still
- * has an open episode (so its episode can close). A subject is asked as its
+ * on), every open session AND the thing it is about, every current hold, and
+ * every subject that still has an open episode (so its episode can close).
+ *
+ * Each episode records the STATUS its subject stood on when the wait was
+ * first found and, for an owed slot, the blocker's name (0408, plan e7f753db
+ * §9): what the recurrence scanner groups repeats by. A thing's own episodes
+ * count every slot holding it up (`owed.blocking`), so a blocker declared on
+ * a session about it is a wait OF THE THING too. A subject is asked as its
  * HOLDER (the thing's owner, a goal's or a session's owner) reads it, under
  * the collector's own floors; a ref the holder may not read stays unnamed.
  *
@@ -21,6 +27,7 @@ import {
   and,
   db,
   entities,
+  entityFacets,
   focusSessions,
   inArray,
   isNull,
@@ -86,6 +93,7 @@ export function waitEpisodeQuestion(
             ],
           }
         : {
+            owed: { blocking: [s.subjectId] },
             proposals: { targetIds: [s.subjectId] },
             blockedNodes: [{ kind: "entity", id: s.subjectId }],
             holds: [{ subjectType: "entity", subjectId: s.subjectId }],
@@ -95,10 +103,14 @@ export function waitEpisodeQuestion(
   }
 }
 
-/** One collector source as the episode it belongs to. */
+/**
+ * One collector source as the episode it belongs to. `status` is the status
+ * the subject stands on now (written only when the episode opens).
+ */
 export function waitEpisodeOf(
   subject: WaitEpisodeSubject,
-  source: WaitingOnSource
+  source: WaitingOnSource,
+  status: string | null = null
 ): WaitEpisodeSeen {
   return {
     ...subject,
@@ -107,33 +119,65 @@ export function waitEpisodeOf(
     reason: waitingOnReasonOf(source),
     ref: source.ref ? ({ ...source.ref } as Record<string, unknown>) : null,
     refKey: waitEpisodeRefKey(source.ref),
+    status,
+    blockerKey:
+      source.kind === "owed_slot" ? (source.blockerKey ?? null) : null,
   };
 }
 
-/** Who reads each subject's waits: its holder. Absent = gone (or ended). */
+/** Who holds each subject, and the status it stands on. */
+interface Holder {
+  userId: string;
+  status: string | null;
+}
+
+/**
+ * Who reads each subject's waits: its holder, with the status the subject
+ * stands on (a role's facet: the facet's). Absent = gone (or ended).
+ */
 async function holdersOf(
   subjects: readonly WaitEpisodeSubject[]
-): Promise<Map<string, string>> {
+): Promise<Map<string, Holder>> {
   const ids = (t: TransitionSubjectType) => [
     ...new Set(
       subjects.filter((s) => s.subjectType === t).map((s) => s.subjectId)
     ),
   ];
-  const holderOf = new Map<string, string>();
-  const byId = new Map<string, string>();
+  const holderOf = new Map<string, Holder>();
+  const byId = new Map<string, Holder>();
   for (const part of chunk(ids("entity"))) {
     for (const r of await db
-      .select({ id: entities.id, userId: entities.userId })
+      .select({
+        id: entities.id,
+        userId: entities.userId,
+        status: entities.status,
+      })
       .from(entities)
       .where(and(inArray(entities.id, part), isNull(entities.deletedAt))))
-      byId.set(`entity:${r.id}`, r.userId);
+      byId.set(`entity:${r.id}`, { userId: r.userId, status: r.status });
+  }
+  // A role's facet waits in the ROLE's status, not the entity's own.
+  const facetIds = [
+    ...new Set(subjects.flatMap((s) => (s.facetId ? [s.facetId] : []))),
+  ].filter(isUuid);
+  const facetStatus = new Map<string, string | null>();
+  for (const part of chunk(facetIds)) {
+    for (const r of await db
+      .select({ id: entityFacets.id, status: entityFacets.status })
+      .from(entityFacets)
+      .where(inArray(entityFacets.id, part)))
+      facetStatus.set(r.id, r.status);
   }
   for (const part of chunk(ids("track"))) {
     for (const r of await db
-      .select({ id: projectTracks.id, userId: projectTracks.userId })
+      .select({
+        id: projectTracks.id,
+        userId: projectTracks.userId,
+        status: projectTracks.status,
+      })
       .from(projectTracks)
       .where(inArray(projectTracks.id, part)))
-      byId.set(`track:${r.id}`, r.userId);
+      byId.set(`track:${r.id}`, { userId: r.userId, status: r.status });
   }
   const ended = new Set<string>(TERMINAL_SESSION_STATUSES);
   for (const part of chunk(ids("focus_session"))) {
@@ -145,12 +189,22 @@ async function holdersOf(
       })
       .from(focusSessions)
       .where(inArray(focusSessions.id, part))) {
-      if (!ended.has(r.status)) byId.set(`focus_session:${r.id}`, r.userId);
+      if (!ended.has(r.status))
+        byId.set(`focus_session:${r.id}`, {
+          userId: r.userId,
+          status: r.status,
+        });
     }
   }
   for (const s of subjects) {
     const holder = byId.get(`${s.subjectType}:${s.subjectId}`);
-    if (holder) holderOf.set(keyOf(s), holder);
+    if (!holder) continue;
+    holderOf.set(
+      keyOf(s),
+      s.facetId
+        ? { ...holder, status: facetStatus.get(s.facetId) ?? null }
+        : holder
+    );
   }
   return holderOf;
 }
@@ -178,7 +232,10 @@ export async function syncWaitEpisodesTick(
 ): Promise<WaitEpisodeTickResult> {
   const [openSessions, holds, open] = await Promise.all([
     db
-      .select({ id: focusSessions.id })
+      .select({
+        id: focusSessions.id,
+        subjectEntityId: focusSessions.subjectEntityId,
+      })
       .from(focusSessions)
       .where(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),
     listHolds(db, { current: true }, now),
@@ -190,8 +247,16 @@ export async function syncWaitEpisodesTick(
     if (isUuid(s.subjectId)) subjects.set(keyOf(s), s);
   };
   for (const s of noticed) add(s);
-  for (const s of openSessions)
+  for (const s of openSessions) {
     add({ subjectType: "focus_session", subjectId: s.id, facetId: null });
+    // The thing the work is about waits on what blocks it (its own episodes).
+    if (s.subjectEntityId)
+      add({
+        subjectType: "entity",
+        subjectId: s.subjectEntityId,
+        facetId: null,
+      });
+  }
   for (const h of holds)
     add({
       subjectType: h.subjectType,
@@ -209,7 +274,7 @@ export async function syncWaitEpisodesTick(
 
   const byHolder = new Map<string, WaitEpisodeSubject[]>();
   for (const s of all) {
-    const holder = holders.get(keyOf(s));
+    const holder = holders.get(keyOf(s))?.userId;
     if (holder) byHolder.set(holder, [...(byHolder.get(holder) ?? []), s]);
   }
   for (const [userId, theirs] of byHolder) {
@@ -226,8 +291,9 @@ export async function syncWaitEpisodesTick(
         );
         for (const s of part) {
           asked.push(s);
+          const status = holders.get(keyOf(s))?.status ?? null;
           for (const source of sources.get(keyOf(s)) ?? [])
-            seen.push(waitEpisodeOf(s, source));
+            seen.push(waitEpisodeOf(s, source, status));
         }
       } catch (err) {
         unread += part.length;

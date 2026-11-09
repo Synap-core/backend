@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { openIn, type AccountPage } from "../../../lib/open-in";
-import { useRecoveryCodesState } from "./recovery-codes-nudge";
+import { useSecurityNudge } from "./recovery-codes-nudge";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import { useConsoleRole } from "./side-nav-role";
@@ -82,9 +82,10 @@ export function TopNav({
   const role = useConsoleRole();
   const t = useT(CATALOGS);
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
-  // A persistent ⚠ until recovery codes are saved (the Overview card is
-  // skippable; this mark is not).
-  const codesMissing = useRecoveryCodesState() === "not_set";
+  // A persistent ⚠ until the security nudge's ask is met: a first or second
+  // way to confirm it's you under `enforce`, else recovery codes (Home's
+  // card is skippable; this mark is not).
+  const nudge = useSecurityNudge();
 
   const handleSignOut = async () => {
     try {
@@ -186,12 +187,10 @@ export function TopNav({
               variant="light"
               size="sm"
               radius="full"
-              aria-label={
-                codesMissing ? t("user.menu.codesMissing") : t("user.menu")
-              }
+              aria-label={nudge ? t(`user.menu.${nudge}`) : t("user.menu")}
               className="relative ml-1 p-0"
             >
-              {codesMissing ? (
+              {nudge ? (
                 <span
                   aria-hidden
                   className="absolute right-0 top-0 z-10 h-2 w-2 rounded-full bg-warning ring-2 ring-background"
@@ -231,10 +230,10 @@ export function TopNav({
                 className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 {t("user.security")}
-                {codesMissing ? (
+                {nudge ? (
                   <span className="flex items-center gap-1 text-[11px] text-warning">
                     <ShieldAlert className="h-3.5 w-3.5" />
-                    {t("user.saveCodes")}
+                    {t(`user.mark.${nudge}`)}
                   </span>
                 ) : (
                   <ShieldCheck className="h-3.5 w-3.5 text-foreground/40" />

@@ -18,13 +18,16 @@
  *                   them in (`intentOf`); no intent, an unmeasured
  *                   revertability, or a "×N" cluster (one sample id standing
  *                   for N) is a `decision`, never routine.
- *   3. `decision` — a verdict only the person can give: a GOAL JUDGEMENT
- *                   ({@link isJudgementSignal}: a goal in review waiting on
- *                   its judge, an unacknowledged impossible report), any other
- *                   pending proposal, an access request, an owed slot blocked
- *                   on a person's choice (`blockedReason: decision`).
+ *   3. `decision` — a verdict on something filed for approval: a GOAL
+ *                   JUDGEMENT ({@link isJudgementSignal}: a goal in review
+ *                   waiting on its judge, an unacknowledged impossible
+ *                   report), any other pending proposal, an access request, an
+ *                   invite, the "Make them goals" card. NEVER an owed slot: an
+ *                   agent's ask is a question whatever it is blocked on
+ *                   (founder, 2026-11-05: Decisions are proposals; the
+ *                   glossary's "Questions: what did an agent ask me?").
  *   4. `question` — everything else that asks the person something: an owed
- *                   slot (an answer, a credential, an action), a session
+ *                   slot (an answer, a choice, a credential, an action), a session
  *                   awaiting review, a capture, any other notification. The
  *                   unknown kind lands here too — the bucket that never
  *                   batches and never reads as broken.
@@ -138,9 +141,6 @@ export interface NeedsYouBucketOptions<T> {
   intentOf?: (signal: T) => ProposalIntentInput | null | undefined;
 }
 
-/** The blocked reason that is a choice only a person can make. */
-const PERSON_DECISION_REASON = "decision";
-
 /** Which of the four filters ONE row belongs to. See the module rule. */
 export function needsYouBucketOf<T extends BucketableSignal>(
   signal: T,
@@ -165,12 +165,6 @@ export function needsYouBucketOf<T extends BucketableSignal>(
     return "decision";
   }
   if (isJudgementSignal(signal)) return "decision";
-  if (
-    signal.kind === "owed-slot" &&
-    signal.blockedReason?.trim().toLowerCase() === PERSON_DECISION_REASON
-  ) {
-    return "decision";
-  }
   return "question";
 }
 

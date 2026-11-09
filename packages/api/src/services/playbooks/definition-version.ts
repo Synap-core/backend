@@ -18,6 +18,10 @@ export const DEFINITION_VERSION_FIELDS = [
   // do. Omitting them here would let a requirements edit leave `version`
   // untouched, so the snapshot could not tell the two apart.
   "requiredIntents",
+  // The rules it follows: a changed ref list changes what a run is told.
+  // (A new VERSION of a referenced rule does not bump this; the run records
+  // that through `guidance.used`, its content hashes.)
+  "guidance",
 ] as const;
 
 export function definitionVersionChanged(

@@ -5,7 +5,7 @@
 3. Propose (before committing):
    - Workspace name: "CRM"
    - Views:
-     - `Deals Pipeline` — kanban on `deal`, groupBy `stage`
+     - `Deals Pipeline` — kanban on `deal`, `groupByField` `stage`
      - `Contacts` — table on `contact`, columns: name, role, company, lastInteraction
      - `Companies` — gallery on `company` (logo-forward)
      - `Upcoming Meetings` — calendar on `event`, filter `relatedToContact`

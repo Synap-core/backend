@@ -85,6 +85,9 @@ export function isSelfService(path: string): boolean {
     // scoped to the caller's account; the one owner-only control (Synap Cloud
     // trust) is re-checked by the pod (`PUT /api/account-recovery/cloud-trust`).
     path === "/settings/security" ||
+    // Your OWN passkeys, the same card on its own page (the door every "Add
+    // a passkey" opens): scoped to the caller's account like the page above.
+    path === "/settings/security/passkeys" ||
     // Linking YOUR Synap Cloud account (the CP claim-access hop lands here).
     // The pod's identity-link door binds only the caller's own session, so
     // requiring pod_admin would stop every member from linking theirs.

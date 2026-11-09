@@ -1,21 +1,27 @@
 /**
  * The words of the proof-of-presence dialog, as catalogs
  * (`@synap-core/types/i18n`): English is the source and the type. Client
- * words: a request, never a proposal. DRAFT French, awaiting the founder's
- * review.
+ * words: a request, never a proposal. A sensitive action is named by its
+ * title (`sensitiveActionTitle`, `@synap-core/types/presence`), never a
+ * second word list here. DRAFT French, awaiting the founder's review.
  */
 import {
   ambientCatalogLocale,
   createT,
   type Catalog,
 } from "@synap-core/types/i18n";
+import { presenceWordsEn, presenceWordsFr } from "@synap-core/types/presence";
 
 export const en = {
+  // The shared presence words ("I lost my passkey", "Use a code instead"):
+  // one wording on every surface.
+  ...presenceWordsEn,
   title: "Confirm it’s you",
   "title.progress": "Confirm it’s you ({index} of {total})",
   action: "To approve “{action}”, confirm with your passkey.",
   "action.unnamed": "To approve this request, confirm with your passkey.",
-  act: "To {doing}, confirm with your passkey.",
+  act: "Confirm “{doing}” with your passkey.",
+  whyToggle: "Why?",
   why: "Some approvals need you in person, not only a signed-in browser: an app or an AI using your session can’t approve them for you. Your browser will ask for Touch ID, Windows Hello or your security key.",
   "why.act":
     "Some changes need you in person, not only a signed-in browser: an app or an AI using your session can’t make them for you. Your browser will ask for Touch ID, Windows Hello or your security key.",
@@ -34,7 +40,32 @@ export const en = {
   readFailed:
     "Couldn’t get a confirmation from your pod. Check your connection, then press Try again.",
   ceremonyFailed:
-    "Your passkey didn’t respond. Try again, or use another passkey.",
+    "The passkey prompt ended with an error. Try again, or use another passkey.",
+  copyDetails: "Copy details",
+  copyDetailsA11y: "Copy the technical details of this error",
+  // A password-manager extension took over the passkey prompt in this page
+  // (`planAssertion`, `lib/passkey.ts`): the other prompt, after one failed.
+  useDevice: "Use this device’s passkey",
+  useManager: "Use your password manager",
+  "fallback.device":
+    "Nothing was confirmed. If your passkey is in {name} on this device, use this device’s passkey.",
+  "fallback.device.unnamed":
+    "Nothing was confirmed. If your passkey is on this device, use this device’s passkey.",
+  "device.unreachable.mac":
+    "This browser can’t reach the passkey on your Mac. Use Safari.",
+  "device.unreachable":
+    "This browser can’t reach the passkey on this device. Use another browser.",
+  "device.closed.mac":
+    "Nothing was confirmed. If the prompt didn’t offer your passkey, this browser can’t reach the passkey on your Mac. Use Safari.",
+  "device.closed":
+    "Nothing was confirmed. If the prompt didn’t offer your passkey, this browser can’t reach the passkey on this device. Use another browser.",
+  // Why a new passkey could not be created (`PasskeyCreateFailed.reason`):
+  // Settings › Security and the invite page.
+  "create.exists":
+    "A passkey for this pod is already there. Use that one, or choose another place for the new one.",
+  "create.timeout": "The passkey prompt closed before it finished. Try again.",
+  "create.failed":
+    "The passkey couldn’t be created here. Try again, or choose another place for it.",
   "noPasskey.title": "Add a passkey to approve this here",
   "noPasskey.title.act": "Add a passkey to do this here",
   "noPasskey.body":
@@ -44,19 +75,36 @@ export const en = {
   "relay.device": "Or approve it in Relay on {device}, with Face ID.",
   "relay.any": "Or approve it in Relay on your phone, with Face ID.",
   addPasskey: "Add a passkey",
+  comeBack:
+    "Add your passkey in the tab that opened, then come back here and press Try again.",
   declined: "Not approved: you didn’t confirm it’s you.",
   "declined.act": "Nothing changed: you didn’t confirm it’s you.",
-  "doing.passkeyAdd": "add a passkey to your account",
-  "doing.modeOff": "turn off “Approvals need you in person”",
+  "doing.passkeyAdd": "Add a passkey to your account",
+  "doing.passkeyRemove": "Remove a passkey from your account",
+  "doing.modeOff": "Turn off approvals in person",
+  "doing.sensitivityOff": "Stop asking for a passkey there",
+  "passkeyChange.needsProof":
+    "A passkey change needs a confirmation from your passkey.",
+  "doing.recoveryCodes": "Create new recovery codes",
+  "doing.totpAdd": "Add an authenticator app",
+  confirmCode: "Confirm with this code",
+  "code.label": "Code",
+  "code.help":
+    "The 6 digits your authenticator app shows, or one of your recovery codes. A recovery code works once.",
+  "again.code":
+    "That code didn’t confirm it’s you, or it was already used. Type the code your app shows now, or another recovery code.",
+  usePasskey: "Use your passkey instead",
 };
 
 const fr: Catalog<typeof en> = {
+  ...presenceWordsFr,
   title: "Confirmez que c’est vous",
   "title.progress": "Confirmez que c’est vous ({index} sur {total})",
   action: "Pour approuver « {action} », confirmez avec votre clé d’accès.",
   "action.unnamed":
     "Pour approuver cette demande, confirmez avec votre clé d’accès.",
-  act: "Pour {doing}, confirmez avec votre clé d’accès.",
+  act: "Confirmez « {doing} » avec votre clé d’accès.",
+  whyToggle: "Pourquoi ?",
   why: "Certaines approbations demandent votre présence, pas seulement un navigateur connecté : une app ou une IA qui utilise votre session ne peut pas les approuver à votre place. Votre navigateur va demander Touch ID, Windows Hello ou votre clé de sécurité.",
   "why.act":
     "Certaines modifications demandent votre présence, pas seulement un navigateur connecté : une app ou une IA qui utilise votre session ne peut pas les faire à votre place. Votre navigateur va demander Touch ID, Windows Hello ou votre clé de sécurité.",
@@ -76,7 +124,29 @@ const fr: Catalog<typeof en> = {
   readFailed:
     "Impossible d’obtenir une confirmation de votre pod. Vérifiez votre connexion, puis appuyez sur Réessayer.",
   ceremonyFailed:
-    "Votre clé d’accès n’a pas répondu. Réessayez, ou utilisez une autre clé d’accès.",
+    "La fenêtre de la clé d’accès s’est arrêtée sur une erreur. Réessayez, ou utilisez une autre clé d’accès.",
+  copyDetails: "Copier les détails",
+  copyDetailsA11y: "Copier les détails techniques de cette erreur",
+  useDevice: "Utiliser la clé d’accès de cet appareil",
+  useManager: "Utiliser votre gestionnaire de mots de passe",
+  "fallback.device":
+    "Rien n’a été confirmé. Si votre clé d’accès est dans {name} sur cet appareil, utilisez la clé d’accès de cet appareil.",
+  "fallback.device.unnamed":
+    "Rien n’a été confirmé. Si votre clé d’accès est sur cet appareil, utilisez la clé d’accès de cet appareil.",
+  "device.unreachable.mac":
+    "Ce navigateur ne peut pas atteindre la clé d’accès de votre Mac. Utilisez Safari.",
+  "device.unreachable":
+    "Ce navigateur ne peut pas atteindre la clé d’accès de cet appareil. Utilisez un autre navigateur.",
+  "device.closed.mac":
+    "Rien n’a été confirmé. Si la fenêtre ne proposait pas votre clé d’accès, ce navigateur ne peut pas atteindre la clé d’accès de votre Mac. Utilisez Safari.",
+  "device.closed":
+    "Rien n’a été confirmé. Si la fenêtre ne proposait pas votre clé d’accès, ce navigateur ne peut pas atteindre la clé d’accès de cet appareil. Utilisez un autre navigateur.",
+  "create.exists":
+    "Une clé d’accès pour ce pod s’y trouve déjà. Utilisez-la, ou choisissez un autre endroit pour la nouvelle.",
+  "create.timeout":
+    "La fenêtre de la clé d’accès s’est fermée avant la fin. Réessayez.",
+  "create.failed":
+    "La clé d’accès n’a pas pu être créée ici. Réessayez, ou choisissez un autre endroit pour elle.",
   "noPasskey.title": "Ajoutez une clé d’accès pour approuver ici",
   "noPasskey.title.act": "Ajoutez une clé d’accès pour le faire ici",
   "noPasskey.body":
@@ -86,10 +156,25 @@ const fr: Catalog<typeof en> = {
   "relay.device": "Ou approuvez dans Relay sur {device}, avec Face ID.",
   "relay.any": "Ou approuvez dans Relay sur votre téléphone, avec Face ID.",
   addPasskey: "Ajouter une clé d’accès",
+  comeBack:
+    "Ajoutez votre clé d’accès dans l’onglet qui s’est ouvert, puis revenez ici et appuyez sur Réessayer.",
   declined: "Non approuvée : vous n’avez pas confirmé que c’est vous.",
   "declined.act": "Rien n’a changé : vous n’avez pas confirmé que c’est vous.",
-  "doing.passkeyAdd": "ajouter une clé d’accès à votre compte",
-  "doing.modeOff": "désactiver « Les approbations demandent votre présence »",
+  "doing.passkeyAdd": "Ajouter une clé d’accès à votre compte",
+  "doing.passkeyRemove": "Retirer une clé d’accès de votre compte",
+  "doing.modeOff": "Désactiver les approbations en personne",
+  "doing.sensitivityOff": "Ne plus demander de clé d’accès à cet endroit",
+  "passkeyChange.needsProof":
+    "Modifier une clé d’accès demande une confirmation avec votre clé d’accès.",
+  "doing.recoveryCodes": "Créer de nouveaux codes de récupération",
+  "doing.totpAdd": "Ajouter une app d’authentification",
+  confirmCode: "Confirmer avec ce code",
+  "code.label": "Code",
+  "code.help":
+    "Les 6 chiffres affichés par votre app d’authentification, ou l’un de vos codes de récupération. Un code de récupération ne sert qu’une fois.",
+  "again.code":
+    "Ce code n’a pas confirmé que c’est vous, ou il a déjà servi. Saisissez le code affiché maintenant par votre app, ou un autre code de récupération.",
+  usePasskey: "Utiliser plutôt votre clé d’accès",
 };
 
 /** The presence dialog's translator, in the ambient catalog locale. */

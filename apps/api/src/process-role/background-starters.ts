@@ -379,6 +379,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       // "Choose an agent" answered ⇒ the run that owed it is re-dispatched
       // through the same executor path, idempotently.
       api.registerAgentChoiceRedispatchReactor();
+      // The self-healing card's answer links each agent to its program (D10).
+      api.registerAgentTemplateAnswerReactor();
       // Same close event again: a session that ENDED with required criteria
       // still unmet is news the founder is told once, on the phone — it is the
       // one moment a course correction is cheap. Re-derives the verdict from
@@ -552,6 +554,17 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         log.info("Registered proposal-approve handler (IoC)");
       }
 
+      // IoC: an owed ask back from the person's Later (founder D3). jobs owns
+      // the `ask-later-return` queue; the slot read and the one needs-you
+      // producer live in api, so the handler is filled here.
+      {
+        const { registerAskLaterReturnHandler } =
+          await import("@synap/jobs/workers/ask-later-return-worker.js");
+        const { runAskLaterReturn } = await import("@synap/api");
+        registerAskLaterReturnHandler((p) => runAskLaterReturn(p));
+        log.info("Registered ask-later-return handler (IoC)");
+      }
+
       // IoC: the Library light read (one item) and its hourly sweep. jobs
       // owns both queues; the readers, the IS client and the AI budget live
       // in api, so the handlers are filled here.
@@ -577,8 +590,17 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         const {
           reconcileChangedCapabilityTemplates,
           notifyCapabilityUpdatesAvailable,
+          installOfficialAgentTemplates,
+          selfHealAgentTemplateLinks,
         } = await import("@synap/api");
         registerOfficialCatalogSyncedHandler(async () => {
+          // The catalog installs every official agent template on every pod
+          // (founder decision D8), then links the agents whose program is
+          // clear and asks the person once for the rest (D10). First, and
+          // neither throws, so a failed capability converge below cannot
+          // skip them.
+          await installOfficialAgentTemplates();
+          await selfHealAgentTemplateLinks();
           const report = await reconcileChangedCapabilityTemplates();
           if (report) await notifyCapabilityUpdatesAvailable(report);
         });

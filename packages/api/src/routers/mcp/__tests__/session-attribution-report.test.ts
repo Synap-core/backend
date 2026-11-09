@@ -186,12 +186,60 @@ describe("structured session attribution on every attributed write", () => {
   it("(d) an explicit OWNED sessionId → explicit (open sessions never counted)", async () => {
     h.owned = true;
     h.openRows = [{ id: "S-NEWEST" }, { id: "S-OLDER" }];
+    h.filed = {
+      status: "ok",
+      filedIn: [{ sessionId: "S-OTHER", title: "Other", kind: "session" }],
+    };
     const { payload } = await run({ sessionId: "S-EXPLICIT" });
     expect(payload.attribution).toEqual({
       session: "explicit",
       ambiguous: false,
       openCount: null,
+      filed: h.filed,
     });
+  });
+
+  // REPLY SHAPING (2026-11-05): the block that only repeats the caller's own
+  // `sessionId` (16-54 tokens on every write) is left out; any news keeps it.
+  it("an explicit sessionId whose writes all landed in it carries NO attribution block", async () => {
+    h.owned = true;
+    for (const filed of [
+      undefined,
+      { status: "ok", filedIn: [] },
+      {
+        status: "ok",
+        filedIn: [{ sessionId: "S-EXPLICIT", title: "Mine", kind: "session" }],
+      },
+    ]) {
+      h.filed = filed;
+      const { payload } = await run({ sessionId: "S-EXPLICIT" });
+      expect(payload).not.toHaveProperty("attribution");
+      expect(payload.status).toBe("applied");
+    }
+  });
+
+  it("an explicit sessionId keeps the block when the filing says something new", async () => {
+    h.owned = true;
+    const mine = { sessionId: "S-EXPLICIT", title: "Mine", kind: "session" };
+    for (const filed of [
+      { status: "unavailable" },
+      {
+        status: "ok",
+        filedIn: [mine],
+        topicHint: {
+          sessionId: "S-EXPLICIT",
+          sessionTitle: "Mine",
+          sessionProject: { id: "P1", name: "One" },
+          writeProject: { id: "P2", name: "Two" },
+          suggest: "synap_start_session",
+        },
+      },
+      { status: "ok", filedIn: [mine], handle: { sessionId: "R", note: "n" } },
+    ]) {
+      h.filed = filed;
+      const { payload } = await run({ sessionId: "S-EXPLICIT" });
+      expect(payload.attribution).toMatchObject({ session: "explicit", filed });
+    }
   });
 
   it("(e) an explicit sessionId that is NOT the caller's is reported as dropped", async () => {

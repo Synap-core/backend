@@ -607,6 +607,13 @@ export const entitiesRouter = router({
         documentId: z.string().uuid().optional(),
         /** Required to replace a body the entity already has (else CONFLICT naming it). */
         replaceBody: z.boolean().optional(),
+        /**
+         * File a POD-WIDE record for a space (its home), or `null` to clear
+         * it. Checked by `entities.update`: a pod-wide row only, a member who
+         * may write in that space, under the key's grant; an agent's home is
+         * always reviewed.
+         */
+        homeWorkspaceId: z.string().uuid().nullable().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -642,6 +649,9 @@ export const entitiesRouter = router({
           ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
           ...(input.documentId ? { documentId: input.documentId } : {}),
           ...(input.replaceBody ? { replaceBody: true } : {}),
+          ...(input.homeWorkspaceId !== undefined
+            ? { homeWorkspaceId: input.homeWorkspaceId }
+            : {}),
           reasoning: input.reasoning,
           // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
           source: hubWriteSource(),
@@ -709,6 +719,7 @@ export const entitiesRouter = router({
           preview: string | null;
           properties: unknown;
           documentId?: string | null;
+          homeWorkspaceId?: string | null;
         };
         statusMove?: { status: string };
         unmodeled?: UnmodeledProperty[];
@@ -726,6 +737,9 @@ export const entitiesRouter = router({
                 description: written.preview,
                 properties: written.properties,
                 documentId: written.documentId ?? null,
+                ...(written.homeWorkspaceId !== undefined
+                  ? { homeWorkspaceId: written.homeWorkspaceId }
+                  : {}),
               },
             }
           : {}),

@@ -56,6 +56,10 @@ import {
   type ApiKeyScope,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
+import {
+  loadEngineAgentTypes,
+  loadTemplateToolSurface,
+} from "../../../services/agent-templates/installed.js";
 import { readAgentGovernance } from "@synap/database/agent-governance";
 
 import { resolveKeyIdentity } from "../../../access/key-identity.js";
@@ -107,6 +111,10 @@ import {
   settleRejectedAgentConnect,
   type PendingKeyOutcome,
 } from "../../../services/agent-connect.js";
+import {
+  checkConnectTemplate,
+  linkAgentToTemplate,
+} from "../../../services/agent-templates/link.js";
 import {
   API_KEY_SCOPES,
   API_KEY_TOOL_PROFILES,
@@ -759,6 +767,19 @@ export function registerSetupRoutes(app: HubHono): void {
         400
       );
     }
+
+    // OPTIONAL — the agent template `synap agents add` names (founder
+    // decision D9). It is applied by the SAME approval that connects the
+    // agent (below: carried on the `agent/connect` proposal), or at once when
+    // no approval is needed; never a second step, never without the first.
+    const connectTemplate: string | null =
+      body.template === undefined || body.template === null
+        ? null
+        : (body.template as string);
+    if (connectTemplate !== null) {
+      const refusal = await checkConnectTemplate(connectTemplate, agentType);
+      if (refusal) return c.json({ error: refusal }, 400);
+    }
     // 0395 — the agent's JOB, optional: `role` a slug ("crm-worker"),
     // `roleLabel` its name ("CRM worker"). Part of the agent's identity: the
     // same engine with another job on the same computer and seat is another
@@ -834,18 +855,39 @@ export function registerSetupRoutes(app: HubHono): void {
     }
     const toolProfile: ApiKeyToolProfile | undefined =
       toolProfileParse.data ?? undefined;
+    // None asked: an agent whose template names a starting surface (Hermes:
+    // entry + read) gets it on its FIRST key; a re-mint keeps what its key
+    // lists (`provisionSurfaceAgentKey`). Finding d812debd.
+    const firstKeyToolSurface = toolProfile
+      ? null
+      : await loadTemplateToolSurface(agentType, connectTemplate);
     // A KEY never connects a live AI by itself: the new key is created
     // inactive and its owner approves it (`agent/connect`). `requireApproval`
     // in the body is no longer an opt-in for a key caller — it is the rule.
     const requireApproval: boolean = authMethod === "api_key_surface";
+    // An ENGINE type: an AI program on a computer, one agent per computer
+    // (decision 59c75aab): the harness of an installed agent template
+    // (claude-code, codex, hermes, …), with SURFACE_AGENT_TYPES as the floor
+    // for a pod without the catalog. Read only for a key caller.
+    const engineTypes: ReadonlySet<string> =
+      authMethod === "api_key_surface"
+        ? await loadEngineAgentTypes()
+        : new Set<string>();
+    const isSurfaceType = engineTypes.has(agentType);
     // W3: a computer's key may ask to connect an AI AS THE PERSON (the CLI's
     // `--as-person`). It is still a pending key + an `agent/connect`
     // proposal, but one the person must approve with a proof of presence
     // (services/presence/gate.ts), and then a custom agent type is allowed
     // and the key keeps the agent's own limits rather than the computer's.
-    // Never a pod-wide agent: it acts for the person.
+    // Never a pod-wide agent: it acts for the person. Only for a type no
+    // template names: an engine type always takes the per-computer path, its
+    // grant clipped to the computer's, whatever the caller asked (founder,
+    // 2026-11-07: "this is not a personal custom agent, this is just hermes,
+    // on my server").
     const asPerson: boolean =
-      authMethod === "api_key_surface" && body.asPerson === true;
+      authMethod === "api_key_surface" &&
+      body.asPerson === true &&
+      !isSurfaceType;
     if (asPerson && podWide) {
       return c.json(
         {
@@ -856,14 +898,12 @@ export function registerSetupRoutes(app: HubHono): void {
       );
     }
 
-    // Surface-key path: SURFACE_AGENT_TYPES are always allowed (claude-code, cursor, …).
-    // Non-surface types (twin, custom slug, assistant, …) are only allowed when the
-    // authenticating key is human-owned (PAT: linkedUserId null). Agent keys may
-    // only mint further surface adjuncts — not arbitrary named agents.
+    // Surface-key path: an engine type is always allowed. Non-engine types
+    // (twin, custom slug, assistant, …) are only allowed when the
+    // authenticating key is human-owned (PAT: linkedUserId null) or the
+    // request is made as the person (asPerson). Agent keys may only mint
+    // further engine adjuncts — not arbitrary named agents.
     if (authMethod === "api_key_surface") {
-      const isSurfaceType = (SURFACE_AGENT_TYPES as readonly string[]).includes(
-        agentType
-      );
       if (!isSurfaceType && !surfaceKeyIsHumanOwned && !asPerson) {
         return c.json(
           {
@@ -871,7 +911,7 @@ export function registerSetupRoutes(app: HubHono): void {
               "Agent keys may only provision surface agent types. " +
               "Named agents (non-surface agentType) require a human-owned hub-protocol.write key.",
             code: "SURFACE_AGENT_TYPE_REQUIRED",
-            allowedSurfaceTypes: SURFACE_AGENT_TYPES,
+            allowedSurfaceTypes: [...engineTypes].sort(),
           },
           400
         );
@@ -1259,6 +1299,7 @@ export function registerSetupRoutes(app: HubHono): void {
         instanceLabel,
         agentLabel,
         ...(toolProfile ? { toolProfile } : {}),
+        ...(firstKeyToolSurface ? { firstKeyToolSurface } : {}),
         // Only the surface-key path provisions a genuine local CLI adjunct
         // (claude-code / codex / cursor). NEVER for jwt/issuer (cloud) agents:
         // an agentCommand on the row makes the renderer try to launch a local
@@ -1410,6 +1451,7 @@ export function registerSetupRoutes(app: HubHono): void {
             agentType,
             instanceId,
             expiresAt: apiKey.expiresAt ?? null,
+            template: connectTemplate,
             // The computer the audit names ("requested from …"): the
             // filing key's own machine record, never this request's body.
             asPerson: asPerson ? { instanceLabel: surfaceHostSeat } : null,
@@ -1433,6 +1475,11 @@ export function registerSetupRoutes(app: HubHono): void {
           registration: registrationTrace,
         });
       }
+
+      // No approval to wait on (a person's own key, an issuer, the
+      // provisioning token): the template applies now.
+      if (connectTemplate)
+        await linkAgentToTemplate(agentUserId, connectTemplate);
 
       return c.json({
         agentUserId,

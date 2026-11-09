@@ -12,6 +12,28 @@
 /** The longest a request can be set aside: 30 days. */
 export const REQUEST_LATER_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * Why `until` is not a time Later may set aside `what` until, or null when it
+ * is: the ONE check both Later doors apply (a request's, `proposals.later`;
+ * an owed ask's, `focusSessions.askLater`), its day count read from
+ * {@link REQUEST_LATER_MAX_MS} so the words cannot drift from the limit.
+ */
+export function laterTimeProblem(
+  until: Date,
+  now: Date,
+  what: "a request" | "an ask"
+): string | null {
+  const at = until.getTime();
+  if (!Number.isFinite(at) || at <= now.getTime()) {
+    return "Later needs a time in the future.";
+  }
+  if (at > now.getTime() + REQUEST_LATER_MAX_MS) {
+    const days = Math.round(REQUEST_LATER_MAX_MS / (24 * 60 * 60 * 1000));
+    return `Later can set ${what} aside for ${days} days at most.`;
+  }
+  return null;
+}
+
 /** The times a surface offers, in this order. */
 export const REQUEST_LATER_CHOICES = [
   "in_3_hours",

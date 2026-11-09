@@ -1,11 +1,11 @@
 /**
- * The proof-of-presence dialog's states (review bf96d410, lane E): what it
+ * The proof-of-presence dialog's states (review bf96d410): what it
  * says and offers in each, so a failed read never reads as "no passkey",
  * and the dialog never promises a way that is not there.
  */
 import { describe, expect, it } from "vitest";
 import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
-import { presenceDialogView } from "./dialog-model";
+import { failedPromptWord, presenceDialogView } from "./dialog-model";
 import { presenceT } from "./copy";
 
 const ready = (over: Partial<{ passkey: boolean; label: string[] }> = {}) =>
@@ -41,6 +41,21 @@ describe("presenceDialogView", () => {
     expect(view.notice).toBe("noPasskey");
     expect(view.primary).toBe("addPasskey");
     expect(view.secondary).toBe("tryAgain");
+  });
+
+  it("after Add a passkey opened its tab: come back and press Try again, which leads", () => {
+    const view = presenceDialogView({
+      phase: ready({ passkey: false }),
+      passkeySupported: true,
+      addPasskeyOpened: true,
+    });
+    expect(view.status).toEqual({ word: "comeBack" });
+    expect(view.primary).toBe("tryAgain");
+    expect(view.secondary).toBe("addPasskey");
+    setAmbientCatalogLocale("en");
+    expect(presenceT()("comeBack")).toMatch(
+      /come back here and press Try again/
+    );
   });
 
   it("a browser that cannot use a passkey: no primary action and no Try again", () => {
@@ -106,5 +121,142 @@ describe("presenceDialogView", () => {
         presenceDialogView({ ...shared, inBrowserOnly: true }).relayDevice
       ).toBeNull();
     }
+  });
+
+  it("GUARDRAIL (recovery ladder): with a 2FA app or recovery codes, every ready state offers a code; code mode makes it primary", () => {
+    const withPasskey = presenceDialogView({
+      phase: ready(),
+      passkeySupported: true,
+      typed: true,
+    });
+    expect(withPasskey.primary).toBe("confirm");
+    expect(withPasskey.useCode).toBe(true);
+    expect(withPasskey.codeField).toBe(false);
+    const coding = presenceDialogView({
+      phase: ready(),
+      passkeySupported: true,
+      typed: true,
+      codeMode: true,
+    });
+    expect(coding.primary).toBe("confirmCode");
+    expect(coding.codeField).toBe(true);
+    expect(coding.notice).toBeNull();
+    // No passkey but a code: straight to the code, no "add a passkey" first.
+    const noPasskey = presenceDialogView({
+      phase: ready({ passkey: false }),
+      passkeySupported: true,
+      typed: true,
+    });
+    expect(noPasskey.primary).toBe("confirmCode");
+    expect(noPasskey.notice).toBeNull();
+    // Without a code to type, nothing changes.
+    const none = presenceDialogView({
+      phase: ready(),
+      passkeySupported: true,
+    });
+    expect(none.useCode).toBe(false);
+    expect(none.codeField).toBe(false);
+  });
+});
+
+describe("a prompt that did not sign, past a password-manager extension", () => {
+  it("offers the other prompt beside Confirm, never while signing", () => {
+    expect(
+      presenceDialogView({
+        phase: { ...ready(), fallback: "native" },
+        passkeySupported: true,
+      }).secondary
+    ).toBe("useDevice");
+    expect(
+      presenceDialogView({
+        phase: { ...ready(), fallback: "page" },
+        passkeySupported: true,
+      }).secondary
+    ).toBe("useManager");
+    expect(
+      presenceDialogView({
+        phase: { ...ready(), kind: "signing", fallback: "native" },
+        passkeySupported: true,
+      }).secondary
+    ).toBeNull();
+    expect(
+      presenceDialogView({ phase: ready(), passkeySupported: true }).secondary
+    ).toBeNull();
+  });
+
+  it("keeps the browser's own error behind Copy details, never in the status", () => {
+    const view = presenceDialogView({
+      phase: {
+        ...ready(),
+        note: "The passkey prompt ended with an error.",
+        copyDetail: "SecurityError: The operation is insecure.",
+      },
+      passkeySupported: true,
+    });
+    expect(view.copyDetail).toBe("SecurityError: The operation is insecure.");
+    expect(view.status).toEqual({
+      note: "The passkey prompt ended with an error.",
+    });
+  });
+
+  it("names why, by the prompt that failed", () => {
+    const base = {
+      cancelled: true,
+      offer: null,
+      deviceName: "iCloud Keychain",
+      onMac: true,
+    } as const;
+    expect(
+      failedPromptWord({ ...base, route: "native", cancelled: false })
+    ).toEqual({ word: "device.unreachable.mac" });
+    expect(
+      failedPromptWord({
+        ...base,
+        route: "native",
+        cancelled: false,
+        onMac: false,
+      })
+    ).toEqual({ word: "device.unreachable" });
+    // A closed prompt is never told flatly that the browser can't reach it.
+    expect(failedPromptWord({ ...base, route: "native" })).toEqual({
+      word: "device.closed.mac",
+    });
+    expect(
+      failedPromptWord({ ...base, route: "native", onMac: false })
+    ).toEqual({ word: "device.closed" });
+    expect(
+      failedPromptWord({ ...base, route: "page", offer: "native" })
+    ).toEqual({ word: "fallback.device", name: "iCloud Keychain" });
+    expect(
+      failedPromptWord({
+        ...base,
+        route: "page",
+        offer: "native",
+        deviceName: null,
+      })
+    ).toEqual({ word: "fallback.device.unnamed" });
+    expect(failedPromptWord({ ...base, route: "page" })).toEqual({
+      word: "cancelled",
+    });
+    expect(
+      failedPromptWord({ ...base, route: "page", cancelled: false })
+    ).toEqual({ word: "ceremonyFailed" });
+  });
+
+  it("the words read as the founder asked, in English and French", () => {
+    setAmbientCatalogLocale("en");
+    const t = presenceT();
+    expect(t("device.unreachable.mac")).toBe(
+      "This browser can’t reach the passkey on your Mac. Use Safari."
+    );
+    expect(t("useDevice")).toBe("Use this device’s passkey");
+    expect(t("fallback.device", { name: "iCloud Keychain" })).toContain(
+      "iCloud Keychain"
+    );
+    setAmbientCatalogLocale("fr");
+    expect(presenceT()("useDevice")).toBe(
+      "Utiliser la clé d’accès de cet appareil"
+    );
+    setAmbientCatalogLocale("en");
   });
 });

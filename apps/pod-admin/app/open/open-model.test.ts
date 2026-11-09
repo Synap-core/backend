@@ -243,6 +243,35 @@ describe("entityPageMedia — what an entity's page leads with", () => {
     });
   });
 
+  // The `file` kind's own declaration (the live profile, 5 Nov 2026).
+  const FILE_KIND = {
+    presentation: {
+      family: "media",
+      media: { kind: "auto", source: { documentId: true } },
+    },
+  };
+
+  it("an HTML page kept as a file is never media: its body is read and runs", () => {
+    expect(
+      entityPageMedia(
+        { id: ENT, documentId: DOC, properties: { mimeType: "text/html" } },
+        FILE_KIND
+      )
+    ).toEqual({ media: null, bodyIsMedia: false });
+  });
+
+  it("any other file the kind declares stays its media (a PDF, an image)", () => {
+    for (const mimeType of ["application/pdf", "image/png"]) {
+      expect(
+        entityPageMedia(
+          { id: ENT, documentId: DOC, properties: { mimeType } },
+          FILE_KIND
+        ).bodyIsMedia,
+        mimeType
+      ).toBe(true);
+    }
+  });
+
   it("a declared media property is the media; the body stays a body", () => {
     const uiHints = {
       presentation: {

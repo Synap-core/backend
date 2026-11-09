@@ -20,6 +20,7 @@
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { automations, users, workspaceMembers } from "../schema/index.js";
+import { personOfOwner } from "./owner-person.js";
 
 export const AUTOMATION_OWNER_LEFT_SPACE =
   "Paused: the person it runs for is no longer a member of this space.";
@@ -35,17 +36,7 @@ export async function automationOwnerHasSpaceAccess(
   params: { ownerId: string; workspaceId: string | null | undefined }
 ): Promise<boolean> {
   if (!params.workspaceId) return true;
-  const [owner] = await database
-    .select({
-      userType: users.userType,
-      createdByUserId: users.createdByUserId,
-    })
-    .from(users)
-    .where(eq(users.id, params.ownerId))
-    .limit(1);
-  if (!owner) return true;
-  const person =
-    owner.userType === "agent" ? owner.createdByUserId : params.ownerId;
+  const person = await personOfOwner(database, params.ownerId);
   if (!person) return true;
   const [member] = await database
     .select({ userId: workspaceMembers.userId })

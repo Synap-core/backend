@@ -10,11 +10,18 @@
  * a row may be updated only by the identity that registered it through this
  * door (`metadata.registeredByUserId`), unless the caller is a pod admin.
  *
- * Through the REAL procedure on PGlite with every @synap/database table.
+ * A pod admin's key adds an AI service whose origin then receives delegation
+ * tokens: the sensitive act `intelligenceRegistry.register` (review of 6 Nov:
+ * this Hub tRPC twin took no proof). It needs a proof bound to the call;
+ * without one `enforce` (the default) refuses and `report` records. The IS's
+ * own internal key is the provisioning path and asks nothing.
+ *
+ * Through the REAL procedure and the REAL proof-of-presence gate on PGlite
+ * with every @synap/database table (a real P-256 device key signs).
  */
 
-import { describe, it, expect, beforeAll, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import crypto, { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -22,6 +29,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  events: [] as Array<{ type: string; data: Record<string, unknown> }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -32,13 +40,31 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
+  // The gate's audit events, captured.
+  class EventRepository {
+    async append(e: { type: string; data: Record<string, unknown> }) {
+      h.events.push({ type: e.type, data: e.data });
+      return e;
+    }
+  }
+  return { ...actual, db: h.db, getDb: async () => h.db, EventRepository };
 });
+vi.mock("@synap/auth", () => ({
+  kratosAdmin: {
+    getIdentity: async () => ({ data: { credentials: {} } }),
+  },
+}));
 
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { servicesRouter } from "./services.js";
+import {
+  presenceActionDigest,
+  presenceActionSubject,
+} from "@synap-core/types/presence";
+import { issuePresenceChallenge } from "../../services/presence/proof.js";
+import { invalidatePresenceMode } from "../../services/presence/mode.js";
 
 const ADMIN = "admin-svc";
 const ALICE = "alice-svc";
@@ -75,6 +101,18 @@ const keyCtx = (userId: string, keyType: string) =>
     scopes: ["hub-protocol.read", "hub-protocol.write"],
   }) as never;
 
+const registration = (
+  serviceId: string,
+  webhookUrl = GOOD_URL,
+  metadata?: Record<string, unknown>
+) => ({
+  serviceId,
+  name: serviceId,
+  webhookUrl,
+  capabilities: ["chat"],
+  ...(metadata ? { metadata } : {}),
+});
+
 const register = (
   userId: string,
   keyType: string,
@@ -82,13 +120,50 @@ const register = (
   webhookUrl = GOOD_URL,
   metadata?: Record<string, unknown>
 ) =>
-  servicesRouter.createCaller(keyCtx(userId, keyType)).register({
-    serviceId,
-    name: serviceId,
-    webhookUrl,
-    capabilities: ["chat"],
-    ...(metadata ? { metadata } : {}),
+  servicesRouter
+    .createCaller(keyCtx(userId, keyType))
+    .register(registration(serviceId, webhookUrl, metadata));
+
+// ── The pod admin's device key (as Relay's Secure Enclave key signs) ─────────
+const POD = "https://pod.example.test";
+const device = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+const DEVICE_KEY_ID = randomUUID();
+
+/** A proof bound to exactly this registration, signed by the admin's device. */
+async function proofFor(input: Record<string, unknown>, userId = ADMIN) {
+  const path = "intelligenceRegistry.register";
+  const c = await issuePresenceChallenge({
+    userId,
+    subject: presenceActionSubject(
+      path,
+      await presenceActionDigest(path, input)
+    ),
   });
+  return {
+    kind: "device_key" as const,
+    challengeId: c.challengeId,
+    keyId: DEVICE_KEY_ID,
+    signature: crypto
+      .sign("sha256", Buffer.from(c.message, "utf8"), {
+        key: device.privateKey,
+        dsaEncoding: "der",
+      })
+      .toString("base64url"),
+  };
+}
+
+/** A pod admin's registration WITH a proof bound to it. */
+async function registerProved(
+  userId: string,
+  serviceId: string,
+  webhookUrl = GOOD_URL,
+  metadata?: Record<string, unknown>
+) {
+  const input = registration(serviceId, webhookUrl, metadata);
+  return servicesRouter
+    .createCaller(keyCtx(userId, "user_pat"))
+    .register({ ...input, presence: await proofFor(input, userId) });
+}
 
 async function row(serviceId: string) {
   const { rows } = await q(
@@ -126,6 +201,24 @@ beforeAll(async () => {
      values ('svc_prov', $1, 'Synap IS', $2, 'k', '["chat"]'::jsonb, 'active', true, '{}'::jsonb)`,
     [PROVISIONED, GOOD_URL]
   );
+  await q(
+    `insert into presence_device_keys (id, user_id, label, public_key) values ($1, $2, 'iPhone', $3)`,
+    [
+      DEVICE_KEY_ID,
+      ADMIN,
+      (
+        device.publicKey.export({ format: "der", type: "spki" }) as Buffer
+      ).toString("base64url"),
+    ]
+  );
+});
+
+beforeEach(async () => {
+  process.env.PUBLIC_URL = POD;
+  delete process.env.SYNAP_PRESENCE_PROOF;
+  await h.client!.exec("delete from pod_settings");
+  invalidatePresenceMode();
+  h.events.length = 0;
 });
 
 describe("services.register — a plain key is refused", () => {
@@ -175,7 +268,7 @@ describe("services.register — is_internal and pod admin", () => {
   });
 
   it("…and cannot take a row over by rewriting its provenance", async () => {
-    await register(ADMIN, "user_pat", "admin-svc-row");
+    await registerProved(ADMIN, "admin-svc-row");
     await expect(
       register(IS_OPERATOR, "is_internal", "admin-svc-row", EVIL_URL, {
         registeredByUserId: IS_OPERATOR,
@@ -190,10 +283,66 @@ describe("services.register — is_internal and pod admin", () => {
     });
   });
 
-  it("a pod admin may update any row, including the provisioned one", async () => {
+  it("a pod admin may update any row, including the provisioned one, with a proof", async () => {
     await expect(
-      register(ADMIN, "user_pat", PROVISIONED, GOOD_URL + "/admin")
+      registerProved(ADMIN, PROVISIONED, GOOD_URL + "/admin")
     ).resolves.toMatchObject({ status: "updated" });
     expect((await row(PROVISIONED))?.webhook_url).toBe(GOOD_URL + "/admin");
+    expect(h.events.map((e) => e.type)).toContain("presence.proved");
+  });
+});
+
+describe("services.register — a pod admin's key needs the proof (review of 6 Nov)", () => {
+  it("GUARDRAIL: with no proof, enforce (the default) refuses and writes nothing, naming pod admin", async () => {
+    const err = await register(ADMIN, "user_pat", "no-proof-svc").catch(
+      (e: Error & { cause?: { reasonCode?: string } }) => e
+    );
+    expect((err as { cause?: { reasonCode?: string } }).cause?.reasonCode).toBe(
+      "PRESENCE_REQUIRED"
+    );
+    expect((err as Error).message).toMatch(/pod admin/);
+    expect(await row("no-proof-svc")).toBeUndefined();
+    // …nor can it re-point an existing row.
+    await expect(
+      register(ADMIN, "user_pat", PROVISIONED, EVIL_URL)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await row(PROVISIONED))?.webhook_url).not.toBe(EVIL_URL);
+  });
+
+  it("GUARDRAIL: a proof made for one registration is refused on another", async () => {
+    const input = registration("bound-svc");
+    const proof = await proofFor(input);
+    await expect(
+      servicesRouter
+        .createCaller(keyCtx(ADMIN, "user_pat"))
+        .register({ ...registration("bound-svc", EVIL_URL), presence: proof })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await row("bound-svc")).toBeUndefined();
+  });
+
+  it("report mode lets a pod admin's key through and records the missing proof", async () => {
+    await q(
+      `insert into pod_settings (id, settings) values (gen_random_uuid(), '{"presence":{"mode":"report"}}'::jsonb)`
+    );
+    invalidatePresenceMode();
+    await expect(
+      register(ADMIN, "user_pat", "report-svc")
+    ).resolves.toMatchObject({ status: "registered" });
+    expect(h.events).toEqual([
+      expect.objectContaining({
+        type: "presence.missing",
+        data: expect.objectContaining({
+          proposalType: "intelligenceRegistry.register",
+          door: "hubProtocol.services.register",
+        }),
+      }),
+    ]);
+  });
+
+  it("the IS's own internal key asks nothing (the provisioning path)", async () => {
+    await expect(
+      register(IS_OPERATOR, "is_internal", "is-no-proof")
+    ).resolves.toMatchObject({ status: "registered" });
+    expect(h.events).toEqual([]);
   });
 });

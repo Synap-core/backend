@@ -12,8 +12,16 @@
  *    cannot enrol a key) and a signature by the new key; each enrolment is
  *    audited, and the person lists and revokes them.
  *
+ *  - `totp.*`: the person's 2FA app (the recovery ladder): its code proves
+ *    presence in pod admin's dialog. Added with a fresh sign-in and, when the
+ *    person holds a factor, a proof from it; removed freely, except below two
+ *    ways in under `enforce`.
+ *  - `recovery.*`: "I lost my passkey": ask, cancel (any session of theirs,
+ *    24 h), finish (a fresh sign-in at the pod), which clears every factor.
+ *
  * Every act is a PERSON's, signed in: a key never asks for a challenge or
- * enrols a device (`assertSignedInPerson`).
+ * enrols a device (`assertSignedInPerson`). The 2FA app and the recovery are
+ * pod admin's (a browser session), never a Synap app's device session.
  *
  * Contract: pod document "W3 pod-first: proof of presence on the pod".
  */
@@ -23,6 +31,7 @@ import { TRPCError } from "@trpc/server";
 import {
   PRESENCE_REQUEST_KINDS,
   oauthConsentId,
+  passkeyHolder,
   presenceRequestSubject,
   presenceActionDigest,
   presenceActionSubject,
@@ -31,42 +40,63 @@ import {
   type SensitiveActionPath,
   type PresenceRequestKind,
   PRESENCE_ENROLL_FRESH_SECONDS,
-  PRESENCE_EXPIRED,
-  PRESENCE_INVALID,
-  PRESENCE_USED,
   enrollmentSubject,
-  presenceMessage,
+  presenceSensitivitySchema,
+  presenceWaysIn,
 } from "@synap-core/types/presence";
 import {
   and,
   db,
   desc,
   eq,
-  gt,
   isNull,
-  presenceChallenges,
   presenceDeviceKeys,
+  presenceTotpFactors,
+  users,
 } from "@synap/database";
 
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { assertPresenceForRequest } from "../services/presence/gate.js";
 import {
-  assertMayEnrollDeviceKey,
+  assertKeepsTwoWaysIn,
+  enrollDeviceKey,
   notifyFactorChanged,
+  presenceFactorCounts,
 } from "../services/presence/factors.js";
-import { PASSKEY_CHANGE_GRANT_SECONDS } from "../services/presence/passkey-change.js";
-import { missingSince, readPresenceMode } from "../services/presence/mode.js";
+import {
+  activeTotpFactor,
+  beginTotpEnrolment,
+  confirmTotpEnrolment,
+} from "../services/presence/totp.js";
+import {
+  cancelPresenceRecovery,
+  completePresenceRecovery,
+  readPresenceRecovery,
+  requestPresenceRecovery,
+} from "../services/presence/recovery.js";
+import {
+  assertMayRemovePasskey,
+  PASSKEY_CHANGE_GRANT_SECONDS,
+} from "../services/presence/passkey-change.js";
+import {
+  missingSince,
+  readPresenceMode,
+  readPresenceSensitivity,
+} from "../services/presence/mode.js";
 import { changePresenceMode } from "../services/presence/mode-change.js";
+import { changePresenceSensitivity } from "../services/presence/sensitivity-change.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
-import { kratosCredentialTime } from "../utils/device-session.js";
+import {
+  isDeviceSession,
+  kratosCredentialTime,
+} from "../utils/device-session.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 import { openAgentConnectProposal } from "../services/agent-connect.js";
 import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import {
   issuePresenceChallenge,
   readPasskeys,
-  verifyDeviceSignature,
   passkeyRpId,
   passkeyRpIds,
   presencePodOrigin,
@@ -90,6 +120,47 @@ function credentialTimeOf(ctx: { session?: unknown }): Date | null {
     | undefined;
   if (session?.device) return session.device.authTime ?? null;
   return kratosCredentialTime(session ?? null);
+}
+
+/**
+ * A credential presented AT the pod (password, code, passkey) within
+ * `PRESENCE_ENROLL_FRESH_SECONDS`: what adding a first factor, or finishing a
+ * recovery, rests on. A Synap Cloud sign-in alone is not one.
+ */
+function assertFreshSignIn(ctx: { session?: unknown }, message: string): void {
+  const at = credentialTimeOf(ctx);
+  if (!at || Date.now() - at.getTime() > PRESENCE_ENROLL_FRESH_SECONDS * 1000) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message,
+      cause: { reasonCode: "STEP_UP_REQUIRED" },
+    });
+  }
+}
+
+const IN_POD_ADMIN = "Do this in pod admin, signed in in your browser.";
+
+/** The 2FA app and the recovery are pod admin's: never a Synap app's device session. */
+function assertBrowserSession(
+  ctx: Parameters<typeof isDeviceSession>[0]
+): void {
+  if (isDeviceSession(ctx)) {
+    throw new TRPCError({ code: "FORBIDDEN", message: IN_POD_ADMIN });
+  }
+}
+
+/** A failed passkey read fails the call: it is never "no passkey". */
+async function countsOf(userId: string) {
+  try {
+    return await presenceFactorCounts(userId);
+  } catch (err) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message:
+        "Couldn't read your passkeys from the pod's sign-in service. Try again in a moment.",
+      cause: err,
+    });
+  }
 }
 
 function asTrpc(err: unknown): never {
@@ -201,6 +272,9 @@ export const presenceRouter = router({
             isNull(presenceDeviceKeys.revokedAt)
           )
         );
+      // The codes a person may TYPE here instead: only in a browser session
+      // (pod admin's dialog), never a Synap app's device session.
+      const counts = isDeviceSession(ctx) ? null : await countsOf(ctx.userId);
       return {
         challengeId: issued.challengeId,
         /** What the message names on line 4: a proposal id, or `<kind>:<id>`. */
@@ -217,14 +291,25 @@ export const presenceRouter = router({
                 rpId: passkeyRpId(podOrigin, toPodAdminOrigin(podOrigin)),
                 /** Every rp id the pod accepts (the host and each parent). */
                 rpIds: passkeyRpIds(podOrigin),
+                /**
+                 * Each passkey, with where it lives (`passkeyHolder`, from its
+                 * AAGUID): pod admin sends a device's passkey straight to the
+                 * browser's own prompt when a password-manager extension has
+                 * taken over WebAuthn in the page.
+                 */
                 allowCredentials: passkeys.map((p) => ({
                   id: p.id,
                   type: "public-key" as const,
+                  ...passkeyHolder(p.aaguid, p.displayName),
                 })),
                 userVerification: "required" as const,
               }
             : null,
         deviceKeys: devices,
+        typed: {
+          totp: counts?.totp ?? false,
+          recoveryCode: (counts?.recoveryCodes ?? 0) > 0,
+        },
       };
     }),
 
@@ -236,6 +321,38 @@ export const presenceRouter = router({
   mode: podAdminProcedure.query(async () => {
     const state = await readPresenceMode();
     return { ...state, missingLast30d: await missingSince(30) };
+  }),
+
+  /**
+   * The caller's own proof factors, counted: their passkeys (from the pod's
+   * sign-in service), their device keys (Relay's Face ID, the desktop's
+   * Touch ID), the authenticator app and their unused recovery codes. What pod admin shows before
+   * the person relies on "Approvals need you in person". A failed passkey read
+   * fails the call, never "no passkey".
+   */
+  factors: protectedProcedure.query(async ({ ctx }) => {
+    assertSignedInPerson(ctx, SIGNED_IN);
+    const [counts, mode] = await Promise.all([
+      countsOf(ctx.userId),
+      readPresenceMode(),
+    ]);
+    return {
+      /**
+       * Whether approvals need the person in person on this pod: what makes
+       * "fewer than two ways in" a warning for every member, not only for a
+       * pod admin (who also reads `presence.mode`). A failed read fails the
+       * call, like the counts.
+       */
+      enforce: mode.mode === "enforce",
+      passkeys: counts.passkeys,
+      deviceKeys: counts.deviceKeys,
+      /** A 2FA app in use. */
+      totp: counts.totp,
+      /** Unused recovery codes. */
+      recoveryCodes: counts.recoveryCodes,
+      /** What "two ways in" counts (`presenceWaysIn`). */
+      waysIn: presenceWaysIn(counts),
+    };
   }),
 
   /**
@@ -262,6 +379,46 @@ export const presenceRouter = router({
     }),
 
   /**
+   * What asks for a passkey on this pod (W5): the rows of the sensitive lists
+   * a pod admin switched off, none by default. Every signed-in person may read
+   * it, so a client asks for a proof only where the pod will. `mode` is the
+   * mode in force (read with the choice, one cached read): a member's
+   * Security page says up front that their last passkey stays while it is
+   * `enforce` (`presence.mode` itself is a pod admin read).
+   */
+  sensitivity: protectedProcedure.query(async () => {
+    const [choice, { mode }] = await Promise.all([
+      readPresenceSensitivity(),
+      readPresenceMode(),
+    ]);
+    return { ...choice, mode };
+  }),
+
+  /**
+   * Change what asks for a passkey. Switching a row OFF needs a proof of
+   * presence for `presence_sensitivity:<id of the new choice>`, in every
+   * mode; switching rows back ON is free. Recorded
+   * (`presence.sensitivity_changed`) and announced to every pod admin.
+   */
+  setSensitivity: podAdminProcedure
+    .input(
+      presenceSensitivitySchema.extend({
+        presence: presenceProofSchema.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      return changePresenceSensitivity({
+        userId: ctx.userId,
+        choice: {
+          approvalsOff: input.approvalsOff,
+          actionsOff: input.actionsOff,
+        },
+        proof: input.presence ?? null,
+      });
+    }),
+
+  /**
    * Before a passkey change in Kratos' settings flow (adding or removing one)
    * when the person already has a factor (founder decision 2): an existing
    * factor proves `passkey_change:<their user id>`. The consumed challenge is
@@ -269,9 +426,29 @@ export const presenceRouter = router({
    * PASSKEY_CHANGE_GRANT_SECONDS. The person's first passkey needs no grant.
    */
   authorizePasskeyChange: protectedProcedure
-    .input(z.object({ presence: presenceProofSchema }))
+    .input(
+      z.object({
+        presence: presenceProofSchema,
+        /**
+         * What the change will be. Removing the person's LAST passkey is
+         * refused while the proof of presence is on (W5), and under
+         * `enforce` a removal must leave two ways in (the recovery ladder):
+         * both are checked before the proof is used. The rules guard the
+         * person from locking themselves out; a proof from them is needed
+         * either way.
+         */
+        change: z.enum(["add", "remove"]).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, SIGNED_IN);
+      if (input.change === "remove") {
+        await assertMayRemovePasskey(ctx.userId);
+        await assertKeepsTwoWaysIn({
+          userId: ctx.userId,
+          after: (c) => ({ ...c, passkeys: Math.max(0, c.passkeys - 1) }),
+        });
+      }
       const verdict = await assertPresenceForRequest({
         userId: ctx.userId,
         kind: "passkey_change",
@@ -353,76 +530,26 @@ export const presenceRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         assertSignedInPerson(ctx, SIGNED_IN);
-        // Proof of possession: the challenge is consumed only by a signature
-        // the new key made over it, once, in time.
-        const challenge = await db.query.presenceChallenges.findFirst({
-          where: and(
-            eq(presenceChallenges.id, input.challengeId),
-            eq(presenceChallenges.userId, ctx.userId)
-          ),
-        });
-        if (
-          !challenge ||
-          challenge.subject !== enrollmentSubject(challenge.id)
-        ) {
-          asTrpc(new PresenceError(PRESENCE_INVALID, "Unknown challenge."));
-        }
-        if (challenge.consumedAt) {
-          asTrpc(new PresenceError(PRESENCE_USED, "This challenge was used."));
-        }
-        if (challenge.expiresAt <= new Date()) {
-          asTrpc(
-            new PresenceError(PRESENCE_EXPIRED, "This challenge expired.")
-          );
-        }
-        const message = presenceMessage({
-          podOrigin: presencePodOrigin(),
-          challengeId: challenge.id,
-          subject: challenge.subject,
-          nonce: challenge.nonce,
-        });
-        if (!verifyDeviceSignature(input.publicKey, message, input.signature)) {
-          asTrpc(
-            new PresenceError(
-              PRESENCE_INVALID,
-              "This key did not sign the enrolment challenge."
-            )
-          );
-        }
-        // An existing factor approves the new one; the person's first factor
-        // rests on the fresh sign-in `enrollChallenge` checked.
-        await assertMayEnrollDeviceKey({
-          userId: ctx.userId,
-          publicKey: input.publicKey,
-          proof: input.presence ?? null,
-        });
-        const [spent] = await db
-          .update(presenceChallenges)
-          .set({ consumedAt: new Date(), method: "device_key" })
-          .where(
-            and(
-              eq(presenceChallenges.id, challenge.id),
-              isNull(presenceChallenges.consumedAt),
-              gt(presenceChallenges.expiresAt, new Date())
-            )
-          )
-          .returning({ id: presenceChallenges.id });
-        if (!spent) {
-          asTrpc(new PresenceError(PRESENCE_USED, "This challenge was used."));
-        }
-        const [row] = await db
-          .insert(presenceDeviceKeys)
-          .values({
+        // Proof of possession, then ONE first factor per person decided in
+        // the transaction that stores the key (`enrollDeviceKey`).
+        let row: { id: string };
+        try {
+          row = await enrollDeviceKey({
             userId: ctx.userId,
+            challengeId: input.challengeId,
             label: input.label,
             publicKey: input.publicKey,
-          })
-          .returning({ id: presenceDeviceKeys.id });
+            signature: input.signature,
+            proof: input.presence ?? null,
+          });
+        } catch (err) {
+          asTrpc(err);
+        }
         void auditLog({
           subjectType: "presence_device_key",
           action: "enroll",
           phase: "completed",
-          subjectId: row!.id,
+          subjectId: row.id,
           userId: ctx.userId,
           workspaceId: null,
           data: { label: input.label },
@@ -432,9 +559,9 @@ export const presenceRouter = router({
           change: "added",
           factor: "device_key",
           label: input.label,
-          id: row!.id,
+          id: row.id,
         });
-        return { id: row!.id };
+        return { id: row.id };
       }),
 
     /** Revoke one of the person's device keys. Only takes power away. */
@@ -442,6 +569,10 @@ export const presenceRouter = router({
       .input(z.object({ id: z.string().uuid() }))
       .mutation(async ({ ctx, input }) => {
         assertSignedInPerson(ctx, SIGNED_IN);
+        await assertKeepsTwoWaysIn({
+          userId: ctx.userId,
+          after: (c) => ({ ...c, deviceKeys: Math.max(0, c.deviceKeys - 1) }),
+        });
         const [ended] = await db
           .update(presenceDeviceKeys)
           .set({ revokedAt: new Date() })
@@ -480,5 +611,173 @@ export const presenceRouter = router({
         });
         return { revoked: true };
       }),
+  }),
+
+  totp: router({
+    /** The person's 2FA app in use, or null. */
+    get: protectedProcedure.query(async ({ ctx }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      return activeTotpFactor(ctx.userId);
+    }),
+
+    /**
+     * Step 1 of adding a 2FA app: a new secret, shown ONCE (as a QR code and
+     * as text). Needs a fresh sign-in at the pod.
+     */
+    begin: protectedProcedure
+      .input(z.object({ label: z.string().trim().min(1).max(LABEL_MAX) }))
+      .mutation(async ({ ctx, input }) => {
+        assertSignedInPerson(ctx, SIGNED_IN);
+        assertBrowserSession(ctx);
+        assertFreshSignIn(
+          ctx,
+          "Sign in again, then add your authenticator app within 10 minutes."
+        );
+        const person = await db.query.users.findFirst({
+          where: eq(users.id, ctx.userId),
+          columns: { email: true },
+        });
+        return beginTotpEnrolment({
+          userId: ctx.userId,
+          label: input.label,
+          account: person?.email || ctx.userId,
+          issuer: `Synap (${new URL(presencePodOrigin()).hostname})`,
+        });
+      }),
+
+    /**
+     * Step 2: the app's first code. A person who already holds a factor
+     * approves it with that factor (`totp_enroll:<id>`).
+     */
+    confirm: protectedProcedure
+      .input(
+        z.object({
+          id: z.string().uuid(),
+          code: z.string().regex(/^\d{6}$/),
+          presence: presenceProofSchema.optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        assertSignedInPerson(ctx, SIGNED_IN);
+        assertBrowserSession(ctx);
+        assertFreshSignIn(
+          ctx,
+          "Sign in again, then add your authenticator app within 10 minutes."
+        );
+        let added: { id: string; label: string };
+        try {
+          added = await confirmTotpEnrolment({
+            userId: ctx.userId,
+            id: input.id,
+            code: input.code,
+            proof: input.presence ?? null,
+          });
+        } catch (err) {
+          asTrpc(err);
+        }
+        void auditLog({
+          subjectType: "presence_totp_factor",
+          action: "enroll",
+          phase: "completed",
+          subjectId: added.id,
+          userId: ctx.userId,
+          workspaceId: null,
+          data: { label: added.label },
+        });
+        await notifyFactorChanged({
+          userId: ctx.userId,
+          change: "added",
+          factor: "totp",
+          label: added.label,
+          id: added.id,
+        });
+        return { id: added.id };
+      }),
+
+    /** Remove the person's 2FA app. Under `enforce`, never below two ways in. */
+    remove: protectedProcedure.mutation(async ({ ctx }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      await assertKeepsTwoWaysIn({
+        userId: ctx.userId,
+        after: (c) => ({ ...c, totp: false }),
+      });
+      const ended = await db
+        .update(presenceTotpFactors)
+        .set({ revokedAt: new Date() })
+        .where(
+          and(
+            eq(presenceTotpFactors.userId, ctx.userId),
+            isNull(presenceTotpFactors.revokedAt)
+          )
+        )
+        .returning({
+          id: presenceTotpFactors.id,
+          label: presenceTotpFactors.label,
+          confirmedAt: presenceTotpFactors.confirmedAt,
+        });
+      const app = ended.find((r) => r.confirmedAt !== null);
+      if (!app) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "You don't use an authenticator app here.",
+        });
+      }
+      void auditLog({
+        subjectType: "presence_totp_factor",
+        action: "revoke",
+        phase: "completed",
+        subjectId: app.id,
+        userId: ctx.userId,
+        workspaceId: null,
+        data: {},
+      });
+      await notifyFactorChanged({
+        userId: ctx.userId,
+        change: "removed",
+        factor: "totp",
+        label: app.label,
+        id: app.id,
+      });
+      return { removed: true };
+    }),
+  }),
+
+  recovery: router({
+    /** The person's latest request ("I lost my passkey"), or null. */
+    status: protectedProcedure.query(async ({ ctx }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      return readPresenceRecovery(ctx.userId);
+    }),
+
+    /** Ask: every device is told; it can be finished in 24 h, cancelled until then. */
+    request: protectedProcedure.mutation(async ({ ctx }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      return requestPresenceRecovery({ userId: ctx.userId });
+    }),
+
+    /** Cancel, from any signed-in session of the person (Relay, the desktop app included). */
+    cancel: protectedProcedure.mutation(async ({ ctx }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      return cancelPresenceRecovery({ userId: ctx.userId });
+    }),
+
+    /**
+     * Finish a request that waited 24 h: needs a fresh sign-in at the pod,
+     * in pod admin. Clears every proof factor of the person.
+     */
+    complete: protectedProcedure.mutation(async ({ ctx }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      assertBrowserSession(ctx);
+      assertFreshSignIn(
+        ctx,
+        "Sign in again with your password or an email code, then finish within 10 minutes."
+      );
+      const current = (ctx as { session?: { id?: unknown } | null }).session
+        ?.id;
+      return completePresenceRecovery({
+        userId: ctx.userId,
+        keepSessionId: typeof current === "string" ? current : null,
+      });
+    }),
   }),
 });

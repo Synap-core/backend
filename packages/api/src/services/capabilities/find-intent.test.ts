@@ -55,6 +55,12 @@ vi.mock("../focus-sessions/match-session-template.js", async (orig) => ({
 vi.mock("./catalog-cache-query.js", () => ({
   queryCatalogCache: (...a: unknown[]) => queryCatalogCache(...a),
 }));
+// The person's computers, as the ONE roster lists them (machine-roster.ts).
+const listMachines = vi.fn(async () => [] as unknown[]);
+vi.mock("../machine-roster.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  listMachines: (...a: unknown[]) => listMachines(...(a as [])),
+}));
 
 const { findByIntent } = await import("./find-intent.js");
 
@@ -492,6 +498,66 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
     ]);
     const none = await findByIntent({ intent: "publish post", ...lens });
     expect(none.marketplace).toEqual({ matches: [] });
+  });
+
+  it("a package that runs on a computer says where, and which of the person's computers can take it (the same projection as market.search)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { dirname, resolve } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const ffmpeg = JSON.parse(
+      readFileSync(
+        resolve(
+          dirname(fileURLToPath(import.meta.url)),
+          "../installations/__fixtures__/media-ffmpeg.0.35.0.definition.json"
+        ),
+        "utf8"
+      )
+    ) as Record<string, unknown>;
+    listMachines.mockResolvedValue([
+      {
+        id: "mac",
+        name: "Mac",
+        platform: "darwin",
+        arch: "arm64",
+        hostsServices: true,
+      },
+      {
+        id: "nas",
+        name: "NAS",
+        platform: "linux",
+        arch: "x64",
+        hostsServices: false,
+      },
+    ]);
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "media-ffmpeg",
+        kind: "capability",
+        name: "ffmpeg on your computer",
+        description: "Edits video on your computer: capture into pod",
+        version: "0.35.0",
+        definition: ffmpeg,
+      },
+    ]);
+
+    const r = await findByIntent({ intent: "capture into pod", ...lens });
+
+    expect(listMachines).toHaveBeenCalledWith("u1");
+    if (!r.marketplace || !("matches" in r.marketplace))
+      throw new Error(
+        `no marketplace matches: ${JSON.stringify(r.marketplace)}`
+      );
+    const match = r.marketplace.matches[0]!;
+    expect(match).toMatchObject({
+      slug: "media-ffmpeg",
+      runsOn: ["computer"],
+      systems: ["darwin", "linux", "win32"],
+      licence: "GPL-2.0-or-later",
+    });
+    expect((match.computers ?? []).map((c) => [c.name, c.canInstall])).toEqual([
+      ["Mac", true],
+      ["NAS", false],
+    ]);
   });
 
   it("a thrown catalog read sets marketplace.error and still returns the intent", async () => {

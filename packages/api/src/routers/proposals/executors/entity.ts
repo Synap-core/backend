@@ -134,7 +134,7 @@ export async function applyApprovedEntityPatch(args: {
   proposalId: string;
   proposalWorkspaceId: string | null;
   entityId: string;
-  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / documentId / replaceBody / sourceFile. */
+  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / documentId / replaceBody / homeWorkspaceId / sourceFile. */
   patch: Record<string, unknown>;
   propertyDecisions?: PropertyDecisionMap;
 }) {
@@ -196,6 +196,12 @@ export async function applyApprovedEntityPatch(args: {
       ? { documentId: innerData.documentId as string | null }
       : {}),
     ...(innerData.replaceBody === true ? { replaceBody: true } : {}),
+    // The home a pod-wide record is filed for (finding a70f910f). Dropping
+    // it here approved the proposal and homed nothing.
+    ...(typeof innerData.homeWorkspaceId === "string" ||
+    innerData.homeWorkspaceId === null
+      ? { homeWorkspaceId: innerData.homeWorkspaceId as string | null }
+      : {}),
     source: "system",
   });
 

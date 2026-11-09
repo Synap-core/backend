@@ -18,6 +18,16 @@ const h = vi.hoisted(() => ({
   entities: [] as unknown[],
   listInputs: [] as Array<{ offset: number; limit: number }>,
   ctxSeen: [] as unknown[],
+  podApps: [] as unknown[] | Error,
+  podAppsFor: [] as string[],
+}));
+
+vi.mock("../services/preferences/connected-pod-apps.js", () => ({
+  readConnectedPodApps: async (userId: string) => {
+    h.podAppsFor.push(userId);
+    if (h.podApps instanceof Error) throw h.podApps;
+    return h.podApps;
+  },
 }));
 
 vi.mock("../services/preferences/rail-pins.js", async (importOriginal) => ({
@@ -75,6 +85,8 @@ beforeEach(() => {
   h.entities = [];
   h.listInputs = [];
   h.ctxSeen = [];
+  h.podApps = [];
+  h.podAppsFor = [];
 });
 
 describe("preferences.yourApps", () => {
@@ -141,5 +153,51 @@ describe("preferences.yourApps", () => {
       },
     ];
     await expect(caller().yourApps()).rejects.toThrow("spaces read failed");
+  });
+});
+
+describe("preferences.yourApps — externalApps (founder S4, 5 Nov 2026: apps are the external ones)", () => {
+  it("lists the person's connected pod apps and tool websites, never pins or spaces", async () => {
+    h.pins = [
+      {
+        key: "doc:d1",
+        profileSlug: null,
+        viewId: null,
+        trackId: null,
+        documentId: "d1",
+        label: null,
+        source: "user",
+        title: "Weekly dashboard",
+      },
+    ];
+    h.spaces = [{ id: "w1", name: "Builder", role: "owner" }];
+    h.entities = [
+      {
+        id: "e1",
+        title: "Figma",
+        properties: { url: "https://figma.com", tags: ["tool"] },
+      },
+    ];
+    h.podApps = [
+      {
+        publicId: "app_crm",
+        name: "Site CRM",
+        clientId: "https://crm.example.com/oauth/client.json",
+        clientUri: "https://crm.example.com/",
+        verified: false,
+      },
+    ];
+    const { externalApps } = await caller().yourApps();
+    expect(externalApps.map((a) => [a.key, a.kind])).toEqual([
+      ["app:app_crm", "app"],
+      ["website:e1", "website"],
+    ]);
+    // The person's own apps, read for them alone.
+    expect(h.podAppsFor).toEqual(["u1"]);
+  });
+
+  it("a failed pod-app read fails the read", async () => {
+    h.podApps = new Error("apps read failed");
+    await expect(caller().yourApps()).rejects.toThrow("apps read failed");
   });
 });

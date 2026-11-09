@@ -26,6 +26,14 @@ export interface WaitEpisode {
   reason: WaitingOnReason | null;
   /** What is waited on, as the thing's holder reads it; null when unnamed. */
   ref: WaitingOnRef | null;
+  /**
+   * The status the subject stood on when the wait was first found (plan
+   * e7f753db §9); null when it had none or the episode predates the record.
+   * Absent from an older pod.
+   */
+  status?: string | null;
+  /** An owed slot's declared blocker name (`not_connected`), else null. */
+  blockerKey?: string | null;
   /** ISO. The tick that first found the wait (no backfill: at most a tick late). */
   openedAt: string;
   /** ISO; null while the wait stands. */

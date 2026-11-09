@@ -756,6 +756,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/projects/create-project.ts": "validates evidence ids",
   "services/proposals/redecide-graph-revision.ts":
     "the capture duplicate door's record scope, re-run for a revised graph (dedup)",
+  "services/retrieval/grant-bounded-search-hits.ts":
+    "narrows hits a door already passed through withoutUnlistableEntityHits (search.search applies the rule first)",
   "services/runs/index.ts": "one run's produced records, by id",
   "services/status/status-facts.ts":
     "a step's wait: the asked things and the one each step names, by id",

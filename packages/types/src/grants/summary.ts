@@ -15,6 +15,7 @@
  */
 
 import {
+  resolveGrantPermissionSentence,
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
@@ -333,7 +334,12 @@ export function summarizeGrant(
         .map((r) => r.label);
       parts.push(`${grantActionLabel(verb)} ${labels.join(", ")}`);
     }
-    if (other.length > 0) parts.push(`+${other.length} more`);
+    // A permission read as its act is said ("Add packs and templates to
+    // your pod"); only the rest is counted.
+    const said = other.map((p) => resolveGrantPermissionSentence(p));
+    for (const sentence of said) if (sentence) parts.push(sentence);
+    const unsaid = said.filter((x) => x === null).length;
+    if (unsaid > 0) parts.push(`+${unsaid} more`);
     const always = alwaysAllowed.map(grantActionLabel).join(", ");
     if (always)
       what =
@@ -396,6 +402,11 @@ export function grantLines(
     for (const g of r.gates) lines.push(`${grantActionLabel(g)} ${r.label}`);
   }
   for (const p of s.other) {
+    const sentence = resolveGrantPermissionSentence(p);
+    if (sentence) {
+      lines.push(sentence);
+      continue;
+    }
     const segs = parsePermission(p);
     const subject = segs[0]!;
     const qualified = isQualifiedGrantSubject(subject);

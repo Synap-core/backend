@@ -20,6 +20,7 @@
  * the still-inactive key.
  */
 
+import { linkAgentToTemplate } from "./agent-templates/link.js";
 import { assertPresenceForApproval } from "./presence/gate.js";
 import type { PresenceProof } from "@synap-core/types/presence";
 import { TRPCError } from "@trpc/server";
@@ -262,6 +263,11 @@ export async function fileAgentConnectProposal(args: {
    * of presence, and the key keeps the agent's own limits, not the computer's.
    */
   asPerson?: { instanceLabel: string | null } | null;
+  /**
+   * The agent template the connect names (`synap agents add`, D9): this same
+   * approval links the agent to it (`approvePendingAgentKey`).
+   */
+  template?: string | null;
 }): Promise<{ proposalId: string }> {
   const grant = await new GrantRepository(db).resolveForKey(args.keyId);
   const requests = requestsFromGrantScopes(grant?.scopes ?? []);
@@ -293,6 +299,7 @@ export async function fileAgentConnectProposal(args: {
       ...(args.asPerson
         ? { asPerson: true, instanceLabel: args.asPerson.instanceLabel }
         : {}),
+      ...(args.template ? { template: args.template } : {}),
     },
     createdBy: args.ownerUserId,
     proposedByUserId: args.ownerUserId,
@@ -750,6 +757,12 @@ export async function approvePendingAgentKey(args: {
     )
     .returning({ id: apiKeys.id });
   if (flipped.length === 0) return "rejected";
+
+  // The template the connect named (D9) applies with this approval: the one
+  // person act that connects the agent, never a second one.
+  const template = (proposal?.data as { template?: unknown } | null)?.template;
+  if (typeof template === "string" && template)
+    await linkAgentToTemplate(key.userId, template);
 
   // The approved key REPLACES only this computer's live key — here, at
   // approval, never when the request is filed: a pending request must not be

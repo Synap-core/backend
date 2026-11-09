@@ -372,6 +372,16 @@ export interface PlaybookRunDetail {
   proposals: RunProposalItem[];
   /** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
   agents: RunAgent[];
+  /**
+   * A TRIAL run (the rule lab, design b199a3a4 slice 1b): the drafts it
+   * rendered in place of current versions, and what it drafted (the agent's
+   * last reply in its room; null until it answers). Absent on any other run.
+   */
+  trial?: {
+    guidanceOverride: Record<string, string>;
+    draftedText: string | null;
+    draftedAt: string | null;
+  };
 }
 
 /** The session card behind a playbook run. */
