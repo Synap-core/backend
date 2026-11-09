@@ -73,7 +73,8 @@
  * matched on "don" and "own"). It is `skipped: playbook_run` on start and on the
  * sweep; a MANUAL "recall again" still runs ("runs recall on demand"). A
  * person's session that FOLLOWS a playbook (`followedVia`) stays `work` and is
- * still recalled; so is an agent-opened session with no playbook.
+ * still recalled. An agent-opened session (origin `agent`) is `skipped:
+ * agent_session` the same way.
  *
  * IDEMPOTENT per session: `recalled` is REPLACED, and the room message carries
  * an idempotency key derived from the recalled id set, so a re-run that finds
@@ -507,6 +508,15 @@ export async function runSessionRecall(
       projectSessionKind(session) === "run"
     ) {
       return await skip("playbook_run");
+    }
+    // NOISE: start recall is for a session a PERSON opens; an agent-opened one
+    // (origin `agent`) is skipped too (founder, 9 Nov 2026). Manual still runs.
+    if (
+      input.trigger !== "manual" &&
+      !startedByAutomation(priorMeta) &&
+      session.origin === "agent"
+    ) {
+      return await skip("agent_session");
     }
     // PRIVACY: who else reads this session decides what may be recalled.
     const shared = await d.sharedWithOthers({

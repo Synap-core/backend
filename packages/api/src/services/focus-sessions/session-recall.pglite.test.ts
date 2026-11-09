@@ -440,10 +440,20 @@ describe("NOISE — a playbook run is not recalled on its own (founder, 9 Nov 20
     expect(posts).toHaveLength(1);
   });
 
-  it("an agent-opened session with no playbook is still recalled on start", async () => {
+  it("an agent-opened session (no playbook): start and sweep are skipped; manual still runs", async () => {
     await asRun("agent", null);
-    const out = await runSessionRecall({ sessionId: SESSION }, deps().d);
-    expect(out.status).toBe("ok");
+    for (const trigger of ["start", "sweep"] as const) {
+      const { d, posts, asked } = deps();
+      const out = await runSessionRecall({ sessionId: SESSION, trigger }, d);
+      expect(out).toEqual({ status: "skipped", reason: "agent_session" });
+      expect(asked).toEqual([]);
+      expect(posts).toEqual([]);
+    }
+    const manual = await runSessionRecall(
+      { sessionId: SESSION, trigger: "manual" },
+      deps().d
+    );
+    expect(manual.status).toBe("ok");
   });
 });
 

@@ -39,12 +39,15 @@ export type RecallSkipReason =
   /** A playbook run (kind `run`): it already has its subject and its method, so
    *  a start recall only posts noise in its room; a manual recall still runs. */
   | "playbook_run"
+  /** Opened by an agent, not a person: start recall is for a person's own session. */
+  | "agent_session"
   /** Others can read the session and it has no workspace to recall from. */
   | "shared_without_workspace";
 
 export const RECALL_SKIP_REASONS: readonly RecallSkipReason[] = [
   "automation",
   "playbook_run",
+  "agent_session",
   "shared_without_workspace",
 ];
 
