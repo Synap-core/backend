@@ -1357,6 +1357,44 @@ export interface PlaybookStage {
    * playbook's own `requires`. Absent ⇒ nothing is checked, as before.
    */
   requires?: string[];
+  /**
+   * The question the POD asks the person when a run's turn ends this stage —
+   * see {@link PlaybookStageEndAsk}. Absent ⇒ the stage asks nothing, as
+   * before.
+   */
+  endAsk?: PlaybookStageEndAsk;
+}
+
+/**
+ * A stage-end ask (plan 08e4fba7 decision 5, founder 9 Nov 2026): a run never
+ * asks the person — it has no ask tool — so a playbook that needs a person's
+ * structured answer mid-run DECLARES it on the stage the answer ends. When a
+ * run's turn completes with this stage (or an earlier one) current, the pod
+ * raises it as ONE owed slot, the run waits (`waiting_on_you`), and the
+ * person's answer wakes a run turn told which stage comes next.
+ */
+export interface PlaybookStageEndAsk {
+  /** The slot's label: what the answer is ("Next week's priorities"). */
+  label: string;
+  /** One line of facts: why the person is asked now. */
+  why?: string;
+  /** What moves once they answer ("The run creates a task for each one"). */
+  unblocks?: string;
+  /** How they answer — the one ask shape. */
+  ask: SlotAsk;
+  /** A `choose` ask's options read from the pod at raise time. */
+  optionsFrom?: PlaybookStageEndAskOptionsFrom;
+}
+
+/**
+ * Where a stage-end `choose` reads its options: the entities linked TO the
+ * run's subject by `relation` (a variant `derived_from` its asset), newest
+ * first, each an option whose value is the entity id. They come before the
+ * declared options, eight in all. None found ⇒ the ask is not raised: there is
+ * nothing to choose among.
+ */
+export interface PlaybookStageEndAskOptionsFrom {
+  relation: string;
 }
 
 /**

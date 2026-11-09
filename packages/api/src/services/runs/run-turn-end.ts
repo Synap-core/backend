@@ -60,7 +60,11 @@ import {
   playbookRuns,
 } from "@synap/database";
 import type { PlaybookRun } from "@synap/database/schema";
-import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  SlotAnswerValue,
+  SlotAsk,
+} from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import type { RunToolProfile } from "@synap/intelligence-client";
@@ -72,8 +76,8 @@ import {
   RUN_TURNS_META_KEY,
 } from "../focus-sessions/session-metadata.js";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
-import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
-import { blockExpectedOutput } from "../focus-sessions/block-output.js";
+import { raiseRunAsk } from "./run-ask.js";
+import { settleStageEndAsk, stageAskTurnEntries } from "./stage-end-ask.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
 import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
 import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
@@ -303,6 +307,11 @@ export interface RunTurnsState {
    * hands the next turn, as the automatic continuation's notice does.
    */
   lastCheckpoint?: NonNullable<CompleteRunBody["checkpoint"]>;
+  /**
+   * The stages whose stage-end ask the pod already raised in THIS run
+   * (`stage-end-ask.ts`), by stage key: each is asked once per run.
+   */
+  stageAsks?: string[];
 }
 
 /**
@@ -335,6 +344,13 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
     turns: Array.isArray(s.turns) ? s.turns.slice(-TURN_HISTORY_MAX) : [],
     ...(s.lastCheckpoint && typeof s.lastCheckpoint === "object"
       ? { lastCheckpoint: s.lastCheckpoint }
+      : {}),
+    ...(Array.isArray(s.stageAsks)
+      ? {
+          stageAsks: s.stageAsks.filter(
+            (k): k is string => typeof k === "string"
+          ),
+        }
       : {}),
   };
 }
@@ -436,6 +452,7 @@ async function recordTurnEnd(
       firstTurn: state.firstTurn ?? record,
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
       ...(lastCheckpoint ? { lastCheckpoint } : {}),
+      ...(state.stageAsks ? { stageAsks: state.stageAsks } : {}),
     };
     await tx
       .update(focusSessions)
@@ -649,6 +666,8 @@ export async function runTurnForAnswer(p: {
   slotLabel?: string | null;
   /** The answer was a confirmed YES (a `confirm` value with `confirmed: true`). */
   approved: boolean;
+  /** The answer's typed value: a stage-end ask's chosen option rides on. */
+  value?: SlotAnswerValue;
 }): Promise<RunTurnForAnswer> {
   let live: { id: string; playbookId: string; workspaceId: string | null };
   try {
@@ -686,7 +705,40 @@ export async function runTurnForAnswer(p: {
     p.approved &&
     normalizeExpectedLabel(p.slotLabel) ===
       normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
-  if (!continues) return { liveRun: "found", run };
+  if (!continues) {
+    // An answer to a stage-end ask the pod raised: the run goes on from the
+    // next stage (`stage-end-ask.ts`). Best effort: a failed read wakes the
+    // run turn without it, and says so.
+    try {
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, p.sessionId),
+        columns: { metadata: true, stages: true },
+      });
+      const entries = await stageAskTurnEntries({
+        runId: live.id,
+        sessionStages: session?.stages,
+        raised: readRunTurns(session?.metadata, live.id).stageAsks ?? [],
+        slotLabel: p.slotLabel,
+        ...(p.value ? { value: p.value } : {}),
+      });
+      if (entries.length > 0) {
+        return { liveRun: "found", run, turnContext: { entries } };
+      }
+    } catch (err) {
+      logger.error(
+        { err, sessionId: p.sessionId, runId: live.id },
+        "run-turn-end: the stage-end ask's next stage could not be read — the run turn goes on without it"
+      );
+      return {
+        liveRun: "found",
+        run,
+        turnContext: {
+          entries: [{ key: "run.stageAsk.read", value: "failed" }],
+        },
+      };
+    }
+    return { liveRun: "found", run };
+  }
   try {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, p.sessionId),
@@ -798,60 +850,24 @@ async function askToKeepGoing(p: {
     yes: { description: "The agent picks up where it stopped" },
     no: { description: "The agent is told to stop" },
   };
-  const wanted = normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
-  try {
-    const declared = await updateExpectedOutputsLocked(
-      p.session.id,
-      (current) => [
-        ...current.filter((o) => normalizeExpectedLabel(o?.label) !== wanted),
-        {
-          kind: "decision",
-          label: RUN_CONTINUE_SLOT_LABEL,
-          status: "pending",
-          // What the answer unblocks (decision E): the room question below is
-          // refused for a slot that does not say it.
-          unblocks: "The run goes on",
-        } satisfies ExpectedOutput,
-      ]
-    );
-    if (!declared) return false;
-
-    if (p.askingAgentUserId && p.session.channelId) {
-      const posted = await postChannelMessage({
-        channelId: p.session.channelId,
-        content: question,
-        userId: p.session.userId,
-        role: "assistant",
-        agentUserId: p.askingAgentUserId,
-        kind: "question",
-        slotLabel: RUN_CONTINUE_SLOT_LABEL,
-        ask,
-        idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
-      });
-      if (posted.slot?.status === "blocked") return true;
-      logger.warn(
-        { runId: p.run.id, slot: posted.slot?.status ?? null },
-        "run-turn-end: the question did not file on the slot; handing it over directly"
-      );
-    }
-    const blocked = await blockExpectedOutput({
-      sessionId: p.session.id,
-      userId: p.session.userId,
-      expectedLabel: RUN_CONTINUE_SLOT_LABEL,
-      blockedReason: "decision",
-      why: facts,
-      ask,
-      agentUserId: p.askingAgentUserId,
-      askCause: { kind: "run", ref: { kind: "run", id: p.run.id } },
-    });
-    return blocked.status === "blocked";
-  } catch (err) {
-    logger.error(
-      { err, runId: p.run.id, sessionId: p.session.id },
-      "run-turn-end: could not ask the person whether to keep the run going"
-    );
-    return false;
-  }
+  return raiseRunAsk({
+    runId: p.run.id,
+    session: p.session,
+    askingAgentUserId: p.askingAgentUserId,
+    slot: {
+      kind: "decision",
+      label: RUN_CONTINUE_SLOT_LABEL,
+      status: "pending",
+      // What the answer unblocks (decision E): the room question is refused
+      // for a slot that does not say it.
+      unblocks: "The run goes on",
+    } satisfies ExpectedOutput,
+    blockedReason: "decision",
+    why: facts,
+    question,
+    ask,
+    idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
+  });
 }
 
 /**
@@ -908,6 +924,26 @@ export async function settleRunTurnEnd(p: {
   // Completing is idempotent (only a LIVE run completes), so a retried
   // `completed` report still settles a run its first attempt failed to.
   if (body.outcome === "completed") {
+    // A retried report of a turn whose end already parked the run on the
+    // person (a stage-end ask) never completes it under them.
+    if (recorded?.duplicate && run.status === "waiting_on_you") {
+      return "duplicate";
+    }
+    // A staged run whose stage declares an ask: the POD raises it and the
+    // run waits for the answer instead of completing (`stage-end-ask.ts`).
+    const staged = await settleStageEndAsk({
+      run,
+      session,
+      askingAgentUserId: p.askingAgentUserId,
+      raised: recorded?.state.stageAsks ?? [],
+    });
+    if (staged === "waiting_on_you") return "waiting_on_you";
+    if (staged === "left_running") {
+      if (run.status !== "running") {
+        await applyRunCapture({ run, status: "running" });
+      }
+      return "left_running";
+    }
     const updated = await applyRunCapture({ run, status: "completed" });
     return updated ? "completed" : "no-running-run";
   }
