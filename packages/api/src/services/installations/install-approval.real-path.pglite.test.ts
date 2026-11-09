@@ -171,6 +171,8 @@ const DEF = JSON.parse(
   )
 ) as Record<string, unknown>;
 
+const HASH_VERSION = `h-${(DEF.contentHash as string).slice(0, 12)}`;
+
 const PERSON = randomUUID();
 const STRANGER = randomUUID();
 const MAC = randomUUID();
@@ -204,8 +206,16 @@ beforeAll(async () => {
   );
   await q(
     `INSERT INTO cp_catalog_cache (source, kind, slug, name, description, version, definition)
-     VALUES ($1, 'capability', 'media-ffmpeg', $2, $3, '0.35.0', $4::jsonb)`,
-    [officialCatalogUrl(), DEF.name, DEF.description, JSON.stringify(DEF)]
+     VALUES ($1, 'capability', 'media-ffmpeg', $2, $3, $5, $4::jsonb)`,
+    [
+      officialCatalogUrl(),
+      DEF.name,
+      DEF.description,
+      JSON.stringify(DEF),
+      // As the live catalog lists a capability: its version is its content
+      // hash (`contentHashVersion`), not a package version.
+      HASH_VERSION,
+    ]
   );
   ({ proposalsRouter } = await import("../../routers/proposals.js"));
 }, 120_000);
@@ -268,8 +278,22 @@ describe("an AI asks to install media-ffmpeg on the person's Mac, and the person
       computerId: MAC,
       capabilityKey: "media-ffmpeg",
       action: "install",
-      catalog: { slug: "media-ffmpeg" },
+      catalog: { slug: "media-ffmpeg", version: HASH_VERSION },
     });
+  });
+
+  it("lists and notifications read what it does, and the hash is not shown as a version", async () => {
+    const row = await proposalRow(proposalId);
+    // The stored summary is the card's own title (one derivation), never
+    // the generic "Request Installation".
+    expect(row.data.summary).toBe(
+      'Add "ffmpeg on your computer" from the marketplace and install it on MacBook-Pro-de-Antoine.local'
+    );
+    // The person's sentence names the licence, never the content hash; the
+    // hash stays on the ask for the approval's check (above).
+    expect(row.data.reasoning).toMatch(/licence GPL-2\.0-or-later/);
+    expect(row.data.reasoning).not.toContain(HASH_VERSION);
+    expect(row.data.reasoning).not.toMatch(/version/);
   });
 
   it("approving it adds the capability, records the installation and queues the Mac's install", async () => {
