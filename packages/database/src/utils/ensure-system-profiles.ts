@@ -594,6 +594,31 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "description", required: false, displayOrder: 4 },
     ],
   },
+  // Snippet — stored text with {variables} that a person or an AI keeps and
+  // renders (plan d8743d2d). Seeded on every pod: pod-wide, default-present.
+  // Its ONE lifecycle is `snippetStatus`, declared in ensure-system-lifecycles.ts
+  // (`current` is a person's call: only a person makes a snippet current).
+  {
+    profileSlug: "snippet",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      {
+        slug: "snippetStatus",
+        required: false,
+        defaultValue: "draft",
+        displayOrder: 1,
+      },
+      { slug: "body", required: false, displayOrder: 2 },
+      { slug: "variables", required: false, displayOrder: 3 },
+      {
+        slug: "use",
+        required: false,
+        defaultValue: "other",
+        displayOrder: 4,
+      },
+      { slug: "channel", required: false, displayOrder: 5 },
+    ],
+  },
   // User Observation — uo_* properties
   {
     profileSlug: "user_observation",
@@ -712,6 +737,7 @@ export const SYSTEM_PROFILE_SLUGS: ReadonlySet<string> = new Set([
   "research",
   "knowledge",
   "issue",
+  "snippet",
   "report",
   "user_observation",
   // Demand signal — a tool the user uses that Synap cannot connect yet
@@ -1302,6 +1328,53 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
+      // Snippet — the kind's ONE lifecycle plus its four fields (plan d8743d2d).
+      {
+        slug: "snippetStatus",
+        valueType: PropertyValueType.STRING,
+        constraints: {
+          enum: systemLifecycleKeys("snippetStatus"),
+        },
+        uiHints: { label: "Status", inputType: "select", displayAs: "status" },
+      },
+      {
+        slug: "body",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 20000 },
+        uiHints: {
+          label: "Text",
+          inputType: "textarea",
+          helpText:
+            "The text, in markdown. A {name} is filled from the variables below when the snippet is rendered.",
+        },
+      },
+      {
+        slug: "variables",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: {
+          label: "Variables",
+          inputType: "json",
+          helpText:
+            'What {name} stands for — {name, type: text | number | entity | choice | boolean, required?, default?, from?: "subject.<field>"}.',
+        },
+      },
+      {
+        slug: "use",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["email", "message", "prompt", "reply", "other"] },
+        uiHints: { label: "Use", inputType: "select" },
+      },
+      {
+        slug: "channel",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 200 },
+        uiHints: {
+          label: "Channel",
+          inputType: "text",
+          helpText: "Where it is sent or pasted, e.g. LinkedIn, else email.",
+        },
+      },
       {
         slug: "conclusion",
         valueType: PropertyValueType.STRING,
@@ -1863,6 +1936,17 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
             "An open bug or problem, titled as the problem itself. Moves open → investigating → fixed or won't fix.",
         },
       },
+      // Snippet — stored text with variables (see its link entry above).
+      {
+        slug: "snippet",
+        displayName: "Snippet",
+        uiHints: {
+          icon: "text-cursor-input",
+          color: "#8B5CF6",
+          description:
+            "Reusable text with {variables}: an email, a message, a reply or a prompt. Starts as a draft; a person makes it current.",
+        },
+      },
       // Report — a generated, read-only narrative artifact over a lens.
       // The body lives in a linked document (markdown + directives); the
       // properties below are only what the header needs to make sense.
@@ -1941,6 +2025,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       "research",
       "knowledge",
       "issue",
+      "snippet",
       "user_observation",
       "file",
       "tool_request",
@@ -2690,37 +2775,6 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
         constraints: { enum: ["manual", "automation"] },
         uiHints: { label: "Triggered By", inputType: "select" },
       },
-      // devplane_prompt_snippet
-      {
-        slug: "snippetTitle",
-        valueType: PropertyValueType.STRING,
-        constraints: { maxLength: 200 },
-        uiHints: { label: "Snippet Title", inputType: "text" },
-      },
-      {
-        slug: "snippetBody",
-        valueType: PropertyValueType.STRING,
-        constraints: { maxLength: 10000 },
-        uiHints: {
-          label: "Prompt Template",
-          inputType: "textarea",
-          description: "Use @{arg:NAME} for dynamic variables",
-        },
-      },
-      {
-        slug: "snippetCategory",
-        valueType: PropertyValueType.STRING,
-        constraints: {
-          enum: ["deploy", "debug", "test", "audit", "review", "custom"],
-        },
-        uiHints: { label: "Category", inputType: "select" },
-      },
-      {
-        slug: "snippetDescription",
-        valueType: PropertyValueType.STRING,
-        constraints: { maxLength: 500 },
-        uiHints: { label: "Description", inputType: "text" },
-      },
       // devplane_incident
       {
         slug: "severity",
@@ -2923,15 +2977,6 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
         },
       },
       {
-        slug: "devplane_prompt_snippet",
-        displayName: "Prompt Snippet",
-        uiHints: {
-          icon: "sparkles",
-          color: "#F59E0B",
-          description: "A reusable AI prompt template with dynamic variables",
-        },
-      },
-      {
         slug: "devplane_incident",
         displayName: "Incident",
         uiHints: {
@@ -3098,21 +3143,6 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
           { slug: "runFinishedAt", required: false, displayOrder: 5 },
           { slug: "runDuration", required: false, displayOrder: 6 },
           { slug: "triggeredBy", required: false, displayOrder: 7 },
-        ],
-      },
-      {
-        profileSlug: "devplane_prompt_snippet",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          { slug: "snippetTitle", required: false, displayOrder: 1 },
-          {
-            slug: "snippetCategory",
-            required: false,
-            defaultValue: "custom",
-            displayOrder: 2,
-          },
-          { slug: "snippetDescription", required: false, displayOrder: 3 },
-          { slug: "snippetBody", required: true, displayOrder: 4 },
         ],
       },
       {

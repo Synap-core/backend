@@ -2162,6 +2162,80 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       toSlug: "research-finding",
       fromTemplate: "research-base",
     },
+
+    // ─── Snippet: `devplane_prompt_snippet` folds into the pod-wide `snippet` ───
+    //
+    // `snippet` (stored text with variables, ensure-system-profiles.ts) is now
+    // the one kind for reusable text; the DevPlane-only prompt snippet is
+    // retired from `ensureDevplaneProfiles`. Read on the one real pod (founder,
+    // 2026-11-09): ONE entity, `snippetCategory: workflow`, a
+    // `snippetDescription`, no `snippetBody`, no `isExecutable`, no `linkedApp`.
+    //   - snippetBody -> body, then snippetDescription -> body: `keepTarget`, so
+    //     a snippet that has a body keeps it and its description is discarded
+    //     (counted as `entitiesKeyConflicts`, never silent); one with no body
+    //     (the real one) gets its description as the text.
+    //   - snippetCategory (deploy, debug, test, audit, review, workflow, custom)
+    //     has no field on `snippet`: every value becomes `use: prompt`.
+    //   - `isExecutable` / `linkedApp` have no field on `snippet`; they are not
+    //     moved, they stay in the entity's JSON.
+    //   - {{var}} / @{arg:x} placeholders are NOT rewritten: no `variables`
+    //     declaration can be derived from them (the real entity has no body).
+    //   - the merge repoints the entities; they were workspace-stamped, so the
+    //     scope reconcile makes them pod-wide like the kind.
+    // Operator-run (`deferAtBoot`), after the boot that seeds `snippet`; each
+    // step refuses until that canonical exists (`requiresCanonical`).
+    {
+      op: "renamePropertyKey",
+      opKey: "snippet.devplane-prompt-snippet.body",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetBody",
+      targetKey: "body",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "snippet.devplane-prompt-snippet.description-into-body",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetDescription",
+      targetKey: "body",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "snippet.devplane-prompt-snippet.category-into-use",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetCategory",
+      targetKey: "use",
+      valueMap: {
+        deploy: "prompt",
+        debug: "prompt",
+        test: "prompt",
+        audit: "prompt",
+        review: "prompt",
+        workflow: "prompt",
+        custom: "prompt",
+      },
+    },
+    {
+      op: "mergeInto",
+      opKey: "snippet.merge.devplane-prompt-snippet-into-snippet",
+      deferAtBoot: true,
+      fromSlugs: ["devplane_prompt_snippet"],
+      intoSlug: "snippet",
+      intoScope: "system",
+    },
+    {
+      op: "reconcileEntityScope",
+      opKey: "snippet.reconcile.entity-scope",
+      deferAtBoot: true,
+      slug: "snippet",
+    },
   ],
 };
 

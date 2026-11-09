@@ -981,10 +981,7 @@ export const devplaneRouter = router({
         .select({ n: count() })
         .from(entities)
         .where(
-          and(
-            eq(entities.type, "devplane_prompt_snippet"),
-            eq(entities.userId, ctx.userId)
-          )
+          and(eq(entities.type, "snippet"), eq(entities.userId, ctx.userId))
         );
 
       if ((existing[0]?.n ?? 0) > 0) {
@@ -1082,13 +1079,14 @@ export const devplaneRouter = router({
         // guard is bypassed / seeded in a second workspace) + project-link.
         await materializeEntity(
           {
-            profileSlug: "devplane_prompt_snippet",
+            // The pod-wide `snippet` kind (devplane_prompt_snippet folded into
+            // it). Its description stays as the first paragraph of the body
+            // and every one is a prompt; the category has no field there.
+            profileSlug: "snippet",
             title: s.title,
             properties: {
-              snippetTitle: s.title,
-              snippetCategory: s.category,
-              snippetDescription: s.description,
-              snippetBody: s.body,
+              body: `${s.description}\n\n${s.body}`,
+              use: "prompt",
             },
             workspaceId: ctx.workspaceId,
             userId: ctx.userId,
