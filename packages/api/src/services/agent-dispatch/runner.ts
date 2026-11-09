@@ -160,6 +160,22 @@ async function requiresOn(
   );
 }
 
+/**
+ * The tools `requires` lists, on the person's computer `computerUserId`
+ * (`null` = none known, or Synap AI: every tool `unverified`). The one check
+ * the stage runner (`enterStage`) and its re-check read, the same as a
+ * runner choice is judged by here.
+ */
+export async function requiresOnComputer(p: {
+  ownerId: string;
+  requires: readonly string[];
+  computerUserId: string | null;
+}): Promise<Record<string, RunnerRequiresState>> {
+  return requiresOn([...new Set(p.requires)], p.computerUserId, () =>
+    listPersonsComputers(p.ownerId)
+  );
+}
+
 export async function resolveRunner(p: {
   ownerId: string;
   runner: PlaybookRunner | null | undefined;

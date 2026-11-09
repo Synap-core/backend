@@ -2726,7 +2726,11 @@ export const tools = {
             currentStage: {
               type: "string",
               description:
-                "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to.",
+                "Advance the session to this playbook stage by its stage `key`. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to.",
+            },
+            stageRunner: {
+              description:
+                "With currentStage: who works it (system/synap/processes).",
             },
             subjectEntityId: {
               type: ["string", "null"],
@@ -6882,9 +6886,9 @@ export const tools = {
                 "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the run goes to the agent the person ASSIGNED to this playbook, when there is one that can take it (the reply's `handedTo` and message name it); otherwise the playbook's own executor runs it.",
             },
             runner: {
-              description:
-                "Who runs THIS run, as a playbook runner (system/synap/processes); never with handToAgentId.",
+              description: "Who runs it (system/synap/processes).",
             },
+            stageRunners: { description: "Per stage key (same skill)." },
           },
           required: [],
         },

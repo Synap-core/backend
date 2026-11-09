@@ -46,6 +46,7 @@ import {
   playbookRuns,
   focusSessions,
   sessionWaitsOnPersonWhere,
+  stageRunWaitsWhere,
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -120,11 +121,20 @@ export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
   )
 )`;
 
+/**
+ * A run one of whose steps WAITS — on a child run or on tools being installed
+ * (its open `session_stage_runs` row, 0422) — is waiting, not idle: a parent
+ * paused on a child for days must not be reaped (runner engine spec 7111934d,
+ * risk 3). Never stale-marked, never failed.
+ */
+export const RUN_STAGE_NOT_WAITING = drizzleSql`NOT ${stageRunWaitsWhere(playbookRuns.sessionId)}`;
+
 /** A running run past the window whose session shows no recent activity. */
 const RUN_IS_STALE = and(
   eq(playbookRuns.status, "running"),
   drizzleSql`${playbookRuns.startedAt} < now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')`,
-  RUN_SESSION_NOT_ACTIVE
+  RUN_SESSION_NOT_ACTIVE,
+  RUN_STAGE_NOT_WAITING
 );
 
 /** Called by the cron scheduler every ~30 minutes. */

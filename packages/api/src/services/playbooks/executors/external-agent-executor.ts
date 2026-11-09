@@ -43,10 +43,12 @@
 import type {
   Executor,
   ExpectedOutput,
+  PlaybookStage,
   RunContext,
   RunResult,
   SlotAsk,
 } from "@synap/playbooks";
+import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import {
   db,
@@ -389,164 +391,258 @@ export class ExternalAgentExecutor implements Executor {
       userId: ownerId,
     });
 
-    // 2. Its binding (a broken one is a visible failure, never a skip).
-    let binding: AgentBinding | null;
-    try {
-      binding = await resolveAgentBinding(agentUserId);
-    } catch (err) {
-      if (err instanceof AgentBindingError) return fail(err.message, "binding");
-      throw err;
-    }
-    if (!binding) {
-      return fail(
-        `${await agentDisplayName(agentUserId)} has no dispatch binding`,
-        "binding"
-      );
-    }
-    const service = resolveServiceName(binding.provider);
-
-    // 3. The playbook's METHOD — the same text the IS kickoff and the MCP bind
-    // doors render (`renderPlaybookMethod`): the approved context skill, the
-    // rules this playbook follows (its guidance, stamped on the run's
-    // snapshot) and the current stage. Not fenced like the goal: every part
-    // of it is person-approved pod content, not the person's free words.
-    const { contextSkill, guidance } = await loadRunMethodParts({
-      playbookId: ctx.playbookId,
-      userId: ctx.userId,
-      runId,
-      warn: (obj, msg) => logger.warn(obj, `external-agent: ${msg}`),
-    });
+    // 2–4. Its binding, the playbook's METHOD and the task, started as the
+    // agent: THE start path (`startAgentTask`), shared with the stage runner.
     const stage = ctx.currentStage
       ? (ctx.stages?.find((s) => s.key === ctx.currentStage) ?? null)
       : null;
-    const method = renderPlaybookMethod({ contextSkill, guidance, stage });
-
-    // 4. Start the task, as the agent.
-    const origin = podPublicOrigin() ?? null;
-    const params = {
-      task: {
-        goal: fenceUntrustedData(ctx.goal, "synap session goal"),
-        ...(typeof input.feedback === "string" && input.feedback.trim()
-          ? {
-              feedback: fenceUntrustedData(
-                input.feedback,
-                "synap reviewer feedback"
-              ),
-            }
-          : {}),
-        ...(ctx.subjectId
-          ? {
-              subject: {
-                id: ctx.subjectId,
-                name: ctx.subjectName ?? null,
-                profile: ctx.subjectProfile ?? null,
-              },
-            }
-          : {}),
-        currentStage: ctx.currentStage ?? null,
-        method: method || null,
-      },
-      ...repoInputs(input, ctx.sessionId),
+    const started = await startAgentTask({
+      agentUserId,
+      ownerId,
+      userId: ctx.userId,
+      playbookId: ctx.playbookId,
       sessionId: ctx.sessionId,
       channelId: ctx.channelId ?? null,
       runId,
-      capturePath: runId ? `/api/hub/runs/${runId}/capture` : null,
-      pod: {
-        url: origin,
-        mcpUrl: origin ? `${origin}/mcp` : null,
-      },
-      agent: {
-        agentUserId,
-        keyRef: await agentKeyRef(agentUserId),
-      },
-    };
-    const started = await callBindingVerb({
-      binding,
-      verb: "start",
-      agentUserId,
-      ownerId,
-      parameters: params,
-      sessionId: ctx.sessionId,
-      channelId: ctx.channelId ?? null,
+      goal: ctx.goal,
+      feedback: typeof input.feedback === "string" ? input.feedback : null,
+      subject: ctx.subjectId
+        ? {
+            id: ctx.subjectId,
+            name: ctx.subjectName ?? null,
+            profile: ctx.subjectProfile ?? null,
+          }
+        : null,
+      stage,
+      currentStage: ctx.currentStage ?? null,
+      repo: repoInputs(input, ctx.sessionId),
       ...(runId ? { idempotencyKey: `agent-start:${runId}` } : {}),
     });
-
+    if (started.status === "failed") return fail(started.error, started.key);
     if (started.status === "proposed") {
       await postDispatchNotice({
         channelId: ctx.channelId,
         ownerId,
-        content: `Starting the ${service} agent needs your approval: ${started.reviewUrl}`,
+        content: `Starting the ${started.service} agent needs your approval: ${started.reviewUrl}`,
         idempotencyKey: `external-agent:${runId ?? ctx.sessionId}:proposed`,
       });
       return {
         status: "proposed",
-        summary: `Waiting on approval to start the ${service} agent`,
-        // A PENDING start (nothing reached the provider): the session section
-        // shows it as "Needs you" with the proposal as its door. The approval
-        // (`approved-start.ts`) records the real hand-off over it.
-        externalAgent: {
-          agentUserId,
-          toolId: binding.toolId,
-          provider: binding.provider,
-          externalId: null,
-          url: null,
-          status: "pending_start",
-          proposalId: started.proposalId,
-          startedAt: new Date().toISOString(),
-        },
+        summary: `Waiting on approval to start the ${started.service} agent`,
+        externalAgent: started.externalAgent,
       };
-    }
-    if (started.status !== "ok") {
-      logger.warn(
-        { runId, agentUserId, toolId: binding.toolId, error: started.message },
-        "external-agent start failed"
-      );
-      return fail(
-        `the ${service} agent did not accept the task: ${externalAgentCallFailedReason(
-          {
-            providerName: service,
-            errorClass:
-              started.status === "failed" ? started.errorClass : undefined,
-            message: started.message,
-          }
-        )}`,
-        "start"
-      );
-    }
-
-    const { externalId, url } = externalRefFromStartResult(started.result);
-    // Nothing to follow: the status poll, the wake and cancel all key on the
-    // task id, so a "running" run with none could never be answered or stopped.
-    // Fail it here, through the same failure writer as a refused start.
-    if (!externalId) {
-      logger.warn(
-        { runId, agentUserId, toolId: binding.toolId },
-        "external-agent start returned no task id"
-      );
-      return fail(
-        noTaskIdMessage(await agentDisplayName(agentUserId), url),
-        "start-no-task-id"
-      );
     }
     // No link in prose: the session section carries "Open in <service>".
     await postDispatchNotice({
       channelId: ctx.channelId,
       ownerId,
-      content: `Handed to the ${service} agent.`,
+      content: `Handed to the ${started.service} agent.`,
       idempotencyKey: `external-agent:${runId ?? ctx.sessionId}:started`,
     });
     return {
       status: "running",
-      summary: `dispatched to ${service} (${externalId})`,
+      summary: `dispatched to ${started.service} (${started.externalAgent.externalId})`,
+      externalAgent: started.externalAgent,
+    };
+  }
+}
+
+/** What {@link startAgentTask} did. */
+export type StartAgentTaskResult =
+  | {
+      status: "running";
+      service: string;
+      externalAgent: PlaybookRunExternalAgent;
+    }
+  | {
+      /** Governance holds the start for the person (nothing reached the provider). */
+      status: "proposed";
+      service: string;
+      reviewUrl: string;
+      proposalId: string;
+      externalAgent: PlaybookRunExternalAgent;
+    }
+  | {
+      status: "failed";
+      error: string;
+      /** Which step refused: the binding, the start, or a start with no task id. */
+      key: "binding" | "start" | "start-no-task-id";
+    };
+
+/**
+ * THE START PATH of a provider task for an agent bound for dispatch — its
+ * binding (a broken one is a visible failure, never a skip), the playbook's
+ * METHOD for the stage, and the binding's `start` verb called AS THE AGENT
+ * (`callBindingVerb`: governed and attributed to the agent user). One path
+ * for a whole run handed to an agent (`ExternalAgentExecutor.run`) and for one
+ * STEP of a run handed to it (the stage runner, `enterStage`). Posts nothing:
+ * each caller says what happened in its own words.
+ */
+export async function startAgentTask(p: {
+  agentUserId: string;
+  ownerId: string;
+  /** The run's actor (`RunContext.userId`): whose method parts are read. */
+  userId: string;
+  playbookId: string | null | undefined;
+  sessionId: string;
+  channelId: string | null;
+  runId: string | null;
+  /** The task: a run's goal, or a step's. Fenced as the person's words. */
+  goal: string;
+  feedback?: string | null;
+  subject?: { id: string; name: string | null; profile: string | null } | null;
+  /** The stage the task is about: its method part. */
+  stage: PlaybookStage | null;
+  /** The run's current stage key, as the task names it (absent: the stage's). */
+  currentStage?: string | null;
+  /** The run's repository inputs (`repoInputs`), when it has any. */
+  repo?: Record<string, unknown>;
+  idempotencyKey?: string;
+}): Promise<StartAgentTaskResult> {
+  const { agentUserId, ownerId } = p;
+  let binding: AgentBinding | null;
+  try {
+    binding = await resolveAgentBinding(agentUserId);
+  } catch (err) {
+    if (err instanceof AgentBindingError) {
+      return { status: "failed", error: err.message, key: "binding" };
+    }
+    throw err;
+  }
+  if (!binding) {
+    return {
+      status: "failed",
+      error: `${await agentDisplayName(agentUserId)} has no dispatch binding`,
+      key: "binding",
+    };
+  }
+  const service = resolveServiceName(binding.provider);
+
+  // The playbook's METHOD — the same text the IS kickoff and the MCP bind
+  // doors render (`renderPlaybookMethod`): the approved context skill, the
+  // rules this playbook follows (its guidance, stamped on the run's
+  // snapshot) and the current stage. Not fenced like the goal: every part
+  // of it is person-approved pod content, not the person's free words.
+  const { contextSkill, guidance } = await loadRunMethodParts({
+    playbookId: p.playbookId ?? undefined,
+    userId: p.userId,
+    runId: p.runId,
+    warn: (obj, msg) => logger.warn(obj, `external-agent: ${msg}`),
+  });
+  const method = renderPlaybookMethod({
+    contextSkill,
+    guidance,
+    stage: p.stage,
+  });
+
+  const origin = podPublicOrigin() ?? null;
+  const params = {
+    task: {
+      goal: fenceUntrustedData(p.goal, "synap session goal"),
+      ...(p.feedback && p.feedback.trim()
+        ? {
+            feedback: fenceUntrustedData(p.feedback, "synap reviewer feedback"),
+          }
+        : {}),
+      ...(p.subject ? { subject: p.subject } : {}),
+      currentStage: p.currentStage ?? p.stage?.key ?? null,
+      method: method || null,
+    },
+    ...(p.repo ?? {}),
+    sessionId: p.sessionId,
+    channelId: p.channelId,
+    runId: p.runId,
+    capturePath: p.runId ? `/api/hub/runs/${p.runId}/capture` : null,
+    pod: {
+      url: origin,
+      mcpUrl: origin ? `${origin}/mcp` : null,
+    },
+    agent: {
+      agentUserId,
+      keyRef: await agentKeyRef(agentUserId),
+    },
+  };
+  const started = await callBindingVerb({
+    binding,
+    verb: "start",
+    agentUserId,
+    ownerId,
+    parameters: params,
+    sessionId: p.sessionId,
+    channelId: p.channelId,
+    ...(p.idempotencyKey ? { idempotencyKey: p.idempotencyKey } : {}),
+  });
+
+  if (started.status === "proposed") {
+    return {
+      status: "proposed",
+      service,
+      reviewUrl: started.reviewUrl,
+      proposalId: started.proposalId,
+      // A PENDING start (nothing reached the provider): the session section
+      // shows it as "Needs you" with the proposal as its door. The approval
+      // (`approved-start.ts`) records the real hand-off over it.
       externalAgent: {
         agentUserId,
         toolId: binding.toolId,
         provider: binding.provider,
-        externalId,
-        url,
-        status: "running",
+        externalId: null,
+        url: null,
+        status: "pending_start",
+        proposalId: started.proposalId,
         startedAt: new Date().toISOString(),
       },
     };
   }
+  if (started.status !== "ok") {
+    logger.warn(
+      {
+        runId: p.runId,
+        agentUserId,
+        toolId: binding.toolId,
+        error: started.message,
+      },
+      "external-agent start failed"
+    );
+    return {
+      status: "failed",
+      error: `the ${service} agent did not accept the task: ${externalAgentCallFailedReason(
+        {
+          providerName: service,
+          errorClass:
+            started.status === "failed" ? started.errorClass : undefined,
+          message: started.message,
+        }
+      )}`,
+      key: "start",
+    };
+  }
+
+  const { externalId, url } = externalRefFromStartResult(started.result);
+  // Nothing to follow: the status poll, the wake and cancel all key on the
+  // task id, so a "running" task with none could never be answered or stopped.
+  if (!externalId) {
+    logger.warn(
+      { runId: p.runId, agentUserId, toolId: binding.toolId },
+      "external-agent start returned no task id"
+    );
+    return {
+      status: "failed",
+      error: noTaskIdMessage(await agentDisplayName(agentUserId), url),
+      key: "start-no-task-id",
+    };
+  }
+  return {
+    status: "running",
+    service,
+    externalAgent: {
+      agentUserId,
+      toolId: binding.toolId,
+      provider: binding.provider,
+      externalId,
+      url,
+      status: "running",
+      startedAt: new Date().toISOString(),
+    },
+  };
 }
