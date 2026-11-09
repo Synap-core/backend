@@ -417,7 +417,15 @@ describe("ask, approve, observe: one card adds media-ffmpeg and installs it on t
 
   it("approving it adds the capability with its computer blocks and queues the Mac's install job", async () => {
     const filed = h.gate.at(-1)!;
-    const data = filed.data as Record<string, unknown>;
+    // Stored as the gate stores it: the ask nested under the request
+    // envelope (install-approval.real-path.pglite.test.ts files it through
+    // the real gate; a flat row here once hid that the executor misread it).
+    const data = {
+      source: "intelligence",
+      targetType: "installation",
+      changeType: "request",
+      data: filed.data,
+    } as Record<string, unknown>;
     const proposalId = randomUUID();
     await q(
       `INSERT INTO proposals (id, target_type, target_id, proposal_type, data, status, revision_history, created_at, updated_at)

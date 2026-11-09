@@ -98,9 +98,9 @@ const q = <T>(sql: string, params?: unknown[]) =>
 beforeAll(async () => {
   await h.client!.exec(pgliteAllTablesDdl());
   await q(
-    `INSERT INTO users (id, email, name, agent_type, created_by_user_id, agent_metadata) VALUES
-      ($1, 'a@x', 'person', NULL, NULL, '{}'::jsonb),
-      ($2, 'm@x', 'Mac', 'machine', $1, $3::jsonb)`,
+    `INSERT INTO users (id, email, name, user_type, agent_type, created_by_user_id, agent_metadata) VALUES
+      ($1, 'a@x', 'person', 'human', NULL, NULL, '{}'::jsonb),
+      ($2, 'm@x', 'Mac', 'agent', 'machine', $1, $3::jsonb)`,
     [
       PERSON,
       MAC,
