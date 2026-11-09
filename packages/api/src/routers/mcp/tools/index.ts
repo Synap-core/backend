@@ -2431,7 +2431,7 @@ export const tools = {
               type: "string",
               enum: ["light", "full"],
               description:
-                "light (default) = startHere + names/ids/domain/counts + onboarding goal, empty domains and the entity-type inventory omitted; full = every workspace, descriptions, full onboarding spec, per-workspace profiles, and the lens-model explanation in `note`.",
+                "light (default) or full, as the tool description says.",
             },
             explain: {
               type: "boolean",
@@ -2478,7 +2478,7 @@ export const tools = {
               type: "string",
               enum: ["handedToYou"],
               description:
-                "Optional, agent keys only: answer just `{ handedToYou }` and nothing else (what a worker polls).",
+                "Agent keys: answer only `{ handedToYou }` (a worker's poll).",
             },
           },
           required: [],
