@@ -5,7 +5,8 @@
  * sessions). `detail: 'lean'` answers what a wake needs and nothing else:
  *
  *   - the session's identity and status,
- *   - its outcomes (key, label, kind, met, state) and the inputs it waits on,
+ *   - its outcomes (key, label, kind, owner, met, retired, state) and the
+ *     inputs it waits on,
  *   - the next move,
  *   - what is asked of the person (owed slots, pending proposals, open room
  *     questions),
@@ -158,7 +159,11 @@ export type LeanOutcomesSection =
         key: string;
         label: string;
         kind: string;
+        /** Whose it is: a person's slot is never an agent's to claim. */
+        owner: "agent" | "human";
         met: boolean;
+        /** Withdrawn: owed by no one, never claimed. */
+        retired: boolean;
         state: string;
       }>;
       inputs: Array<{
@@ -187,7 +192,9 @@ export function projectLeanOutcomes(
       key: o.key,
       label: o.label,
       kind: o.kind,
+      owner: o.owner,
       met: o.met,
+      retired: o.retired,
       state: o.state.state,
     })),
     inputs: section.inputs.map((i) => ({

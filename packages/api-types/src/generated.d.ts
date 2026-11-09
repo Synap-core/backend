@@ -23856,6 +23856,10 @@ export type LeanOutcomesSection = {
 		kind: string;
 		label: string;
 		met: boolean;
+		/** Whose it is: a person's slot is never an agent's to claim. */
+		owner: "agent" | "human";
+		/** Withdrawn: owed by no one, never claimed. */
+		retired: boolean;
 		state: string;
 	}>;
 	status: "ok";

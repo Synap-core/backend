@@ -2470,6 +2470,12 @@ export const tools = {
               description:
                 "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals. An unknown part is refused.",
             },
+            only: {
+              type: "string",
+              enum: ["handedToYou"],
+              description:
+                "Optional, agent keys only: answer just `{ handedToYou }` and nothing else (what a worker polls).",
+            },
           },
           required: [],
         },
