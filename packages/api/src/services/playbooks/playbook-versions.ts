@@ -101,3 +101,32 @@ export async function loadPlaybookVersion(
     .limit(1);
   return row?.definition ?? null;
 }
+
+/**
+ * `playbook` as it stood at the kept `version` (a step that `uses` it is pinned
+ * there): every kept field of that version over the live row, `version` set to
+ * the pin. The live row is returned unchanged when it IS that version. Throws
+ * when the pod does not keep the version (the write door refuses such a pin;
+ * this is the floor for a definition written before it). The caller has
+ * already checked the playbook itself is visible.
+ */
+export async function playbookAtVersion<P extends Playbook>(
+  reader: DbOrTx,
+  playbook: P,
+  version: number
+): Promise<P> {
+  if (playbook.version === version) return playbook;
+  const definition = await loadPlaybookVersion(reader, playbook.id, version);
+  if (!definition) {
+    throw new Error(
+      `Version ${version} of "${playbook.name}" is not kept: pin version ${playbook.version} or a kept one.`
+    );
+  }
+  const pinned = { ...playbook, version } as P;
+  for (const field of PLAYBOOK_VERSION_FIELDS) {
+    if (field in definition) {
+      (pinned as Record<string, unknown>)[field] = definition[field];
+    }
+  }
+  return pinned;
+}
