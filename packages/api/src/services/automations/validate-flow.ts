@@ -650,6 +650,24 @@ export function validateFlowDefinition(
       loopBodyNodeIds.add(id);
     }
   }
+  // A loop runs MANY playbook runs on one step: none of them can be awaited
+  // (runner engine slice 5). Refused here, by the same ownership walk the
+  // executor applies; the executor keeps its own refusal as the floor.
+  for (const node of nodes) {
+    if (
+      nonEmptyString(node.id) &&
+      node.type === "playbook_run" &&
+      loopBodyNodeIds.has(node.id) &&
+      isRecord(node.data) &&
+      node.data.await === true
+    ) {
+      errors.push({
+        nodeId: node.id,
+        code: "playbook_run_await_in_loop",
+        message: `Playbook-run node "${node.id}" awaits its run, but it is inside a loop body, which starts one run per item and cannot wait on one. Move the node out of the loop or drop await.`,
+      });
+    }
+  }
   for (const node of nodes) {
     if (!nonEmptyString(node.id)) continue;
     const refs = collectLoopBindingRefs(node.data);
