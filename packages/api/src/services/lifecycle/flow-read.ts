@@ -372,7 +372,7 @@ export async function readFlowOf(
       workedBy: item.workedBy ?? [],
       ...(input.properties ? { properties: item.card?.properties ?? {} } : {}),
       next,
-      blocker: blockerOf(item.id),
+      blocker: { blocked: false, count: 0, why: null, ball: null, unlocks: null, clearedBy: null, ref: null },
     };
   };
 

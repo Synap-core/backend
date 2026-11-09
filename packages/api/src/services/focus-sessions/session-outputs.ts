@@ -557,7 +557,7 @@ export async function listSessionOutputsWithOutcomes(
     )
   ).map(({ subjectEntityId: _subject, ...e }) => e as PendingExpected);
   return attachSessionOutcomes(
-    { ...joined.result, pendingExpected },
+    { ...joined.result, pendingExpected: joined.result.pendingExpected },
     joined.slots,
     {
       criteria: session.criteria,
