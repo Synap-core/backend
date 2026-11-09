@@ -105,6 +105,28 @@
             "type": "boolean",
             "description": "With a lastInteraction window: also return the people never contacted (no interaction recorded). Default false."
           },
+          "filters": {
+            "type": "array",
+            "maxItems": 10,
+            "description": "View filters, ANDed, at most 10 — the same grammar as Hub GET /entities `filters`: [{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]. `field` is title, preview, type, createdAt, updatedAt or `properties.<slug>`; `operator` is equals, not_equals, contains, not_contains, in, not_in, greater_than, greater_than_or_equal, less_than, less_than_or_equal, is_empty or is_not_empty. A `properties.<slug>` clause needs `profileSlug` naming a kind that declares it. An unknown or secret property, or a malformed filter, is an error — never ignored. Only narrows what you already read.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "operator": {
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": ["field", "operator"]
+            }
+          },
+          "includeFacets": {
+            "type": "boolean",
+            "description": "true = each row also carries `facetSlugs` and `facets` (each role facet with its overlay `properties` and `status`, e.g. a lead's stage), on rows wearing at least one role. Default false."
+          },
           "limit": {
             "type": "number",
             "default": 50,
