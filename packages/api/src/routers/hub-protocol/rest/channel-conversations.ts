@@ -772,7 +772,11 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
           { channelId, draftId },
           "a draft's revision history does not end at its words"
         );
-        return c.json({ error: err.message }, 500);
+        // A server fault (no refusal in its cause): the mapper answers 500.
+        return c.json(
+          { error: err.message },
+          httpStatusForTrpcError(err) as never
+        );
       }
       logger.error(
         { err, channelId, draftId },
