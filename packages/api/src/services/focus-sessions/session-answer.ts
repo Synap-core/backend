@@ -48,6 +48,15 @@
  * (continuation packet `aiCanDo[].answer`, the `answered` nudge, or the poll
  * door `GET /focus-sessions/:id/answers`).
  *
+ * ── A FREE MESSAGE (founder, 9 Nov 2026) ────────────────────────────────────
+ * The owner's message with NO open question wakes the session's agent too
+ * (`wakeOnFreeMessage`), while the session is `active`: the first staffed
+ * agent the pod can reach gets ONE turn (pod-run) or its binding's `send`
+ * (dispatch); an agent on a computer reads it as the `owner_message` change it
+ * already got. A burst is one turn: at most one wake per session per
+ * `FREE_MESSAGE_WAKE_WINDOW_MS`; the woken turn reads the room, so the later
+ * messages of the window reach it. Each woken turn costs credits.
+ *
  * Side-effect helpers never throw into the caller's send: a failure here is
  * logged and the message the person sent still stands.
  */
@@ -125,6 +134,7 @@ import { agentsOperatedBy } from "../agent-presence.js";
 import { wakeExternalAgent } from "../agent-dispatch/wake-external-agent.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { isTerminalSessionStatus } from "./session-statuses.js";
+import { MESSAGE_WAKE_META_KEY } from "./session-metadata.js";
 import {
   attestExpectedOutput,
   criterionMetBy,
@@ -527,6 +537,8 @@ async function wake(p: {
   confirmation?: { confirmationId: string; decision: "approved" | "rejected" };
   /** The answer's typed value, when it has one: a confirmed YES continues a stopped run. */
   value?: SlotAnswerValue;
+  /** The owner's FREE message (no open question): it answers nothing. */
+  freeMessage?: boolean;
 }): Promise<boolean> {
   if (!p.target) return false;
   if (p.target.reach === "dispatch") {
@@ -541,10 +553,10 @@ async function wake(p: {
             decision: p.confirmation.decision,
             confirmationId: p.confirmation.confirmationId,
           }
-        : { kind: "answer" as const }),
+        : { kind: p.freeMessage ? ("message" as const) : ("answer" as const) }),
       text: p.content,
       ...(p.slotLabel ? { slotKey: p.slotLabel } : {}),
-      idempotencyKey: `answer:${p.messageId}`,
+      idempotencyKey: `${p.freeMessage ? "message" : "answer"}:${p.messageId}`,
     });
     return sent.status === "sent";
   }
@@ -574,6 +586,97 @@ async function wake(p: {
   });
 }
 
+/**
+ * How long one wake of the owner's FREE message covers (founder, 9 Nov 2026,
+ * outcome `wake-on-message` on session 4e027878): a burst of messages is ONE
+ * turn. The woken turn reads the room, so a message sent inside the window
+ * reaches it without a turn of its own.
+ */
+export const FREE_MESSAGE_WAKE_WINDOW_MS = 60_000;
+
+/**
+ * Take the session's wake window, atomically: true when no wake of this
+ * session started in the last `FREE_MESSAGE_WAKE_WINDOW_MS` (or `force`, the
+ * answer path, which always wakes and only opens the window), and the session
+ * is `active`. Two concurrent sends cannot both take it (one UPDATE). The stamp
+ * is server-owned (`MESSAGE_WAKE_META_KEY`): a forged future date would mute
+ * the agent.
+ */
+async function takeMessageWakeWindow(
+  sessionId: string,
+  now: Date,
+  force = false
+): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - FREE_MESSAGE_WAKE_WINDOW_MS);
+  const at = drizzleSql`(${focusSessions.metadata} -> ${MESSAGE_WAKE_META_KEY} ->> 'at')`;
+  const rows = await db
+    .update(focusSessions)
+    .set({
+      metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || jsonb_build_object(${MESSAGE_WAKE_META_KEY}::text, jsonb_build_object('at', ${now.toISOString()}::text))`,
+    })
+    .where(
+      and(
+        eq(focusSessions.id, sessionId),
+        eq(focusSessions.status, "active"),
+        force
+          ? undefined
+          : drizzleSql`(${at} IS NULL OR ${at}::timestamptz <= ${cutoff.toISOString()}::timestamptz)`
+      )
+    )
+    .returning({ id: focusSessions.id });
+  return rows.length > 0;
+}
+
+/**
+ * The owner's FREE message (no open question) wakes the session's agent
+ * (founder, 9 Nov 2026): only while the session is `active`, the first staffed
+ * agent the pod can reach (`resolveWakeTarget`, no asker), at most once per
+ * window (`takeMessageWakeWindow`). An agent on a computer (`pull`) is not
+ * woken here: it reads the message as the `owner_message` change. Never
+ * throws: the message stands whatever happens.
+ */
+async function wakeOnFreeMessage(p: {
+  channelId: string;
+  messageId: string;
+  content: string;
+  ownerId: string;
+  sessionId: string;
+}): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({
+        status: focusSessions.status,
+        agentIds: focusSessions.agentIds,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, p.sessionId))
+      .limit(1);
+    if (row?.status !== "active") return false;
+    const target = await resolveWakeTarget({ agentIds: row.agentIds ?? [] });
+    if (!target) return false;
+    if (!(await takeMessageWakeWindow(p.sessionId, new Date()))) return false;
+    return await wake({ ...p, target, freeMessage: true });
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: p.sessionId, messageId: p.messageId },
+      "owner room message: waking the session's agent failed — the message stands"
+    );
+    return false;
+  }
+}
+
+/** An answer's wake opens the window too: the messages right after it are read by that turn. */
+async function openWakeWindowAfterAnswer(sessionId: string): Promise<void> {
+  try {
+    await takeMessageWakeWindow(sessionId, new Date(), true);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "owner room reply: the wake window was not stamped"
+    );
+  }
+}
+
 // ── Entrance 1: the owner's reply in the room ────────────────────────────────
 
 /**
@@ -585,7 +688,12 @@ export type OwnerRoomReplySlotStatus =
   AnswerExpectedOutputResult["status"] | "kept_owed";
 
 export type OwnerRoomReplyResult =
-  | { status: "no_session" | "not_owner" | "no_open_question" | "failed" }
+  | { status: "no_session" | "not_owner" | "failed" }
+  | {
+      status: "no_open_question";
+      /** A free message that woke the session's agent (`wakeOnFreeMessage`); absent otherwise. */
+      woke?: true;
+    }
   | {
       status: "answered";
       questionId: string;
@@ -702,13 +810,23 @@ export async function recordOwnerRoomReply(p: {
     if (session.userId !== p.userId) return { status: "not_owner" };
 
     const question = await findOpenQuestion(p.channelId);
-    // WAKE SEAM (decision pending: outcome `wake-on-message` on session
-    // 4e027878, plan "The run's room inside the app" decision 1): the owner's
-    // free message with no open question wakes nobody here, so a pod-run
-    // agent mid-run gets no new turn (a waiting agent still reads it as an
-    // `owner_message` change). Waking it would go on this branch, for both
-    // send doors, through the same `wake` and `resolveWakeTarget` as below.
-    if (!question) return { status: "no_open_question" };
+    // A FREE message (founder, 9 Nov 2026, outcome `wake-on-message` on
+    // session 4e027878): it answers nothing, and wakes the session's agent,
+    // once per window (`wakeOnFreeMessage`), for both send doors.
+    if (!question) {
+      const woke = p.wake
+        ? await wakeOnFreeMessage({
+            channelId: p.channelId,
+            messageId: p.messageId,
+            content: p.content,
+            ownerId: p.userId,
+            sessionId: session.id,
+          })
+        : false;
+      return woke
+        ? { status: "no_open_question", woke: true }
+        : { status: "no_open_question" };
+    }
 
     if (question.confirmationId) {
       // An APPROVAL CARD is answered from the card (a typed approve / reject),
@@ -728,6 +846,7 @@ export async function recordOwnerRoomReply(p: {
             slotLabel: question.slotLabel,
           })
         : false;
+      if (woke) await openWakeWindowAfterAnswer(session.id);
       return {
         status: "answered",
         questionId: question.id,
@@ -798,6 +917,7 @@ export async function recordOwnerRoomReply(p: {
           ...(answeredValue ? { value: answeredValue } : {}),
         })
       : false;
+    if (woke) await openWakeWindowAfterAnswer(session.id);
 
     return {
       status: "answered",

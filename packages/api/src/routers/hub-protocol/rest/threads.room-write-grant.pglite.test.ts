@@ -30,13 +30,21 @@
  *   - an agent-acting app's post stored as the person's;
  *   - a room in a space the grant does not tick written;
  *   - a channel that is no session's room written without `message.create`;
- *   - the owner's own AI (`synap session post`) refused in a session's room.
+ *   - the owner's own AI (`synap session post`) refused in a session's room;
+ *   - the owner's FREE message (no open question) in a running session not
+ *     waking its pod-run agent, or waking it twice within the window
+ *     (`FREE_MESSAGE_WAKE_WINDOW_MS`, founder 9 Nov 2026), or never again
+ *     once the window passed;
+ *   - a closed or paused session, or an agent key's message, waking anyone;
+ *   - a reply to an open question waking the agent twice (the answer path
+ *     and the free-message path), or the message right after it waking again.
  *
  * Seams replaced, and why: the event store and `auditLog` write through the
  * postgres-js client this harness has not (recorders); `createPendingProposal`
  * inserts on the transaction it is given; the guest check and sub-token
  * mapping are constant answers; the message event, side effects and the AI
- * turn are recorders (a post's fan-out, not its gate).
+ * turn are recorders (a post's fan-out, not its gate); `triggerAutoRespond`
+ * records each turn a post starts, which is what the wake rows count.
  *
  * Cannot see: production Postgres; a real Content Studio deployment.
  */
@@ -54,6 +62,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  /** Every agent turn a post started (`triggerAutoRespond`). */
+  turns: [] as Array<Record<string, any>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -85,7 +95,10 @@ vi.mock("@synap/events", async (importOriginal) => ({
 }));
 vi.mock("../../../utils/audit-log.js", () => ({ auditLog: async () => null }));
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
-  triggerAutoRespond: async () => undefined,
+  triggerAutoRespond: async (input: Record<string, any>) => {
+    h.turns.push(input);
+    return true;
+  },
 }));
 vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -174,6 +187,14 @@ const FINANCE_ROOM = randomUUID();
 const FINANCE_SESSION = randomUUID();
 /** A plain conversation in Content OS: no session's room. */
 const THREAD = randomUUID();
+/** An agent the pod runs (no key of its own, no dispatch binding). */
+const POD_AGENT = randomUUID();
+/** Runs in Content OS staffed with POD_AGENT, one per wake row. */
+const WAKE = { room: randomUUID(), session: randomUUID() };
+const CLOSED = { room: randomUUID(), session: randomUUID() };
+const PAUSED = { room: randomUUID(), session: randomUUID() };
+const BY_AGENT = { room: randomUUID(), session: randomUUID() };
+const ANSWER = { room: randomUUID(), session: randomUUID() };
 
 const TICKED: Record<string, string[]> = {
   [STUDIO]: [CHANNEL_READ, SESSION_UPDATE],
@@ -215,16 +236,28 @@ const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 /** A session room, as `ensureSessionChannel` mints it, and its session. */
-async function seedRun(room: string, session: string, workspaceId: string) {
+async function seedRun(
+  room: string,
+  session: string,
+  workspaceId: string,
+  opts: { status?: string; agentIds?: string[] } = {}
+) {
   await q(
     `insert into channels (id, user_id, workspace_id, channel_type, scope, status, title, context_object_type, context_object_id, metadata)
      values ($1,$2,$3,'group','workspace','active','Run','focus_session',$4,'{}'::jsonb)`,
     [room, OWNER, workspaceId, session]
   );
   await q(
-    `insert into focus_sessions (id, user_id, workspace_id, channel_id, goal, status, expected_outputs, metadata)
-     values ($1,$2,$3,$4,'Make a carousel','active','[]'::jsonb,'{}'::jsonb)`,
-    [session, OWNER, workspaceId, room]
+    `insert into focus_sessions (id, user_id, workspace_id, channel_id, goal, status, agent_ids, expected_outputs, metadata)
+     values ($1,$2,$3,$4,'Make a carousel',$5,$6,'[]'::jsonb,'{}'::jsonb)`,
+    [
+      session,
+      OWNER,
+      workspaceId,
+      room,
+      opts.status ?? "active",
+      opts.agentIds ?? [],
+    ]
   );
 }
 
@@ -273,6 +306,22 @@ beforeAll(async () => {
   }
   await seedRun(ROOM, SESSION, CONTENT);
   await seedRun(FINANCE_ROOM, FINANCE_SESSION, FINANCE);
+  await q(
+    `insert into users (id, email, name, user_type, agent_type) values ($1,'meta@x','Meta','agent','meta')`,
+    [POD_AGENT]
+  );
+  for (const [run, status] of [
+    [WAKE, "active"],
+    [CLOSED, "closed"],
+    [PAUSED, "paused"],
+    [BY_AGENT, "active"],
+    [ANSWER, "active"],
+  ] as const) {
+    await seedRun(run.room, run.session, CONTENT, {
+      status,
+      agentIds: [POD_AGENT],
+    });
+  }
   await q(
     `insert into channels (id, user_id, workspace_id, channel_type, scope, status, title, metadata)
      values ($1,$2,$3,'thread','workspace','active','Notes','{}'::jsonb)`,
@@ -378,6 +427,10 @@ async function postBatch(bearer: string, channelId: string, items: unknown[]) {
   );
   return { status: res.status, body: (await res.json()) as any };
 }
+
+/** The agent turns a post started for this session. */
+const turnsOf = (sessionId: string) =>
+  h.turns.filter((t) => t.focusSessionId === sessionId);
 
 const messagesIn = async (channelId: string) =>
   (
@@ -549,5 +602,109 @@ describe("a post in a room needs a write grant, not only a read", () => {
     });
     expect(plain.status).toBe(403);
     expect(plain.body.error).toMatch(/grant does not allow "message\.create"/);
+  });
+  // ── the owner's free message wakes the run's agent (founder, 9 Nov 2026) ──
+
+  it("the owner's free message in a running session wakes its agent once; a burst inside the window is that same turn", async () => {
+    const first = await post(token[STUDIO]!, WAKE.room, {
+      role: "user",
+      content: "Make it warmer.",
+      userId: OWNER,
+    });
+    const second = await post(token[STUDIO]!, WAKE.room, {
+      role: "user",
+      content: "And shorter.",
+      userId: OWNER,
+    });
+    expect([first.status, second.status]).toEqual([200, 200]);
+    // Both are stored as the person's words, exactly as before.
+    const stored = await messagesIn(WAKE.room);
+    expect(stored.map((m) => [m.content, m.author_type]).sort()).toEqual([
+      ["And shorter.", "human"],
+      ["Make it warmer.", "human"],
+    ]);
+    const turns = turnsOf(WAKE.session);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({
+      channelId: WAKE.room,
+      userMessageId: first.body.messageId,
+      sourceUserId: OWNER,
+      agentType: "meta",
+    });
+    // Once the window has passed, the next message wakes it again.
+    await q(
+      `update focus_sessions set metadata = jsonb_set(metadata, '{messageWake,at}', to_jsonb((now() - interval '2 minutes')::text)) where id = $1`,
+      [WAKE.session]
+    );
+    const later = await post(token[STUDIO]!, WAKE.room, {
+      role: "user",
+      content: "One more thing.",
+      userId: OWNER,
+    });
+    expect(later.status).toBe(200);
+    expect(turnsOf(WAKE.session)).toHaveLength(2);
+  });
+
+  it("a session that is not running wakes nobody: closed, paused", async () => {
+    for (const run of [CLOSED, PAUSED]) {
+      const res = await post(token[STUDIO]!, run.room, {
+        role: "user",
+        content: "Are you there?",
+        userId: OWNER,
+      });
+      expect(res.status).toBe(200);
+      expect(await messagesIn(run.room)).toHaveLength(1);
+      expect(turnsOf(run.session)).toHaveLength(0);
+    }
+  });
+
+  it("an agent key's message wakes nobody; the person's next one does", async () => {
+    const byAgent = await post(token[OTHER]!, BY_AGENT.room, {
+      role: "user",
+      content: "Status?",
+      userId: OWNER,
+    });
+    expect(byAgent.status).toBe(200);
+    expect(turnsOf(BY_AGENT.session)).toHaveLength(0);
+    const byPerson = await post(token[STUDIO]!, BY_AGENT.room, {
+      role: "user",
+      content: "Status?",
+      userId: OWNER,
+    });
+    expect(byPerson.status).toBe(200);
+    expect(turnsOf(BY_AGENT.session)).toHaveLength(1);
+  });
+
+  it("a reply to an open question takes the answer path: one wake, and the message right after is that turn's too", async () => {
+    const question = randomUUID();
+    await q(
+      `insert into messages (id, channel_id, user_id, content, role, author_type, routed_teammate_id, metadata, timestamp)
+       values ($1,$2,$3,'Which pillar?','assistant','ai_agent',$4,'{"roomPost":{"kind":"question"}}'::jsonb, now())`,
+      [question, ANSWER.room, OWNER, POD_AGENT]
+    );
+    const reply = await post(token[STUDIO]!, ANSWER.room, {
+      role: "user",
+      content: "Craft.",
+      userId: OWNER,
+    });
+    expect(reply.status).toBe(200);
+    const [asked] = (await messagesIn(ANSWER.room)).filter(
+      (m) => m.id === question
+    );
+    expect(asked!.metadata?.roomPost?.answer).toMatchObject({
+      messageId: reply.body.messageId,
+    });
+    expect(turnsOf(ANSWER.session)).toHaveLength(1);
+    expect(turnsOf(ANSWER.session)[0]).toMatchObject({
+      userMessageId: reply.body.messageId,
+      agentType: "meta",
+    });
+    const after = await post(token[STUDIO]!, ANSWER.room, {
+      role: "user",
+      content: "Oh, and keep it short.",
+      userId: OWNER,
+    });
+    expect(after.status).toBe(200);
+    expect(turnsOf(ANSWER.session)).toHaveLength(1);
   });
 });
