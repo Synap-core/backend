@@ -37,6 +37,8 @@ export type ConversionOp =
   | FoldRoleIntoStatusOp
   | RenameProfileOp
   | ProjectLifecycleColumnsOp
+  | FillFacetInitialStatusOp
+  | DeriveLifecycleListsOp
   | FoldBookingDealIntoLeadOp
   | RekindByStatusOp;
 
@@ -670,6 +672,30 @@ export type RenamePropertyKeyConflict =
  */
 export interface ProjectLifecycleColumnsOp extends BaseOp {
   op: "projectLifecycleColumns";
+}
+
+/**
+ * Status-first wave (doors audit 1bb7b083, bug 6): a role's facet born with NO
+ * status gets its lifecycle's initial status — column, category and the
+ * `properties[<slug>]` mirror together, as a facet birth now does. Only a
+ * non-terminal, non-person-only initial status is filled (the birth rule);
+ * a facet that holds a mirror value is `projectLifecycleColumns`' to fill.
+ * Idempotent. (`services/lifecycle/heal-lifecycle-declarations.ts`)
+ */
+export interface FillFacetInitialStatusOp extends BaseOp {
+  op: "fillFacetInitialStatus";
+}
+
+/**
+ * Status-first wave (doors audit bug 5): ONE option list per lifecycle. The
+ * stored `uiHints.enumValues` (categorised option keys) and
+ * `constraints.defaultValue` (the declaring link's initial status) of every
+ * lifecycle def are rewritten from `constraints.enumOptions`, the declaration;
+ * a stale copy is only ever replaced, never added. Idempotent.
+ * (`services/lifecycle/heal-lifecycle-declarations.ts`)
+ */
+export interface DeriveLifecycleListsOp extends BaseOp {
+  op: "deriveLifecycleLists";
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -1849,6 +1875,17 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "projectLifecycleColumns",
       opKey: "w12.lifecycle.project-columns",
     },
+    // ─── Status-first wave: facets born without a status, one option list ────
+    // After the column fill, so a facet whose mirror holds a value is projected
+    // first and only a truly status-less facet gets the initial status.
+    {
+      op: "fillFacetInitialStatus",
+      opKey: "sf1.lifecycle.fill-facet-initial-status",
+    },
+    {
+      op: "deriveLifecycleLists",
+      opKey: "sf1.lifecycle.derive-option-lists",
+    },
 
     {
       op: "renameProfile",
@@ -2258,6 +2295,8 @@ export const CONVERSION_OP_TYPES = [
   "foldRoleIntoStatus",
   "renameProfile",
   "projectLifecycleColumns",
+  "fillFacetInitialStatus",
+  "deriveLifecycleLists",
   "foldBookingDealIntoLead",
   "rekindByStatus",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
@@ -2549,6 +2588,8 @@ export function validateManifest(manifest: ConversionManifest): void {
         }
         break;
       case "projectLifecycleColumns":
+      case "fillFacetInitialStatus":
+      case "deriveLifecycleLists":
         break; // no parameters: every declared lifecycle
       case "renameProfile":
         requireSlug(op.opKey, op.slug);

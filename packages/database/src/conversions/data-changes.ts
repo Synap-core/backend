@@ -92,6 +92,8 @@ const OP_PROFILE_SLUGS: {
   renameProfile: (op) => [op.slug, op.toSlug],
   // Fills lifecycle columns for EVERY kind or role that declares a lifecycle.
   projectLifecycleColumns: () => EVERY_PROFILE,
+  fillFacetInitialStatus: () => EVERY_PROFILE,
+  deriveLifecycleLists: () => EVERY_PROFILE,
   foldBookingDealIntoLead: (op) => [
     op.slug,
     op.lead.personSlug,
@@ -155,6 +157,8 @@ const CHANGED_COUNTERS = [
   "propertyDefRelationsRepointed",
   "relationDefsDeleted",
   "lifecycleColumnsProjected",
+  "facetsInitialStatusFilled",
+  "lifecycleListsHealed",
   "dealsConverted",
   "leadsAdvanced",
   "relationsCreated",
@@ -271,6 +275,10 @@ export function describeConversionOp(
         : `Rename the kind "${kind(op.slug)}" to "${op.displayName ?? kind(op.toSlug)}".`;
     case "projectLifecycleColumns":
       return "Fill in each thing's lifecycle status from the value it already holds.";
+    case "fillFacetInitialStatus":
+      return "Give each role that has no status yet the status its lifecycle starts in.";
+    case "deriveLifecycleLists":
+      return "Make each lifecycle's pick-list and default follow its one list of statuses.";
     case "foldBookingDealIntoLead":
       return `Turn each untouched booked-call "${kind(op.slug)}" into a "${kind(op.lead.role)}" at "${op.lead.status}" on its person, linking the call; edited ones are kept.`;
     case "rekindByStatus": {

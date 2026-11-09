@@ -28,6 +28,7 @@ import { readStoredEnumOptions } from "../utils/property-enum.js";
 import {
   isLifecycleCategory,
   parseLifecycleOptions,
+  withDerivedLifecycleLists,
   type EffectiveLifecycle,
 } from "../utils/lifecycle-model.js";
 import type { AiPosture } from "../schema/profiles.js";
@@ -841,6 +842,15 @@ export class ProfileResolutionService {
      * overlay fields matter less — only that a stable, explicable order beats
      * an interleaving nobody chose.
      */
+    // ONE option list per lifecycle: the form-facing copies are derived from
+    // `enumOptions`, never read from what a pod stored beside it.
+    if (lifecycleSlug) {
+      const lifecycleProp = propertyMap.get(lifecycleSlug);
+      if (lifecycleProp) {
+        propertyMap.set(lifecycleSlug, withDerivedLifecycleLists(lifecycleProp));
+      }
+    }
+
     const result = Array.from(propertyMap.values()).sort(
       compareEffectiveProperties
     );

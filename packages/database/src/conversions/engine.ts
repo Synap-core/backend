@@ -52,6 +52,10 @@ import {
   lifecycleProjectionQueries,
   type LifecycleProjectionScope,
 } from "../services/lifecycle/project-lifecycle-columns.js";
+import {
+  deriveLifecycleLists,
+  fillFacetInitialStatus,
+} from "../services/lifecycle/heal-lifecycle-declarations.js";
 import { EVERY_PROFILE, opProfileSlugs } from "./data-changes.js";
 import {
   classifyRelationDefCopies,
@@ -162,6 +166,10 @@ export interface OpCounts {
   lifecycleColumnsProjected?: number;
   /** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
   lifecycleUncategorized?: number;
+  /** fillFacetInitialStatus: facets given their lifecycle's initial status. */
+  facetsInitialStatusFilled?: number;
+  /** deriveLifecycleLists: lifecycle defs whose stored option list / default was rewritten. */
+  lifecycleListsHealed?: number;
   /** renameProfile: entities whose `type` was rewritten to the new slug. */
   entitiesRetyped?: number;
   /** renameProfile (`fromTemplate`): rows left because a `toSlug` twin already sits beside them. */
@@ -287,6 +295,8 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   // Derivation only: an unfilled column reads as "no status yet"; the declare
   // door and the next boot fill it.
   projectLifecycleColumns: "advisory",
+  fillFacetInitialStatus: "advisory",
+  deriveLifecycleLists: "advisory",
   reconcileEntityScope: "advisory",
   reconcileFacetScope: "advisory",
   keep: "advisory",
@@ -649,6 +659,10 @@ async function applyOp(
       return applyRekindByStatus(tx, op);
     case "projectLifecycleColumns":
       return applyProjectLifecycleColumns(tx);
+    case "fillFacetInitialStatus":
+      return applyHeal(tx, "facetsInitialStatusFilled", fillFacetInitialStatus);
+    case "deriveLifecycleLists":
+      return applyHeal(tx, "lifecycleListsHealed", deriveLifecycleLists);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -3035,10 +3049,34 @@ export async function computeCounts(
       }
       return {};
     }
+    case "fillFacetInitialStatus":
+    case "deriveLifecycleLists": {
+      // Dry run DERIVED from the apply: the same statements, rolled back.
+      try {
+        await sql.begin(async (tx) => {
+          const counts = await applyOp(tx as unknown as Sql, op, {} as RunOptions);
+          throw new DryRunRollback(counts, []);
+        });
+      } catch (e) {
+        if (e instanceof DryRunRollback) return e.counts;
+        throw e;
+      }
+      return {};
+    }
     case "keep":
     case "extractNonEntity":
       return {};
   }
+}
+
+/** Run one lifecycle heal and report its row count under `key`. */
+async function applyHeal(
+  tx: Sql,
+  key: "facetsInitialStatusFilled" | "lifecycleListsHealed",
+  heal: (tx: Sql) => Promise<number>
+): Promise<OpCounts> {
+  const n = await heal(tx);
+  return n ? { [key]: n } : {};
 }
 
 /**
