@@ -87,6 +87,7 @@ import {
   renderPlaybookMethod,
 } from "../playbook-method.js";
 import { IsAgentExecutor } from "../executors/is-agent-executor.js";
+import { TRIAL_KICKOFF_NOTE, readTrialDraft } from "../trial-run.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -521,5 +522,104 @@ describe("every door renders the same section", () => {
       hash: rendered.hash,
       used: rendered.used,
     });
+  });
+});
+
+describe("a TRIAL run (the rule lab, slice 1b)", () => {
+  it("renders the draft in place of the current version, says it is a trial, and records what it replaced", async () => {
+    const sessionId = randomUUID();
+    const channelId = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, channel_id, metadata, created_at, updated_at)
+       values ($1, $2, 'Try the v2 voice', 'active', $3, $4::jsonb, now(), now())`,
+      [
+        sessionId,
+        USER,
+        channelId,
+        JSON.stringify({
+          trial: { guidanceOverride: { [APPROVED_VOICE]: DRAFT_VOICE } },
+        }),
+      ]
+    );
+    const runId = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, definition_snapshot)
+       values ($1, $2, $3, 'is-agent', 'running', '{}'::jsonb, $4, $5::jsonb)`,
+      [
+        runId,
+        PLAYBOOK,
+        sessionId,
+        USER,
+        JSON.stringify({ version: 1, guidance: { declared: GUIDANCE } }),
+      ]
+    );
+    h.kickoffs.length = 0;
+    const res = await new IsAgentExecutor().run({
+      workspaceId: WS,
+      userId: USER,
+      playbookId: PLAYBOOK,
+      sessionId,
+      channelId,
+      goal: "Draft the first message to Jane.",
+      capabilities: [],
+      input: { runId },
+    });
+    expect(res.status).toBe("running");
+    const kickoff = h.kickoffs[0]!;
+    expect(kickoff).toContain(SAID.draft);
+    expect(kickoff).not.toContain(SAID.approved);
+    expect(kickoff).toContain(TRIAL_KICKOFF_NOTE);
+
+    const [run] = (
+      await q<{ definition_snapshot: Record<string, any> }>(
+        `select definition_snapshot from playbook_runs where id = $1`,
+        [runId]
+      )
+    ).rows;
+    expect(run!.definition_snapshot.guidance.used[0].rows).toEqual([
+      { id: DRAFT_VOICE, version: "1", replaces: APPROVED_VOICE },
+    ]);
+  });
+
+  it("NEGATIVE: the same run outside a trial renders the current version", async () => {
+    h.kickoffs.length = 0;
+    await new IsAgentExecutor().run({
+      workspaceId: WS,
+      userId: USER,
+      playbookId: PLAYBOOK,
+      sessionId: randomUUID(),
+      channelId: randomUUID(),
+      goal: "Draft the first message to Jane.",
+      capabilities: [],
+      input: {},
+    });
+    expect(h.kickoffs[0]).toContain(SAID.approved);
+    expect(h.kickoffs[0]).not.toContain(TRIAL_KICKOFF_NOTE);
+  });
+
+  it("its drafted text is the agent's last reply in its room; null until it answers; no trial on another run", async () => {
+    const channelId = randomUUID();
+    const metadata = {
+      trial: { guidanceOverride: { [APPROVED_VOICE]: DRAFT_VOICE } },
+    };
+    expect(await readTrialDraft({ metadata, channelId })).toEqual({
+      guidanceOverride: { [APPROVED_VOICE]: DRAFT_VOICE },
+      draftedText: null,
+      draftedAt: null,
+    });
+    for (const [role, content, at] of [
+      ["user", "kickoff", "2026-11-08T10:00:00Z"],
+      ["assistant", "First try", "2026-11-08T10:01:00Z"],
+      ["assistant", "Hi Jane, your Malt brief…", "2026-11-08T10:02:00Z"],
+    ] as const) {
+      await q(
+        `insert into messages (id, channel_id, user_id, role, content, timestamp) values ($1, $2, $3, $4, $5, $6)`,
+        [randomUUID(), channelId, USER, role, content, at]
+      );
+    }
+    expect(await readTrialDraft({ metadata, channelId })).toMatchObject({
+      draftedText: "Hi Jane, your Malt brief…",
+    });
+    expect(await readTrialDraft({ metadata: {}, channelId })).toBeNull();
   });
 });

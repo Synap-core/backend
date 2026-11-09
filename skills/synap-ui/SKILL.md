@@ -32,7 +32,7 @@ You build the surfaces the user sees: views over their data, bento dashboards, f
 
 ## Apps are views of pod state
 
-Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from `flow.of` (tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`): the kind's lifecycle in order, the playbook stage that owns each status, the things in each with who works them and their next step. A thing's own status and what holds it up come from `statusOf` (`GET /api/hub/orient?statusOf=<id>`). Moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
 ## Before you build anything
 
@@ -82,6 +82,7 @@ Widget definitions are the source of truth for which cells are installed and how
      1. `create_cell` a frame that reads what the kind's own page reads, through the bridge's intent reads: `lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list` (params and shapes: `synap` skill, ViewFrame Cells → "Intent reads"). Never pre-fetch rows into the source.
      2. `promote_cell_to_renderer({ profileSlug: "post", slot: "dashboard", cellKey })`. `dashboard` is the `entity-profile` content kind. It is governed, so `proposed` is success.
      - On a kind with a lifecycle the cell fills the **Dashboard** tab and the Pipeline tab stays the board (its moves and card frame are the kind's). On a kind without one, the cell is the page.
+     - An app that is not a frame (a board, a thing's page) reads `flow.of` for the kind; a cell reads `lifecycle.board`, the board lens `flow.of` is built on. Either way no status list or stage list is written by hand.
      - A saved view can take the same slot from the app (Keep → Become renderer of… → Whole profile dashboard). Any view type renders there.
 
 ---
@@ -124,7 +125,7 @@ POST /api/hub/views
   "type":        "kanban",
   "profileSlug": "task",
   "config": {
-    "groupBy":  { "property": "projectId" },
+    "groupByField": "projectId",
     "columns":  [
       { "slug": "title" },
       { "slug": "priority" },
@@ -138,7 +139,7 @@ POST /api/hub/views
 }
 ```
 
-The `config` shape varies by view type — kanban needs `groupBy`, calendar needs a date property, gallery needs an image property. When in doubt, fetch an existing view of the same type first and mirror its structure.
+The `config` shape varies by view type — kanban needs `groupByField` (a property key, a string; `groupBy` is not read), calendar needs a date property, gallery needs an image property. When in doubt, fetch an existing view of the same type first and mirror its structure.
 
 ---
 
@@ -206,7 +207,7 @@ The canonical flow:
      ],
      views: [
        { name: "Pipeline", type: "kanban", profileSlug: "draft",
-         config: { groupBy: { property: "status" } } },
+         config: { groupByField: "status" } },
        { name: "Published", type: "gallery", profileSlug: "article",
          config: { filters: [{ property: "status", op: "eq", value: "published" }] } }
      ],
@@ -251,7 +252,7 @@ Otherwise: add a view, add a bento block, add properties — don't multiply work
 3. Propose (before committing):
    - Workspace name: "CRM"
    - Views:
-     - `Deals Pipeline` — kanban on `deal`, groupBy `stage`
+     - `Deals Pipeline` — kanban on `deal`, `groupByField` `stage`
      - `Contacts` — table on `contact`, columns: name, role, company, lastInteraction
      - `Companies` — gallery on `company` (logo-forward)
      - `Upcoming Meetings` — calendar on `event`, filter `relatedToContact`

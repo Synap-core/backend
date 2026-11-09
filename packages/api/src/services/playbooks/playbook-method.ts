@@ -19,6 +19,7 @@
 
 import {
   getDb,
+  focusSessions,
   playbooks,
   skills,
   links,
@@ -36,7 +37,9 @@ import {
 import {
   loadPlaybookGuidance,
   recordRunGuidance,
+  type GuidanceOverride,
 } from "./playbook-guidance.js";
+import { trialStampOf, type TrialSessionStamp } from "@synap/capability-gate";
 
 /** The heading the context skill is rendered under. */
 export const PLAYBOOK_HOW_TO_HEADING = "## How to run this playbook";
@@ -150,10 +153,16 @@ export async function loadPlaybookContextSkill(
  */
 export async function loadMethodGuidance(
   playbookId: string,
-  userId: string
+  userId: string,
+  /** A trial's drafts, rendered in place of the current versions they name. */
+  override?: GuidanceOverride
 ): Promise<{ text: string; snapshot: GuidanceSnapshot }> {
   try {
-    const { rendered } = await loadPlaybookGuidance(playbookId, { userId });
+    const { rendered } = await loadPlaybookGuidance(
+      playbookId,
+      { userId },
+      override
+    );
     return { text: rendered.text, snapshot: guidanceSnapshotOf(rendered) };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
@@ -183,9 +192,21 @@ export async function loadRunMethodParts(input: {
   playbookId: string | undefined;
   userId: string;
   runId?: string | null;
+  /**
+   * The run's session: a TRIAL session (`metadata.trial`, the rule lab)
+   * renders its drafts in place of the current versions they name.
+   */
+  sessionId?: string | null;
   warn: (obj: Record<string, unknown>, msg: string) => void;
-}): Promise<{ contextSkill: string | null; guidance: string }> {
-  if (!input.playbookId) return { contextSkill: null, guidance: "" };
+}): Promise<{
+  contextSkill: string | null;
+  guidance: string;
+  /** The run is a trial: its kickoff says so (`TRIAL_KICKOFF_NOTE`). */
+  trial: boolean;
+}> {
+  if (!input.playbookId) {
+    return { contextSkill: null, guidance: "", trial: false };
+  }
   let contextSkill: string | null = null;
   try {
     contextSkill = await loadPlaybookContextSkill(input.playbookId);
@@ -197,7 +218,41 @@ export async function loadRunMethodParts(input: {
       "context skill lookup failed (non-fatal)"
     );
   }
-  const guidance = await loadMethodGuidance(input.playbookId, input.userId);
+  // A trial's drafts come from its OWN session's stamp, written by the
+  // runner: never from the executor's input. An unreadable session renders
+  // no rules and says so: a trial must never quietly render the current
+  // versions (the lab would compare the current text with itself).
+  let trial: TrialSessionStamp | null = null;
+  let sessionUnread: string | null = null;
+  if (input.sessionId) {
+    try {
+      const db = await getDb();
+      const [row] = await db
+        .select({ metadata: focusSessions.metadata })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, input.sessionId))
+        .limit(1);
+      trial = trialStampOf(row?.metadata);
+    } catch (err) {
+      sessionUnread = err instanceof Error ? err.message : String(err);
+      input.warn(
+        { err, sessionId: input.sessionId },
+        "reading whether the run is a trial failed (the rules section says so)"
+      );
+    }
+  }
+  const guidance = sessionUnread
+    ? {
+        text: guidanceUnavailableText(
+          `whether this run tries draft rules could not be read: ${sessionUnread}`
+        ),
+        snapshot: { status: "unavailable" as const, error: sessionUnread },
+      }
+    : await loadMethodGuidance(
+        input.playbookId,
+        input.userId,
+        trial?.guidanceOverride
+      );
   if (input.runId) {
     try {
       await recordRunGuidance(input.runId, guidance.snapshot);
@@ -208,7 +263,7 @@ export async function loadRunMethodParts(input: {
       );
     }
   }
-  return { contextSkill, guidance: guidance.text };
+  return { contextSkill, guidance: guidance.text, trial: trial !== null };
 }
 
 /** What a binding door hands the agent: the method, or why it could not. */

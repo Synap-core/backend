@@ -442,7 +442,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? } (forEach and when are declared, advisory until the executor lands). `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -459,7 +459,7 @@ const PLAYBOOK_STAGES_PROPERTY = {
           "canceled",
         ],
         description:
-          "Which rollup bucket this stage belongs to: backlog (not committed) · planned (committed, not begun) · started (work under way) · paused (on hold) · completed (terminal, succeeded) · canceled (terminal, abandoned).",
+          "Rollup bucket: backlog (not committed) · planned (committed, not begun) · started (under way) · paused (on hold) · completed (terminal, succeeded) · canceled (terminal, abandoned).",
       },
       description: { type: "string" },
       goal: { type: "string" },
@@ -512,6 +512,14 @@ const PLAYBOOK_PARAMS_PROPERTY = {
     },
     required: ["name", "type"],
   },
+};
+
+/** The rules a playbook follows (design b199a3a4), parsed by `playbookGuidanceSchema`. */
+const PLAYBOOK_GUIDANCE_PROPERTY = {
+  type: "array",
+  description:
+    "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>', label?, when?, where?: { <prop>: [values] } }]. Person-approved versions only.",
+  items: { type: "object" },
 };
 
 const PLAYBOOK_CRITERIA_PROPERTY = {
@@ -3764,6 +3772,7 @@ export const tools = {
             },
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
+            guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             sessionId: {
               type: "string",
               description:
@@ -3782,7 +3791,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3804,6 +3813,7 @@ export const tools = {
             stages: PLAYBOOK_STAGES_PROPERTY,
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
+            guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             subjectProfileSlug: {
               type: "string",
               description:

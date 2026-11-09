@@ -24,7 +24,7 @@ The canonical flow:
      ],
      views: [
        { name: "Pipeline", type: "kanban", profileSlug: "draft",
-         config: { groupBy: { property: "status" } } },
+         config: { groupByField: "status" } },
        { name: "Published", type: "gallery", profileSlug: "article",
          config: { filters: [{ property: "status", op: "eq", value: "published" }] } }
      ],

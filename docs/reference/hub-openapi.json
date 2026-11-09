@@ -27895,6 +27895,20 @@
                   "remember": {
                     "type": "boolean",
                     "description": "Remember this run's choice (runOn or handToAgentId) as yours for this playbook, so the next launch does not ask (GET /playbooks/{id}/run-choice). A person's act: refused for an agent."
+                  },
+                  "trial": {
+                    "type": "object",
+                    "properties": {
+                      "guidanceOverride": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string",
+                          "format": "uuid"
+                        }
+                      }
+                    },
+                    "required": ["guidanceOverride"],
+                    "description": "Try draft rules without making them current: { guidanceOverride: { <current version id>: <draft id> } }. The drafts render in place of those versions, the run is on Synap AI, and every write, send and save in it is refused. The drafted text is the agent's last reply: GET /runs/{runId}?flowType=playbook, playbookDetail.trial.draftedText. A person's act: refused for an agent, with remember or with handToAgentId."
                   }
                 }
               }

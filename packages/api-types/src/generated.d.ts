@@ -1202,6 +1202,8 @@ export interface AgentMetadata {
 	 */
 	hostname?: string;
 	platform?: string;
+	/** Node's `process.arch` as the device flow reported it, when it did. */
+	arch?: string;
 	/**
 	 * COMPUTER principals only: this computer's key lifetime in days. Absent ⇒
 	 * the pod default (`pod_settings.settings.machineDefaults.keyTtlDays`), else
@@ -15190,6 +15192,16 @@ export interface PlaybookRunDetail {
 	proposals: RunProposalItem[];
 	/** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
 	agents: RunAgent[];
+	/**
+	 * A TRIAL run (the rule lab, design b199a3a4 slice 1b): the drafts it
+	 * rendered in place of current versions, and what it drafted (the agent's
+	 * last reply in its room; null until it answers). Absent on any other run.
+	 */
+	trial?: {
+		draftedAt: string | null;
+		draftedText: string | null;
+		guidanceOverride: Record<string, string>;
+	};
 }
 /** The session card behind a playbook run. */
 export interface RunSessionCard {
@@ -22099,6 +22111,8 @@ export interface MachineView {
 	name: string;
 	hostname: string | null;
 	platform: string | null;
+	/** The processor (`process.arch`), when the computer reported it. */
+	arch: string | null;
 	createdAt: Date;
 	/** Newest `last_used_at` over the computer's own keys. */
 	lastSeenAt: Date | null;
@@ -47514,6 +47528,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				suspendedIntent?: string | undefined;
 				trackId?: string | undefined;
 				trackStage?: string | undefined;
+				trial?: {
+					guidanceOverride: Record<string, string>;
+				} | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;

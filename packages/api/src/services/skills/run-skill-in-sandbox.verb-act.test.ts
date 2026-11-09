@@ -125,7 +125,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
-    getDb: async () => ({}),
+    // The capability gate's trial-run check reads the session's row through
+    // getDb(): no rows = not a trial.
+    getDb: async () => ({ select }),
     findCapabilityGrant: (...a: unknown[]) => h.findGrant(...a),
     resolveCapabilityGrant: async () => ({ ok: true }),
     // A session reaches the worker send ceiling (worker-send-ceiling.ts), which
