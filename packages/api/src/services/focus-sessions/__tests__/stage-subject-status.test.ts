@@ -509,6 +509,40 @@ describe("a BIRTH never moves its subject backwards", () => {
     expect(h.move).not.toHaveBeenCalled();
   });
 
+  it("a subject DONE at a later stage is a reopen, not 'ahead': the status door decides (it proposes at birth)", async () => {
+    h.proc = {
+      ...h.proc!,
+      stages: [
+        ...PRODUCE,
+        { key: "publish", name: "Publish", subjectStatus: "Published" },
+      ],
+    };
+    h.target.mockResolvedValue({
+      ok: true,
+      target: {
+        current: "Published",
+        lifecycle: {
+          options: [
+            { key: "Briefed", category: "planned" },
+            { key: "Published", category: "done" },
+          ],
+        },
+      },
+    });
+    h.move.mockResolvedValue({
+      status: "proposed",
+      proposalId: "reopen-1",
+    });
+    const out = await writeStageSubjectStatus({
+      session: SESSION,
+      toStage: "brief",
+      userId: "owner-1",
+      atSessionBirth: true,
+    });
+    expect(out).toMatchObject({ status: "proposed", proposalId: "reopen-1" });
+    expect(h.move.mock.calls[0]![0]).toMatchObject({ atSessionBirth: true });
+  });
+
   it("a subject behind the birth stage (an Idea) is still moved forward", async () => {
     h.proc = { ...h.proc!, stages: PRODUCE };
     h.target.mockResolvedValue({ ok: true, target: { current: "Idea" } });

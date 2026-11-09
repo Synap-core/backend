@@ -62,7 +62,7 @@ import {
   resolveStatusMoveTarget,
   type StatusMoveActor,
 } from "@synap/database";
-import type { Hold } from "@synap-core/types/lifecycle";
+import { findLifecycleOption, type Hold } from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
@@ -363,7 +363,20 @@ async function writeSubjectStatusValue(input: {
         : (subject.properties as Record<string, unknown> | null)?.[
             proc.statusProperty
           ];
-      if (typeof current === "string" && input.notBackFrom.has(current)) {
+      // A thing that is DONE or LOST is not "further along": starting work on
+      // it is a reopen, which the status door proposes at birth
+      // (`atSessionBirth`, finding 2d84febb). Only a thing still in progress
+      // at a later stage is left where it is.
+      const category = target.ok
+        ? findLifecycleOption(target.target.lifecycle, target.target.current)
+            ?.category
+        : undefined;
+      if (
+        typeof current === "string" &&
+        input.notBackFrom.has(current) &&
+        category !== "done" &&
+        category !== "lost"
+      ) {
         return { status: "skipped", reason: "subject_ahead" };
       }
     }
