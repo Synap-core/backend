@@ -11398,7 +11398,7 @@
         "destructiveHint": false,
         "openWorldHint": true
       },
-      "description": "Ask to install a capability on one of the person's computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person's computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on \"Installs from the pod\" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer \"pod\"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. After the computer's worker runs it, read the result with synap_list_installations.",
+      "description": "Ask to install a capability on one of the person's computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person's computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on \"Installs from the pod\" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer \"pod\"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer's worker runs it, read the result with synap_list_installations.",
       "parameters": [
         {
           "name": "capabilityKey",
@@ -11410,7 +11410,7 @@
           "name": "computer",
           "type": "string",
           "required": true,
-          "description": "Where it goes: one of the person's computers by name or id (market.search `computers`), or \"pod\" for a capability that runs on the pod."
+          "description": "One of the person's computers (market.search `computers`) by id, name, a word of it, or \"mac\"/\"linux\"/\"windows\" for their only one; or \"pod\" for a pod capability."
         },
         {
           "name": "action",
@@ -11441,7 +11441,7 @@
           },
           "computer": {
             "type": "string",
-            "description": "Where it goes: one of the person's computers by name or id (market.search `computers`), or \"pod\" for a capability that runs on the pod."
+            "description": "One of the person's computers (market.search `computers`) by id, name, a word of it, or \"mac\"/\"linux\"/\"windows\" for their only one; or \"pod\" for a pod capability."
           },
           "action": {
             "type": "string",
