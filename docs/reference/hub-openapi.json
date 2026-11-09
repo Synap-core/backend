@@ -13477,7 +13477,12 @@
                   "channelId": { "type": "string", "format": "uuid" },
                   "workspaceId": { "type": "string", "format": "uuid" },
                   "agentType": { "type": "string" },
-                  "requestId": { "type": "string", "format": "uuid" }
+                  "requestId": { "type": "string", "format": "uuid" },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
                 },
                 "required": ["query"]
               }
@@ -33420,6 +33425,64 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai-providers/available": {
+      "get": {
+        "tags": ["Chat"],
+        "summary": "The AI models the pod has enabled, selectable for a chat turn",
+        "description": "Enabled providers' models only: the id a chat turn's `model` accepts, a label, the provider, and which model is the default. Never a key, credential, base URL or priority. Requires hub-protocol.read; a scoped key needs `chat.stream`.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Selectable models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "label": { "type": "string" },
+                          "providerId": { "type": "string" },
+                          "providerName": { "type": "string" },
+                          "tier": { "type": ["string", "null"] },
+                          "isDefault": { "type": "boolean" }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "providerId",
+                          "providerName",
+                          "tier",
+                          "isDefault"
+                        ]
+                      }
+                    },
+                    "defaultModelId": { "type": ["string", "null"] }
+                  },
+                  "required": ["models", "defaultModelId"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope or outside the grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "error": { "type": "string" } },
+                  "required": ["error"]
+                }
               }
             }
           }
