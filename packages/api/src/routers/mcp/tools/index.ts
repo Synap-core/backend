@@ -3576,29 +3576,22 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as the renderer of a TARGET: a kind's records (profileSlug, or target {kind:'profile', slug}; slots list | detail | card | dashboard) or ONE capability, playbook or view (target {kind, id}; a playbook or view has the 'detail' slot, a capability 'detail' or 'dashboard'). The cell must exist (synap_create_cell, or a pending one from it). clear: true unbinds the slot. Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = in that space only; 'pod' = everywhere (a kind's system default, or the object's own renderer); 'user' = only you (not for a capability). Never promote a speculative or unproven one-off.",
+          "Escalation L4: bind a cell that already proved itself as a renderer. For a kind's records (profileSlug; slots list|detail|card|dashboard) or ONE capability, playbook or view (target {kind,id}; slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
         inputSchema: {
           type: "object",
           properties: {
             profileSlug: {
               type: "string",
-              description:
-                "Slug of the profile (kind) to bind the renderer on. Same as target {kind:'profile', slug}.",
+              description: "A kind's records (profile slug).",
             },
             target: {
               type: "object",
               description:
-                "What the renderer is for, instead of profileSlug: {kind:'capability'|'playbook'|'view', id} for ONE object's page, or {kind:'profile', slug} for a kind's records.",
+                "One capability, playbook or view: {kind, id} (or {kind:'profile', slug}).",
               properties: {
                 kind: { type: "string", enum: [...RENDERER_TARGET_KINDS] },
-                id: {
-                  type: "string",
-                  description: "The capability, playbook or view id.",
-                },
-                slug: {
-                  type: "string",
-                  description: "The profile slug (kind 'profile' only).",
-                },
+                id: { type: "string" },
+                slug: { type: "string" },
               },
               required: ["kind"],
             },
@@ -3606,17 +3599,15 @@ export const tools = {
               type: "string",
               enum: [...RENDERER_SLOTS],
               description:
-                "Which renderer slot to set. 'card' = the entity's small embeddable block (this is the ONLY door that reaches it besides Renderer Studio in Builder mode — most personalization requests from a user are this slot, not 'detail').",
+                "'card' = the entity's small embeddable block (most personalization asks are this slot).",
             },
             cellKey: {
               type: "string",
-              description:
-                "The cell typeKey to bind (e.g. from synap_create_cell). Omit with clear: true.",
+              description: "Cell typeKey (synap_create_cell).",
             },
             clear: {
               type: "boolean",
-              description:
-                "true = unbind whatever this slot holds at this scope (no cellKey).",
+              description: "Unbind the slot (no cellKey).",
             },
             props: {
               type: "object",
@@ -3626,11 +3617,11 @@ export const tools = {
               type: "string",
               enum: [...RENDERER_SCOPES],
               description:
-                "'workspace' (default) = in that space only (requires workspaceId); 'pod' = everywhere; 'user' = only you.",
+                "'workspace' (default, needs workspaceId); 'pod' = everywhere; 'user' = only you.",
             },
             workspaceId: {
               type: "string",
-              description: "Workspace UUID (required for scope 'workspace').",
+              description: "Workspace UUID.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
