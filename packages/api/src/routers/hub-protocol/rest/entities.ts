@@ -33,6 +33,7 @@ import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
   ENTITIES_LEAN_NOTE,
   projectLeanEntityList,
+  leanListedUnderRole,
 } from "../../../services/entity-lean-list.js";
 import {
   compareListedEntities,
@@ -438,6 +439,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const userFilters = parsedUserFilters.filters;
     try {
+      // Listed under a ROLE, a lean row's status is that role's facet status:
+      // the list loads the facet rows for it (`projectLeanEntityList`).
+      const listedUnder =
+        query.projection === "lean"
+          ? await leanListedUnderRole(profileSlug)
+          : undefined;
       // A workspaceId PINS the caller to it (podProcedure checks membership and
       // refuses an archived one: an explicit choice). Without one the caller
       // lens stays NULL, so `entities.list` resolves the USER FLOOR (every
@@ -462,7 +469,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // Declared and forwarded like the two above: a filter this door
         // accepts and drops answers 200 with the whole list.
         ...(userFilters ? { filters: userFilters } : {}),
-        ...(query.includeFacets === "true" ? { includeFacets: true } : {}),
+        ...(query.includeFacets === "true" || listedUnder
+          ? { includeFacets: true }
+          : {}),
         // This is the user-wide FLOOR read (the agent's door). `list` is
         // scoped-by-default, so without this a workspace lens drops pod-wide
         // profiles (person/company/contact live at workspace_id NULL) — which
@@ -480,7 +489,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
             projection: "lean" as const,
             entities: await projectLeanEntityList(
               result as unknown as Array<Record<string, unknown>>,
-              fields.length > 0 ? { fields } : {}
+              {
+                ...(fields.length > 0 ? { fields } : {}),
+                ...(listedUnder ? { listedUnder } : {}),
+              }
             ),
             note: ENTITIES_LEAN_NOTE,
           },

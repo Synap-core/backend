@@ -54,6 +54,8 @@ vi.mock("../../../utils/relation-types.js", async (importOriginal) => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   getDb: vi.fn(async () => ({})),
+  // The lean list's role lookup: `note` is a kind.
+  resolveSlugKind: vi.fn(async () => ({ hasKindRow: true, hasRoleRow: false })),
   // The lean door reads each kind's defs; the note kind declares none here,
   // so its properties are ranked by their stored values.
   ProfileResolutionService: class {

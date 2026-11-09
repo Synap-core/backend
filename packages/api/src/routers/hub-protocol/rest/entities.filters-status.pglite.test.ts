@@ -15,8 +15,11 @@
  *   - an unknown category read as "no rows" (it is a 400); an unknown status
  *     VALUE matches nothing (a value is declared per lifecycle).
  *
- * Cannot see: production Postgres, the MCP door (its forwarder is another
- * lane's), the lean projection (unit test `entity-lean-list.test.ts`).
+ * The MCP door too: `synap_get_entities` with a REAL hub caller over the same
+ * rows — a role filter narrows, and each lean row shows the FACET's status.
+ *
+ * Cannot see: production Postgres; lifecycle words and categories on lean rows
+ * (no lifecycle is declared here: unit test `entity-lean-list.test.ts`).
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
@@ -64,6 +67,9 @@ import * as schema from "@synap/database/schema";
 import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { registerEntitiesRoutes } from "./entities.js";
+import { readHandlers } from "../../mcp/handlers/read.js";
+import { createHubProtocolCaller } from "../../mcp/handlers/shared.js";
+import type { McpToolContext } from "../../mcp/handlers/shared.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const BASIC =
@@ -320,5 +326,60 @@ describe("status filter on a ROLE reads the role's facet", () => {
         ])
       )
     ).toEqual(sorted(C_TRAP, C_PLAIN));
+  });
+});
+
+describe("MCP synap_get_entities: a role's status filter and lean rows read the facet", () => {
+  const mcp = async (args: Record<string, unknown>) => {
+    const r = await readHandlers.synap_get_entities!({
+      toolName: "synap_get_entities",
+      args,
+      userId: OWNER,
+      apiKeyScopes: ["mcp.read"],
+      caller: await createHubProtocolCaller(OWNER, ["mcp.read"]),
+      lensCaller: {} as McpToolContext["lensCaller"],
+      workspaceAccessible: true,
+    } as McpToolContext);
+    const b = r.content?.[0];
+    if (!b || b.type !== "text") throw new Error("expected text");
+    return JSON.parse(b.text) as {
+      entities?: Array<Record<string, unknown>>;
+      error?: string;
+    };
+  };
+
+  it("status = qualified returns only the qualified lead, with the facet's status", async () => {
+    const out = await mcp({
+      profileSlug: "lead",
+      filters: [{ field: "status", operator: "equals", value: "qualified" }],
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.entities?.map((e) => e.id)).toEqual([C_QUAL]);
+    expect(out.entities?.[0]?.status).toBe("qualified");
+  });
+
+  it("lean rows listed under the role show the facet status, never the company's", async () => {
+    const out = await mcp({ profileSlug: "lead" });
+    const status = new Map(
+      (out.entities ?? []).map((e) => [e.id as string, e.status])
+    );
+    expect([...status.keys()].sort()).toEqual(
+      sorted(C_NEW, C_QUAL, C_TRAP, C_UNSET)
+    );
+    // The company's own column says qualified; its lead facet says new.
+    expect(status.get(C_TRAP)).toBe("new");
+    expect(status.get(C_NEW)).toBe("new");
+    expect(status.get(C_UNSET)).toBeUndefined();
+  });
+
+  it("control: listed under the KIND, a row keeps the entity's status", async () => {
+    const out = await mcp({
+      profileSlug: "company",
+      filters: [{ field: "status", operator: "equals", value: "qualified" }],
+    });
+    expect(out.entities?.map((e) => e.id).sort()).toEqual(
+      sorted(C_TRAP, C_PLAIN)
+    );
+    for (const e of out.entities ?? []) expect(e.status).toBe("qualified");
   });
 });

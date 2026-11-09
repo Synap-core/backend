@@ -43,6 +43,7 @@ import {
   db as defaultDb,
   ProfileResolutionService,
   profileSlugRows,
+  resolveSlugKind,
 } from "@synap/database";
 import { lifecycleOptionLabel } from "@synap-core/types/lifecycle";
 
@@ -398,6 +399,21 @@ function optionLabels(
       lifecycleOptionLabel({ key: o.key, label: o.label ?? undefined }),
     ])
   );
+}
+
+/**
+ * The slug a lean list is "listed under" when it names a ROLE, else
+ * `undefined`. A caller asks this BEFORE listing: a role's lean rows read
+ * their status from the role's facet, so the list must load the facet rows
+ * (`includeFacets: true`) and pass the slug as `listedUnder`. One cached
+ * vocabulary lookup (`resolveSlugKind`).
+ */
+export async function leanListedUnderRole(
+  profileSlug: string | undefined
+): Promise<string | undefined> {
+  if (!profileSlug) return undefined;
+  const { hasRoleRow } = await resolveSlugKind(defaultDb, profileSlug);
+  return hasRoleRow ? profileSlug : undefined;
 }
 
 /**
