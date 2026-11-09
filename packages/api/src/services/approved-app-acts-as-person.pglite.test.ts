@@ -428,6 +428,14 @@ function hubApp() {
   registerAppsRoutes(hub);
   const root = new Hono();
   root.route("/api/hub", hub);
+  // As the API server answers a thrown SynapError (apps/api index.ts
+  // `app.onError`): its own status, so a dead sign-in reads as the 401 it is.
+  root.onError((err, c) =>
+    c.json(
+      { error: err.message },
+      ((err as { statusCode?: number }).statusCode ?? 500) as never
+    )
+  );
   return root;
 }
 
@@ -556,10 +564,14 @@ async function approveAsPerson(proposalId: string, person = OWNER) {
   });
 }
 
-/** Is a request with this token refused at the door (dead token)? */
+/**
+ * Is a request with this token refused at the door as a dead sign-in (401)?
+ * A revoked key is refused at lookup; a person key whose app no longer acts
+ * as the person is refused by `resolveKeyIdentity` ("sign in again").
+ */
 const deadAtDoor = async (bearer: string) => {
   const res = await hub(bearer, "/__probe/write", { workspaceId: CONTENT });
-  return res.status === 401 || res.status === 403;
+  return res.status === 401;
 };
 
 describe("an approved app acts as you: ask, approve, then its token is yours", () => {

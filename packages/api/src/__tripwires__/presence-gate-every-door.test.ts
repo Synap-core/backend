@@ -309,6 +309,8 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
       "files an app/connect proposal; approving it is gated",
     "apps.rename": "a label",
     "apps.narrow": "only takes reach away",
+    "apps.revokeActsAsPerson":
+      "only takes power away: the app's token stops being the person's",
     "apps.revoke": "only takes power away",
     "apps.remove": "only takes power away",
     "apps.adminRevoke": "only takes power away",
