@@ -131,13 +131,13 @@ describe("computeSessionNudges", () => {
       current: "build",
       stages: ["plan", "build", "verify"],
     });
-    expect(
-      computeSessionNudges({
-        session: session({ stages: STAGES, currentStage: "verify" }),
-        evaluation,
-        phase: "complete",
-      })
-    ).toBeUndefined();
+    const final = computeSessionNudges({
+      session: session({ stages: STAGES, currentStage: "verify" }),
+      evaluation,
+      phase: "complete",
+    });
+    expect(final?.stage).toBeUndefined();
+    expect(final?.ungradedCriteria).toBeUndefined();
   });
 
   it("a STAGELESS playbook session never nags about currentStage (NULL is by design)", () => {
@@ -151,7 +151,7 @@ describe("computeSessionNudges", () => {
         }),
         evaluation: summarizeEvaluations([crit("a")], [row("a", "pass")]),
         phase: "complete",
-      })
+      })?.stage
     ).toBeUndefined();
   });
 
@@ -199,6 +199,74 @@ describe("computeSessionNudges", () => {
     });
     expect(n?.playbookCandidates).toHaveLength(NUDGE_PLAYBOOK_CANDIDATES_MAX);
     expect(n?.hints.join(" ")).toMatch(/followPlaybookId/);
+  });
+});
+
+describe("computeSessionNudges: retrospective hints at close", () => {
+  const close = (
+    s: NudgeSessionLike,
+    criteria: unknown[],
+    rows: SessionEvaluationRow[],
+    phase: "update" | "complete" = "complete"
+  ) =>
+    computeSessionNudges({
+      session: s,
+      evaluation: summarizeEvaluations(criteria, rows),
+      phase,
+    })?.hints.join(" | ") ?? "";
+
+  it("no playbook + every required criterion passes ⇒ a repeat QUESTION and a capture hint", () => {
+    const h = close(session(), [crit("a")], [row("a", "pass")]);
+    expect(h).toMatch(
+      /Will this work repeat\?.*synap_promote_session_to_playbook/
+    );
+    expect(h).toMatch(/synap_ask first, then synap_capture/);
+    expect(h).not.toMatch(/synap_update_playbook/);
+  });
+
+  it("a playbook-bound session that passed gets the capture hint, never the promote one", () => {
+    const h = close(
+      session({ playbookId: "pb" }),
+      [crit("a")],
+      [row("a", "pass")]
+    );
+    expect(h).toMatch(/synap_capture/);
+    expect(h).not.toMatch(/promote_session_to_playbook/);
+  });
+
+  it("a required FAIL under a playbook ⇒ synap_update_playbook, and no capture/promote", () => {
+    const h = close(
+      session({ playbookId: "pb" }),
+      [crit("a")],
+      [row("a", "fail")]
+    );
+    expect(h).toMatch(/synap_update_playbook/);
+    expect(h).not.toMatch(/synap_capture|promote_session_to_playbook/);
+  });
+
+  it("a FAIL with no playbook proposes nothing (only a passed session promotes or captures)", () => {
+    expect(close(session(), [crit("a")], [row("a", "fail")])).toBe("");
+  });
+
+  it("an OPTIONAL failing criterion does not make the session 'failing'", () => {
+    const h = close(
+      session({ playbookId: "pb" }),
+      [crit("a"), { ...crit("b"), required: false }],
+      [row("a", "pass"), row("b", "fail")]
+    );
+    expect(h).not.toMatch(/synap_update_playbook/);
+    expect(h).toMatch(/synap_capture/);
+  });
+
+  it("only at complete: the same passed session says nothing retrospective mid-work", () => {
+    expect(close(session(), [crit("a")], [row("a", "pass")], "update")).toBe(
+      ""
+    );
+  });
+
+  it("an unfinished session (required criterion ungraded) gets no retrospective hint", () => {
+    const h = close(session(), [crit("a")], []);
+    expect(h).not.toMatch(/synap_capture|promote_session_to_playbook/);
   });
 });
 
