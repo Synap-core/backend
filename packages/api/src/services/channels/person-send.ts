@@ -94,25 +94,47 @@ export async function findDraftOnChannel(args: {
  * (approved), held (pending with `held`: not reachable yet), failed (its
  * approval failed, with the reason), or null (still pending for another
  * reason, or gone).
+ *
+ * `mark` names the row's last recorded attempt (status, when it was last
+ * written or reviewed, its reason, its hold). Read before the approval and
+ * compared after it, it tells an outcome THIS attempt wrote from one an
+ * earlier attempt left: a refusal before anything ran leaves the mark as it
+ * was, and must be answered as that refusal, never as the old failure.
  */
 export async function readSendOutcome(proposalId: string): Promise<{
   status: "sent" | "held" | "failed" | null;
   reason?: string;
+  mark: string | null;
 }> {
   const [row] = await db
     .select({
       status: proposals.status,
       data: proposals.data,
       rejectionReason: proposals.rejectionReason,
+      updatedAt: proposals.updatedAt,
+      reviewedAt: proposals.reviewedAt,
     })
     .from(proposals)
     .where(eq(proposals.id, proposalId))
     .limit(1);
-  if (!row) return { status: null };
-  if (row.status === "approved") return { status: "sent" };
-  if (row.status === "approval_failed") {
-    return { status: "failed", reason: row.rejectionReason ?? undefined };
-  }
+  if (!row) return { status: null, mark: null };
   const held = row.status === "pending" ? readHeld(row.data) : null;
-  return held ? { status: "held", reason: held.reason } : { status: null };
+  const mark = JSON.stringify([
+    row.status,
+    row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
+    row.reviewedAt ? new Date(row.reviewedAt).toISOString() : null,
+    row.rejectionReason ?? null,
+    held?.at ?? null,
+  ]);
+  if (row.status === "approved") return { status: "sent", mark };
+  if (row.status === "approval_failed") {
+    return {
+      status: "failed",
+      reason: row.rejectionReason ?? undefined,
+      mark,
+    };
+  }
+  return held
+    ? { status: "held", reason: held.reason, mark }
+    : { status: null, mark };
 }

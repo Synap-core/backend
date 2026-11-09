@@ -540,6 +540,9 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
+      // The row as it stands before this click: a held or failed outcome is
+      // this attempt's only when the approval wrote it.
+      const before = (await readSendOutcome(proposalId)).mark;
       try {
         await caller.approve({
           proposalId,
@@ -547,7 +550,10 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
         });
       } catch (err) {
         const outcome = await readSendOutcome(proposalId);
-        if (outcome.status === "held" || outcome.status === "failed") {
+        if (
+          (outcome.status === "held" || outcome.status === "failed") &&
+          outcome.mark !== before
+        ) {
           return c.json(
             {
               status: outcome.status,
