@@ -49,8 +49,10 @@ describe("compactPlaybookMatches", () => {
 
   it("cuts a description the way synap_find does, and adds none to a row that has no key", () => {
     const long = "Turn a take into a reel. ".repeat(40);
-    const rows: Array<ReturnType<typeof intent> & { description?: string }> =
-      [{ ...intent("a", 5), description: long }, intent("b", 5)];
+    const rows: Array<ReturnType<typeof intent> & { description?: string }> = [
+      { ...intent("a", 5), description: long },
+      intent("b", 5),
+    ];
     const [withDesc, without] = compactPlaybookMatches(rows, undefined);
     expect(withDesc!.description).toBe(playbookDescriptionPreview(long));
     expect(withDesc!.description!.length).toBeLessThan(long.length);

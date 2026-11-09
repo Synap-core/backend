@@ -17976,6 +17976,12 @@ export interface PlaybookCandidate {
 	scope: PlaybookScope;
 	/** The user noun for that scope ("Goal template" / "Work template"). */
 	templateKind: string;
+	/**
+	 * When to use it, in its author's words, cut at
+	 * `PLAYBOOK_DESCRIPTION_CAP` (`playbookDescriptionPreview`). Absent when the
+	 * playbook has none. What tells two similar names apart.
+	 */
+	description?: string;
 }
 /**
  * The `playbooks` block every start response carries when matching ran — the
@@ -20235,9 +20241,14 @@ export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindOb
 	/** The EXACT block `start_session` ships. ABSENT when not searched. */
 	playbooks?: SessionPlaybookCandidates;
 	/**
-	 * Capability packages from the pod catalog cache. Present when a returned
+	 * Capability packages from the pod catalog cache that serve the best intent
+	 * (by their declared `provides` first, then by words). When a returned
 	 * intent has no installed verbs, or the best intent match is weak (it
-	 * missed a query term). ABSENT when that lookup did not run.
+	 * missed a query term): any package. Otherwise only packages that run on
+	 * the person's computer (which of their computers can take one, and
+	 * `synap_list_installations` says which already have it). ABSENT when no
+	 * intent matched (the lookup did not run), or when a served intent has no
+	 * such computer tool.
 	 */
 	marketplace?: FindMarketplace;
 	/** Member spaces to route the work to. ABSENT when not searched. */
@@ -47907,6 +47918,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				autoPicked: boolean;
 				playbooks: {
 					activators: PlaybookActivator[];
+					description: string | null;
 					executor: PlaybookExecutorRef;
 					forceProposeWrites: boolean;
 					goalTemplate: string;
@@ -47939,6 +47951,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				activators: PlaybookActivator[];
+				description: string | null;
 				executor: PlaybookExecutorRef;
 				forceProposeWrites: boolean;
 				goalTemplate: string;
