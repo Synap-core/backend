@@ -47592,7 +47592,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
-					onEnd?: undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -48673,7 +48672,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
-					onEnd?: undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -59692,7 +59690,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
-							onEnd?: undefined;
 						} | undefined;
 					}[] | undefined;
 					automations?: {
