@@ -15,6 +15,12 @@
  *  - Add: with a passkey already, it first confirms with it
  *    (`presence.authorizePasskeyChange`, W3 slice 3): Kratos' guard refuses
  *    a new one without that grant (`passkey-add-model.ts`).
+ *  - "Add this device" (founder decision of 9 Nov 2026): when the passkey is
+ *    on another device, or only Relay protects the account, a device the
+ *    person already uses approves THIS one ("Approve from another device",
+ *    `DeviceLinkPanel`), which then adds its passkey with no grant: the
+ *    guard redeems the approval. Both ways add through the one step
+ *    `registerPasskey`, and this browser then remembers it holds a passkey.
  *  - Remove: a confirm, then the same grant (`change: "remove"`), then the
  *    flow's `passkey_remove`. The person's last passkey while approvals need
  *    them in person is not removable, with the sentence why; the pod refuses
@@ -39,7 +45,6 @@ import {
   type KratosFlow,
 } from "../../../lib/kratos-flow";
 import {
-  createPasskey,
   isPasskeySupported,
   PasskeyCancelled,
   PasskeyCreateFailed,
@@ -55,7 +60,10 @@ import { useAuthorizePasskeyChange } from "../presence/use-factor-doors";
 import { usePodSensitivity } from "../presence/use-sensitivity";
 import { en, fr } from "./copy";
 import { PasskeyPlacementMenu } from "../passkey-placement/passkey-placement-menu";
-import { passkeyAddStep } from "./passkey-add-model";
+import { offersDeviceLink, passkeyAddStep } from "./passkey-add-model";
+import { registerPasskey } from "./register-passkey";
+import { DeviceLinkPanel } from "../presence/device-link/DeviceLinkPanel";
+import { rememberThisDevicePasskey } from "../presence/device-link/use-this-device";
 import {
   passkeyRemoveBlock,
   passkeyRows,
@@ -128,6 +136,8 @@ export function PasskeysCard({
     detail?: string;
   } | null>(null);
   const [needsReauth, setNeedsReauth] = useState(false);
+  /** "Approve from another device": the "Add this device" panel is open. */
+  const [linking, setLinking] = useState(false);
 
   const start = useCallback(async () => {
     setLoad({ kind: "loading" });
@@ -170,7 +180,8 @@ export function PasskeysCard({
   /** Kratos' answer to a passkey change: the new flow, a sign-in, an error. */
   const settle = (
     r: Awaited<ReturnType<typeof submitSelfServiceFlow>>,
-    words: { done: string; failed: string }
+    words: { done: string; failed: string },
+    onDone?: () => void
   ) => {
     if (r.kind === "refresh_required") setNeedsReauth(true);
     else if (r.kind === "flow") {
@@ -180,6 +191,7 @@ export function PasskeysCard({
       if (errors.length)
         setError({ message: words.failed, detail: errors.join(" ") });
       else if (r.flow.state === "success") {
+        onDone?.();
         addToast({ title: words.done, color: "default" });
         // The count of ways in beside this card (and the top bar's mark)
         // reads `presence.factors`: a passkey added or removed changes it.
@@ -193,21 +205,20 @@ export function PasskeysCard({
   const add = async (placement: PasskeyPlacement) => {
     if (load.kind !== "ready") return;
     const flow = load.flow;
-    const createData = nodeValue(flow, "passkey_create_data");
-    if (!createData) return;
+    if (!nodeValue(flow, "passkey_create_data")) return;
     setBusy(true);
     setError(null);
     setNeedsReauth(false);
     try {
-      const register = await createPasskey(createData, placement);
       // The guard redeems the grant whatever happens next: one proof, one try.
-      setGrantedUntil(null);
-      const r = await submitSelfServiceFlow(flow, {
-        method: "passkey",
-        csrf_token: nodeValue(flow, "csrf_token") ?? "",
-        passkey_settings_register: register,
-      });
-      settle(r, { done: t("passkeys.added"), failed: t("passkeys.addFailed") });
+      const r = await registerPasskey(flow, placement, () =>
+        setGrantedUntil(null)
+      );
+      settle(
+        r,
+        { done: t("passkeys.added"), failed: t("passkeys.addFailed") },
+        rememberThisDevicePasskey
+      );
     } catch (err) {
       if (!(err instanceof PasskeyCancelled)) {
         setError({
@@ -412,6 +423,16 @@ export function PasskeysCard({
               <p className="text-[12.5px] text-foreground/65">
                 {t("passkeys.unsupported")}
               </p>
+            ) : linking && offersDeviceLink(step) ? (
+              <DeviceLinkPanel
+                onDone={() => {
+                  setLinking(false);
+                  addToast({ title: t("passkeys.added"), color: "default" });
+                  // The new passkey joins the list.
+                  void start();
+                }}
+                onCancel={() => setLinking(false)}
+              />
             ) : step === "devicesFailed" ? (
               <div className="flex flex-wrap items-center gap-3">
                 <p className="text-[12.5px] text-status-down">
@@ -427,9 +448,19 @@ export function PasskeysCard({
                 </Button>
               </div>
             ) : step === "relayOnly" ? (
-              <p className="text-[12.5px] text-foreground/65">
-                {t("passkeys.relayOnly")}
-              </p>
+              <div className="flex flex-col items-start gap-2">
+                <p className="text-[12.5px] text-foreground/65">
+                  {t("passkeys.relayOnly")}
+                </p>
+                <Button
+                  size="sm"
+                  radius="md"
+                  color="primary"
+                  onPress={() => setLinking(true)}
+                >
+                  {t("passkeys.relayOnly.action")}
+                </Button>
+              </div>
             ) : step === "create" ? (
               <div className="flex flex-col items-start gap-2">
                 <p className="text-[12.5px] text-foreground/65">
@@ -452,17 +483,30 @@ export function PasskeysCard({
                       : "passkeys.grant.why"
                   )}
                 </p>
-                <Button
-                  size="sm"
-                  radius="md"
-                  variant="flat"
-                  startContent={<KeyRound className="h-3.5 w-3.5" />}
-                  isLoading={busy}
-                  isDisabled={!me.data?.id}
-                  onPress={() => void confirmFirst()}
-                >
-                  {t(grantExpired ? "passkeys.grant.again" : "passkeys.add")}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    radius="md"
+                    variant="flat"
+                    startContent={<KeyRound className="h-3.5 w-3.5" />}
+                    isLoading={busy}
+                    isDisabled={!me.data?.id}
+                    onPress={() => void confirmFirst()}
+                  >
+                    {t(grantExpired ? "passkeys.grant.again" : "passkeys.add")}
+                  </Button>
+                  {/* The passkey may live on another device: that device
+                      approves this one instead. */}
+                  <Button
+                    size="sm"
+                    radius="md"
+                    variant="light"
+                    isDisabled={busy}
+                    onPress={() => setLinking(true)}
+                  >
+                    {t("passkeys.link")}
+                  </Button>
+                </div>
               </div>
             ) : (
               <PasskeyPlacementMenu

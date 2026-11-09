@@ -274,6 +274,9 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "tRPC presence.setSensitivity",
         // The recovery ladder (6 Nov): a 2FA app added with a factor's proof.
         "tRPC presence.totp.confirm",
+        // "Add this device" (9 Nov 2026): a device the person already uses
+        // approves a new one (app/_lib/presence/device-link/).
+        "tRPC presence.deviceLink.approve",
         // W3 slice 3: the sensitive actions pod admin calls (derived doors).
         "action agentUsers.setPosture",
         "action apiKeys.adminCreateServiceKey",
@@ -362,7 +365,7 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
     );
     expect(
       bypass,
-      "These call an approve door or a sensitive action directly. Go through app/_lib/presence (useApproveProposal, useBatchApproveProposals, approvePendingKey(s), use-request-doors, use-sensitive-actions, use-factor-doors), so the call carries its passkey proof."
+      "These call an approve door or a sensitive action directly. Go through app/_lib/presence (useApproveProposal, useBatchApproveProposals, approvePendingKey(s), use-request-doors, use-sensitive-actions, use-factor-doors, device-link/use-device-link-requests), so the call carries its passkey proof."
     ).toEqual([]);
   });
 

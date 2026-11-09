@@ -5,7 +5,7 @@
  * a failed read of the device keys is never "none".
  */
 import { describe, expect, it } from "vitest";
-import { passkeyAddStep } from "./passkey-add-model";
+import { offersDeviceLink, passkeyAddStep } from "./passkey-add-model";
 
 describe("passkeyAddStep", () => {
   it("no factor: the first passkey is added straight away", () => {
@@ -26,7 +26,7 @@ describe("passkeyAddStep", () => {
     ).toBe("create");
   });
 
-  it("only a Relay key: pod admin cannot get the grant", () => {
+  it("only a Relay key: pod admin cannot get the grant here", () => {
     expect(passkeyAddStep({ passkeys: 0, deviceKeys: 1, granted: false })).toBe(
       "relayOnly"
     );
@@ -36,5 +36,41 @@ describe("passkeyAddStep", () => {
     expect(
       passkeyAddStep({ passkeys: 0, deviceKeys: null, granted: false })
     ).toBe("devicesFailed");
+  });
+});
+
+describe("offersDeviceLink (Add this device, 9 Nov 2026)", () => {
+  it("a Relay key alone: approving this device from Relay or another device is the way forward", () => {
+    expect(
+      offersDeviceLink(
+        passkeyAddStep({ passkeys: 0, deviceKeys: 1, granted: false })
+      )
+    ).toBe(true);
+  });
+
+  it("a passkey: offered beside confirming with it (it may live on another device)", () => {
+    expect(
+      offersDeviceLink(
+        passkeyAddStep({ passkeys: 1, deviceKeys: 0, granted: false })
+      )
+    ).toBe(true);
+  });
+
+  it("not with no factor, not once granted, not on a failed read", () => {
+    expect(
+      offersDeviceLink(
+        passkeyAddStep({ passkeys: 0, deviceKeys: 0, granted: false })
+      )
+    ).toBe(false);
+    expect(
+      offersDeviceLink(
+        passkeyAddStep({ passkeys: 1, deviceKeys: 0, granted: true })
+      )
+    ).toBe(false);
+    expect(
+      offersDeviceLink(
+        passkeyAddStep({ passkeys: 0, deviceKeys: null, granted: false })
+      )
+    ).toBe(false);
   });
 });
