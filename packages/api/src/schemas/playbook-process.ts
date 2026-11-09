@@ -180,16 +180,29 @@ export const ON_END_RETIRED_MESSAGE =
  * `subjectProfile` — loose (unknown keys survive a round-trip), with the keys
  * this contract owns typed. `profileSlug` stays optional: a subject-less
  * playbook may still store `{}` and the existing doors already accept it.
+ *
+ * The retired `onEnd` is refused by a CHECK on the object, not by a key in its
+ * shape: the Hub's OpenAPI generator (zod-to-openapi) cannot render `z.never`,
+ * and one unrenderable key drops every route that embeds this schema from the
+ * served reference. The check renders as nothing; the key is not advertised.
  */
-export const playbookSubjectProfileSchema = z.looseObject({
-  profileSlug: z.string().min(1).optional(),
-  /** The subject kind's property slug holding its lifecycle (e.g. "post-status"). */
-  statusProperty: z.string().trim().min(1).max(120).optional(),
-  activators: playbookActivatorsSchema.optional(),
-  humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
-  /** Retired: refused when sent ({@link ON_END_RETIRED_MESSAGE}). */
-  onEnd: z.never({ error: ON_END_RETIRED_MESSAGE }).optional(),
-});
+export const playbookSubjectProfileSchema = z
+  .looseObject({
+    profileSlug: z.string().min(1).optional(),
+    /** The subject kind's property slug holding its lifecycle (e.g. "post-status"). */
+    statusProperty: z.string().trim().min(1).max(120).optional(),
+    activators: playbookActivatorsSchema.optional(),
+    humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
+  })
+  .superRefine((sp, ctx) => {
+    if (sp.onEnd !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["onEnd"],
+        message: ON_END_RETIRED_MESSAGE,
+      });
+    }
+  });
 
 /**
  * The stable identity of an activator within one playbook — the ONE
