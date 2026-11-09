@@ -1163,6 +1163,11 @@ jobs:
   # PR's own run of this check had to be green to enter the queue, and an entry
   # has no PR body to name a companion) and a push (the devbox baseline
   # measures the dependents against main) pass through "Not affected".
+  # OPEN RACE (named, not closed): two PRs that each pass here but break a
+  # dependent TOGETHER land through the queue unchecked, as an entry does not
+  # re-run this check. The catch is the devbox baseline (app-tsc, browser-tsc,
+  # relay-tsc at every new main head): its red is fixed by one owner, as a red
+  # main is (.claude/rules/github-ci.md), in the dependent or in backend.
   dependent-repos:
     name: Dependent repos typecheck
     needs: [changes, preflight]

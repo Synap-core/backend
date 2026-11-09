@@ -71,6 +71,43 @@ describe("dependents-typecheck", () => {
     expect(v.targets[0].state).toBe("preexisting");
   });
 
+  // The comparison itself (lead, 9 Nov): a base already red with N errors.
+  // Head = base + 1 must fail with exactly that one; head = base must pass.
+  // Removing the comparison either way turns one of these two red: reading
+  // every head error as new fails "head = base"; ignoring head when a base
+  // exists fails "base + 1".
+  describe("head vs a base that already has N errors", () => {
+    const BASE = [
+      OLD,
+      "src/a.ts(3,1): error TS2307: Cannot find module 'x'.",
+      "src/b.ts(9,4): error TS7006: Parameter 'p' implicitly has an 'any' type.",
+    ];
+    for (const n of [1, 3]) {
+      const base = BASE.slice(0, n);
+      it(`N=${n}, head adds one: fails, naming only the new one`, () => {
+        const v = decide(
+          withHeadless(2, ...base, FLOOR),
+          withHeadless(2, ...base)
+        );
+        expect(v.ok).toBe(false);
+        const t = v.targets[0];
+        expect(t.state).toBe("new");
+        expect(t.fresh.map((e: { file: string }) => e.file)).toEqual([
+          "src/connectors/model.ts",
+        ]);
+        expect(t.preexisting).toBe(n);
+      });
+      it(`N=${n}, head equals base: passes`, () => {
+        const v = decide(withHeadless(2, ...base), withHeadless(2, ...base));
+        expect(v.ok).toBe(true);
+        expect(v.targets[0]).toMatchObject({
+          state: "preexisting",
+          preexisting: n,
+        });
+      });
+    }
+  });
+
   it("an error that only moved lines is not new; one more of the same is", () => {
     const moved = OLD.replace("(15,42)", "(19,42)");
     expect(newErrors(parseTscErrors(moved), parseTscErrors(OLD))).toHaveLength(
