@@ -70,6 +70,7 @@ import type {
   ChannelSpec,
   RunResult,
   InputStrategy,
+  PlaybookRunner,
   PlaybookStage,
 } from "@synap/playbooks";
 import {
@@ -96,6 +97,7 @@ import {
   routeRefusalLine,
 } from "../agent-dispatch/route.js";
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
+import { resolveRunner } from "../agent-dispatch/runner.js";
 import type { RunOn } from "@synap-core/types/agents";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
@@ -414,7 +416,7 @@ type PlaybookRunGenerated = {
 export interface RunHandedTo {
   agentUserId: string;
   name: string | null;
-  via: "named" | "assigned";
+  via: "named" | "authored" | "assigned";
 }
 
 export type RunPlaybookResult =
@@ -824,8 +826,13 @@ interface RunHandOff {
   reach: "dispatch" | "pull";
   /** The agent's name, for the reply that says who has the run. */
   name: string | null;
-  /** Named by the caller, or the agent a person assigned to this playbook. */
-  via: "named" | "assigned";
+  /**
+   * Named by the caller, the runner the playbook names (`playbooks.runner`),
+   * or the agent a person assigned to this playbook.
+   */
+  via: "named" | "authored" | "assigned";
+  /** Its computer (`users.host_user_id`); null = none known. */
+  computerUserId?: string | null;
 }
 
 /**
@@ -860,7 +867,11 @@ export async function resolveRunHandOff(
   }
   const db = await getDb();
   const [agent] = await db
-    .select({ name: users.name, userType: users.userType })
+    .select({
+      name: users.name,
+      userType: users.userType,
+      hostUserId: users.hostUserId,
+    })
     .from(users)
     .where(eq(users.id, agentUserId))
     .limit(1);
@@ -898,6 +909,7 @@ export async function resolveRunHandOff(
     reach: routed.reach,
     name: agent.name?.trim() || null,
     via: "named",
+    computerUserId: agent.hostUserId ?? null,
   };
 }
 
@@ -926,7 +938,7 @@ async function resolveAssignedRunHandOff(
   }
   const db = await getDb();
   const [agent] = await db
-    .select({ name: users.name })
+    .select({ name: users.name, hostUserId: users.hostUserId })
     .from(users)
     .where(eq(users.id, routed.agentUserId))
     .limit(1);
@@ -935,6 +947,7 @@ async function resolveAssignedRunHandOff(
     reach: routed.reach,
     name: agent?.name?.trim() || null,
     via: "assigned",
+    computerUserId: agent?.hostUserId ?? null,
   };
 }
 
@@ -944,26 +957,48 @@ export interface ResolvedRunChoice {
   handOff: RunHandOff | null;
   /** Recorded on the run (`playbook_runs.run_on`). */
   runOn: RunOn;
+  /**
+   * Synap AI named by the playbook's runner as a persona
+   * (`{ synapAi: { persona } }`): the run's `agentType` when the caller gave
+   * none.
+   */
+  persona?: string | null;
+}
+
+/** A playbook's stored `requires` (jsonb: data), as capability keys. */
+function readRequires(requires: unknown): string[] {
+  return Array.isArray(requires)
+    ? requires.filter((k): k is string => typeof k === "string")
+    : [];
 }
 
 /**
  * THE rule for who runs a playbook for a person (slice 5a, plan v2 66d229dc;
- * founder Q1: ask once, then remember). First match wins:
+ * founder Q1: ask once, then remember; runner engine slice 2, spec 7111934d
+ * §2.5 with the founder's flip of D1 via the lead, 9 Nov 2026: the playbook's
+ * own runner beats the person's remembered choice). First match wins:
  *   1. named     this run's choice: `runOn: "synap_ai"`, or `handToAgentId`
  *                (an agent named for this run never falls through: refused
  *                by name, as {@link resolveRunHandOff} says);
- *   2. stored    the person's remembered choice for the playbook (the
+ *   2. authored  the runner the playbook names (`playbooks.runner`, 0413),
+ *                resolved by `resolveRunner`: the first of its choices that
+ *                the route admits and that is awake, preferring one whose
+ *                computer has every tool the playbook `requires`; the choices
+ *                passed over are recorded (`runOn.runnerPassedOver`) on
+ *                whatever rung takes the run;
+ *   3. stored    the person's remembered choice for the playbook (the
  *                assignment edge, `readStoredRunChoice`): Synap AI, or an
  *                agent that is AWAKE now (`deriveAgentWake`, the roster's
  *                `wake`) and that the route admits;
- *   3. fallback  a remembered agent that cannot take it now: Synap AI runs it,
+ *   4. fallback  a remembered agent that cannot take it now: Synap AI runs it,
  *                when the playbook allows it (`executor` is not
  *                `external-agent`), and the run says which agent was passed
  *                over and why;
- *   4. default   nothing chosen (or a choice the playbook cannot use): the
+ *   5. default   nothing chosen (or a choice the playbook cannot use): the
  *                playbook's own executor, exactly as before.
  * A playbook that only runs on agents (`external-agent`) never falls to Synap
  * AI: its remembered agent takes it awake or not, as an assignment did.
+ * A playbook with no `runner` decides exactly as before rung 2 existed.
  * Read-only: the run door and the "who runs it" read (`playbooks.runChoice`)
  * ask it with the same inputs, so the preview is what the run does.
  */
@@ -972,7 +1007,8 @@ export async function resolveRunChoice(
     RunPlaybookInput,
     "handToAgentId" | "agentUserId" | "userId" | "runOn"
   > & {
-    playbook: Pick<Playbook, "id" | "executor">;
+    playbook: Pick<Playbook, "id" | "executor"> &
+      Partial<Pick<Playbook, "runner" | "requires">>;
   }
 ): Promise<ResolvedRunChoice> {
   // A one-shot (`generate`) playbook is run by the pod itself: Synap AI.
@@ -1020,14 +1056,70 @@ export async function resolveRunChoice(
         agentUserId: named,
         via: "named",
         passedOver: null,
+        ...(handOff?.computerUserId
+          ? { computerUserId: handOff.computerUserId }
+          : {}),
       },
     };
   }
 
-  const fallbackDefault: ResolvedRunChoice = {
+  // 2. The playbook's own runner.
+  const requires = readRequires(input.playbook.requires);
+  const authored =
+    input.playbook.runner !== null && input.playbook.runner !== undefined
+      ? await resolveRunner({
+          ownerId: input.userId,
+          runner: input.playbook.runner as PlaybookRunner,
+          requires,
+          synapAiAllowed,
+        })
+      : null;
+  const runnerPassedOver =
+    authored && authored.passedOver.length > 0 ? authored.passedOver : null;
+  /** Every later rung still says which of the playbook's choices were passed over. */
+  const decided = (r: ResolvedRunChoice): ResolvedRunChoice =>
+    runnerPassedOver ? { ...r, runOn: { ...r.runOn, runnerPassedOver } } : r;
+  if (authored?.chosen) {
+    const c = authored.chosen;
+    const report =
+      Object.keys(c.requires).length > 0 ? { requires: c.requires } : {};
+    if (c.kind === "synap_ai") {
+      return decided({
+        handOff: null,
+        runOn: {
+          executor: "is-agent",
+          agentUserId: null,
+          via: "authored",
+          passedOver: null,
+          ...report,
+        },
+        persona: c.persona,
+      });
+    }
+    return decided({
+      handOff: {
+        agentUserId: c.agentUserId,
+        reach: c.reach,
+        name: c.name,
+        via: "authored",
+        computerUserId: c.computerUserId,
+      },
+      runOn: {
+        executor: "external-agent",
+        agentUserId: c.agentUserId,
+        via: "authored",
+        passedOver: null,
+        ...(c.computerUserId ? { computerUserId: c.computerUserId } : {}),
+        ...(c.preset ? { preset: c.preset } : {}),
+        ...report,
+      },
+    });
+  }
+
+  const fallbackDefault: ResolvedRunChoice = decided({
     handOff: null,
     runOn: { executor, agentUserId: null, via: "default", passedOver: null },
-  };
+  });
   const stored = await readStoredRunChoice({
     ownerId: input.userId,
     playbookId: input.playbook.id,
@@ -1036,7 +1128,7 @@ export async function resolveRunChoice(
     // A remembered Synap AI on a playbook that only runs on agents is a
     // choice it cannot use: its own executor picks, as with none.
     return synapAiAllowed
-      ? {
+      ? decided({
           handOff: null,
           runOn: {
             executor: "is-agent",
@@ -1044,7 +1136,7 @@ export async function resolveRunChoice(
             via: "stored",
             passedOver: null,
           },
-        }
+        })
       : fallbackDefault;
   }
 
@@ -1060,17 +1152,16 @@ export async function resolveRunChoice(
     handOff?.agentUserId ??
     (stored?.executor === "external-agent" ? stored.agentUserId : null);
   if (!agentUserId) return fallbackDefault;
+  const storedRunOn = (h: RunHandOff): RunOn => ({
+    executor: "external-agent",
+    agentUserId: h.agentUserId,
+    via: "stored",
+    passedOver: null,
+    ...(h.computerUserId ? { computerUserId: h.computerUserId } : {}),
+  });
   if (!synapAiAllowed) {
     return handOff
-      ? {
-          handOff,
-          runOn: {
-            executor: "external-agent",
-            agentUserId: handOff.agentUserId,
-            via: "stored",
-            passedOver: null,
-          },
-        }
+      ? decided({ handOff, runOn: storedRunOn(handOff) })
       : fallbackDefault;
   }
   // Presence: only an agent that is awake NOW takes it; anything else would
@@ -1081,17 +1172,9 @@ export async function resolveRunChoice(
     (a) => a.agentUserId === agentUserId
   );
   if (handOff && row?.wake.state === "awake") {
-    return {
-      handOff,
-      runOn: {
-        executor: "external-agent",
-        agentUserId: handOff.agentUserId,
-        via: "stored",
-        passedOver: null,
-      },
-    };
+    return decided({ handOff, runOn: storedRunOn(handOff) });
   }
-  return {
+  return decided({
     handOff: null,
     runOn: {
       executor,
@@ -1103,7 +1186,7 @@ export async function resolveRunChoice(
         why: !handOff ? "refused" : (row?.wake.why ?? "not_awake"),
       },
     },
-  };
+  });
 }
 
 /**
@@ -1246,7 +1329,7 @@ function refuseOneShotRunShape(
 export async function runPlaybook(
   rawInput: RunPlaybookInput
 ): Promise<RunPlaybookResult> {
-  const input = trialRunInput(rawInput);
+  let input = trialRunInput(rawInput);
   // Resolve the playbook — by id, else by NAME within this workspace (then a
   // pod-wide NULL-workspace playbook), with the cross-workspace visibility guard.
   // The ONE door (playbook-lifecycle.ts): the appointment materializer resolves
@@ -1273,8 +1356,8 @@ export async function runPlaybook(
   // before anything exists (an unknown / paused / foreign agent named for it
   // refuses the run; a remembered agent that is not awake falls to Synap AI).
   // A one-shot run is always the pod's own call (Synap AI): a remembered
-  // agent for the playbook does not apply to it.
-  const { handOff, runOn } = oneShot
+  // agent, or a runner the playbook names, does not apply to it.
+  const choice = oneShot
     ? {
         handOff: null,
         runOn: {
@@ -1283,6 +1366,7 @@ export async function runPlaybook(
           via: input.runOn ? ("named" as const) : ("default" as const),
           passedOver: null,
         },
+        persona: null,
       }
     : await resolveRunChoice({
         userId: input.userId,
@@ -1291,6 +1375,12 @@ export async function runPlaybook(
         runOn: input.runOn,
         playbook,
       });
+  const { handOff, runOn } = choice;
+  // The playbook's runner named a Synap AI persona: it answers this run,
+  // unless the caller named one.
+  if (choice.persona && !input.agentType) {
+    input = { ...input, agentType: choice.persona };
+  }
 
   // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
   // playbook depending on not-enabled skills files ONE enable request per pack
@@ -1411,7 +1501,9 @@ export function handedToLine(h: RunHandedTo | undefined): string {
   const who = h.name ?? `agent ${h.agentUserId}`;
   return h.via === "assigned"
     ? ` It is handed to ${who}, the agent assigned to this playbook.`
-    : ` It is handed to ${who}.`;
+    : h.via === "authored"
+      ? ` It is handed to ${who}, the runner this playbook names.`
+      : ` It is handed to ${who}.`;
 }
 
 /** Names the hand-off on a run that started or was held with it. */
@@ -2103,7 +2195,7 @@ export async function startHeldRun(
   // may have been paused since): a refusal throws here, before the claim, so
   // the hold stays rather than starting the playbook's own executor instead.
   // The person's remembered choice applies too: it is their run now.
-  const { handOff, runOn } = await resolveRunChoice({
+  const { handOff, runOn, persona } = await resolveRunChoice({
     userId: session.userId,
     handToAgentId: held.handToAgentId ?? null,
     runOn: held.runOn,
@@ -2130,7 +2222,7 @@ export async function startHeldRun(
     workspaceId: session.workspaceId ?? null,
     params: held.params,
     subjectId: session.subjectEntityId ?? null,
-    agentType: held.agentType,
+    agentType: held.agentType ?? persona ?? null,
     handOff,
     runOn,
   });

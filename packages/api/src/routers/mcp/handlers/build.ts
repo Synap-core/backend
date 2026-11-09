@@ -1280,6 +1280,8 @@ export const buildHandlers: McpHandlerMap = {
       projectId: trimmed(args.projectId),
       trackId: trimmed(args.trackId),
       handToAgentId: trimmed(args.handToAgentId),
+      // Validated by `playbooks.run` (`playbookRunnerSchema`), never dropped.
+      ...(args.runner !== undefined ? { runner: args.runner } : {}),
       parentSessionId: trimmed(args.parentSessionId),
       suspendedIntent: trimmed(args.suspendedIntent),
       source: "mcp",
