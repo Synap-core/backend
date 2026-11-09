@@ -1749,7 +1749,11 @@ export interface ThingBlockerWhy {
 	waitKind: WaitKind;
 	/** An owed slot's class of blocker ("what to build"), else null. */
 	blockedReason: string | null;
-	/** An owed slot's domain name (`not_connected`), else null. */
+	/**
+	 * The lead wait's stable name: an owed slot's declared domain name
+	 * (`not_connected`), a pending proposal's type (`messaging.external.send`)
+	 * or a held send's reason (`not_connected`); else null.
+	 */
 	blockerKey: string | null;
 }
 export interface ThingBlocker {
@@ -11674,6 +11678,13 @@ export interface Context {
 	 */
 	isHubProtocol?: boolean;
 	/**
+	 * Set ONLY by a Hub door that acts as the person (their own app token,
+	 * past `rejectAgentReviewer`) on the caller context it builds: the session
+	 * roster of the human doors applies there (`rosterReadFor`). Never set from
+	 * a request; ignored with an acting agent.
+	 */
+	personRoster?: boolean;
+	/**
 	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
 	 * its workspace binding, threaded from api-key-auth middleware. They let the
 	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
@@ -15964,6 +15975,7 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"conflict",
 	"kind_missing",
 	"not_connected",
+	"do_not_contact",
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
@@ -35192,7 +35204,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string | undefined;
 				failure?: {
 					enableProposalId?: string | undefined;
-					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
+					errorClass: "auth" | "conflict" | "do_not_contact" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
 						kind: "add" | "connect" | "enable" | "none" | "run";

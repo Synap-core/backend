@@ -256,6 +256,10 @@ const CONNECT_AFFORDANCE =
 // leaf module below (see its docstring for why it's split out).
 export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { refuseWorkerSendPastCeiling } from "../services/playbooks/worker-send-ceiling.js";
+import {
+  doNotContactRefusal,
+  readRecipientDoNotContact,
+} from "../services/channels/do-not-contact.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { encodeFormBody } from "./form-encode.js";
 import { isUuid } from "@synap-core/types/property-render";
@@ -949,7 +953,13 @@ export async function sendExternalMessage(
             eq(channels.channelType, ChannelType.EXTERNAL),
             eq(channels.externalId as any, threadId)
           ),
-          columns: { id: true, externalSource: true, workspaceId: true },
+          columns: {
+            id: true,
+            externalSource: true,
+            workspaceId: true,
+            contextObjectType: true,
+            contextObjectId: true,
+          },
         })
       : undefined;
   if (!threadId && !sendChannel) {
@@ -997,6 +1007,22 @@ export async function sendExternalMessage(
       });
       if (denial) return { success: false, error: denial };
     }
+  }
+
+  // Do not contact (founder, 2026-11-09): the person the conversation is
+  // bound to may be flagged, and then NOTHING goes to them, whoever asks (a
+  // person, an app, an agent, an automation). Refused before the gate, so
+  // nothing is filed; and on an approved replay too, since the flag may have
+  // been set after the send was filed. A conversation bound to no person goes
+  // on as before (`services/channels/do-not-contact.ts`).
+  const doNotContact = await readRecipientDoNotContact(linkedChannel);
+  if (doNotContact) {
+    return {
+      success: false,
+      error: doNotContactRefusal(doNotContact),
+      errorClass: "do_not_contact",
+      providerRef: linkedChannel?.externalSource ?? undefined,
+    };
   }
 
   const provider = linkedChannel?.externalSource ?? undefined;

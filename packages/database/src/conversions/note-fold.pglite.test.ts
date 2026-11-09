@@ -161,6 +161,9 @@ ALTER TABLE entities ADD COLUMN IF NOT EXISTS status_category text;
 ALTER TABLE entity_facets ADD COLUMN IF NOT EXISTS status_category text;
 ALTER TABLE property_defs ADD COLUMN IF NOT EXISTS constraints jsonb DEFAULT '{}';
 ALTER TABLE profile_properties ADD COLUMN IF NOT EXISTS is_lifecycle boolean DEFAULT false;
+ALTER TABLE profile_properties ADD COLUMN IF NOT EXISTS default_value jsonb;
+ALTER TABLE property_defs ADD COLUMN IF NOT EXISTS ui_hints jsonb;
+ALTER TABLE property_defs ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 CREATE TABLE views (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   scope_profile_ids uuid[] DEFAULT '{}'
