@@ -4,7 +4,7 @@
  * Every kind and every role declares at most ONE lifecycle: one select
  * property (the link row `profile_properties.is_lifecycle`) whose options are
  * objects `{ key, label?, category, tone?, humanOnly?, stuckAfterDays?,
- * dateBinding?, waits? }` stored at
+ * dateBinding?, waits?, requires? }` stored at
  * `property_defs.constraints.enumOptions` (the bare `constraints.enum` key list
  * is DERIVED from them by the one mapper, `utils/property-enum.ts`).
  *
@@ -21,11 +21,14 @@
 import {
   HOLD_ON,
   LIFECYCLE_CATEGORIES,
+  LIFECYCLE_REQUIREMENT_DIRECTIONS,
+  LIFECYCLE_REQUIREMENT_OWNERS,
   TERMINAL_LIFECYCLE_CATEGORIES,
   type HoldOn,
   type LifecycleCategory,
   type LifecycleDeclaration,
   type LifecycleOption,
+  type LifecycleOptionRequirement,
   type LifecycleOptionWaits,
 } from "@synap-core/types/lifecycle";
 import { isWaitKind } from "@synap-core/types/units";
@@ -161,6 +164,12 @@ export function parseLifecycleOptions(raw: unknown): {
       if (typeof parsed === "string") errors.push(parsed);
       else opt.waits = parsed;
     }
+    if (o.requires !== undefined) {
+      // Validated like `waits`: reported, never dropping the option.
+      const parsed = parseOptionRequires(key, o.category, o.requires);
+      if (typeof parsed === "string") errors.push(parsed);
+      else if (parsed.length > 0) opt.requires = parsed;
+    }
     options.push(opt);
   });
   return { options, errors };
@@ -215,6 +224,188 @@ export function parseOptionWaits(
     return `option "${key}" waits has unknown field(s): ${unknown.join(", ")}`;
   }
   return out;
+}
+
+/** Most requirements one option may declare. */
+export const REQUIREMENTS_PER_OPTION_MAX = 10;
+
+/** A `blockerKey`: lowercase letters, digits and `_` (`no_contact`). */
+const BLOCKER_KEY = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * What a step may REQUIRE of a thing standing in it (`LifecycleOption.requires`):
+ * a closed, typed list — `link` (a relation type, a direction, a minimum
+ * count) or `property` (present, or one of `in`), each with its
+ * `blockerKey`, `label?`, `clearedBy?`, `owner?` (`you` | `agent`) and
+ * `forKinds?`. No expression language. The one parser, so every door that
+ * declares a lifecycle (the def door, the lifecycle door, a catalog install)
+ * reads it alike. Returns the clean list, or the error words.
+ *
+ * Names are checked for SHAPE only: a role's requirement may name a property
+ * of the kind wearing it (a lead's person: `linkedinUrl`), which is not the
+ * role's own property, and a relation type may be a workspace's own slug.
+ */
+export function parseOptionRequires(
+  key: string,
+  category: LifecycleCategory,
+  raw: unknown
+): LifecycleOptionRequirement[] | string {
+  const at = (i: number) => `option "${key}" requires[${i}]`;
+  if (!Array.isArray(raw)) {
+    return `option "${key}" requires must be a list of { kind: "link" | "property", blockerKey, ... }`;
+  }
+  if (raw.length > 0 && TERMINAL_LIFECYCLE_CATEGORIES.includes(category)) {
+    return `option "${key}" is ${category}: a finished thing requires nothing (requires is for open, active or paused options)`;
+  }
+  if (raw.length > REQUIREMENTS_PER_OPTION_MAX) {
+    return `option "${key}" requires at most ${REQUIREMENTS_PER_OPTION_MAX} things`;
+  }
+  const out: LifecycleOptionRequirement[] = [];
+  const seen = new Set<string>();
+  for (const [i, item] of raw.entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return `${at(i)} must be an object`;
+    }
+    const r = item as Record<string, unknown>;
+    if (typeof r.blockerKey !== "string" || !BLOCKER_KEY.test(r.blockerKey)) {
+      return `${at(i)}.blockerKey must be a lowercase name (letters, digits, _), e.g. "no_contact"`;
+    }
+    if (seen.has(r.blockerKey)) {
+      return `${at(i)}.blockerKey "${r.blockerKey}" is declared twice`;
+    }
+    seen.add(r.blockerKey);
+    const base: {
+      blockerKey: string;
+      label?: string;
+      owner?: LifecycleOptionRequirement["owner"];
+      clearedBy?: LifecycleOptionRequirement["clearedBy"];
+      forKinds?: string[];
+    } = { blockerKey: r.blockerKey };
+    if (r.label !== undefined) {
+      if (typeof r.label !== "string" || !r.label.trim()) {
+        return `${at(i)}.label must be words`;
+      }
+      base.label = r.label.trim();
+    }
+    if (r.owner !== undefined) {
+      if (
+        !(LIFECYCLE_REQUIREMENT_OWNERS as readonly unknown[]).includes(r.owner)
+      ) {
+        return `${at(i)}.owner must be one of ${LIFECYCLE_REQUIREMENT_OWNERS.join(" | ")}`;
+      }
+      base.owner = r.owner as LifecycleOptionRequirement["owner"];
+    }
+    if (r.clearedBy !== undefined) {
+      const c = parseRequirementClearedBy(r.clearedBy);
+      if (!c) {
+        return `${at(i)}.clearedBy must be one of { answer: true } | { intent } | { playbookId } | { capability }`;
+      }
+      base.clearedBy = c;
+    }
+    if (r.forKinds !== undefined) {
+      if (
+        !Array.isArray(r.forKinds) ||
+        r.forKinds.length === 0 ||
+        !r.forKinds.every((k) => typeof k === "string" && DATE_BINDING.test(k))
+      ) {
+        return `${at(i)}.forKinds must be a list of kind slugs (e.g. ["person"])`;
+      }
+      base.forKinds = [...new Set(r.forKinds as string[])];
+    }
+    const common = [
+      "kind",
+      "blockerKey",
+      "label",
+      "owner",
+      "clearedBy",
+      "forKinds",
+    ];
+    if (r.kind === "link") {
+      if (typeof r.relation !== "string" || !DATE_BINDING.test(r.relation)) {
+        return `${at(i)}.relation must name a relation type (its slug, e.g. "works_at")`;
+      }
+      if (
+        !(LIFECYCLE_REQUIREMENT_DIRECTIONS as readonly unknown[]).includes(
+          r.direction
+        )
+      ) {
+        return `${at(i)}.direction must be "out" (the thing is the link's source) or "in" (its target)`;
+      }
+      if (
+        r.min !== undefined &&
+        !(
+          typeof r.min === "number" &&
+          Number.isInteger(r.min) &&
+          r.min >= 1 &&
+          r.min <= 1000
+        )
+      ) {
+        return `${at(i)}.min must be a whole number from 1 to 1000`;
+      }
+      const unknown = Object.keys(r).filter(
+        (k) => ![...common, "relation", "direction", "min"].includes(k)
+      );
+      if (unknown.length > 0) {
+        return `${at(i)} has unknown field(s): ${unknown.join(", ")}`;
+      }
+      out.push({
+        ...base,
+        kind: "link",
+        relation: r.relation,
+        direction: r.direction as "out" | "in",
+        ...(typeof r.min === "number" ? { min: r.min } : {}),
+      });
+      continue;
+    }
+    if (r.kind === "property") {
+      if (typeof r.property !== "string" || !DATE_BINDING.test(r.property)) {
+        return `${at(i)}.property must name a property (its slug, e.g. "linkedinUrl")`;
+      }
+      if (
+        r.in !== undefined &&
+        !(
+          Array.isArray(r.in) &&
+          r.in.length > 0 &&
+          r.in.every((v) => typeof v === "string" && v.trim())
+        )
+      ) {
+        return `${at(i)}.in must be a non-empty list of values`;
+      }
+      const unknown = Object.keys(r).filter(
+        (k) => ![...common, "property", "in"].includes(k)
+      );
+      if (unknown.length > 0) {
+        return `${at(i)} has unknown field(s): ${unknown.join(", ")}`;
+      }
+      out.push({
+        ...base,
+        kind: "property",
+        property: r.property,
+        ...(Array.isArray(r.in) ? { in: [...new Set(r.in as string[])] } : {}),
+      });
+      continue;
+    }
+    return `${at(i)}.kind must be "link" or "property"`;
+  }
+  return out;
+}
+
+/** The one shape of what clears a blocker (`ThingBlockerClearedBy`); null when it is none. */
+function parseRequirementClearedBy(
+  raw: unknown
+): LifecycleOptionRequirement["clearedBy"] | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const c = raw as Record<string, unknown>;
+  const keys = Object.keys(c);
+  if (keys.length !== 1) return null;
+  if (c.answer === true) return { answer: true };
+  for (const k of ["intent", "playbookId", "capability"] as const) {
+    const v = c[k];
+    if (typeof v === "string" && v.trim()) {
+      return { [k]: v.trim() } as LifecycleOptionRequirement["clearedBy"];
+    }
+  }
+  return null;
 }
 
 export function findLifecycleOption(

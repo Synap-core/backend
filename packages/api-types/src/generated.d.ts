@@ -562,6 +562,407 @@ export type MoveHoldDecision = {
 	message: string;
 	ok: false;
 };
+declare const EVALUATION_VERDICTS: readonly [
+	"pass",
+	"fail",
+	"unmeasured"
+];
+export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
+declare const EVALUATOR_KINDS: readonly [
+	"evidence",
+	"capability",
+	"judge",
+	"human"
+];
+export type EvaluatorKind = (typeof EVALUATOR_KINDS)[number];
+export interface SessionVerdict {
+	total: number;
+	passed: number;
+	failed: number;
+	unmeasured: number;
+	/** Required criteria whose current verdict is not `pass`. */
+	requiredUnmet: number;
+	/**
+	 * none       — the session declares no criteria.
+	 * passing    — every required criterion passes.
+	 * failing    — at least one required criterion's current verdict is `fail`.
+	 * incomplete — no required criterion failed, but some are not yet measured.
+	 */
+	state: "failing" | "incomplete" | "none" | "passing";
+}
+declare const CI_FINISHED_STATUSES: readonly [
+	"success",
+	"failure",
+	"cancelled",
+	"skipped",
+	"neutral",
+	"timed_out"
+];
+export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
+declare const repoSnapshotEventSchema: z.ZodObject<{
+	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+		kind: z.ZodEnum<{
+			desktop: "desktop";
+			image: "image";
+			npm: "npm";
+			pod: "pod";
+			site: "site";
+		}>;
+		label: z.ZodString;
+		sha: z.ZodNullable<z.ZodString>;
+	}, z.core.$strip>>>;
+	main: z.ZodObject<{
+		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		health: z.ZodEnum<{
+			infra: "infra";
+			ok: "ok";
+			red: "red";
+			unmeasured: "unmeasured";
+		}>;
+		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
+			at: z.ZodOptional<z.ZodString>;
+			prNumber: z.ZodOptional<z.ZodNumber>;
+			sha: z.ZodString;
+		}, z.core.$strip>>>;
+		sha: z.ZodNullable<z.ZodString>;
+		source: z.ZodEnum<{
+			"devbox-baseline": "devbox-baseline";
+			"github-checks": "github-checks";
+			none: "none";
+		}>;
+	}, z.core.$strip>;
+	mergedToday: z.ZodArray<z.ZodObject<{
+		mergedAt: z.ZodString;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		title: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	observedAt: z.ZodString;
+	prs: z.ZodArray<z.ZodObject<{
+		author: z.ZodString;
+		autoMerge: z.ZodBoolean;
+		branch: z.ZodOptional<z.ZodString>;
+		checks: z.ZodEnum<{
+			green: "green";
+			infra: "infra";
+			none: "none";
+			queued: "queued";
+			red: "red";
+			running: "running";
+		}>;
+		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
+			number: z.ZodNumber;
+			repo: z.ZodString;
+		}, z.core.$strip>>>;
+		draft: z.ZodBoolean;
+		headSha: z.ZodString;
+		mergeable: z.ZodEnum<{
+			blocked: "blocked";
+			clean: "clean";
+			dirty: "dirty";
+			unknown: "unknown";
+		}>;
+		number: z.ZodNumber;
+		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
+		title: z.ZodString;
+		updatedAt: z.ZodString;
+		url: z.ZodString;
+	}, z.core.$strip>>;
+	repo: z.ZodString;
+	visibility: z.ZodEnum<{
+		private: "private";
+		public: "public";
+	}>;
+}, z.core.$strip>;
+export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
+declare const PULL_REQUEST_STATES: readonly [
+	"open",
+	"merged",
+	"closed"
+];
+export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
+declare const PULL_REQUEST_CHECKS: readonly [
+	"passed",
+	"failed"
+];
+export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
+/** What the recorded facts say about one PR. */
+export interface PullRequestStateFacts {
+	state: PullRequestState;
+	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
+	checks?: PullRequestChecks;
+	/** The sha `checks` is about — compare it with a newer head before trusting it. */
+	checksOn?: string;
+	/**
+	 * A check on `checksOn` is running: a `ci.started` with no later
+	 * `ci.finished` of its workflow on that sha. `checks` then holds a failure
+	 * already settled, never `passed`. Never `false`.
+	 */
+	checksRunning?: true;
+	/**
+	 * The PR is in its repository's merge queue: open, with a
+	 * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
+	 */
+	queued?: true;
+	/**
+	 * A merge into the repository's default branch (the producer said so). Only
+	 * on `merged`; absent when the fact did not say (a stacked PR merged into
+	 * its parent branch is not on main).
+	 */
+	intoDefault?: boolean;
+	/**
+	 * A deploy contains the merge (built from a later commit of the repo, or
+	 * from the merge commit). Never `false`: see the file header.
+	 */
+	deployed?: true;
+	/** When the fact that set `state` happened (ISO). */
+	at: string;
+}
+declare const TRACK_WORK_KINDS: readonly [
+	"project",
+	"flow",
+	"operation",
+	"investigation",
+	"incident",
+	"commission",
+	"pathway"
+];
+export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
+declare const TRACK_UNCERTAINTY_LEVELS: readonly [
+	"clear",
+	"complicated",
+	"complex",
+	"chaotic",
+	"unknown"
+];
+export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
+declare const CRITERION_CHECK_MEANINGS: readonly [
+	"measured",
+	"judged",
+	"handed_over",
+	"learning",
+	"decided_outside",
+	"certified"
+];
+export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
+declare const CRITERION_ABOUT: readonly [
+	"result",
+	"method"
+];
+export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
+declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
+declare const GOAL_ACCEPTANCE_STATES: readonly [
+	"waiting",
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
+/** The stored record of a judge's decision on one goal criterion. */
+export interface GoalCriterionAcceptance {
+	decision: GoalAcceptanceDecision;
+	/** The person who decided. */
+	by: string;
+	/** ISO-8601. */
+	at: string;
+	/** Why, in words — what to change, or why it was rejected. */
+	note?: string;
+}
+declare const GOAL_CRITERION_MARKS: readonly [
+	"met",
+	"claimed",
+	"under_way",
+	"not_met",
+	"not_started"
+];
+export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
+/**
+ * A claim as every goal read returns it (`GoalCriterionView.claim`): who
+ * claimed, in which run, and what backs it — names resolved by the pod,
+ * never looked up by a page (`null` = not known, never an id).
+ */
+export interface GoalCriterionClaim {
+	by: string | null;
+	byName: string | null;
+	sessionId: string;
+	sessionTitle: string | null;
+	/** The evaluation's evidence (links, files, numbers) — `null` when none. */
+	evidence: Record<string, unknown> | null;
+	note: string | null;
+	/** ISO-8601. */
+	at: string;
+}
+/**
+ * One goal criterion as every track read returns it (`TrackView.criteria`):
+ * the stored criterion (the session criterion shape), the judge's stored
+ * decision, and the derived state. `mark` is `null` only on a view that could
+ * not read the goal's runs (a write's fallback) — never a guessed
+ * `not_started`.
+ */
+export interface GoalCriterionView {
+	key: string;
+	statement: string;
+	required?: boolean;
+	check: {
+		capability?: string;
+		evidenceKey?: string;
+		hint?: string;
+		kind: EvaluatorKind;
+	};
+	stageKey?: string;
+	checkKind?: CriterionCheckMeaning;
+	about?: CriterionAbout;
+	/** The judge's stored decision — `null` until one is made. */
+	acceptance: GoalCriterionAcceptance | null;
+	mark: GoalCriterionMark | null;
+	acceptanceState: GoalAcceptanceState | null;
+	meaning: CriterionCheckMeaning;
+	currentValue: string | null;
+	/**
+	 * Who claimed it, in which run, what backs it — the current passing
+	 * evaluation (`null` when none: never claimed, or accepted from an outside
+	 * decision with no run). `undefined` never: a write's fallback reads `null`.
+	 */
+	claim: GoalCriterionClaim | null;
+	/**
+	 * D-6 (founder, 2026-10-26): what backs a criterion — its claim's run title,
+	 * evidence and note, and its `currentValue` — is shown only to the goal's
+	 * OWNER, its JUDGE and whoever may read that run. `true` = there is such
+	 * content and this reader is none of them: those fields read `null`
+	 * ("Evidence visible to the owner and judge"), never an empty claim.
+	 * `false` = nothing withheld. The pod sets it on every derived read; it is
+	 * absent only on a write's fallback view, which read no goal facts
+	 * (`mark: null`).
+	 */
+	evidenceWithheld?: boolean;
+	/**
+	 * WHO WORKS IT: the open sessions that serve this criterion
+	 * (`session --serves--> goal` with `metadata.criterionKey`), only those the
+	 * reader may read, oldest first. Empty = nobody on it. Absent on a write's
+	 * fallback view, which read no goal facts.
+	 */
+	servedBy?: GoalCriterionServer[];
+}
+/** One session serving a criterion, as the goal page names it. */
+export interface GoalCriterionServer {
+	sessionId: string;
+	title: string;
+	status: string;
+}
+declare const OPERATION_PERIOD_MARKS: readonly [
+	"met",
+	"not_met",
+	"unmeasured"
+];
+export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
+export interface OperationPeriodReading {
+	/** ISO-8601, inclusive. */
+	from: string;
+	/** ISO-8601, exclusive. */
+	to: string;
+	mark: OperationPeriodMark;
+}
+declare const WAITING_ON_REASONS: readonly [
+	"input",
+	"approval",
+	"access",
+	"another_work",
+	"outside_world",
+	"external",
+	"date"
+];
+export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
+/**
+ * WHAT is waited on: the session, PR, person, decision, proposal, owed slot
+ * or thing behind a mark. `label` is words a surface can show; `id` (a pod
+ * id) and `url` (an outside page) are doors when present. A slot's `id` is
+ * the session that declares it.
+ */
+export interface WaitingOnRef {
+	kind: "decision" | "person" | "proposal" | "pull_request" | "session" | "slot" | "thing";
+	id?: string;
+	url?: string;
+	label: string;
+	/**
+	 * What kind of wait it is (`WAIT_KINDS`, `./wait-kind.ts`), from the
+	 * source that named this ref ({@link waitKindOf}). Absent from an older
+	 * pod; a reader must work without it.
+	 */
+	waitKind?: WaitKind;
+}
+export interface WaitingOnMark {
+	reason: WaitingOnReason;
+	count: number;
+	/**
+	 * What is waited on, at most {@link WAITING_ON_REFS_MAX}, in source order.
+	 * Absent when no source named one; a reader must work without it.
+	 */
+	refs?: WaitingOnRef[];
+}
+/** What clears a blocker — the mirror of `SlotClearedBy` (`@synap/playbooks`). */
+export type ThingBlockerClearedBy = {
+	answer: true;
+} | {
+	intent: string;
+} | {
+	playbookId: string;
+} | {
+	capability: string;
+};
+/** Why a thing is blocked: the lead wait, in the pod's own vocabulary. */
+export interface ThingBlockerWhy {
+	/** The coarse waiting-on reason (`WAITING_ON_REASONS`). */
+	reason: WaitingOnReason;
+	/** The finer wait kind (`WAIT_KINDS`); its ball is {@link ThingBlocker.ball}. */
+	waitKind: WaitKind;
+	/** An owed slot's class of blocker ("what to build"), else null. */
+	blockedReason: string | null;
+	/**
+	 * The lead wait's stable name: an owed slot's declared domain name
+	 * (`not_connected`), a pending proposal's type (`messaging.external.send`)
+	 * a held send's reason (`not_connected`) or a step requirement's declared
+	 * name (`no_contact`); else null.
+	 */
+	blockerKey: string | null;
+}
+export interface ThingBlocker {
+	blocked: boolean;
+	/** How many waits block it (the lead one is described below). */
+	count: number;
+	why: ThingBlockerWhy | null;
+	/** Whose move it is: the lead wait's ball (yours first). */
+	ball: WaitBall | null;
+	/**
+	 * The status clearing it lets the thing reach: the lead slot's declared
+	 * `blocks.to` when its lifecycle declares it, else the next main-path
+	 * status. Null when the thing has no lifecycle, stands off its path, or
+	 * has no step left.
+	 */
+	unlocks: {
+		label: string;
+		to: string;
+	} | null;
+	/**
+	 * What clears it: the lead slot's declared door; a person's owed slot with
+	 * none is cleared by their answer. Null when nothing names one (a proposal
+	 * is cleared by its review, a `blocked_by` by the other work).
+	 */
+	clearedBy: ThingBlockerClearedBy | null;
+	/** What is waited on (the lead wait's ref), when the reader may read it. */
+	ref: WaitingOnRef | null;
+}
 declare const LIFECYCLE_CATEGORIES: readonly [
 	"open",
 	"active",
@@ -1567,406 +1968,6 @@ export interface LensDoor {
 	id: string;
 	/** Optional view reading (`room`), from `OBJECT_NAV_VIEWS`. */
 	view?: string;
-}
-declare const EVALUATION_VERDICTS: readonly [
-	"pass",
-	"fail",
-	"unmeasured"
-];
-export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
-declare const EVALUATOR_KINDS: readonly [
-	"evidence",
-	"capability",
-	"judge",
-	"human"
-];
-export type EvaluatorKind = (typeof EVALUATOR_KINDS)[number];
-export interface SessionVerdict {
-	total: number;
-	passed: number;
-	failed: number;
-	unmeasured: number;
-	/** Required criteria whose current verdict is not `pass`. */
-	requiredUnmet: number;
-	/**
-	 * none       — the session declares no criteria.
-	 * passing    — every required criterion passes.
-	 * failing    — at least one required criterion's current verdict is `fail`.
-	 * incomplete — no required criterion failed, but some are not yet measured.
-	 */
-	state: "failing" | "incomplete" | "none" | "passing";
-}
-declare const CI_FINISHED_STATUSES: readonly [
-	"success",
-	"failure",
-	"cancelled",
-	"skipped",
-	"neutral",
-	"timed_out"
-];
-export type CiFinishedStatus = (typeof CI_FINISHED_STATUSES)[number];
-declare const repoSnapshotEventSchema: z.ZodObject<{
-	live: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-		behindBy: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
-		kind: z.ZodEnum<{
-			desktop: "desktop";
-			image: "image";
-			npm: "npm";
-			pod: "pod";
-			site: "site";
-		}>;
-		label: z.ZodString;
-		sha: z.ZodNullable<z.ZodString>;
-	}, z.core.$strip>>>;
-	main: z.ZodObject<{
-		fixedBy: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-			number: z.ZodNumber;
-			repo: z.ZodString;
-		}, z.core.$strip>>>;
-		health: z.ZodEnum<{
-			infra: "infra";
-			ok: "ok";
-			red: "red";
-			unmeasured: "unmeasured";
-		}>;
-		reason: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		redSince: z.ZodOptional<z.ZodNullable<z.ZodObject<{
-			at: z.ZodOptional<z.ZodString>;
-			prNumber: z.ZodOptional<z.ZodNumber>;
-			sha: z.ZodString;
-		}, z.core.$strip>>>;
-		sha: z.ZodNullable<z.ZodString>;
-		source: z.ZodEnum<{
-			"devbox-baseline": "devbox-baseline";
-			"github-checks": "github-checks";
-			none: "none";
-		}>;
-	}, z.core.$strip>;
-	mergedToday: z.ZodArray<z.ZodObject<{
-		mergedAt: z.ZodString;
-		number: z.ZodNumber;
-		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		title: z.ZodString;
-		url: z.ZodString;
-	}, z.core.$strip>>;
-	observedAt: z.ZodString;
-	prs: z.ZodArray<z.ZodObject<{
-		author: z.ZodString;
-		autoMerge: z.ZodBoolean;
-		branch: z.ZodOptional<z.ZodString>;
-		checks: z.ZodEnum<{
-			green: "green";
-			infra: "infra";
-			none: "none";
-			queued: "queued";
-			red: "red";
-			running: "running";
-		}>;
-		dependsOn: z.ZodOptional<z.ZodArray<z.ZodObject<{
-			number: z.ZodNumber;
-			repo: z.ZodString;
-		}, z.core.$strip>>>;
-		draft: z.ZodBoolean;
-		headSha: z.ZodString;
-		mergeable: z.ZodEnum<{
-			blocked: "blocked";
-			clean: "clean";
-			dirty: "dirty";
-			unknown: "unknown";
-		}>;
-		number: z.ZodNumber;
-		podSessionId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-		redInheritedFromMain: z.ZodOptional<z.ZodBoolean>;
-		title: z.ZodString;
-		updatedAt: z.ZodString;
-		url: z.ZodString;
-	}, z.core.$strip>>;
-	repo: z.ZodString;
-	visibility: z.ZodEnum<{
-		private: "private";
-		public: "public";
-	}>;
-}, z.core.$strip>;
-export type RepoSnapshotFact = z.infer<typeof repoSnapshotEventSchema>;
-declare const PULL_REQUEST_STATES: readonly [
-	"open",
-	"merged",
-	"closed"
-];
-export type PullRequestState = (typeof PULL_REQUEST_STATES)[number];
-declare const PULL_REQUEST_CHECKS: readonly [
-	"passed",
-	"failed"
-];
-export type PullRequestChecks = (typeof PULL_REQUEST_CHECKS)[number];
-/** What the recorded facts say about one PR. */
-export interface PullRequestStateFacts {
-	state: PullRequestState;
-	/** The newest CI result on the PR's newest run sha; absent when none settles it. */
-	checks?: PullRequestChecks;
-	/** The sha `checks` is about — compare it with a newer head before trusting it. */
-	checksOn?: string;
-	/**
-	 * A check on `checksOn` is running: a `ci.started` with no later
-	 * `ci.finished` of its workflow on that sha. `checks` then holds a failure
-	 * already settled, never `passed`. Never `false`.
-	 */
-	checksRunning?: true;
-	/**
-	 * The PR is in its repository's merge queue: open, with a
-	 * `dev.merge_queued` at or after the fact that (re)opened it. Never `false`.
-	 */
-	queued?: true;
-	/**
-	 * A merge into the repository's default branch (the producer said so). Only
-	 * on `merged`; absent when the fact did not say (a stacked PR merged into
-	 * its parent branch is not on main).
-	 */
-	intoDefault?: boolean;
-	/**
-	 * A deploy contains the merge (built from a later commit of the repo, or
-	 * from the merge commit). Never `false`: see the file header.
-	 */
-	deployed?: true;
-	/** When the fact that set `state` happened (ISO). */
-	at: string;
-}
-/** What clears a blocker — the mirror of `SlotClearedBy` (`@synap/playbooks`). */
-export type ThingBlockerClearedBy = {
-	answer: true;
-} | {
-	intent: string;
-} | {
-	playbookId: string;
-} | {
-	capability: string;
-};
-/** Why a thing is blocked: the lead wait, in the pod's own vocabulary. */
-export interface ThingBlockerWhy {
-	/** The coarse waiting-on reason (`WAITING_ON_REASONS`). */
-	reason: WaitingOnReason;
-	/** The finer wait kind (`WAIT_KINDS`); its ball is {@link ThingBlocker.ball}. */
-	waitKind: WaitKind;
-	/** An owed slot's class of blocker ("what to build"), else null. */
-	blockedReason: string | null;
-	/**
-	 * The lead wait's stable name: an owed slot's declared domain name
-	 * (`not_connected`), a pending proposal's type (`messaging.external.send`)
-	 * or a held send's reason (`not_connected`); else null.
-	 */
-	blockerKey: string | null;
-}
-export interface ThingBlocker {
-	blocked: boolean;
-	/** How many waits block it (the lead one is described below). */
-	count: number;
-	why: ThingBlockerWhy | null;
-	/** Whose move it is: the lead wait's ball (yours first). */
-	ball: WaitBall | null;
-	/**
-	 * The status clearing it lets the thing reach: the lead slot's declared
-	 * `blocks.to` when its lifecycle declares it, else the next main-path
-	 * status. Null when the thing has no lifecycle, stands off its path, or
-	 * has no step left.
-	 */
-	unlocks: {
-		label: string;
-		to: string;
-	} | null;
-	/**
-	 * What clears it: the lead slot's declared door; a person's owed slot with
-	 * none is cleared by their answer. Null when nothing names one (a proposal
-	 * is cleared by its review, a `blocked_by` by the other work).
-	 */
-	clearedBy: ThingBlockerClearedBy | null;
-	/** What is waited on (the lead wait's ref), when the reader may read it. */
-	ref: WaitingOnRef | null;
-}
-declare const TRACK_WORK_KINDS: readonly [
-	"project",
-	"flow",
-	"operation",
-	"investigation",
-	"incident",
-	"commission",
-	"pathway"
-];
-export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
-declare const TRACK_UNCERTAINTY_LEVELS: readonly [
-	"clear",
-	"complicated",
-	"complex",
-	"chaotic",
-	"unknown"
-];
-export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
-declare const CRITERION_CHECK_MEANINGS: readonly [
-	"measured",
-	"judged",
-	"handed_over",
-	"learning",
-	"decided_outside",
-	"certified"
-];
-export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
-declare const CRITERION_ABOUT: readonly [
-	"result",
-	"method"
-];
-export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
-declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
-	"accepted",
-	"changes_asked",
-	"rejected"
-];
-export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
-declare const GOAL_ACCEPTANCE_STATES: readonly [
-	"waiting",
-	"accepted",
-	"changes_asked",
-	"rejected"
-];
-export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
-/** The stored record of a judge's decision on one goal criterion. */
-export interface GoalCriterionAcceptance {
-	decision: GoalAcceptanceDecision;
-	/** The person who decided. */
-	by: string;
-	/** ISO-8601. */
-	at: string;
-	/** Why, in words — what to change, or why it was rejected. */
-	note?: string;
-}
-declare const GOAL_CRITERION_MARKS: readonly [
-	"met",
-	"claimed",
-	"under_way",
-	"not_met",
-	"not_started"
-];
-export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
-/**
- * A claim as every goal read returns it (`GoalCriterionView.claim`): who
- * claimed, in which run, and what backs it — names resolved by the pod,
- * never looked up by a page (`null` = not known, never an id).
- */
-export interface GoalCriterionClaim {
-	by: string | null;
-	byName: string | null;
-	sessionId: string;
-	sessionTitle: string | null;
-	/** The evaluation's evidence (links, files, numbers) — `null` when none. */
-	evidence: Record<string, unknown> | null;
-	note: string | null;
-	/** ISO-8601. */
-	at: string;
-}
-/**
- * One goal criterion as every track read returns it (`TrackView.criteria`):
- * the stored criterion (the session criterion shape), the judge's stored
- * decision, and the derived state. `mark` is `null` only on a view that could
- * not read the goal's runs (a write's fallback) — never a guessed
- * `not_started`.
- */
-export interface GoalCriterionView {
-	key: string;
-	statement: string;
-	required?: boolean;
-	check: {
-		capability?: string;
-		evidenceKey?: string;
-		hint?: string;
-		kind: EvaluatorKind;
-	};
-	stageKey?: string;
-	checkKind?: CriterionCheckMeaning;
-	about?: CriterionAbout;
-	/** The judge's stored decision — `null` until one is made. */
-	acceptance: GoalCriterionAcceptance | null;
-	mark: GoalCriterionMark | null;
-	acceptanceState: GoalAcceptanceState | null;
-	meaning: CriterionCheckMeaning;
-	currentValue: string | null;
-	/**
-	 * Who claimed it, in which run, what backs it — the current passing
-	 * evaluation (`null` when none: never claimed, or accepted from an outside
-	 * decision with no run). `undefined` never: a write's fallback reads `null`.
-	 */
-	claim: GoalCriterionClaim | null;
-	/**
-	 * D-6 (founder, 2026-10-26): what backs a criterion — its claim's run title,
-	 * evidence and note, and its `currentValue` — is shown only to the goal's
-	 * OWNER, its JUDGE and whoever may read that run. `true` = there is such
-	 * content and this reader is none of them: those fields read `null`
-	 * ("Evidence visible to the owner and judge"), never an empty claim.
-	 * `false` = nothing withheld. The pod sets it on every derived read; it is
-	 * absent only on a write's fallback view, which read no goal facts
-	 * (`mark: null`).
-	 */
-	evidenceWithheld?: boolean;
-	/**
-	 * WHO WORKS IT: the open sessions that serve this criterion
-	 * (`session --serves--> goal` with `metadata.criterionKey`), only those the
-	 * reader may read, oldest first. Empty = nobody on it. Absent on a write's
-	 * fallback view, which read no goal facts.
-	 */
-	servedBy?: GoalCriterionServer[];
-}
-/** One session serving a criterion, as the goal page names it. */
-export interface GoalCriterionServer {
-	sessionId: string;
-	title: string;
-	status: string;
-}
-declare const OPERATION_PERIOD_MARKS: readonly [
-	"met",
-	"not_met",
-	"unmeasured"
-];
-export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
-export interface OperationPeriodReading {
-	/** ISO-8601, inclusive. */
-	from: string;
-	/** ISO-8601, exclusive. */
-	to: string;
-	mark: OperationPeriodMark;
-}
-declare const WAITING_ON_REASONS: readonly [
-	"input",
-	"approval",
-	"access",
-	"another_work",
-	"outside_world",
-	"external",
-	"date"
-];
-export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
-/**
- * WHAT is waited on: the session, PR, person, decision, proposal, owed slot
- * or thing behind a mark. `label` is words a surface can show; `id` (a pod
- * id) and `url` (an outside page) are doors when present. A slot's `id` is
- * the session that declares it.
- */
-export interface WaitingOnRef {
-	kind: "decision" | "person" | "proposal" | "pull_request" | "session" | "slot" | "thing";
-	id?: string;
-	url?: string;
-	label: string;
-	/**
-	 * What kind of wait it is (`WAIT_KINDS`, `./wait-kind.ts`), from the
-	 * source that named this ref ({@link waitKindOf}). Absent from an older
-	 * pod; a reader must work without it.
-	 */
-	waitKind?: WaitKind;
-}
-export interface WaitingOnMark {
-	reason: WaitingOnReason;
-	count: number;
-	/**
-	 * What is waited on, at most {@link WAITING_ON_REFS_MAX}, in source order.
-	 * Absent when no source named one; a reader must work without it.
-	 */
-	refs?: WaitingOnRef[];
 }
 declare enum AgentType {
 	DEFAULT = "default",
@@ -44352,6 +44353,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						humanOnly: boolean;
 						key: string;
 						label: string;
+						requires?: ({
+							blockerKey: string;
+							clearedBy?: {
+								answer: true;
+							} | {
+								intent: string;
+							} | {
+								playbookId: string;
+							} | {
+								capability: string;
+							} | undefined;
+							direction: "in" | "out";
+							forKinds?: string[] | undefined;
+							kind: "link";
+							label?: string | undefined;
+							min?: number | undefined;
+							owner?: "agent" | "you" | undefined;
+							relation: string;
+						} | {
+							blockerKey: string;
+							clearedBy?: {
+								answer: true;
+							} | {
+								intent: string;
+							} | {
+								playbookId: string;
+							} | {
+								capability: string;
+							} | undefined;
+							forKinds?: string[] | undefined;
+							in?: string[] | undefined;
+							kind: "property";
+							label?: string | undefined;
+							owner?: "agent" | "you" | undefined;
+							property: string;
+						})[] | undefined;
 						stuckAfterDays?: number | undefined;
 						tone: string;
 						waits?: {
@@ -44390,6 +44427,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					humanOnly: boolean;
 					key: string;
 					label: string;
+					requires?: ({
+						blockerKey: string;
+						clearedBy?: {
+							answer: true;
+						} | {
+							intent: string;
+						} | {
+							playbookId: string;
+						} | {
+							capability: string;
+						} | undefined;
+						direction: "in" | "out";
+						forKinds?: string[] | undefined;
+						kind: "link";
+						label?: string | undefined;
+						min?: number | undefined;
+						owner?: "agent" | "you" | undefined;
+						relation: string;
+					} | {
+						blockerKey: string;
+						clearedBy?: {
+							answer: true;
+						} | {
+							intent: string;
+						} | {
+							playbookId: string;
+						} | {
+							capability: string;
+						} | undefined;
+						forKinds?: string[] | undefined;
+						in?: string[] | undefined;
+						kind: "property";
+						label?: string | undefined;
+						owner?: "agent" | "you" | undefined;
+						property: string;
+					})[] | undefined;
 					stuckAfterDays?: number | undefined;
 					tone: string;
 					waits?: {
