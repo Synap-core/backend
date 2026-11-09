@@ -797,11 +797,13 @@ export const sendMessageProcedure = protectedProcedure
         wake: roomWake,
       });
       // Never ask "who should answer?" about a message something already
-      // answers: a reply to an agent's open question (the answer loop), an
-      // anchored comment's or a capture room's own turn.
+      // answers: a reply to an agent's open question (the answer loop), a
+      // free message that woke the session's agent, an anchored comment's or
+      // a capture room's own turn.
       if (
         roomChoice &&
         ownerReply?.status !== "answered" &&
+        !(ownerReply?.status === "no_open_question" && ownerReply.woke) &&
         !anchoredComment?.decision.trigger &&
         !captureTurn
       ) {
