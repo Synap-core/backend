@@ -242,8 +242,21 @@ async function moveInstallation(
         inArray(installations.status, [...from])
       )
     )
-    .returning({ status: installations.status });
-  if (moved) return moved.status;
+    .returning({
+      status: installations.status,
+      machineUserId: installations.machineUserId,
+    });
+  if (moved) {
+    // An install a step waits on landed (or failed): the steps that wait on
+    // tools on that computer are checked again (the stage runner, never
+    // throws).
+    if (to === "installed" || to === "failed") {
+      const { recheckStagesOnComputer } =
+        await import("../playbooks/stage-runner.js");
+      await recheckStagesOnComputer(moved.machineUserId);
+    }
+    return moved.status;
+  }
   const [row] = await db
     .select({ status: installations.status })
     .from(installations)

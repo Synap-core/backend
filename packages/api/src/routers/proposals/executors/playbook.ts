@@ -800,6 +800,17 @@ export function registerPlaybookExecutors(): void {
             : {}),
           // Synap AI asked for this run stays Synap AI once approved.
           ...(inner.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+          // Who works each step, as asked: re-validated by the run door.
+          ...(inner.stageRunners &&
+          typeof inner.stageRunners === "object" &&
+          !Array.isArray(inner.stageRunners)
+            ? {
+                stageRunners: inner.stageRunners as Record<
+                  string,
+                  PlaybookRunner
+                >,
+              }
+            : {}),
           // A trial (the rule lab) stays a trial once approved: re-validated
           // by the run door's own schema.
           ...(inner.trial && typeof inner.trial === "object"

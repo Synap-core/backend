@@ -222,6 +222,13 @@ export interface RunPlaybookInput {
    */
   runOn?: "synap_ai";
   /**
+   * WHO works each step of THIS run, by stage key (spec 7111934d §2.4): the
+   * stage runner's second rung, after a runner named when the step is
+   * entered and before the step's own `runner`. Stored on the run's input
+   * (`playbook_runs.input.stageRunners`), where `enterStage` reads it.
+   */
+  stageRunners?: Record<string, PlaybookRunner>;
+  /**
    * The agent that STARTED this run directly (no proposal). The run is still
    * the PERSON's (`userId`): the agent rides first on the roster and the
    * session waits as a triage DRAFT (`origin: "agent"`) for the person to
@@ -1812,6 +1819,7 @@ async function executeSingleRun(
       ...(handOff ? { handToAgentId: handOff.agentUserId } : {}),
       // A run asked for Synap AI stays on Synap AI when it is accepted.
       ...(input.runOn ? { runOn: input.runOn } : {}),
+      ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
       heldAt: new Date().toISOString(),
     };
     const [heldSession] = await db
@@ -1838,6 +1846,7 @@ async function executeSingleRun(
     agentType: input.agentType ?? null,
     handOff: handOff ?? null,
     runOn: runOn ?? null,
+    stageRunners: input.stageRunners,
   });
 
   // Re-load the session so the returned row reflects the wired channelId.
@@ -1862,6 +1871,8 @@ interface HeldRun {
   handToAgentId?: string;
   /** Synap AI was asked for this run (`RunPlaybookInput.runOn`). */
   runOn?: "synap_ai";
+  /** Who works each step (`RunPlaybookInput.stageRunners`). */
+  stageRunners?: Record<string, PlaybookRunner>;
   heldAt: string;
 }
 
@@ -1882,6 +1893,11 @@ function readHeldRun(metadata: unknown): HeldRun | null {
       ? { handToAgentId: h.handToAgentId }
       : {}),
     ...(h.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+    ...(h.stageRunners &&
+    typeof h.stageRunners === "object" &&
+    !Array.isArray(h.stageRunners)
+      ? { stageRunners: h.stageRunners }
+      : {}),
     heldAt: typeof h.heldAt === "string" ? h.heldAt : "",
   };
 }
@@ -1907,6 +1923,8 @@ async function dispatchRunOnSession(p: {
   handOff?: RunHandOff | null;
   /** Who runs it and why ({@link resolveRunChoice}), recorded on the run. */
   runOn?: RunOn | null;
+  /** Who works each step (`RunPlaybookInput.stageRunners`), kept on the run's input. */
+  stageRunners?: Record<string, PlaybookRunner>;
 }): Promise<PlaybookRun> {
   const db = await getDb();
   const { playbook, actorId, params } = p;
@@ -1930,7 +1948,9 @@ async function dispatchRunOnSession(p: {
       executor: executorRef,
       ...(p.runOn ? { runOn: p.runOn } : {}),
       status: "running",
-      input: params,
+      input: p.stageRunners
+        ? { ...params, stageRunners: p.stageRunners }
+        : params,
       createdBy: actorId,
       definitionSnapshot: buildDefinitionSnapshot(playbook),
     })
@@ -1967,6 +1987,18 @@ async function dispatchRunOnSession(p: {
         "playbook run: enrollment upsert failed (non-fatal)"
       );
     }
+  }
+
+  // 4c. BIRTH: the run's first stage starts now — the stage runner records
+  // who works it and hands it over when the stage names another runner
+  // (`enterStage`, spec 7111934d §3.1). Never throws.
+  if (session.currentStage) {
+    const { enterStage } = await import("./stage-runner.js");
+    await enterStage({
+      sessionId: session.id,
+      stageKey: session.currentStage,
+      cause: { kind: "birth" },
+    });
   }
 
   // 5. Resolve the playbook's granted capabilities (its `grants` links) into
@@ -2109,6 +2141,7 @@ export async function startHeldRun(
     agentType: held.agentType ?? persona ?? null,
     handOff,
     runOn,
+    stageRunners: held.stageRunners,
   });
   return { status: "started", run };
 }

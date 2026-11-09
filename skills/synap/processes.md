@@ -139,6 +139,13 @@ All three are optional: without them a playbook runs exactly as before.
   first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
   list is resolved then, and nobody it names → refused), then the playbook's
   runner, then the person's remembered choice.
+  A stage's runner can be chosen too: for a whole run,
+  `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
+  working, `synap_update_session { currentStage, stageRunner }` for the stage
+  you enter (`"self"` = you do it; naming another agent asks the person
+  first). A step with another runner gives that agent a turn on the same
+  session; the reply's `stageRun` says who has it and whether it waits on
+  tools.
 - `requires`: capability keys (`["media-ffmpeg"]`), at most 16; a stage needs
   its own plus the playbook's. They are checked on the runner's computer
   before a step is handed over.

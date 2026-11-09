@@ -12,7 +12,10 @@
 
 import { trialRunInputSchema } from "../../../services/playbooks/trial-run.js";
 import { z } from "@hono/zod-openapi";
-import { playbookRunnerSchema } from "../../../schemas/playbook-runner.js";
+import {
+  playbookRunnerSchema,
+  stageRunnerSchema,
+} from "../../../schemas/playbook-runner.js";
 import type { Context } from "hono";
 
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
@@ -159,6 +162,12 @@ const RunPlaybookBodySchema = z.object({
     .optional()
     .describe(
       "Who runs THIS run, in the playbook runner grammar: 'synap_ai', {synapAi:{persona}}, {agentId}, {role, computer?}, {engine, computer?}, or an ordered list of fallbacks. A role, engine or list is resolved now (only an agent that is yours, awake and allowed takes it); nobody it names can take it → refused. Never with handToAgentId or runOn. It comes before the playbook's own runner and your remembered choice."
+    ),
+  stageRunners: z
+    .record(z.string().trim().min(1).max(120), stageRunnerSchema)
+    .optional()
+    .describe(
+      "Who works each step of THIS run, by stage key: 'self', 'synap_ai', {synapAi:{persona}}, {agentId}, {role, computer?}, {engine, computer?}, or an ordered list. Kept on the run; when a step is entered it comes before the step's own runner."
     ),
   remember: z
     .boolean()
@@ -786,6 +795,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           handToAgentId: body.handToAgentId,
           runOn: body.runOn,
           ...(body.runner !== undefined ? { runner: body.runner } : {}),
+          ...(body.stageRunners !== undefined
+            ? { stageRunners: body.stageRunners }
+            : {}),
           remember: body.remember,
           ...(body.trial ? { trial: body.trial } : {}),
           source: "hub-rest",

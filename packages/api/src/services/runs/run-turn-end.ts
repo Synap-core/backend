@@ -943,6 +943,17 @@ export async function settleRunTurnEnd(p: {
   // Completing is idempotent (only a LIVE run completes), so a retried
   // `completed` report still settles a run its first attempt failed to.
   if (body.outcome === "completed") {
+    // A step held by another agent, or waiting on a child run or on tools,
+    // is not Synap AI's to finish: its turn simply ends and the run stays
+    // live (runner engine spec 7111934d §3.4). Without this, the first
+    // hand-off of a Synap AI run would end the whole run.
+    const { stageIsAway } = await import("../playbooks/stage-runner.js");
+    if (await stageIsAway(session.id)) {
+      if (run.status !== "running") {
+        await applyRunCapture({ run, status: "running" });
+      }
+      return "left_running";
+    }
     const updated = await applyRunCapture({ run, status: "completed" });
     if (!updated) return "no-running-run";
     await closeOneTurnRun(session.id);

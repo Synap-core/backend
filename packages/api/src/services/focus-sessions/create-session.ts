@@ -1345,6 +1345,18 @@ export async function createFocusSession(
     agentUserId: agentUserId ?? null,
   });
 
+  // BIRTH: a session born on a playbook starts its first stage now — the
+  // stage runner records who works it (`enterStage`, spec 7111934d §3.1).
+  // After the commit; never throws.
+  if (playbook && sessionOut.currentStage) {
+    const { enterStage } = await import("../playbooks/stage-runner.js");
+    await enterStage({
+      sessionId: sessionOut.id,
+      stageKey: sessionOut.currentStage,
+      cause: { kind: "birth" },
+    });
+  }
+
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
   // parent). AFTER the session exists, and never inside the transaction — a bad
   // parent handle must not roll back a legitimate session. The producer owns the

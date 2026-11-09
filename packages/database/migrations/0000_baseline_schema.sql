@@ -5018,6 +5018,27 @@ CREATE TABLE IF NOT EXISTS "playbook_versions" (
   "created_at"  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("playbook_id", "version")
 );
+-- 0417: one row per step entry of a playbook run (who works it, where, why it waits).
+CREATE TABLE IF NOT EXISTS "session_stage_runs" (
+  "id"                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "session_id"           uuid        NOT NULL,
+  "playbook_run_id"      uuid,
+  "stage_key"            text        NOT NULL,
+  "attempt"              integer     NOT NULL DEFAULT 1,
+  "runner_agent_user_id" text,
+  "runner_via"           text        NOT NULL,
+  "preset_key"           text,
+  "computer_user_id"     text,
+  "child_session_id"     uuid,
+  "external_agent"       jsonb,
+  "status"               text        NOT NULL DEFAULT 'running',
+  "requires_report"      jsonb,
+  "passed_over"          jsonb,
+  "started_at"           timestamptz NOT NULL DEFAULT now(),
+  "ended_at"             timestamptz
+);
+CREATE INDEX IF NOT EXISTS "session_stage_runs_session_stage_idx"
+  ON "session_stage_runs" ("session_id", "stage_key");
 -- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
 -- both seeded from the playbook and authorable afterwards; `stages` was the
 -- missing third, and without it a session running no playbook could not have

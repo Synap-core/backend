@@ -14,6 +14,8 @@
  * output RMW lock — they are intentionally distinct doors, not unified here.
  */
 
+import type { PlaybookRunner } from "@synap/playbooks";
+import type { EnterStageResult } from "../playbooks/stage-runner.js";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -186,6 +188,13 @@ export interface UpdateFocusSessionParams {
   occurredAt?: string | null;
   progress?: number;
   currentStage?: string;
+  /**
+   * With `currentStage`: who works the stage being entered, named for THIS
+   * entry (the stage runner's first rung, spec 7111934d §2.4). `"self"` = the
+   * caller's run agent does it. An agent naming another agent goes through
+   * the hand-off gate.
+   */
+  stageRunner?: PlaybookRunner | null;
   /**
    * Append ONE slot. `owner`/`blockedReason`/`why` make this the door an agent
    * uses to declare a slot it CANNOT take: the work is named on the board, the
@@ -409,6 +418,11 @@ export type UpdateFocusSessionResult =
        * caller, who otherwise reads the advance as having moved the thing.
        */
       subjectMove?: StageSubjectStatusOutcome;
+      /**
+       * Who works the stage a `currentStage` advance entered (the stage
+       * runner, `enterStage`): its runner, the hand-off, the tools it waits on.
+       */
+      stageRun?: EnterStageResult;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -2881,6 +2895,7 @@ export async function updateFocusSession(
   // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
   let subjectMove: StageSubjectStatusOutcome | undefined;
+  let stageRun: EnterStageResult | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -2897,7 +2912,11 @@ export async function updateFocusSession(
       userId,
       agentUserId,
       stageWrite: "caller",
+      ...(params.stageRunner !== undefined
+        ? { stageRunner: params.stageRunner }
+        : {}),
     });
+    stageRun = advance.stageRun;
     // Report the status the ROW now holds, not the one this call asked for —
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
@@ -3065,6 +3084,7 @@ export async function updateFocusSession(
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(targetsWrite ? { targets: targetsWrite } : {}),
     ...(subjectMove ? { subjectMove } : {}),
+    ...(stageRun ? { stageRun } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),

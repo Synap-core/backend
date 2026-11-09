@@ -774,6 +774,9 @@ const ASK_PERSON_WITHHELD = [
   "followPlaybookId",
   "params",
   "followStageKey",
+  // Who works the stage entered (0417): rides with `currentStage`, which this
+  // door withholds too.
+  "stageRunner",
 ] as const;
 
 const ACKNOWLEDGED_GAPS: Gap[] = [
