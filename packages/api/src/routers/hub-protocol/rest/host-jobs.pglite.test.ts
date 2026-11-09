@@ -447,10 +447,13 @@ describe("host-jobs routes — the computer's own work", () => {
   });
 
   it("a report stores health and never moves the lifecycle; health is read", async () => {
+    // A job whose lease moves no lifecycle carries the reports. Not a `verb`
+    // run: since 0415 a run waits behind its installation's due check (the
+    // reconciler queues one beside it), so it would not be the job leased.
     const verbJob = randomUUID();
     await q(
       `INSERT INTO host_jobs (id, kind, installation_id, user_id, machine_user_id, spec, status, attempt, parameters, queued_at)
-       VALUES ($1, 'verb', $2, $3, $4, '{}'::jsonb, 'queued', 0, '{}'::jsonb, now())`,
+       VALUES ($1, 'provider_op', $2, $3, $4, '{}'::jsonb, 'queued', 0, '{}'::jsonb, now())`,
       [verbJob, INST, PERSON, DEVBOX]
     );
     const leased = (await lease(devbox()))!;

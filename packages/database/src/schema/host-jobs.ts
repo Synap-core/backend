@@ -3,8 +3,9 @@
  *
  * ONE job for the host runner on a computer (`synap worker`): install,
  * remove, update or verify an installation, run a provider's computer-side op,
- * or run a hosted verb. At most ONE open job per installation (the pod-side
- * reconciler queues the next once this one settles). The pod holds the queue, the lease and the evidence; the
+ * or run a hosted verb. At most ONE open lifecycle job per installation (the
+ * pod-side reconciler queues the next once this one settles); hosted verb runs
+ * queue beside it (0415). The pod holds the queue, the lease and the evidence; the
  * computer pulls (`/host-jobs/lease`, key scope `host.runner`), heartbeats,
  * reports and finishes. The pod never opens a connection to the computer.
  *
@@ -81,6 +82,20 @@ export interface HostJobEvidence {
   output?: Record<string, unknown>;
   /** What the runner removed on a failure path ("leave nothing running"). */
   cleanedUp?: string[];
+  /**
+   * A hosted verb's output files, as the pod stored them (the wire's
+   * `HostJobStoredFile`): stored as the requester's file, proposed for the
+   * person's review, or not stored with why.
+   */
+  files?: Array<{
+    param: string;
+    name: string;
+    status: "stored" | "proposed" | "refused" | "missing";
+    fileEntityId?: string;
+    documentId?: string;
+    proposalId?: string;
+    error?: string;
+  }>;
 }
 
 export const hostJobs = pgTable(
@@ -170,12 +185,20 @@ export const hostJobs = pgTable(
       table.installationId,
       table.queuedAt
     ),
-    /** At most ONE open job per installation. */
+    /**
+     * At most ONE open LIFECYCLE job per installation (install, update,
+     * remove, verify, provider op). A hosted verb run (`verb`) is not one:
+     * several runs of a tool queue beside its check (0415). The lease takes a
+     * run only while its installation is installed and no lifecycle job of it
+     * is open (`services/host-jobs`).
+     */
     oneOpenPerInstallation: uniqueIndex(
-      "uq_host_jobs_one_open_per_installation"
+      "uq_host_jobs_one_open_lifecycle_per_installation"
     )
       .on(table.installationId)
-      .where(sql`${table.status} IN ('queued', 'leased', 'running')`),
+      .where(
+        sql`${table.status} IN ('queued', 'leased', 'running') AND ${table.kind} <> 'verb'`
+      ),
     userQueuedIdx: index("idx_host_jobs_user_queued").on(
       table.userId,
       table.queuedAt

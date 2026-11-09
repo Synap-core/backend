@@ -6,7 +6,8 @@
  *   POST /host-jobs/lease            {capacity?, os?, arch?}  → {job | null}
  *   POST /host-jobs/:id/heartbeat    {leaseId, phase}         → {leaseExpiresAt, stopRequested, logsRequested}
  *   POST /host-jobs/:id/report       {leaseId, health?, verify?, observedVersion?, os?, arch?, log?} → {installationId, status}
- *   POST /host-jobs/:id/finish       {leaseId, status, …}     → {id, status, installationStatus}
+ *   POST /host-jobs/:id/uploads      {leaseId, filename, mimeType, size} → presigned PUT (a hosted verb's output)
+ *   POST /host-jobs/:id/finish       {leaseId, status, files?, …} → {id, status, installationStatus, files?}
  *   GET  /host-jobs/:id/logs                                  → {id, status, log, logReceivedAt, logsRequestedAt}
  *
  * WHO MAY CALL the runner routes: a COMPUTER (`users.agent_type = 'machine'`,
@@ -43,6 +44,7 @@ import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import {
   HOST_BODY_MAX_BYTES,
   HostJobFinishBodySchema,
+  HostJobUploadBodySchema,
   HostJobHeartbeatBodySchema,
   HostJobLeaseBodySchema,
   HostJobReportBodySchema,
@@ -63,6 +65,7 @@ import {
   finishHostJob,
   heartbeatHostJob,
   leaseHostJob,
+  loadLeasedHostJob,
   noteHostRunner,
   reportHostJob,
   type HostLeaseRefusal,
@@ -280,6 +283,52 @@ export function registerHostJobsRoutes(app: HubHono): void {
     return c.json({ installationId: out.installationId, status: out.status });
   });
 
+  // ── POST /host-jobs/:id/uploads ──────────────────────────────────────────
+  // One output file of a hosted verb (`verb`): the box runs' presigned upload
+  // lane, minted for the run's REQUESTER (person, agent, session, space),
+  // never for the computer, so the file lands as the work of whoever asked.
+  app.post("/host-jobs/:id/uploads", async (c) => {
+    const who = await resolveHostRunner(c);
+    if (!who.ok)
+      return c.json({ code: who.code, error: who.error }, who.status);
+    const jobId = requireUuidParam(c, "id");
+    if (jobId instanceof Response) return jobId;
+    const parsed = await body(c, HostJobUploadBodySchema);
+    if (!parsed.ok)
+      return c.json({ code: "BAD_REQUEST", error: parsed.error }, 400);
+    const held = await loadLeasedHostJob({
+      jobId,
+      leaseId: parsed.data.leaseId,
+      runner: who.runner,
+    });
+    if (!held.ok) return refused(c, held);
+    if (held.job.kind !== "verb") {
+      return c.json(
+        {
+          code: "NOT_A_VERB_RUN",
+          error: "Only a hosted verb run returns files.",
+        },
+        400
+      );
+    }
+    const { requestAgentUpload } =
+      await import("../../../services/files/agent-upload.js");
+    const ticket = await requestAgentUpload({
+      userId: held.job.userId,
+      ...(held.job.agentUserId ? { agentUserId: held.job.agentUserId } : {}),
+      workspaceId: held.job.workspaceId ?? undefined,
+      filename: parsed.data.filename,
+      mimeType: parsed.data.mimeType,
+      size: parsed.data.size,
+      ...(held.job.sessionId ? { sessionId: held.job.sessionId } : {}),
+    });
+    if (!ticket.ok) {
+      return c.json({ code: ticket.code, error: ticket.error }, ticket.status);
+    }
+    const { ok: _ok, ...rest } = ticket;
+    return c.json(rest);
+  });
+
   // ── POST /host-jobs/:id/finish ───────────────────────────────────────────
   app.post("/host-jobs/:id/finish", async (c) => {
     const who = await resolveHostRunner(c);
@@ -302,6 +351,7 @@ export function registerHostJobsRoutes(app: HubHono): void {
       ...(b.log ? { log: b.log } : {}),
       ...(b.output ? { output: b.output } : {}),
       ...(b.cleanedUp ? { cleanedUp: b.cleanedUp } : {}),
+      ...(b.files ? { files: b.files } : {}),
       observed: observedFrom(b),
     });
     if (!out.ok) return refused(c, out);
@@ -309,6 +359,7 @@ export function registerHostJobsRoutes(app: HubHono): void {
       id: out.job.id,
       status: boxStatusForVerdict(b.status),
       installationStatus: out.installationStatus,
+      ...(out.job.evidence?.files ? { files: out.job.evidence.files } : {}),
     });
   });
 
@@ -434,6 +485,29 @@ function registerHostJobsOpenApi(app: HubHono): void {
   });
   registerOpenApi(app, {
     method: "post",
+    path: "/host-jobs/:id/uploads",
+    tags: ["HostJobs"],
+    summary: "Get an upload ticket for one output file of a hosted verb run",
+    description:
+      "A presigned PUT minted for the run's requester (their session and " +
+      "space), never for the computer. Pass the returned `uploadToken` in " +
+      `the finish's \`files\`. Only a \`verb\` job returns files. ${runner}`,
+    request: { params: IdParams, body: HostJobUploadBodySchema },
+    responses: {
+      200: {
+        description: "The upload ticket",
+        schema: zOpenapi.object({
+          uploadUrl: zOpenapi.string(),
+          method: zOpenapi.literal("PUT"),
+          headers: zOpenapi.record(zOpenapi.string(), zOpenapi.string()),
+          uploadToken: zOpenapi.string(),
+        }),
+      },
+      ...refusals,
+    },
+  });
+  registerOpenApi(app, {
+    method: "post",
     path: "/host-jobs/:id/finish",
     tags: ["HostJobs"],
     summary: "Finish a host job with its verdict",
@@ -448,6 +522,9 @@ function registerHostJobsOpenApi(app: HubHono): void {
           id: zOpenapi.string(),
           status: zOpenapi.enum(["done", "failed", "stopped"]),
           installationStatus: zOpenapi.string(),
+          files: zOpenapi
+            .array(zOpenapi.record(zOpenapi.string(), zOpenapi.unknown()))
+            .optional(),
         }),
       },
       ...refusals,

@@ -50,6 +50,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  ne,
   or,
   sql,
 } from "drizzle-orm";
@@ -65,6 +66,7 @@ import {
   type InstallationStatus,
 } from "@synap/database/schema";
 import type {
+  HostJobFile,
   HostLog,
   HostVerify,
   LeasedHostJob,
@@ -208,6 +210,20 @@ const leasable = () =>
       lt(hostJobs.leaseExpiresAt, sql`now()`),
       isNull(hostJobs.stopRequestedAt)
     )
+  );
+
+/**
+ * A hosted verb run (`verb`) is taken only while its tool can run: its
+ * installation is `installed` and none of its LIFECYCLE jobs is open (0415:
+ * runs queue beside a check). A repair or an update runs first, and the run
+ * waits for it; a removal leaves the run queued until its person stops it.
+ * Every other kind is unaffected.
+ */
+const verbReady = () =>
+  or(
+    ne(hostJobs.kind, "verb"),
+    sql`EXISTS (SELECT 1 FROM ${installations} i WHERE i.id = ${hostJobs.installationId} AND i.status = 'installed')
+      AND NOT EXISTS (SELECT 1 FROM ${hostJobs} lj WHERE lj.installation_id = ${hostJobs.installationId} AND lj.kind <> 'verb' AND lj.status IN ('queued', 'leased', 'running'))`
   );
 
 /**
@@ -373,7 +389,7 @@ export async function leaseHostJob(
   const head = db
     .select({ id: hostJobs.id })
     .from(hostJobs)
-    .where(and(onThisComputer(runner), leasable()))
+    .where(and(onThisComputer(runner), leasable(), verbReady()))
     .orderBy(asc(hostJobs.queuedAt), asc(hostJobs.id))
     .limit(1)
     .for("update", { skipLocked: true });
@@ -418,6 +434,39 @@ export async function leaseHostJob(
     .from(installations)
     .where(eq(installations.id, job.installationId))
     .limit(1);
+
+  // A hosted verb's input files: signed now, for the job's owner. A file
+  // gone or no longer readable fails the run with the reason; the runner
+  // never sees a job it cannot start.
+  let inputs: LeasedHostJob["inputs"];
+  if (job.kind === "verb") {
+    const { leaseInputs, noticeVerbFinished } =
+      await import("./hosted-verbs.js");
+    const got = await leaseInputs(job, inst?.manifest ?? {});
+    if (!got.ok) {
+      const [failed] = await db
+        .update(hostJobs)
+        .set({
+          status: "failed",
+          error: got.error,
+          evidence: {
+            verdict: "failed",
+            durationMs: null,
+            steps: [{ name: "inputs", ok: false, detail: got.error }],
+            log: { head: "", tail: "", totalBytes: null, truncated: false },
+          },
+          finishedAt: sql`now()`,
+          updatedAt: sql`now()`,
+          leaseId: null,
+        })
+        .where(and(eq(hostJobs.id, job.id), eq(hostJobs.leaseId, leaseId)))
+        .returning();
+      if (failed) await noticeVerbFinished(failed, null, []);
+      return null;
+    }
+    inputs = got.inputs;
+  }
+
   return {
     id: job.id,
     kind: job.kind,
@@ -440,6 +489,7 @@ export async function leaseHostJob(
     skillId: job.skillId,
     spec: job.spec,
     parameters: job.parameters,
+    ...(inputs ? { inputs } : {}),
   };
 }
 
@@ -663,6 +713,8 @@ export interface FinishHostJobInput {
   output?: Record<string, unknown>;
   cleanedUp?: string[];
   observed?: HostObserved;
+  /** A hosted verb's uploaded outputs (kind `verb` only). */
+  files?: HostJobFile[];
 }
 
 function failureSentence(input: FinishHostJobInput): string | null {
@@ -781,7 +833,48 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
   if (!ok && (LIFECYCLE_JOB_KINDS as readonly string[]).includes(job.kind)) {
     await askToTryAgainIfStopped(job.installationId);
   }
+  if (job.kind === "verb") {
+    // The run's files: stored as the requester's (the lease was checked by
+    // the update above, so this runs once), then named on the evidence.
+    const { storeVerbFiles, noticeVerbFinished } =
+      await import("./hosted-verbs.js");
+    const files = await storeVerbFiles(job, input.files ?? []);
+    let closed = job;
+    if (files.length > 0) {
+      const [withFiles] = await db
+        .update(hostJobs)
+        .set({ evidence: { ...evidence, files }, updatedAt: sql`now()` })
+        .where(eq(hostJobs.id, job.id))
+        .returning();
+      if (withFiles) closed = withFiles;
+    }
+    const [computer] = await db
+      .select({ name: users.name })
+      .from(users)
+      .where(eq(users.id, job.machineUserId))
+      .limit(1);
+    await noticeVerbFinished(closed, computer?.name ?? null, files);
+    return { ok: true, job: closed, installationStatus };
+  }
   return { ok: true, job, installationStatus };
+}
+
+/**
+ * A job this computer still holds (an upload of a hosted verb's output
+ * presents its lease, as every leaser act does).
+ */
+export async function loadLeasedHostJob(input: {
+  jobId: string;
+  leaseId: string;
+  runner: HostRunner;
+}): Promise<{ ok: true; job: HostJobRow } | HostLeaseRefusal> {
+  const [job] = await db
+    .select()
+    .from(hostJobs)
+    .where(holdsLease(input.jobId, input.leaseId, input.runner))
+    .limit(1);
+  if (!job) return refusalFor(input.jobId, input.runner);
+  return { ok: true, job };
 }
 
 async function currentStatus(

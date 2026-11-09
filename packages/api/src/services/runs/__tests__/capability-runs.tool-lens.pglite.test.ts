@@ -44,6 +44,7 @@ import {
   users,
   projectMembers,
   boxRuns,
+  hostJobs,
   capabilities,
   links,
 } from "@synap/database/schema";
@@ -188,6 +189,8 @@ beforeAll(async () => {
     users,
     projectMembers,
     boxRuns,
+    // Hosted verb runs (0415) are a ledger of the runs feed too.
+    hostJobs,
     capabilities,
     links,
   ]) {

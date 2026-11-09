@@ -79,6 +79,7 @@
  */
 
 import type { CatalogPlacement } from "../installations/request-installation.js";
+import type { InstalledRecipes } from "../host-jobs/hosted-verbs.js";
 import { listIntentSlugs } from "./intent-registry.js";
 
 import {
@@ -187,6 +188,14 @@ export interface AbstractIntentMatch {
   intent: string;
   /** Verbs declaring it under this caller's lens. `[]` is a real answer. */
   verbs: IntentVerbMatch[];
+  /**
+   * "<recipe> on <computer>": the recipes of this intent's tools INSTALLED and
+   * checked on the person's computers, run with `computer.run_recipe`
+   * (hosted verbs). ABSENT when none of its tools is installed on a computer;
+   * `error` when that read failed. The catalog side (packages to install) is
+   * `marketplace`.
+   */
+  recipes?: InstalledRecipes;
   score: number;
   confidence: number;
   match: TermMatch;
@@ -689,15 +698,30 @@ export async function findByIntent(
       { primary: "intent", secondary: "-", tertiary: "-" }
     );
     const best = ranked[0]?.score ?? 0;
+    const top = ranked.slice(0, limit);
+    // The installed side of each intent: the recipes its tools can run on
+    // the person's computers now (hosted verbs). ONE read for every intent.
+    const { installedRecipesFor } =
+      await import("../host-jobs/hosted-verbs.js");
+    const recipesByIntent = await installedRecipesFor({
+      userId: input.userId,
+      intents: top.map((r) => r.item),
+      query: input.intent,
+      limit,
+    });
     result.intents = {
-      matches: ranked.slice(0, limit).map((r) => ({
-        intent: r.item,
-        verbs: byIntent.get(r.item) ?? [],
-        score: r.score,
-        confidence: normalise(r.score, best),
-        match: r.match,
-        termCoverage: coverageOf(r.match, terms),
-      })),
+      matches: top.map((r) => {
+        const recipes = recipesByIntent.get(r.item);
+        return {
+          intent: r.item,
+          verbs: byIntent.get(r.item) ?? [],
+          ...(recipes ? { recipes } : {}),
+          score: r.score,
+          confidence: normalise(r.score, best),
+          match: r.match,
+          termCoverage: coverageOf(r.match, terms),
+        };
+      }),
     };
     scoring.intents = {
       ranker:
