@@ -78,6 +78,8 @@ import {
   resolveRunnablePlaybook,
   resolveGoal,
 } from "./playbook-lifecycle.js";
+import { playbookAtVersion } from "./playbook-versions.js";
+import { STAGE_OF_METADATA_KEY, type StageOf } from "./stage-of.js";
 import {
   resolveGrantedCapabilities,
   getLinksFor,
@@ -292,6 +294,19 @@ export interface RunPlaybookInput {
    * as `createFocusSession`). Absent ⇒ a slice that does not block the parent.
    */
   suspendedIntent?: string;
+  /**
+   * Run the playbook as it stood at this KEPT version (`playbook_versions`),
+   * not its live definition: a step that `uses` a playbook is pinned (spec
+   * 7111934d §2.3). Refused when the version is not kept. Absent ⇒ the live
+   * definition, as every other run.
+   */
+  pinnedVersion?: number;
+  /**
+   * This run WORKS A STEP of another run (a stage that `uses` this playbook):
+   * stamped on the session (`metadata.stageOf`), where the child-close reactor
+   * finds the parent step to hand its outputs back to (`stage-child.ts`).
+   */
+  stageOf?: StageOf;
   /**
    * The PROJECT this run is filed into (`focus_sessions.project_id`). Must be
    * visible to `userId`; refused otherwise.
@@ -1293,11 +1308,18 @@ export async function runPlaybook(
   // The ONE door (playbook-lifecycle.ts): the appointment materializer resolves
   // through the same function, so the by-name fallback and the write-side IDOR
   // floor exist once, not once per scheduled door.
-  const playbook = await resolveRunnablePlaybook({
+  const live = await resolveRunnablePlaybook({
     playbookId: input.playbookId,
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+  // A step that IS this playbook runs the version it is pinned at: the run,
+  // its snapshot and its session follow that kept definition, never the live
+  // row (spec 7111934d §3.2).
+  const playbook =
+    input.pinnedVersion !== undefined
+      ? await playbookAtVersion(await getDb(), live, input.pinnedVersion)
+      : live;
 
   // FILING — the project/track this run lands in, resolved ONCE for every
   // fan-out item. Before any session, channel or run row exists, so a bad
@@ -1595,6 +1617,8 @@ async function executeSingleRun(
     // A trial (the rule lab): the drafts it renders, and the stamp every
     // write door refuses a write on.
     ...(input.trial ? trialSessionMetadata(input.trial) : {}),
+    // The step of another run this run works (a stage that `uses` it).
+    ...(input.stageOf ? { [STAGE_OF_METADATA_KEY]: input.stageOf } : {}),
     // `profileSlug` = the lifecycle the worker follows: process-sync settles
     // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker
@@ -1613,6 +1637,10 @@ async function executeSingleRun(
   // against the automation StepContext), else substituted against `params`.
   const session = await instantiateSession({
     playbookId: playbook.id,
+    // The session's stages and slots come from the pinned version too.
+    ...(input.pinnedVersion !== undefined
+      ? { pinnedVersion: input.pinnedVersion }
+      : {}),
     workspaceId: input.workspaceId,
     userId: actorId,
     // The birth stage's subject move is governed as the agent that ran it.
