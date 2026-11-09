@@ -128,7 +128,7 @@ import {
 } from "../messaging/post-message.js";
 import { findNewestSlotThreadSeed } from "./slot-thread.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
-import { runTurnForAnswer } from "../runs/run-turn-end.js";
+import { readRunTurns, runTurnForAnswer } from "../runs/run-turn-end.js";
 import { resolveAgentReach } from "../agent-dispatch/agent-binding.js";
 import { agentsOperatedBy } from "../agent-presence.js";
 import { wakeExternalAgent } from "../agent-dispatch/wake-external-agent.js";
@@ -630,10 +630,11 @@ async function takeMessageWakeWindow(
 /**
  * The owner's FREE message (no open question) wakes the session's agent
  * (founder, 9 Nov 2026): only while the session is `active`, the first staffed
- * agent the pod can reach (`resolveWakeTarget`, no asker), at most once per
- * window (`takeMessageWakeWindow`). An agent on a computer (`pull`) is not
- * woken here: it reads the message as the `owner_message` change. Never
- * throws: the message stands whatever happens.
+ * agent the pod can reach (`resolveWakeTarget`, no asker), else the run's own
+ * runner (`liveRunWakeTarget`: a run the person started on Synap AI has an
+ * empty roster), at most once per window (`takeMessageWakeWindow`). An agent
+ * on a computer (`pull`) is not woken here: it reads the message as the
+ * `owner_message` change. Never throws: the message stands whatever happens.
  */
 async function wakeOnFreeMessage(p: {
   channelId: string;
@@ -647,12 +648,15 @@ async function wakeOnFreeMessage(p: {
       .select({
         status: focusSessions.status,
         agentIds: focusSessions.agentIds,
+        metadata: focusSessions.metadata,
       })
       .from(focusSessions)
       .where(eq(focusSessions.id, p.sessionId))
       .limit(1);
     if (row?.status !== "active") return false;
-    const target = await resolveWakeTarget({ agentIds: row.agentIds ?? [] });
+    const target =
+      (await resolveWakeTarget({ agentIds: row.agentIds ?? [] })) ??
+      (await liveRunWakeTarget(p.sessionId, row.metadata));
     if (!target) return false;
     if (!(await takeMessageWakeWindow(p.sessionId, new Date()))) return false;
     return await wake({ ...p, target, freeMessage: true });
@@ -663,6 +667,38 @@ async function wakeOnFreeMessage(p: {
     );
     return false;
   }
+}
+
+/**
+ * The run's own runner, when the roster names nobody the pod can reach: the
+ * session's newest LIVE run on Synap AI (`is-agent`). A run the person starts
+ * from an app has an empty roster (`executeSingleRun`: no starting agent, no
+ * hand-off), so without this the person's message in their own run's room
+ * would wake nobody. Its agent type is the one its last turn reported
+ * (`runTurns`, the ledger `complete-run` keeps), else the kickoff's default
+ * "meta" (`is-agent-executor.ts`), as the automatic continuation does.
+ */
+async function liveRunWakeTarget(
+  sessionId: string,
+  metadata: unknown
+): Promise<WakeTarget | null> {
+  const [run] = await db
+    .select({ id: playbookRuns.id, executor: playbookRuns.executor })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, sessionId),
+        liveRunStatusWhere(playbookRuns.status)
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  if (run?.executor !== "is-agent") return null;
+  const turns = readRunTurns(metadata, run.id);
+  const reported = [turns.firstTurn, ...turns.turns]
+    .reverse()
+    .find((t) => t?.agentType?.trim())?.agentType;
+  return { reach: "pod", agentType: reported?.trim() || "meta" };
 }
 
 /** An answer's wake opens the window too: the messages right after it are read by that turn. */

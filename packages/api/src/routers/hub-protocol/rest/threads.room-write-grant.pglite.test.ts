@@ -37,12 +37,15 @@
  *     once the window passed;
  *   - a closed or paused session, or an agent key's message, waking anyone;
  *   - a reply to an open question waking the agent twice (the answer path
- *     and the free-message path), or the message right after it waking again.
+ *     and the free-message path), or the message right after it waking again;
+ *   - a run the person started on Synap AI (empty roster) not woken by their
+ *     message (`runPlaybook`, the real start, with its real `is-agent` kickoff).
  *
  * Seams replaced, and why: the event store and `auditLog` write through the
  * postgres-js client this harness has not (recorders); `createPendingProposal`
  * inserts on the transaction it is given; the guest check and sub-token
- * mapping are constant answers; the message event, side effects and the AI
+ * mapping are constant answers; the run's kickoff message
+ * (`insertChannelMessage`, postgres-js) is the same insert on PGlite; the message event, side effects and the AI
  * turn are recorders (a post's fan-out, not its gate); `triggerAutoRespond`
  * records each turn a post starts, which is what the wake rows count.
  *
@@ -86,6 +89,26 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: async () => h.db,
     EventRepository: RecordingEventRepository,
     emitMessageEvent: async () => undefined,
+    // The run's kickoff message (`is-agent-executor.ts`), written through the
+    // postgres-js client this harness has not: the same row, on PGlite.
+    insertChannelMessage: async (p: Record<string, any>) => {
+      const { randomUUID: uuid } = await import("node:crypto");
+      const [row] = await (h.db as any)
+        .insert(schema.messages)
+        .values({
+          id: p.id ?? uuid(),
+          channelId: p.channelId,
+          content: p.content,
+          userId: p.userId ?? "system",
+          role: p.role ?? "assistant",
+          authorType: p.authorType ?? "bot",
+          metadata: p.metadata ?? {},
+          hash: "",
+          previousHash: "",
+        })
+        .returning({ id: schema.messages.id });
+      return { messageId: row?.id };
+    },
   };
 });
 vi.mock("@synap/events", async (importOriginal) => ({
@@ -159,6 +182,7 @@ import {
 import { computeS256Challenge } from "../../oauth/protocol.js";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 import { passPresenceForAction } from "../../../services/presence/gate.js";
+import { runPlaybook } from "../../../services/playbooks/run-playbook.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const DOC = "/.well-known/synap-client.json";
@@ -195,6 +219,8 @@ const CLOSED = { room: randomUUID(), session: randomUUID() };
 const PAUSED = { room: randomUUID(), session: randomUUID() };
 const BY_AGENT = { room: randomUUID(), session: randomUUID() };
 const ANSWER = { room: randomUUID(), session: randomUUID() };
+/** A playbook the person runs on Synap AI from an app (no agent on its roster). */
+const PLAYBOOK = randomUUID();
 
 const TICKED: Record<string, string[]> = {
   [STUDIO]: [CHANNEL_READ, SESSION_UPDATE],
@@ -267,6 +293,10 @@ beforeAll(async () => {
   for (const value of Object.values(schema)) {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
+  // The arbiter `runPlaybook`'s session → playbook link conflicts on.
+  await h.client!.exec(
+    `create unique index on links (from_type, from_id, to_type, to_id, link_type)`
+  );
   // Not a proof-of-presence suite: this pod CHOSE `report`, so the consent
   // applies without a proof (presence.pglite.test.ts owns the gate).
   await h.client!.exec(
@@ -309,6 +339,11 @@ beforeAll(async () => {
   await q(
     `insert into users (id, email, name, user_type, agent_type) values ($1,'meta@x','Meta','agent','meta')`,
     [POD_AGENT]
+  );
+  await q(
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, status, executor, metadata, version)
+     values ($1,$2,$3,'Make a carousel','Make a carousel','[]'::jsonb,'{"kind":"none"}'::jsonb,'{}'::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'active','is-agent','{}'::jsonb,1)`,
+    [PLAYBOOK, CONTENT, OWNER]
   );
   for (const [run, status] of [
     [WAKE, "active"],
@@ -706,5 +741,49 @@ describe("a post in a room needs a write grant, not only a read", () => {
     });
     expect(after.status).toBe(200);
     expect(turnsOf(ANSWER.session)).toHaveLength(1);
+  });
+  it("a run the person started on Synap AI (no agent on its roster) is woken by their message: one turn, its runner", async () => {
+    const started = await runPlaybook({
+      playbookId: PLAYBOOK,
+      workspaceId: CONTENT,
+      userId: OWNER,
+    });
+    const sessionId = started.session!.id;
+    const room = started.session!.channelId!;
+    const [session] = (
+      await q<{ agent_ids: string[] | null; status: string }>(
+        `select agent_ids, status from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows;
+    // What production writes for a person's run on Synap AI: nobody on the
+    // roster, the run live on `is-agent`, its kickoff turn already started.
+    expect(session).toMatchObject({ status: "active" });
+    expect(session!.agent_ids ?? []).toEqual([]);
+    expect(
+      (
+        await q<{ executor: string; status: string }>(
+          `select executor, status from playbook_runs where session_id = $1`,
+          [sessionId]
+        )
+      ).rows
+    ).toEqual([{ executor: "is-agent", status: "running" }]);
+    const kickoff = turnsOf(sessionId).length;
+    expect(kickoff).toBe(1);
+
+    const res = await post(token[STUDIO]!, room, {
+      role: "user",
+      content: "Use the warm palette.",
+      userId: OWNER,
+    });
+    expect(res.status).toBe(200);
+    const woken = turnsOf(sessionId).slice(kickoff);
+    expect(woken).toHaveLength(1);
+    expect(woken[0]).toMatchObject({
+      channelId: room,
+      userMessageId: res.body.messageId,
+      sourceUserId: OWNER,
+      agentType: "meta",
+    });
   });
 });
