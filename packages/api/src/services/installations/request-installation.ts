@@ -481,6 +481,13 @@ export interface InstallationAskInput {
    * approved (one proposal). Off for the computer's own REST ask.
    */
   fromCatalog?: boolean;
+  /**
+   * The POD files this ask on its own (self-heal: "try again" once its
+   * retries stopped, or a prerequisite nobody approved): always ONE proposal
+   * for the person, one tap, even for a repair that would otherwise ask
+   * nobody; authored by `author`, with this sentence on the card.
+   */
+  filedByPod?: { author: `system:${string}`; reasoning: string };
 }
 
 /** What the proposal carries to add a catalog capability on approval. */
@@ -640,7 +647,7 @@ export async function requestInstallation(
   }
 
   // Approved once for this pair at this version: a repair asks nobody.
-  if (live && !requestNeedsApproval(live, input)) {
+  if (live && !input.filedByPod && !requestNeedsApproval(live, input)) {
     const jobId = await reconcileInstallation(live, {
       kind:
         live.status === "installed" || live.status === "failed"
@@ -663,7 +670,15 @@ export async function requestInstallation(
     // agent's ask would be refused, never filed.
     proposeBeyondGrant: true,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-    reasoning: reasoningFor(input, !!live, addition),
+    ...(input.filedByPod
+      ? { forcePropose: true, machineAuthor: input.filedByPod.author }
+      : {}),
+    // The pod's own sentence; a marketplace addition still says so.
+    reasoning: input.filedByPod
+      ? addition
+        ? `${input.filedByPod.reasoning} ${reasoningFor(input, !!live, addition)}`
+        : input.filedByPod.reasoning
+      : reasoningFor(input, !!live, addition),
     data: {
       id: computer.id,
       computerId: computer.id,
