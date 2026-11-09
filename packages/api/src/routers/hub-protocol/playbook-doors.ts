@@ -136,6 +136,10 @@ export async function createPlaybookDoor(
     expectedOutputs?: PlaybookDefinition["expectedOutputs"];
     /** The rules it follows, by ref (`playbookGuidanceSchema`, validated by `playbooks.create`). */
     guidance?: PlaybookDefinition["guidance"];
+    /** Who runs it by default (`playbookRunnerSchema`, validated by `playbooks.create`). */
+    runner?: PlaybookDefinition["runner"];
+    /** The tools every step needs (`requiresSchema`, validated by `playbooks.create`). */
+    requires?: PlaybookDefinition["requires"];
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -179,6 +183,8 @@ export async function createPlaybookDoor(
       ? { expectedOutputs: input.expectedOutputs }
       : {}),
     ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
+    ...(input.runner !== undefined ? { runner: input.runner } : {}),
+    ...(input.requires !== undefined ? { requires: input.requires } : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

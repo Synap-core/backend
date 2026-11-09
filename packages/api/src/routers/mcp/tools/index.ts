@@ -97,6 +97,10 @@ import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-ans
 import { automationDataContractSchema } from "../../automations.js";
 import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
+  playbookRunnerSchema,
+  requiresSchema,
+} from "../../../schemas/playbook-runner.js";
+import {
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
   playbookSubjectProfileSchema,
@@ -407,12 +411,22 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     ),
     forEach: deriveJsonSchema(
       playbookStageSchema.shape.forEach.unwrap(),
-      "DECLARED, advisory until the executor lands: run this stage once per item of a collection, {over: '<param or dotted path>', as?: '<item name>', max?: n (1-200)}. Today a run executes the stage ONCE and ignores it; do not rely on a fan-out."
+      "Advisory, not run yet: once per item, {over: '<param or dotted path>', as?, max? (1-200)}. Today the stage runs once; do not rely on a fan-out."
     ),
     when: deriveJsonSchema(
       playbookStageSchema.shape.when.unwrap(),
-      "DECLARED, advisory until the executor lands: run this stage only when {param: '<param or dotted path>', equals?: string|number|boolean|null, exists?: boolean} holds. Today a run executes the stage unconditionally and ignores it; do not rely on a skip."
+      "Advisory, not run yet: only when {param: '<param or dotted path>', equals? | exists?} holds. Today the stage always runs; do not rely on a skip."
     ),
+  },
+  // Kept minimal (token budget): the shapes are taught on demand in
+  // `system/synap/processes` ("Who runs it"); `playbooks.create` / `.update`
+  // validate them for real (`playbookRunnerSchema`, `requiresSchema`).
+  runner: {
+    description: "Who runs it (shapes: load_skill system/synap/processes).",
+  },
+  requires: {
+    type: "array",
+    items: { type: "string" },
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
@@ -441,7 +455,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -3821,6 +3835,8 @@ export const tools = {
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
+            runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
+            requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             sessionId: {
               type: "string",
               description:
@@ -3862,6 +3878,8 @@ export const tools = {
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
+            runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
+            requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             subjectProfileSlug: {
               type: "string",
               description:

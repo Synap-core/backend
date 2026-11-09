@@ -18,6 +18,7 @@ import { createLinks } from "../../../services/links/links-service.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import type { GuidanceDeclaration } from "@synap-core/types/guidance";
+import type { PlaybookRunner } from "@synap/playbooks";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import {
@@ -197,6 +198,10 @@ export function registerPlaybookExecutors(): void {
         // approval genuinely covers it, and the executor will inject it.
         contextSkill: innerData.contextSkill as
           { name?: string; body: string } | undefined,
+        // Who runs it and the tools it needs (0416). Re-validated by
+        // `playbooks.create`; read back so an approved playbook keeps them.
+        runner: innerData.runner as PlaybookRunner | null | undefined,
+        requires: innerData.requires as string[] | undefined,
       };
       // The replay must APPLY, never re-propose — see `assertApplied`.
       const created = await playbookCaller.create(
@@ -317,6 +322,8 @@ export function registerPlaybookExecutors(): void {
         "executor",
         "status",
         "scope",
+        "runner",
+        "requires",
         "metadata",
       ] as const;
       const patch: Record<string, unknown> = { id: playbookId };

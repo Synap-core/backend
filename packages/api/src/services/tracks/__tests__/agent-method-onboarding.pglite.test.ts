@@ -124,6 +124,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
   playbooks,
+  playbookVersions,
   projects,
   proposals,
   workspaces,
@@ -160,7 +161,9 @@ function ddlFor(table: PgTable): string {
         ? " default gen_random_uuid()"
         : c.name === "started_at" || c.name === "created_at"
           ? " default now()"
-          : "";
+          : c.name === "version"
+            ? " default 1"
+            : "";
     return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
@@ -178,6 +181,8 @@ beforeAll(async () => {
     workspaceMembers,
     links,
     playbooks,
+    // Every kept version of a playbook (0416): the create door writes it.
+    playbookVersions,
     projects,
     sessionEvaluations,
     podMembers,
