@@ -151,10 +151,8 @@ export function shouldOfferPlaybooks(session: NudgeSessionLike): boolean {
  */
 export function computeSessionNudges(input: {
   session: NudgeSessionLike;
-  evaluation: Pick<
-    SessionEvaluationSummary,
-    "criteria" | "evaluations" | "verdict"
-  >;
+  evaluation: Pick<SessionEvaluationSummary, "criteria" | "evaluations"> &
+    Partial<Pick<SessionEvaluationSummary, "verdict">>;
   phase: NudgePhase;
   playbookCandidates?: PlaybookCandidate[];
   /** The session's next move as THE rule derived it — see `readyToClose`. */
@@ -258,7 +256,8 @@ export function computeSessionNudges(input: {
   // criterion passes, "failing" = a required one failed.
   if (phase === "complete") {
     const bound = !!session.playbookId || session.origin === "playbook";
-    const state = evaluation.verdict.state;
+    // No verdict given ⇒ no retrospective hint (never guessed).
+    const state = evaluation.verdict?.state;
     if (bound && state === "failing") {
       out.hints.push(
         "A required criterion failed under a playbook: if its stage lessons caused it or would have prevented it, propose the patch with synap_update_playbook."
