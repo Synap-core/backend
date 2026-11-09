@@ -448,6 +448,7 @@ export async function readStatusOf(
       blockedNodes: [{ kind: "entity", id: t.id }],
       holds: [{ subjectType: "entity", subjectId: t.id }],
       steps: [{ subjectType: "entity", subjectId: t.id }],
+      requirements: [{ entityId: t.id }],
     });
   }
   for (const sid of new Set([

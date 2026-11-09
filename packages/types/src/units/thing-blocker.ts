@@ -13,7 +13,8 @@
  * two stay separate or the model forks. Every other source that makes a
  * waiting-on mark blocks: a person's owed slot, an agent's slot that declares
  * the thing it blocks, a proposal on the thing, a `blocked_by` edge, a step
- * that declares a wait, an open PR, an open sub-session.
+ * that declares a wait, a step requirement the thing does not meet, an open
+ * PR, an open sub-session.
  */
 import {
   lifecycleOptionLabel,
@@ -59,7 +60,7 @@ export interface ThingBlockerWhy {
   waitKind: WaitKind;
   /** An owed slot's class of blocker ("what to build"), else null. */
   blockedReason: string | null;
-  /** An owed slot's domain name (`not_connected`), else null. */
+  /** An owed slot's or a requirement's domain name (`not_connected`), else null. */
   blockerKey: string | null;
 }
 
@@ -137,6 +138,7 @@ export function thingBlockerUnlocks(
 }
 
 function clearedByOf(lead: WaitingOnSource): ThingBlockerClearedBy | null {
+  if (lead.kind === "requirement") return lead.clearedBy ?? null;
   if (lead.kind !== "owed_slot") return null;
   if (lead.clearedBy) return lead.clearedBy;
   return lead.owner === "agent" ? null : { answer: true };
@@ -170,7 +172,10 @@ export function deriveThingBlocker(
       waitKind,
       blockedReason:
         lead.kind === "owed_slot" ? (lead.blockedReason ?? null) : null,
-      blockerKey: lead.kind === "owed_slot" ? (lead.blockerKey ?? null) : null,
+      blockerKey:
+        lead.kind === "owed_slot" || lead.kind === "requirement"
+          ? (lead.blockerKey ?? null)
+          : null,
     },
     ball: WAIT_KIND_BALL[waitKind],
     unlocks: thingBlockerUnlocks(

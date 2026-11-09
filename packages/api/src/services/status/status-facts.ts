@@ -73,6 +73,11 @@ import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { isUuid } from "@synap-core/types/property-render";
+import {
+  readRequirementSources,
+  requirementAskKey,
+  type RequirementAsk,
+} from "./requirement-sources.js";
 
 /** Counts per lifecycle category; a category with none is left out. */
 export type CategoryCounts = Partial<Record<LifecycleCategory, number>>;
@@ -266,6 +271,8 @@ export interface WaitingOnQuestion {
   workUnitsOf?: string[];
   /** Sessions whose OPEN sub-sessions (`spawned_from`) count. */
   childrenOf?: string[];
+  /** Things (a kind, or a role by its facet) whose current step's unmet `requires` count. */
+  requirements?: RequirementAsk[];
 }
 
 /**
@@ -342,7 +349,8 @@ export async function readWaitingOn(
  *   · open pull request outcomes, by what the pod recorded about them
  *     (`readPullRequestStates`, one read for every PR asked about): checks
  *     not settled wait on CI, green ones on the merge queue;
- *   · open sub-sessions.
+ *   · open sub-sessions;
+ *   · a thing's current step's unmet `requires` (`requirement-sources.ts`).
  *
  * Each source names what is waited on (`WaitingOnMark.refs`), and only what
  * the reader may read: a session it may not read is counted (a container
@@ -454,6 +462,7 @@ export async function readWaitingOnSourcesFor<K>(
     units,
     children,
     stepWaits,
+    requirementSources,
   ] = await Promise.all([
     owedOf(owedSessionIds, false),
     owedOf(owedContainerIds, true),
@@ -506,6 +515,10 @@ export async function readWaitingOnSourcesFor<K>(
     readOpenWorkUnits(reader, unitSessionIds, unitContainerIds),
     readOpenChildren(reader, parentIds),
     readStepWaits(userId, stepIds),
+    readRequirementSources(
+      userId,
+      asked.flatMap(([, q]) => q.requirements ?? [])
+    ),
   ]);
 
   // Which of the sessions behind a source the reader may READ: only those
@@ -644,6 +657,8 @@ export async function readWaitingOnSourcesFor<K>(
         });
       }
     }
+    for (const r of q.requirements ?? [])
+      sources.push(...(requirementSources.get(requirementAskKey(r)) ?? []));
     out.set(key, sources);
   });
   return out;

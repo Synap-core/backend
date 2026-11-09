@@ -876,6 +876,20 @@ export type WaitingOnSource = (
       on: HoldOn;
       waitKind?: WaitKind;
     }
+  | {
+      /**
+       * The thing stands in a step that REQUIRES something it lacks
+       * (`requires` on its lifecycle option: a lead in outreach needs a
+       * contact). Derived live from the thing's links and properties, never
+       * a stored flag. Whose move: the requirement's `owner`.
+       */
+      kind: "requirement";
+      owner: "you" | "agent";
+      /** The requirement's domain name (`no_contact`), as declared. */
+      blockerKey: string;
+      /** What clears it, as declared. */
+      clearedBy?: ThingBlockerClearedBy | null;
+    }
 ) & { ref?: WaitingOnRef };
 
 /** THE mapping from one source to its reason; `null` = it makes no mark. */
@@ -895,6 +909,9 @@ export function waitingOnReasonOf(
         : null;
     case "work_unit":
       return pullRequestWaitingOn(source);
+    case "requirement":
+      // A missing fact is an input the person owes; an agent's is its work.
+      return source.owner === "agent" ? "another_work" : "input";
     case "owed_slot": {
       // An agent's runnable blocker: other work holds the thing, not a person.
       if (source.owner === "agent") return "another_work";
@@ -937,6 +954,10 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
       return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
         ? WAIT_KIND_FROM.hold[source.on]
         : WAIT_KIND_FROM.hold.unspecified;
+    case "requirement":
+      return source.owner === "agent"
+        ? WAIT_KIND_FROM.source.requirement_agent
+        : WAIT_KIND_FROM.source.requirement;
     case "owed_slot": {
       if (source.owner === "agent") return WAIT_KIND_FROM.source.agent_blocker;
       const r = source.blockedReason?.trim().toLowerCase();

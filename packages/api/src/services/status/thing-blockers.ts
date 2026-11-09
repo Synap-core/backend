@@ -27,18 +27,27 @@ import {
 /** One card: the thing, the status it stands on and the lifecycle it moves on. */
 export interface ThingBlockerAsk {
   id: string;
+  /**
+   * The role's facet when the card is a role's (a lead): its status and the
+   * role's lifecycle decide which `requires` count. Absent = the kind's.
+   */
+  facetId?: string | null;
   status: string | null;
   /** Its declared lifecycle (the board's columns); null without one. */
   lifecycle: { readonly options: readonly LifecycleOption[] } | null;
 }
 
 /** THE question one thing's blocker asks: every wait but a hold. */
-export function thingBlockerQuestion(id: string): WaitingOnQuestion {
+export function thingBlockerQuestion(
+  id: string,
+  facetId?: string | null
+): WaitingOnQuestion {
   return {
     owed: { blocking: [id] },
     proposals: { targetIds: [id] },
     blockedNodes: [{ kind: "entity", id }],
     steps: [{ subjectType: "entity", subjectId: id }],
+    requirements: [{ entityId: id, ...(facetId ? { facetId } : {}) }],
   };
 }
 
@@ -51,7 +60,7 @@ export async function readThingBlockers(
   if (unique.length === 0) return new Map();
   const sources = await readWaitingOnSourcesFor(
     reader,
-    new Map(unique.map((t) => [t.id, thingBlockerQuestion(t.id)]))
+    new Map(unique.map((t) => [t.id, thingBlockerQuestion(t.id, t.facetId)]))
   );
   return new Map(
     unique.map((t) => [

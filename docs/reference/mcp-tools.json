@@ -10069,6 +10069,11 @@
                 "stuckAfterDays": {
                   "type": "number",
                   "description": "Days in this option before a thing is stuck (open, active or paused options only)."
+                },
+                "requires": {
+                  "type": "array",
+                  "description": "What a thing standing here must HAVE to move on; each unmet one shows live as a blocker (flow.of, statusOf), never a stored flag. Each: { kind: 'link', relation: '<relation type slug>', direction: 'out' | 'in', min? (default 1) } or { kind: 'property', property: '<slug>', in?: [values] (absent = any non-empty value) }, plus blockerKey (e.g. 'no_contact'), label? (what is missing, in words), clearedBy? ({ playbookId } | { capability } | { intent } | { answer: true }), owner? ('you' default | 'agent': whose move), forKinds? (kind slugs: only things of these kinds, for a role worn by several kinds). Open, active or paused options only.",
+                  "items": { "type": "object" }
                 }
               },
               "required": ["key", "category"]

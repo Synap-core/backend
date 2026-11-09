@@ -139,6 +139,16 @@ export function checkLifecycleDefUpdate(
         `"${o.key}" waits is set through the lifecycle door (it names the profile's properties)`
       );
     }
+    // A step requirement is validated by the lifecycle declaration's parser,
+    // which this door does not run: the lifecycle door sets it.
+    if (
+      o.requires !== undefined &&
+      JSON.stringify(o.requires) !== JSON.stringify(prev?.requires)
+    ) {
+      reasons.push(
+        `"${o.key}" requires is set through the lifecycle door (it is validated there)`
+      );
+    }
     if (!prev) {
       if (!isLifecycleCategory(o.category)) {
         reasons.push(`the new option "${o.key}" needs a category`);
@@ -254,7 +264,8 @@ export async function changeLifecycleOptions(
         Boolean(b.humanOnly) === Boolean(o.humanOnly) &&
         b.stuckAfterDays === o.stuckAfterDays &&
         b.dateBinding === o.dateBinding &&
-        JSON.stringify(b.waits) === JSON.stringify(o.waits)
+        JSON.stringify(b.waits) === JSON.stringify(o.waits) &&
+        JSON.stringify(b.requires) === JSON.stringify(o.requires)
       );
     });
   if (same) return { status: "unchanged" };

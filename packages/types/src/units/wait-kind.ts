@@ -163,6 +163,10 @@ export const WAIT_KIND_FROM = {
     // An agent-owned slot that declares the thing it blocks (plan e7f753db
     // §9): the agent holds it until its run delivers the slot.
     agent_blocker: "agent_work",
+    // A step's unmet requirement (`LifecycleOption.requires`): a fact or a
+    // link the person owes ("answer"), or an agent's to find.
+    requirement: "answer",
+    requirement_agent: "agent_work",
   },
 } as const satisfies {
   hold: Record<HoldOn, WaitKind>;

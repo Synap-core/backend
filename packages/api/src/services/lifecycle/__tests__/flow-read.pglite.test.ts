@@ -13,7 +13,8 @@
  *    lifecycle does not declare going unreported;
  *  - open runs on an older frozen copy of the flow not marked;
  *  - a flow of another space, or an archived one, listed in this space;
- *  - a role read losing the kind of each thing (people and companies);
+ *  - a role read losing the kind of each thing (people and companies), or a
+ *    role card's blocker not reading what the ROLE's step requires;
  *  - the space's primary output not read from its settings;
  *  - a card's `blocker` not the one `statusOf` returns for the thing (a
  *    person's owed slot, an agent's slot that declares `blocks`), one read per
@@ -70,7 +71,19 @@ vi.mock("@synap/database", async (importOriginal) => {
       propertySlug: "leadStatus",
       options: [
         { key: "new", category: "open" },
-        { key: "contacted", category: "active" },
+        {
+          key: "contacted",
+          category: "active",
+          // Read on the ROLE's status (the facet's), for people only.
+          requires: [
+            {
+              kind: "property",
+              blockerKey: "no_linkedin",
+              property: "linkedinUrl",
+              forKinds: ["person"],
+            },
+          ],
+        },
         { key: "qualified", category: "active" },
         { key: "converted", category: "done" },
       ],
@@ -450,6 +463,20 @@ describe("flow.of — a role across kinds (lead on people and companies)", () =>
     ]);
     const bob = state(f, "contacted").cards.find((c) => c.id === ids.bob)!;
     expect(bob.next!.to).toBe("qualified");
+  });
+
+  it("a card is blocked by what its role's step requires and it lacks", async () => {
+    const f = await read({ profileSlug: "lead" });
+    const bob = state(f, "contacted").cards.find((c) => c.id === ids.bob)!;
+    expect(bob.blocker).toMatchObject({
+      blocked: true,
+      ball: "me",
+      why: { blockerKey: "no_linkedin" },
+      unlocks: { to: "qualified" },
+    });
+    // Ada stands in `new`, which requires nothing.
+    const ada = state(f, "new").cards.find((c) => c.id === ids.ada)!;
+    expect(ada.blocker).toMatchObject({ blocked: false });
   });
 });
 
