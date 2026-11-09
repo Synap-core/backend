@@ -16,8 +16,12 @@
  *   - `computer: "me"` is the caller's own computer (its key, or an agent
  *     hosted on it); an agent on no computer is refused; a stranger's
  *     computer is 404 on the ask and empty on the read;
- *   - the reconciler queues at most one open job per installation, repairs
- *     once per finding, and verifies when a check is due.
+ *   - the reconciler queues at most one open job per installation, verifies
+ *     when a check is due, repairs a drift once per finding, and heals by
+ *     itself (self-heal.ts): a failed lifecycle is checked then repaired, a
+ *     failed check is repaired, each retried with a back-off up to a cap
+ *     that sends ONE card; an install waits for its prerequisites, and one
+ *     nobody approved is ONE ask.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -33,7 +37,27 @@ const h = vi.hoisted(() => ({
   },
   db: null as unknown,
   gate: [] as Array<Record<string, unknown>>,
+  prerequisiteAsks: [] as Array<{ installationId: string; missing: string[] }>,
 }));
+
+// The prerequisite ask is recorded, not filed: its own test below drives the
+// real producer with a stub ask door.
+vi.mock(
+  "../../../services/installations/self-heal-notice.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<Record<string, unknown>>();
+    return {
+      ...actual,
+      askForPrerequisites: async (row: { id: string }, missing: string[]) => {
+        h.prerequisiteAsks.push({
+          installationId: row.id,
+          missing: [...missing],
+        });
+        return missing.length;
+      },
+    };
+  }
+);
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -67,9 +91,20 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerInstallationsRoutes } from "./installations.js";
 import {
+  applyInstallationRequest,
+  loadInstallableCapability,
+  loadPersonsComputer,
   nextJobFor,
+  NO_PREREQUISITES,
   reconcileComputer,
+  requiredCapabilityKeys,
 } from "../../../services/installations/installations.js";
+import { requestInstallation } from "../../../services/installations/request-installation.js";
+import {
+  SELF_HEAL_BACKOFF_SECONDS,
+  SELF_HEAL_MAX_FAILURES,
+  type InstallationJobHistoryEntry,
+} from "../../../services/installations/self-heal.js";
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 import type { InstallationRow } from "@synap/database/schema";
@@ -207,6 +242,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   h.gate.length = 0;
+  h.prerequisiteAsks.length = 0;
 });
 
 describe("installations — the ask", () => {
@@ -433,19 +469,208 @@ describe("the reconciler", () => {
     expect(nextJobFor(row({}), now)).toBeNull();
     expect(nextJobFor(row({ verifiedAt: ago(7200) }), now)).toBe("verify");
     expect(nextJobFor(row({ verifiedAt: null }), now)).toBe("verify");
-    // A failed lifecycle is never retried on its own.
-    expect(nextJobFor(row({ status: "failed" }), now)).toBeNull();
+    // A failed lifecycle heals by itself: a check first.
+    expect(nextJobFor(row({ status: "failed" }), now)).toBe("verify");
   });
 
-  it("repairs a failed check or a drift ONCE per finding", () => {
-    const failedCheck = row({
-      health: { verify: { ok: false, exitCode: 127 } },
-    });
-    expect(nextJobFor(failedCheck, now, undefined, "verify")).toBe("install");
-    expect(nextJobFor(failedCheck, now, undefined, "install")).toBeNull();
+  /** A past job, finished `s` seconds before `now`. */
+  const past = (
+    kind: InstallationJobHistoryEntry["kind"],
+    status: InstallationJobHistoryEntry["status"],
+    s: number
+  ): InstallationJobHistoryEntry => ({
+    kind,
+    status,
+    queuedAt: ago(s + 30),
+    finishedAt: ago(s),
+  });
+
+  it("self-heal 6: a runner that came back has every tool not checked for 10 min checked again", () => {
+    const daily = { verify: { reverifyEvery: "P1D" } };
+    const checked = (s: number) => row({ verifiedAt: ago(s), manifest: daily });
+    expect(
+      nextJobFor(checked(20 * 60), now, undefined, [], NO_PREREQUISITES, true)
+    ).toBe("verify");
+    expect(nextJobFor(checked(20 * 60), now)).toBeNull();
+    expect(
+      nextJobFor(checked(5 * 60), now, undefined, [], NO_PREREQUISITES, true)
+    ).toBeNull();
+    // A service is checked by its own health window, not by this.
+    expect(
+      nextJobFor(
+        row({
+          kind: "service",
+          verifiedAt: ago(20 * 60),
+          manifest: daily,
+          lastReportAt: ago(60),
+        }),
+        now,
+        undefined,
+        [],
+        NO_PREREQUISITES,
+        true
+      )
+    ).toBeNull();
+  });
+
+  it("repairs a drift ONCE per finding", () => {
     const drifted = row({ observedVersion: "1.1.0" });
-    expect(nextJobFor(drifted, now, undefined, "verify")).toBe("install");
-    expect(nextJobFor(drifted, now, undefined, "update")).toBeNull();
+    expect(
+      nextJobFor(drifted, now, undefined, [past("verify", "done", 60)])
+    ).toBe("install");
+    expect(
+      nextJobFor(drifted, now, undefined, [past("update", "done", 60)])
+    ).toBeNull();
+  });
+
+  it("self-heal 1: a tool recorded failed that may work is checked first; a failed check is then repaired", () => {
+    // Tonight's ffmpeg: installed on the computer, recorded failed after a timed-out check.
+    const failed = row({
+      status: "failed",
+      statusDetail: "ffmpeg took longer than 30 s",
+    });
+    const installFailed = [past("install", "failed", 120)];
+    expect(nextJobFor(failed, now, undefined, installFailed)).toBe("verify");
+    // The check failed too: the next try is an install from the approved snapshot, after the back-off.
+    const checkFailed = [past("verify", "failed", 10), ...installFailed];
+    expect(nextJobFor(failed, now, undefined, checkFailed)).toBeNull();
+    const later = new Date(now.getTime() + SELF_HEAL_BACKOFF_SECONDS[1] * 1000);
+    expect(nextJobFor(failed, later, undefined, checkFailed)).toBe("install");
+  });
+
+  it("self-heal 2: an installed tool whose check failed is installed again, after the back-off", () => {
+    const broken = row({ health: { verify: { ok: false, exitCode: 127 } } });
+    const checkFailed = [past("verify", "failed", 30)];
+    expect(nextJobFor(broken, now, undefined, checkFailed)).toBeNull();
+    expect(
+      nextJobFor(
+        broken,
+        new Date(now.getTime() + SELF_HEAL_BACKOFF_SECONDS[0] * 1000),
+        undefined,
+        checkFailed
+      )
+    ).toBe("install");
+    // A repair that took resets the ladder: the next due check runs as usual.
+    expect(
+      nextJobFor(row({ verifiedAt: ago(7200) }), now, undefined, [
+        past("install", "done", 7200),
+        ...checkFailed,
+      ])
+    ).toBe("verify");
+  });
+
+  it("self-heal 3: the back-off grows, the cap stops it, and a person's stop or ask decides", () => {
+    const failed = row({ status: "failed" });
+    for (let f = 1; f < SELF_HEAL_MAX_FAILURES; f++) {
+      const history = Array.from({ length: f }, (_, i) =>
+        past(i % 2 ? "install" : "verify", "failed", 1 + i * 10)
+      );
+      const wait = SELF_HEAL_BACKOFF_SECONDS[f - 1]!;
+      expect(
+        nextJobFor(
+          failed,
+          new Date(now.getTime() + (wait - 2) * 1000),
+          undefined,
+          history
+        )
+      ).toBeNull();
+      expect(
+        nextJobFor(
+          failed,
+          new Date(now.getTime() + wait * 1000),
+          undefined,
+          history
+        )
+      ).not.toBeNull();
+    }
+    const capped = Array.from({ length: SELF_HEAL_MAX_FAILURES }, (_, i) =>
+      past(i % 2 ? "install" : "verify", "failed", 1 + i * 10)
+    );
+    const muchLater = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
+    expect(nextJobFor(failed, muchLater, undefined, capped)).toBeNull();
+    // A job a person stopped is their call.
+    expect(
+      nextJobFor(failed, muchLater, undefined, [
+        past("install", "stopped", 600),
+      ])
+    ).toBeNull();
+    // A person's own ask (a repair) runs now, whatever the ladder says.
+    expect(nextJobFor(failed, now, "install", capped)).toBe("install");
+  });
+
+  it("self-heal 4: an install waits for its approved prerequisites, and for one nobody approved", () => {
+    const planned = row({ status: "planned" });
+    expect(
+      nextJobFor(planned, now, undefined, [], {
+        waiting: ["media-ffmpeg"],
+        missing: [],
+      })
+    ).toBeNull();
+    expect(
+      nextJobFor(planned, now, undefined, [], {
+        waiting: [],
+        missing: ["media-ffmpeg"],
+      })
+    ).toBeNull();
+    expect(
+      nextJobFor(planned, now, undefined, [], { waiting: [], missing: [] })
+    ).toBe("install");
+    // A repair waits too, after its check: waiting counts no failure.
+    const failed = row({ status: "failed" });
+    expect(
+      nextJobFor(failed, now, undefined, [past("verify", "failed", 3600)], {
+        waiting: ["media-ffmpeg"],
+        missing: [],
+      })
+    ).toBeNull();
+    // Which prerequisites count: this computer's system, never itself.
+    const manifest = {
+      placement: {
+        requires: {
+          capabilities: [
+            { slug: "media-ffmpeg" },
+            { slug: "winget-thing", os: "win32" },
+            { slug: "media-download" },
+          ],
+        },
+      },
+    };
+    expect(
+      requiredCapabilityKeys(
+        { capabilityKey: "media-download", manifest },
+        "darwin"
+      )
+    ).toEqual(["media-ffmpeg"]);
+    expect(
+      requiredCapabilityKeys(
+        { capabilityKey: "media-download", manifest },
+        "win32"
+      )
+    ).toEqual(["media-ffmpeg", "winget-thing"]);
+  });
+
+  it("self-heal 5: a removal converges the same way: retried with a back-off, capped, a person's ask runs now", () => {
+    const leaving = row({ desiredState: "removed", status: "failed" });
+    expect(
+      nextJobFor(leaving, now, undefined, [past("remove", "failed", 10)])
+    ).toBeNull();
+    expect(
+      nextJobFor(leaving, now, undefined, [
+        past("remove", "failed", SELF_HEAL_BACKOFF_SECONDS[0]),
+      ])
+    ).toBe("remove");
+    const capped = Array.from({ length: SELF_HEAL_MAX_FAILURES }, (_, i) =>
+      past("remove", "failed", 1 + i)
+    );
+    expect(
+      nextJobFor(
+        leaving,
+        new Date(now.getTime() + 30 * 24 * 3600 * 1000),
+        undefined,
+        capped
+      )
+    ).toBeNull();
+    expect(nextJobFor(leaving, now, "remove", capped)).toBe("remove");
   });
 
   it("on a lease, queues at most one open job per installation, never a pile", async () => {
@@ -460,5 +685,216 @@ describe("the reconciler", () => {
     expect(await reconcileComputer(runner)).toBe(1);
     expect(await reconcileComputer(runner)).toBe(0);
     expect(await openJobs()).toEqual([{ kind: "verify" }]);
+  });
+
+  it("on a lease, a dependent waits for its approved prerequisite and installs right after it", async () => {
+    // Tonight: Download was approved with ffmpeg; it must install after ffmpeg, not fail.
+    const ffmpeg = randomUUID();
+    const download = randomUUID();
+    const requires = JSON.stringify({
+      placement: { requires: { capabilities: [{ slug: "media-ffmpeg" }] } },
+    });
+    await q(
+      `INSERT INTO installations (id, user_id, kind, capability_key, machine_user_id, status, manifest) VALUES
+        ($1, $3, 'tool', 'media-ffmpeg', $4, 'installing', '{}'::jsonb),
+        ($2, $3, 'tool', 'media-download', $4, 'planned', $5::jsonb)`,
+      [ffmpeg, download, PERSON, OFFBOX, requires]
+    );
+    const runner = { machineUserId: OFFBOX, ownerUserId: PERSON };
+    const openFor = async (id: string) =>
+      (
+        await q<{ kind: string }>(
+          `SELECT kind FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+          [id]
+        )
+      ).rows;
+    await reconcileComputer(runner);
+    expect(await openFor(download)).toEqual([]);
+    await q(
+      `UPDATE installations SET status = 'installed', verified_at = now(), health = '{"verify":{"ok":true,"exitCode":0}}'::jsonb WHERE id = $1`,
+      [ffmpeg]
+    );
+    await reconcileComputer(runner);
+    expect(await openFor(download)).toEqual([{ kind: "install" }]);
+  });
+
+  it("a person's install whose prerequisite nobody approved on that computer queues nothing and asks ONCE", async () => {
+    const DOWNLOAD_CAP = randomUUID();
+    const needsFfmpeg = {
+      ...TOOL,
+      placement: {
+        ...TOOL.placement,
+        requires: { capabilities: [{ slug: "media-ffmpeg-x" }] },
+      },
+    };
+    await q(
+      `INSERT INTO capabilities (id, created_by, name, template_key, metadata) VALUES ($1, $2, 'Download media', 'media-download-x', $3::jsonb)`,
+      [DOWNLOAD_CAP, PERSON, JSON.stringify({ computer: needsFfmpeg })]
+    );
+    const res = await ask(person(), {
+      capabilityKey: "media-download-x",
+      action: "install",
+      computer: MAC,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      installationId: string;
+      jobId?: string | null;
+    };
+    expect(body.jobId ?? null).toBeNull();
+    expect(h.prerequisiteAsks).toEqual([
+      { installationId: body.installationId, missing: ["media-ffmpeg-x"] },
+    ]);
+    // A lease reconciles it again: still nothing queued, and no second ask.
+    await reconcileComputer({ machineUserId: MAC, ownerUserId: PERSON });
+    const open = await q(
+      `SELECT 1 FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+      [body.installationId]
+    );
+    expect(open.rows).toEqual([]);
+    expect(h.prerequisiteAsks).toHaveLength(1);
+  });
+});
+
+describe("self-heal: the one-tap asks", () => {
+  const actualAsks = () =>
+    vi.importActual<
+      typeof import("../../../services/installations/self-heal-notice.js")
+    >("../../../services/installations/self-heal-notice.js");
+  const inst = randomUUID();
+
+  it("when the pod stops trying, ONE 'try again' card is filed, by the failure that reaches the cap", async () => {
+    const { askToTryAgainIfStopped, SELF_HEAL_AUTHOR } = await actualAsks();
+    await q(
+      `INSERT INTO installations (id, user_id, kind, capability_id, capability_key, machine_user_id, status, status_detail, manifest)
+       VALUES ($1, $2, 'tool', $3, $4, $5, 'failed', 'The step “Homebrew: install mlx-whisper” failed: exit 1', '{}'::jsonb)`,
+      [inst, PERSON, CAP, KEY, OFFBOX]
+    );
+    const fail = (i: number) =>
+      q(
+        `INSERT INTO host_jobs (id, kind, installation_id, user_id, machine_user_id, spec, status, attempt, parameters, queued_at, finished_at)
+         VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 'failed', 1, '{}'::jsonb, now() - make_interval(mins => $6), now() - make_interval(mins => $6))`,
+        [
+          randomUUID(),
+          i % 2 ? "verify" : "install",
+          inst,
+          PERSON,
+          OFFBOX,
+          100 - i,
+        ]
+      );
+    const asked: Array<Record<string, unknown>> = [];
+    const deps = {
+      request: async (input: Record<string, unknown>) => (
+        asked.push(input),
+        { status: "proposed", proposalId: randomUUID() }
+      ),
+    };
+    for (let i = 1; i < SELF_HEAL_MAX_FAILURES; i++) {
+      await fail(i);
+      expect(await askToTryAgainIfStopped(inst, deps as never)).toBe(false);
+    }
+    await fail(SELF_HEAL_MAX_FAILURES);
+    expect(await askToTryAgainIfStopped(inst, deps as never)).toBe(true);
+    await fail(SELF_HEAL_MAX_FAILURES + 1);
+    expect(await askToTryAgainIfStopped(inst, deps as never)).toBe(false);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      userId: PERSON,
+      agentUserId: OFFBOX,
+      capabilityKey: KEY,
+      action: "install",
+      computer: { id: OFFBOX, name: "Off box" },
+      filedByPod: { author: SELF_HEAL_AUTHOR },
+    });
+    expect((asked[0]!.filedByPod as { reasoning: string }).reasoning).toBe(
+      `The pod tried ${SELF_HEAL_MAX_FAILURES} times to make ${KEY} work on Off box, as you approved it, and stopped. ` +
+        "Last error: The step “Homebrew: install mlx-whisper” failed: exit 1. Approve to try again now. " +
+        `To see each step, run \`synap tools install ${KEY}\` on Off box.`
+    );
+  });
+
+  it("the pod's ask is always ONE proposal, even for a repair that would ask nobody", async () => {
+    // The Mac already has it (the asks above): a repair there asks nobody.
+    const computer = (await loadPersonsComputer(PERSON, MAC))!;
+    h.gate.length = 0;
+    const ask = await requestInstallation({
+      userId: PERSON,
+      agentUserId: MAC,
+      computer,
+      capabilityKey: KEY,
+      action: "install",
+      filedByPod: {
+        author: "system:installation-self-heal",
+        reasoning: "Try again.",
+      },
+    });
+    expect(ask.status).toBe("proposed");
+    expect(h.gate).toHaveLength(1);
+    expect(h.gate[0]).toMatchObject({
+      forcePropose: true,
+      machineAuthor: "system:installation-self-heal",
+      reasoning: "Try again.",
+    });
+  });
+
+  it("approving it runs the repair now, past the ladder's cap", async () => {
+    // The installation above sits past the cap: the reconciler alone queues nothing.
+    await reconcileComputer({ machineUserId: OFFBOX, ownerUserId: PERSON });
+    const open = () =>
+      q<{ kind: string }>(
+        `SELECT kind FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+        [inst]
+      );
+    expect((await open()).rows).toEqual([]);
+    const out = await applyInstallationRequest({
+      computer: (await loadPersonsComputer(PERSON, OFFBOX))!,
+      capability: (await loadInstallableCapability(KEY))!,
+      action: "install",
+      approverId: PERSON,
+    });
+    expect(out.jobId).not.toBeNull();
+    expect((await open()).rows).toEqual([{ kind: "install" }]);
+  });
+
+  it("a prerequisite nobody approved is ONE card per prerequisite: its own install on that computer", async () => {
+    const { askForPrerequisites, SELF_HEAL_AUTHOR } = await actualAsks();
+    const asked: Array<Record<string, unknown>> = [];
+    const deps = {
+      request: async (input: Record<string, unknown>) => (
+        asked.push(input),
+        { status: "proposed", proposalId: randomUUID() }
+      ),
+    };
+    const [row] = (
+      await q<Record<string, unknown>>(
+        `SELECT id FROM installations WHERE id = $1`,
+        [inst]
+      )
+    ).rows;
+    expect(row).toBeDefined();
+    const dependent = {
+      id: inst,
+      userId: PERSON,
+      machineUserId: OFFBOX,
+      capabilityKey: "media-download",
+    } as InstallationRow;
+    expect(
+      await askForPrerequisites(dependent, ["media-ffmpeg"], deps as never)
+    ).toBe(1);
+    expect(asked).toEqual([
+      expect.objectContaining({
+        userId: PERSON,
+        agentUserId: OFFBOX,
+        capabilityKey: "media-ffmpeg",
+        action: "install",
+        fromCatalog: true,
+        filedByPod: {
+          author: SELF_HEAL_AUTHOR,
+          reasoning:
+            "media-download on Off box needs media-ffmpeg first. Approve to install media-ffmpeg there; media-download installs right after it.",
+        },
+      }),
+    ]);
   });
 });
