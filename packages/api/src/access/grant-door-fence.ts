@@ -309,6 +309,12 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // ANDed inside that floor (only narrow); `includeWorkspace` names only the
   // spaces of the rows returned (entities.filters-space-names.pglite.test.ts).
   /^\/entities\/?$/,
+  // `GET /search` (`search.search`): the same floor as the list door's `q`. Typesense ranks what the PERSON may see, then
+  // for a fenced grant the page's entity hits are re-read through the entity read floor and EVERY other hit (documents,
+  // views, channels, agents) is dropped (`withinGrantSearchHits`, finding cce86e6b), so a scoped key gets only entity
+  // hits its grant reads. The AI service's `search_unified` tool calls it. Its siblings do NOT go through that floor and
+  // stay unclassified: `/search/collection`, `/search/documents`, `/vector-search`.
+  /^\/search\/?$/,
   route("/entities/:id"),
   route("/entities/:id/connections"),
   route("/entities/:id/facets"),
