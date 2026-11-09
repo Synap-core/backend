@@ -45,6 +45,7 @@ import {
 import { listMachines } from "../machine-roster.js";
 import {
   applyInstallationRequest,
+  computerRefOf,
   InstallationRequestError,
   installRefusal,
   loadInstallableCapability,
@@ -193,14 +194,7 @@ export async function listPersonsComputers(
   personId: string
 ): Promise<ComputerRef[]> {
   return (await listMachines(personId))
-    .map((m) => ({
-      id: m.id,
-      ownerUserId: personId,
-      name: m.name,
-      os: m.platform,
-      arch: m.arch,
-      installsFromPod: m.hostsServices,
-    }))
+    .map((m) => computerRefOf(personId, m))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

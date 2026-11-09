@@ -175,15 +175,15 @@ beforeAll(async () => {
   const meta = (platform: string, arch: string, on: boolean) =>
     JSON.stringify({ platform, arch, hostsServices: on });
   await q(
-    `INSERT INTO users (id, email, name, agent_type, created_by_user_id, host_user_id, agent_metadata) VALUES
-      ($1, 'a@x', 'person', NULL, NULL, NULL, '{}'::jsonb),
-      ($2, 'b@x', 'other', NULL, NULL, NULL, '{}'::jsonb),
-      ($3, 'm@x', 'Mac', 'machine', $1, NULL, $9::jsonb),
-      ($4, 'o@x', 'Off box', 'machine', $1, NULL, $10::jsonb),
-      ($5, 'w@x', 'Win box', 'machine', $1, NULL, $11::jsonb),
-      ($6, 's@x', 'Stranger box', 'machine', $2, NULL, $9::jsonb),
-      ($7, 'h@x', 'Claude Code on the Mac', 'claude-code', $1, $3, '{}'::jsonb),
-      ($8, 'c@x', 'Cloud agent', 'claude-code', $1, NULL, '{}'::jsonb)`,
+    `INSERT INTO users (id, email, name, user_type, agent_type, created_by_user_id, host_user_id, agent_metadata) VALUES
+      ($1, 'a@x', 'person', 'human', NULL, NULL, NULL, '{}'::jsonb),
+      ($2, 'b@x', 'other', 'human', NULL, NULL, NULL, '{}'::jsonb),
+      ($3, 'm@x', 'Mac', 'agent', 'machine', $1, NULL, $9::jsonb),
+      ($4, 'o@x', 'Off box', 'agent', 'machine', $1, NULL, $10::jsonb),
+      ($5, 'w@x', 'Win box', 'agent', 'machine', $1, NULL, $11::jsonb),
+      ($6, 's@x', 'Stranger box', 'agent', 'machine', $2, NULL, $9::jsonb),
+      ($7, 'h@x', 'Claude Code on the Mac', 'agent', 'claude-code', $1, $3, '{}'::jsonb),
+      ($8, 'c@x', 'Cloud agent', 'agent', 'claude-code', $1, NULL, '{}'::jsonb)`,
     [
       PERSON,
       OTHER,

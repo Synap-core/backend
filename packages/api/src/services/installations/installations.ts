@@ -48,7 +48,11 @@ import {
   placementRefusal,
 } from "@synap-core/types/capability-manifest";
 import { scopedDb, type AccessContext } from "../../access/index.js";
-import { machineName } from "../machine-roster.js";
+import {
+  listMachines,
+  machineName,
+  type MachineView,
+} from "../machine-roster.js";
 import {
   installationHealth,
   isoDurationSeconds,
@@ -146,20 +150,56 @@ export async function resolveCallerComputer(identity: {
   return toRef(machine);
 }
 
-/** One of the person's computers by id, or null (a stranger's reads as none). */
+/** A computer of the person's roster, as the installation doors name it. */
+export function computerRefOf(
+  personId: string,
+  m: Pick<MachineView, "id" | "name" | "platform" | "arch" | "hostsServices">
+): ComputerRef {
+  return {
+    id: m.id,
+    ownerUserId: personId,
+    name: m.name,
+    os: m.platform,
+    arch: m.arch,
+    installsFromPod: m.hostsServices,
+  };
+}
+
+/**
+ * One of the person's computers by id, or null (a stranger's reads as none).
+ * Read through the ONE roster (`machine-roster.ts` `listMachines`), the read
+ * an ask names a computer through (`listPersonsComputers`), so the computer
+ * an agent's ask was filed for is the computer its approval finds.
+ */
 export async function loadPersonsComputer(
   personId: string,
   computerId: string
 ): Promise<ComputerRef | null> {
+  const m = (await listMachines(personId)).find((c) => c.id === computerId);
+  return m ? computerRefOf(personId, m) : null;
+}
+
+/**
+ * Why `computerId` is not one of the person's computers, as the end of a
+ * refusal: it is gone, it is not a computer, or it is someone else's. Only
+ * for wording a refusal after `loadPersonsComputer` found nothing; it
+ * decides nothing.
+ */
+export async function whyNotPersonsComputer(
+  personId: string,
+  computerId: string
+): Promise<string> {
   const [row] = await db
-    .select(computerColumns)
+    .select({ ...computerColumns, userType: users.userType })
     .from(users)
-    .where(
-      and(eq(users.id, computerId), eq(users.agentType, MACHINE_AGENT_TYPE))
-    )
+    .where(eq(users.id, computerId))
     .limit(1);
-  if (!row || row.owner !== personId) return null;
-  return toRef(row);
+  if (!row) return "this computer is no longer on the pod";
+  const name = row.agentType === MACHINE_AGENT_TYPE ? machineName(row) : null;
+  if (row.userType !== "agent" || !name)
+    return `${row.name?.trim() || "what it names"} is not a computer`;
+  if (row.owner !== personId) return `${name} is not one of your computers`;
+  return `${name} is not on your list of computers`;
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────

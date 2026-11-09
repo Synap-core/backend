@@ -10,6 +10,11 @@
  * `synap_request_installation`), the proposal carries `catalog`: approving
  * adds it from Synap's catalog, then records the installation. One card.
  *
+ * The ask sits where the gate files it: NESTED under the request envelope
+ * (`proposal.data.data`; `checkPermissionOrPropose`). Reading it at the top
+ * of `proposal.data` found no action, so every agent's ask failed on
+ * approval (live, 2026-11-09: proposal 55928891).
+ *
  * Approval needs a fresh sign-in (installing on a person's machine is a
  * commitment: the default the reconciliation §3.4 names, overridable):
  * `widensCredential` makes the dispatch refuse a Synap app's device session
@@ -27,6 +32,7 @@ import {
   isInstallationRequestApproved,
   loadInstallableCapability,
   loadPersonsComputer,
+  whyNotPersonsComputer,
 } from "../../../services/installations/installations.js";
 import {
   addCatalogCapability,
@@ -45,6 +51,11 @@ function cannotApply(message: string) {
     { errorClass: "conflict" }
   );
 }
+
+const asRecord = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
 
 /** The catalog addition an agent's ask carried, when well formed. */
 function catalogAdditionOf(raw: unknown): CatalogAddition | null {
@@ -68,24 +79,32 @@ export function registerInstallationExecutors(): void {
       if (await isInstallationRequestApproved(input.proposalId)) {
         return { success: true, alreadyApproved: true };
       }
-      const data = (payload ?? {}) as Record<string, unknown>;
+      const stored = asRecord(payload);
+      // The ask, as the gate filed it (`requestInstallation`'s `data`).
+      const data = asRecord(stored.data);
       const computerId = String(proposal.targetId ?? data.computerId ?? "");
       const action = data.action;
       const capabilityKey =
         typeof data.capabilityKey === "string" ? data.capabilityKey : "";
-      const computer = computerId
-        ? await loadPersonsComputer(userId, computerId)
-        : null;
       if (
-        !computer ||
         !(INSTALLATION_REQUEST_ACTIONS as readonly unknown[]).includes(
           action
         ) ||
         action === "verify"
       ) {
         throw cannotApply(
-          "Couldn't apply — this computer is not yours, or it is no longer connected. Nothing was asked of it."
+          "Couldn't apply — the request does not say to install, update or remove anything. Nothing was asked of the computer."
         );
+      }
+      // The same read the ask named the computer through (the roster).
+      const computer = computerId
+        ? await loadPersonsComputer(userId, computerId)
+        : null;
+      if (!computer) {
+        const why = computerId
+          ? await whyNotPersonsComputer(userId, computerId)
+          : "the request names no computer";
+        throw cannotApply(`Couldn't apply — ${why}. Nothing was asked of it.`);
       }
       let capability = await loadInstallableCapability(capabilityKey);
       // An agent asked for a capability the pod did not have yet: approving
@@ -134,7 +153,7 @@ export function registerInstallationExecutors(): void {
         to: ProposalStatus.APPROVED,
         set: {
           data: {
-            ...data,
+            ...stored,
             applied: {
               installationId: out.installation.id,
               jobId: out.jobId,
