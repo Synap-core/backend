@@ -278,6 +278,10 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // The links writer upserts on this key (`createLink` on conflict do nothing).
+  await h.client!.exec(
+    `create unique index on links (from_type, from_id, to_type, to_id, link_type)`
+  );
 
   await q(`insert into users (id, email, user_type) values ($1,$2,'human')`, [
     PERSON,
@@ -476,7 +480,10 @@ describe("a one-shot (generate) playbook run through the Hub door", () => {
       created_by: "system:generate-run",
       session_id: null,
     });
-    expect(p.data.ops).toEqual([
+    // A pending proposal nests the gate data under `data.data`
+    // (`documentPatchPayload`, the one reading of that shape).
+    const payload = (p.data.data ?? p.data) as Record<string, any>;
+    expect(payload.ops).toEqual([
       {
         op: "upsert_section",
         id: "caption-draft",
@@ -484,7 +491,7 @@ describe("a one-shot (generate) playbook run through the Hub door", () => {
         body: DRAFT,
       },
     ]);
-    expect(p.data.author).toBe("system:generate-run");
+    expect(payload.author).toBe("system:generate-run");
     // The stored document is untouched until the person approves.
     const [doc] = (
       await q<{ storage_key: string; content_revision: number }>(
