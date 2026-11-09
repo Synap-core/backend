@@ -20,9 +20,13 @@
  *   reconcileInstallation at most ONE open job per installation (the partial
  *                         unique `uq_host_jobs_one_open_per_installation`
  *                         makes a second insert a no-op): planned → install;
- *                         desired removed → remove; a failed check or a
- *                         drifted version → install again at the approved
- *                         version (a repair); a check that is due → verify.
+ *                         desired removed → remove; a failed lifecycle → a
+ *                         check, then a repair; a failed check → install
+ *                         again from the approved snapshot (a repair); each
+ *                         retried on its own with a back-off and a cap
+ *                         (`self-heal.ts`); a drifted version → one repair;
+ *                         a check that is due → verify; an install waits
+ *                         for the prerequisites it names.
  *
  * Who may write what the computer OBSERVED: only its own key with
  * `host.runner`, through the host-job routes. An agent hosted on the computer
@@ -59,6 +63,12 @@ import {
   TOOL_REVERIFY_DEFAULT_SECONDS,
   type InstallationHealthVerdict,
 } from "../host-jobs/host-jobs.js";
+import {
+  loadInstallationJobHistory,
+  selfHealGate,
+  type InstallationJobHistoryEntry,
+} from "./self-heal.js";
+import { notifyPrerequisiteNeeded } from "./self-heal-notice.js";
 
 /**
  * Was this installation request already approved? The approve executor's
@@ -475,6 +485,8 @@ export async function applyInstallationRequest(input: {
       })
       .where(eq(installations.id, live.id))
       .returning()) as [InstallationRow];
+    // The person asked: it runs now, whatever the ladder's back-off.
+    kindHint = "remove";
   } else if (!live) {
     const [inserted] = await db
       .insert(installations)
@@ -522,6 +534,14 @@ export async function applyInstallationRequest(input: {
     if (upgrade || input.action === "update") kindHint = "update";
   }
   const jobId = await reconcileInstallation(row, { kind: kindHint });
+  if (input.action === "install" && !jobId) {
+    // An install that waits for a prerequisite nobody approved on this
+    // computer: ONE ask, now, never one per lease.
+    const prerequisites = await loadPrerequisiteState(row);
+    if (prerequisites.missing.length > 0) {
+      await notifyPrerequisiteNeeded(row, prerequisites.missing);
+    }
+  }
   return { installation: row, jobId };
 }
 
@@ -533,42 +553,141 @@ export class InstallationRequestError extends Error {
 
 // ── The reconciler ──────────────────────────────────────────────────────────
 
+/** An installation's prerequisites (`placement.requires.capabilities`) as they stand on its computer. */
+export interface PrerequisiteState {
+  /** Approved on this computer, not installed and working yet: an install waits for it. */
+  waiting: string[];
+  /** Not approved on this computer: an install waits for the person's yes. */
+  missing: string[];
+}
+
+export const NO_PREREQUISITES: PrerequisiteState = { waiting: [], missing: [] };
+
+/**
+ * The capability keys an installation's manifest needs first on its computer,
+ * for that computer's system (an entry with `os` counts only there). Pure.
+ */
+export function requiredCapabilityKeys(
+  row: Pick<InstallationRow, "capabilityKey" | "manifest">,
+  os: string | null
+): string[] {
+  const placement = (row.manifest.placement ?? {}) as {
+    requires?: { capabilities?: Array<{ slug?: unknown; os?: unknown }> };
+  };
+  const keys = new Set<string>();
+  for (const dep of placement.requires?.capabilities ?? []) {
+    if (typeof dep?.slug !== "string" || dep.slug === row.capabilityKey) continue;
+    if (typeof dep.os === "string" && os && dep.os !== os) continue;
+    keys.add(dep.slug);
+  }
+  return [...keys];
+}
+
+/**
+ * Where each prerequisite of this installation stands on the same computer:
+ * ready (installed, its last check not failed), waiting (approved, not ready
+ * yet) or missing (no live installation the person still wants).
+ */
+export async function loadPrerequisiteState(
+  row: InstallationRow
+): Promise<PrerequisiteState> {
+  let os = row.observedOs;
+  if (!os) {
+    const [computer] = await db
+      .select({ agentMetadata: users.agentMetadata })
+      .from(users)
+      .where(eq(users.id, row.machineUserId))
+      .limit(1);
+    const platform = (computer?.agentMetadata as { platform?: unknown } | null)
+      ?.platform;
+    os = typeof platform === "string" ? platform : null;
+  }
+  const keys = requiredCapabilityKeys(row, os);
+  if (keys.length === 0) return NO_PREREQUISITES;
+  const deps = await db
+    .select()
+    .from(installations)
+    .where(
+      and(
+        eq(installations.machineUserId, row.machineUserId),
+        eq(installations.userId, row.userId),
+        inArray(installations.capabilityKey, keys),
+        ne(installations.status, "removed")
+      )
+    );
+  const state: PrerequisiteState = { waiting: [], missing: [] };
+  for (const key of keys) {
+    const dep = deps.find((d) => d.capabilityKey === key);
+    if (!dep || dep.desiredState === "removed") state.missing.push(key);
+    else if (
+      dep.status !== "installed" ||
+      installationHealth(dep).health === "failed"
+    )
+      state.waiting.push(key);
+  }
+  return state;
+}
+
 /**
  * What job (if any) turns this installation's asked state into its observed
- * one. Pure; {@link reconcileInstallation} queues it. `hint` is the request's
- * own (an approved upgrade is an `update`); the rest is derived:
+ * one. Pure; {@link reconcileInstallation} queues it. `hint` is a person's own
+ * ask (an approved upgrade is an `update`, a repair an `install`, a removal a
+ * `remove`): it runs now. The rest is derived, and every job runs the
+ * manifest snapshot the person approved:
  *   - desired removed and not removing        → remove
  *   - planned                                 → install
- *   - installed, last check failed or drifted → install (a repair at the
- *                                               approved version), ONCE per
- *                                               finding: when the last job
- *                                               was itself an install or an
- *                                               update, the repair did not
- *                                               take and it waits for the
- *                                               person (no loop: a package
- *                                               manager that cannot pin a
- *                                               version would drift forever)
+ *   - failed (an install or an update that
+ *     did not finish)                         → a check first (the tool may
+ *                                               work after all: tonight's
+ *                                               ffmpeg, installed, recorded
+ *                                               failed after a timeout); after
+ *                                               a failed check → install
+ *   - installed, last check failed            → install (a repair)
+ *   - installed, drifted                      → install, ONCE per finding: a
+ *                                               package manager that cannot
+ *                                               pin a version would drift
+ *                                               forever
  *   - installed, check due (never, or past
  *     `verify.reverifyEvery`, default P7D)    → verify
- * A `failed` lifecycle is not retried on its own: the person (or an agent,
- * which needs no approval for it) asks again (a repair at the same version).
+ * A job that failed is tried again only through the ladder
+ * ({@link selfHealGate}: back-off, cap, a person's stop). An install (first
+ * or repair) waits, counting no failure, while a prerequisite is not ready.
  */
 export function nextJobFor(
   row: InstallationRow,
   now: Date = new Date(),
   hint?: HostJobKind,
-  lastJobKind: HostJobKind | null = null
+  history: readonly InstallationJobHistoryEntry[] = [],
+  prerequisites: PrerequisiteState = NO_PREREQUISITES
 ): HostJobKind | null {
   if (row.status === "removed" || row.status === "removing") return null;
-  if (row.desiredState === "removed") return "remove";
+  if (row.desiredState === "removed") {
+    return hint === "remove" || selfHealGate(history, now).open
+      ? "remove"
+      : null;
+  }
   if (hint) return hint;
-  if (row.status === "planned") return "install";
+  const install = (): HostJobKind | null =>
+    prerequisites.waiting.length === 0 && prerequisites.missing.length === 0
+      ? "install"
+      : null;
+  if (row.status === "planned") return install();
+  if (row.status === "failed") {
+    if (!selfHealGate(history, now).open) return null;
+    const last = history[0];
+    return last?.kind === "verify" && last.status === "failed"
+      ? install()
+      : "verify";
+  }
   if (row.status !== "installed") return null;
   const health = installationHealth(row, now).health;
-  if (health === "failed" || health === "drifted")
-    return lastJobKind === "install" || lastJobKind === "update"
-      ? null
-      : "install";
+  if (health === "failed") {
+    return selfHealGate(history, now).open ? install() : null;
+  }
+  if (health === "drifted") {
+    const last = history[0]?.kind ?? null;
+    return last === "install" || last === "update" ? null : install();
+  }
   const verify = (row.manifest.verify ?? {}) as { reverifyEvery?: unknown };
   const every =
     isoDurationSeconds(verify.reverifyEvery) ?? TOOL_REVERIFY_DEFAULT_SECONDS;
@@ -583,20 +702,19 @@ export function nextJobFor(
 /**
  * Queue the next job for this installation, at most ONE open per
  * installation: a second insert meets the partial unique index and is a
- * no-op. Returns the queued job's id, or null when nothing was due or a job
- * is already open.
+ * no-op. Returns the queued job's id, or null when nothing was due, the
+ * ladder holds it back, or a job is already open.
  */
 export async function reconcileInstallation(
   row: InstallationRow,
   opts: { now?: Date; kind?: HostJobKind } = {}
 ): Promise<string | null> {
-  const [last] = await db
-    .select({ kind: hostJobs.kind })
-    .from(hostJobs)
-    .where(eq(hostJobs.installationId, row.id))
-    .orderBy(desc(hostJobs.queuedAt))
-    .limit(1);
-  const kind = nextJobFor(row, opts.now, opts.kind, last?.kind ?? null);
+  const history = await loadInstallationJobHistory(row.id);
+  const prerequisites =
+    row.desiredState === "installed"
+      ? await loadPrerequisiteState(row)
+      : NO_PREREQUISITES;
+  const kind = nextJobFor(row, opts.now, opts.kind, history, prerequisites);
   if (!kind) return null;
   const [job] = await db
     .insert(hostJobs)

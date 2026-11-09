@@ -28,7 +28,11 @@
  * `installed` or `failed`; an update goes `installed` → `updating` →
  * `installed` (a failed update keeps the previous version, so it is
  * `installed` again with the reason); a remove goes `removing` → `removed`; a
- * verify moves nothing. Reports and finishes store what the runner OBSERVED
+ * verify moves nothing, except that a verify that PASSES on a `failed`
+ * installation makes it `installed` (the tool works: what failed was the job,
+ * self-heal case 1). A failed lifecycle job whose failure is the cap of the
+ * self-heal ladder sends the person ONE card (`installations/self-heal-notice`).
+ * Reports and finishes store what the runner OBSERVED
  * (health, verify, version, os, arch). Health (ok, degraded, drifted, stale,
  * unknown, failed) is a READ verdict ({@link installationHealth}), never
  * stored.
@@ -67,6 +71,8 @@ import type {
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import { boxStatusForVerdict, capLog } from "../box-runs/box-runs.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
+import { notifyIfSelfHealStopped } from "../installations/self-heal-notice.js";
+import { LIFECYCLE_JOB_KINDS } from "../installations/self-heal.js";
 
 /** A lease lives this long; each heartbeat extends it to now + TTL. */
 export const HOST_LEASE_TTL_SECONDS = 120;
@@ -695,16 +701,36 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
           : { statusDetail: error ?? "The removal was stopped." }
       );
       break;
-    default: {
-      const [row] = await db
-        .select({ status: installations.status })
-        .from(installations)
-        .where(eq(installations.id, job.installationId))
-        .limit(1);
-      installationStatus = row?.status ?? null;
-    }
+    case "verify":
+      // A check that passes on a failed installation: the tool is there and
+      // works, so the record says so (with the version observed above).
+      installationStatus = ok
+        ? await moveInstallation(job.installationId, ["failed"], "installed", {
+            statusDetail: null,
+          })
+        : await currentStatus(job.installationId);
+      break;
+    default:
+      installationStatus = await currentStatus(job.installationId);
+  }
+  if (
+    !ok &&
+    (LIFECYCLE_JOB_KINDS as readonly string[]).includes(job.kind)
+  ) {
+    await notifyIfSelfHealStopped(job.installationId);
   }
   return { ok: true, job, installationStatus };
+}
+
+async function currentStatus(
+  installationId: string
+): Promise<InstallationStatus | null> {
+  const [row] = await db
+    .select({ status: installations.status })
+    .from(installations)
+    .where(eq(installations.id, installationId))
+    .limit(1);
+  return row?.status ?? null;
 }
 
 // ── Logs (the owner) ────────────────────────────────────────────────────────
