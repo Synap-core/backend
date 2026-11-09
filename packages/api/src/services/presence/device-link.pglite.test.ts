@@ -102,7 +102,8 @@ const {
   redeemDeviceLink,
   requestDeviceLink,
 } = await import("./device-link.js");
-const { redeemPasskeyChangeGrant } = await import("./passkey-change.js");
+const { passkeyChangeReady, redeemPasskeyChangeGrant } =
+  await import("./passkey-change.js");
 const { enrollDeviceKey } = await import("./factors.js");
 const { issuePresenceChallenge } = await import("./proof.js");
 const { invalidatePresenceMode, writePresenceMode } = await import("./mode.js");
@@ -688,6 +689,28 @@ describe("Add this device: approving", () => {
 });
 
 describe("Add this device: redeeming", () => {
+  it("GUARDRAIL: passkeyChangeReady reads an approved passkey link for the session that asked only, and redeems nothing", async () => {
+    const asked = await ask();
+    expect((await passkeyChangeReady(PERSON, NEW_PHONE)).ready).toBe(false);
+    await approveDeviceLink({
+      userId: PERSON,
+      sessionKey: RELAY,
+      id: asked.id,
+      number: await shownNumber(asked.id),
+      proof: await approvalProof(asked.id),
+    });
+    const ready = await passkeyChangeReady(PERSON, NEW_PHONE);
+    expect(ready.ready).toBe(true);
+    expect(ready.until).toBeInstanceOf(Date);
+    expect((await passkeyChangeReady(PERSON, RELAY)).ready).toBe(false);
+    expect((await passkeyChangeReady(OTHER, NEW_PHONE)).ready).toBe(false);
+    expect((await passkeyChangeReady(PERSON, null)).ready).toBe(false);
+    // Reading twice redeemed nothing: the guard still can, once.
+    expect((await passkeyChangeReady(PERSON, NEW_PHONE)).ready).toBe(true);
+    expect(await redeemPasskeyChangeGrant(PERSON, NEW_PHONE)).toBe(true);
+    expect((await passkeyChangeReady(PERSON, NEW_PHONE)).ready).toBe(false);
+  });
+
   it("GUARDRAIL: a passkey link is redeemed once, only by the session that asked, through the passkey-change grant", async () => {
     const asked = await approved();
     expect(await redeemPasskeyChangeGrant(PERSON, RELAY)).toBe(false);

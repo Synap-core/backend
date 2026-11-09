@@ -467,6 +467,37 @@ export async function declineDeviceLink(args: {
 }
 
 /**
+ * When this session's approved, unredeemed request of `kind` stops being
+ * redeemable (approval + `DEVICE_LINK_TTL_SECONDS`), or null when it holds
+ * none. A read: nothing is redeemed (`passkeyChangeReady`).
+ */
+export async function approvedDeviceLinkUntil(args: {
+  userId: string;
+  sessionKey: string;
+  kind: DeviceLinkKind;
+}): Promise<Date | null> {
+  const since = new Date(Date.now() - DEVICE_LINK_TTL_SECONDS * 1000);
+  const [link] = await db
+    .select({ decidedAt: presenceDeviceLinks.decidedAt })
+    .from(presenceDeviceLinks)
+    .where(
+      and(
+        eq(presenceDeviceLinks.userId, args.userId),
+        eq(presenceDeviceLinks.kind, args.kind),
+        eq(presenceDeviceLinks.requesterSession, args.sessionKey),
+        eq(presenceDeviceLinks.status, "approved"),
+        gt(presenceDeviceLinks.decidedAt, since),
+        isNull(presenceDeviceLinks.redeemedAt)
+      )
+    )
+    .orderBy(desc(presenceDeviceLinks.decidedAt))
+    .limit(1);
+  return link?.decidedAt
+    ? new Date(link.decidedAt.getTime() + DEVICE_LINK_TTL_SECONDS * 1000)
+    : null;
+}
+
+/**
  * Step 3: redeem the approval of THIS session, once. The person's newest
  * `approved` request of `kind` asked by `sessionKey`, approved within
  * `DEVICE_LINK_TTL_SECONDS`, not yet redeemed, and for a device key naming
