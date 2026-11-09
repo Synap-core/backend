@@ -164,19 +164,6 @@ export async function triggerAutoRespond(params: {
       workspaceId: channel.workspaceId ?? undefined,
       capability: "chat",
     });
-    // A RUN turn always acts as an AI (founder, 2026-11-09): the space's house
-    // agent, else the person's own Synap AI enrolled in the space — never as
-    // the person with no agent named (`run-acting-agent.ts`). The pod signs it
-    // as the turn's `act.sub`, which is what lets its writes through.
-    const agentUserId = params.run
-      ? await (
-          await import("../services/playbooks/run-acting-agent.js")
-        ).runActingAgentUserId({
-          houseAgentUserId: resolvedService.agentUserId,
-          operatorUserId: principal.userId,
-          workspaceId: channel.workspaceId ?? null,
-        })
-      : resolvedService.agentUserId;
     await getBoss().send(
       A2AI_TRIGGER_QUEUE,
       {
@@ -194,7 +181,7 @@ export async function triggerAutoRespond(params: {
         serviceUrl: resolvedService.endpoint,
         serviceApiKey: resolvedService.serviceApiKey,
         serviceId: resolvedService.serviceId,
-        agentUserId,
+        agentUserId: resolvedService.agentUserId,
         ...(params.turnContext ? { turnContext: params.turnContext } : {}),
         ...(params.run ? { run: params.run } : {}),
       },
