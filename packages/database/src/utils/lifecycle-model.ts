@@ -274,7 +274,11 @@ export function classifyLifecycleMove(
  * lifecycle property at the effective-property seam. PURE.
  */
 export function withDerivedLifecycleLists<
-  P extends { constraints?: unknown; uiHints?: unknown; defaultValue?: unknown },
+  P extends {
+    constraints?: unknown;
+    uiHints?: unknown;
+    defaultValue?: unknown;
+  },
 >(prop: P): P {
   const constraints = (prop.constraints ?? {}) as Record<string, unknown>;
   const options = normalizeEnumOptions(constraints.enumOptions);

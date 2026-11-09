@@ -847,7 +847,10 @@ export class ProfileResolutionService {
     if (lifecycleSlug) {
       const lifecycleProp = propertyMap.get(lifecycleSlug);
       if (lifecycleProp) {
-        propertyMap.set(lifecycleSlug, withDerivedLifecycleLists(lifecycleProp));
+        propertyMap.set(
+          lifecycleSlug,
+          withDerivedLifecycleLists(lifecycleProp)
+        );
       }
     }
 

@@ -18,7 +18,12 @@ let db: any;
 const events = { append: async () => ({ id: "ev" }) } as never;
 const personIds: string[] = [];
 
-async function role(slug: string, prop: string, options: unknown[], initial: string) {
+async function role(
+  slug: string,
+  prop: string,
+  options: unknown[],
+  initial: string
+) {
   const [p] = await db
     .insert(schema.profiles)
     .values({ slug, displayName: slug, profileKind: "role", scope: "system" })
@@ -36,7 +41,10 @@ async function role(slug: string, prop: string, options: unknown[], initial: str
     .insert(schema.profileProperties)
     .values({ profileId: p.id, propertyDefId: d.id });
   await declareLifecycle(db, { profileId: p.id, propertySlug: prop });
-  await setLifecycleInitialStatus(db, { propertyDefId: d.id, initialStatus: initial });
+  await setLifecycleInitialStatus(db, {
+    propertyDefId: d.id,
+    initialStatus: initial,
+  });
 }
 
 async function person() {
@@ -75,7 +83,14 @@ afterAll(async () => h?.pg.close());
 
 const attach = (entityId: string, profileSlug: string, extra: object = {}) =>
   new FacetRepository(db, events).attach(
-    { entityId, profileSlug, properties: {}, skipValidation: true, skipEvent: true, ...extra },
+    {
+      entityId,
+      profileSlug,
+      properties: {},
+      skipValidation: true,
+      skipEvent: true,
+      ...extra,
+    },
     "u1"
   );
 
@@ -91,7 +106,9 @@ describe("facet birth fills the initial status", () => {
     const a = await attach(await person(), "lead", { status: "engaged" });
     expect(a.status).toBe("engaged");
     expect(a.properties).toEqual({ leadStage: "engaged" });
-    const b = await attach(await person(), "lead", { properties: { leadStage: "engaged" } });
+    const b = await attach(await person(), "lead", {
+      properties: { leadStage: "engaged" },
+    });
     expect(b.status).toBe("engaged");
   });
 

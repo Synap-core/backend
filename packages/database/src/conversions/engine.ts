@@ -3054,7 +3054,11 @@ export async function computeCounts(
       // Dry run DERIVED from the apply: the same statements, rolled back.
       try {
         await sql.begin(async (tx) => {
-          const counts = await applyOp(tx as unknown as Sql, op, {} as RunOptions);
+          const counts = await applyOp(
+            tx as unknown as Sql,
+            op,
+            {} as RunOptions
+          );
           throw new DryRunRollback(counts, []);
         });
       } catch (e) {

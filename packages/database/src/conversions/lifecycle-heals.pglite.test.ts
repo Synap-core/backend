@@ -157,13 +157,22 @@ beforeAll(async () => {
   );
   plainDef = plain.defId;
   const person = (
-    await db.insert(schema.entities).values({ userId: "u1", type: "person" }).returning()
+    await db
+      .insert(schema.entities)
+      .values({ userId: "u1", type: "person" })
+      .returning()
   )[0].id as string;
   const facet = async (profileId: string, extra: object = {}) =>
     (
       await db
         .insert(schema.entityFacets)
-        .values({ entityId: person, profileId, userId: "u1", properties: {}, ...extra })
+        .values({
+          entityId: person,
+          profileId,
+          userId: "u1",
+          properties: {},
+          ...extra,
+        })
         .returning()
     )[0].id as string;
   nullLead = await facet(lead.profileId);
@@ -185,8 +194,12 @@ const facetRow = async (id: string) =>
     )
   ).rows[0];
 const defRow = async (id: string) =>
-  (await h.pg.query("select ui_hints, constraints from property_defs where id = $1", [id]))
-    .rows[0];
+  (
+    await h.pg.query(
+      "select ui_hints, constraints from property_defs where id = $1",
+      [id]
+    )
+  ).rows[0];
 
 describe("fillFacetInitialStatus", () => {
   it("dry run counts and writes nothing", async () => {
@@ -221,8 +234,13 @@ describe("fillFacetInitialStatus", () => {
 describe("deriveLifecycleLists", () => {
   it("rewrites a stale stored list and default from the one declaration", async () => {
     const dry = await runConversions(sql, ops(DERIVE), DRY);
-    expect(dry.results[0]).toMatchObject({ counts: { lifecycleListsHealed: 1 } });
-    expect((await defRow(leadDef)).ui_hints.enumValues).toEqual(["prospect", "qualified"]);
+    expect(dry.results[0]).toMatchObject({
+      counts: { lifecycleListsHealed: 1 },
+    });
+    expect((await defRow(leadDef)).ui_hints.enumValues).toEqual([
+      "prospect",
+      "qualified",
+    ]);
 
     await runConversions(sql, ops(DERIVE), OPERATOR);
     const lead = await defRow(leadDef);
