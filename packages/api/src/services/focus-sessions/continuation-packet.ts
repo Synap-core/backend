@@ -66,6 +66,7 @@ import {
   ownerPrivateVisibleWhere,
   openRoomQuestionConditions,
   listHolds,
+  sessionStageRuns,
 } from "@synap/database";
 import { questionDisposition } from "@synap-core/types/ask";
 import {
@@ -198,6 +199,29 @@ const logger = createLogger({ module: "continuation-packet" });
 
 /** Items per section. Totals are always exact; only the item list is cut. */
 export const PACKET_TOP_N = 5;
+
+/** At most this many step entries on a session read (the newest; `total` counts all). */
+export const PACKET_STAGE_RUNS_MAX = 50;
+
+/**
+ * ONE ENTRY OF A STEP (`session_stage_runs`, runner engine slice 3): who works
+ * or worked it, on which computer, and where it stands. `agent: null` = Synap
+ * AI (or the run's own executor). Names are the users table's, or null.
+ */
+export interface PacketStageRunItem {
+  id: string;
+  stageKey: string;
+  /** 1 for the first entry of the step; more after a return (`onFail`). */
+  attempt: number;
+  /** running | waiting_tools | waiting_start | unreached | waiting_child | done | failed | cancelled */
+  status: string;
+  agent: { id: string; name: string | null } | null;
+  computer: { id: string; name: string | null } | null;
+  /** The child run's session when the step IS a playbook (`uses`). */
+  childSessionId: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
 
 export type PacketSection<T> =
   | { status: "ok"; total: number; items: T[] }
@@ -711,6 +735,15 @@ export interface ContinuationPacket {
    * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
    */
   holder: SessionHolderSection;
+  /**
+   * WHO WORKS EACH STEP — every entry of a step of this run
+   * (`session_stage_runs`), oldest first, the newest
+   * {@link PACKET_STAGE_RUNS_MAX} kept (`total` counts all). The newest entry
+   * of a `stageKey` is who is on it now (`status` running or waiting_*), or
+   * who did it. `total: 0` = no step entered yet (or a session with no
+   * stages); a failed read is `unavailable`, never an empty list.
+   */
+  stageRuns: PacketSection<PacketStageRunItem>;
   outputs: PacketSection<PacketOutputItem>;
   /**
    * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -1095,6 +1128,67 @@ export function isOpenAgentSlot(slot: ExpectedOutput): boolean {
     slot.retiredAt == null &&
     slot.claimedDone !== true
   );
+}
+
+/** The session's step entries, with the agent's and the computer's names. */
+async function readStageRuns(
+  database: typeof db,
+  sessionId: string
+): Promise<PacketSection<PacketStageRunItem>> {
+  const where = eq(sessionStageRuns.sessionId, sessionId);
+  const [[totalRow], newest] = await Promise.all([
+    database.select({ n: count() }).from(sessionStageRuns).where(where),
+    database
+      .select({
+        id: sessionStageRuns.id,
+        stageKey: sessionStageRuns.stageKey,
+        attempt: sessionStageRuns.attempt,
+        status: sessionStageRuns.status,
+        agentId: sessionStageRuns.runnerAgentUserId,
+        computerId: sessionStageRuns.computerUserId,
+        childSessionId: sessionStageRuns.childSessionId,
+        startedAt: sessionStageRuns.startedAt,
+        endedAt: sessionStageRuns.endedAt,
+      })
+      .from(sessionStageRuns)
+      .where(where)
+      .orderBy(desc(sessionStageRuns.startedAt), desc(sessionStageRuns.id))
+      .limit(PACKET_STAGE_RUNS_MAX),
+  ]);
+  const ids = [
+    ...new Set(
+      newest
+        .flatMap((r) => [r.agentId, r.computerId])
+        .filter((id): id is string => !!id)
+    ),
+  ];
+  const named =
+    ids.length > 0
+      ? await database
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(inArray(users.id, ids))
+      : [];
+  const nameOf = new Map(named.map((u) => [u.id, u.name?.trim() || null]));
+  const who = (id: string | null) =>
+    id ? { id, name: nameOf.get(id) ?? null } : null;
+  const iso = (d: Date | string | null) =>
+    d === null ? null : d instanceof Date ? d.toISOString() : String(d);
+  return {
+    status: "ok",
+    total: Number(totalRow?.n ?? 0),
+    items: newest.reverse().map((r) => ({
+      id: r.id,
+      stageKey: r.stageKey,
+      attempt: r.attempt,
+      status: r.status,
+      agent: who(r.agentId),
+      computer: who(r.computerId),
+      childSessionId: r.childSessionId ?? null,
+      startedAt: iso(r.startedAt)!,
+      endedAt: iso(r.endedAt),
+    })),
+  };
 }
 
 async function readPendingProposals(
@@ -2811,6 +2905,14 @@ export async function projectContinuationPacket(
   trackRead.catch(() => undefined);
   // The person's notification facts (`session-notify.ts`), read beside the
   // sections below; each failure is its own `unavailable`.
+  // Who works each step (slice 3), read beside the sections below.
+  const stageRunsRead = readStageRuns(database, row.id).catch(
+    unavailable(
+      row.id,
+      "stageRuns",
+      "Who works each step of this session could not be read."
+    )
+  );
   const notifyReads = Promise.all([
     readSessionDevboxJobs(database, reader, row)
       .then((r): PacketDevboxJobsSection => ({ status: "ok", ...r }))
@@ -3200,6 +3302,7 @@ export async function projectContinuationPacket(
 
   const manifest = readSessionRunManifest(row.metadata);
   const [devboxJobs, muted] = await notifyReads;
+  const stageRuns = await stageRunsRead;
 
   return {
     version: 1,
@@ -3220,6 +3323,7 @@ export async function projectContinuationPacket(
     blockers,
     externalAgent,
     holder,
+    stageRuns,
     outputs,
     children,
     parent,
