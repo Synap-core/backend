@@ -245,7 +245,7 @@
           "name": "detail",
           "type": "enum",
           "required": false,
-          "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows.",
+          "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, `truncated` names it with its full length); `omitted` lists the keys left out. full = unprojected rows.",
           "enum": ["lean", "full"]
         },
         {
@@ -276,7 +276,7 @@
           "name": "projectId",
           "type": "string",
           "required": false,
-          "description": "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL."
+          "description": "Optional: narrow to a project (entity id). Orthogonal to workspaceId; usually pre-set by the connection URL."
         },
         {
           "name": "facetSlug",
@@ -302,7 +302,7 @@
           "name": "lastInteractionBefore",
           "type": "string",
           "required": false,
-          "description": "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Who haven't I spoken to in a month' = facetSlug 'lead' or 'client', lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting that happened, sent outreach, a dated conversation."
+          "description": "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Not spoken to in a month' = lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting, outreach sent, a dated conversation."
         },
         {
           "name": "lastInteractionAfter",
@@ -320,13 +320,13 @@
           "name": "filters",
           "type": "array<object>",
           "required": false,
-          "description": "View filters, ANDed, at most 10 — the same grammar as Hub GET /entities `filters`: [{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]. `field` is title, preview, type, createdAt, updatedAt or `properties.<slug>`; `operator` is equals, not_equals, contains, not_contains, in, not_in, greater_than, greater_than_or_equal, less_than, less_than_or_equal, is_empty or is_not_empty. A `properties.<slug>` clause needs `profileSlug` naming a kind that declares it. An unknown or secret property, or a malformed filter, is an error — never ignored. Only narrows what you already read."
+          "description": "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading."
         },
         {
           "name": "includeFacets",
           "type": "boolean",
           "required": false,
-          "description": "true = each row also carries `facetSlugs` and `facets` (each role facet with its overlay `properties` and `status`, e.g. a lead's stage), on rows wearing at least one role. Default false."
+          "description": "Rows also carry their role facets."
         },
         {
           "name": "limit",
@@ -347,7 +347,7 @@
           "detail": {
             "type": "string",
             "enum": ["lean", "full"],
-            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows."
+            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, `truncated` names it with its full length); `omitted` lists the keys left out. full = unprojected rows."
           },
           "fields": {
             "type": "array",
@@ -368,7 +368,7 @@
           },
           "projectId": {
             "type": "string",
-            "description": "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL."
+            "description": "Optional: narrow to a project (entity id). Orthogonal to workspaceId; usually pre-set by the connection URL."
           },
           "facetSlug": {
             "type": "string",
@@ -386,7 +386,7 @@
           },
           "lastInteractionBefore": {
             "type": "string",
-            "description": "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Who haven't I spoken to in a month' = facetSlug 'lead' or 'client', lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting that happened, sent outreach, a dated conversation."
+            "description": "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Not spoken to in a month' = lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting, outreach sent, a dated conversation."
           },
           "lastInteractionAfter": {
             "type": "string",
@@ -398,21 +398,12 @@
           },
           "filters": {
             "type": "array",
-            "maxItems": 10,
-            "description": "View filters, ANDed, at most 10 — the same grammar as Hub GET /entities `filters`: [{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]. `field` is title, preview, type, createdAt, updatedAt or `properties.<slug>`; `operator` is equals, not_equals, contains, not_contains, in, not_in, greater_than, greater_than_or_equal, less_than, less_than_or_equal, is_empty or is_not_empty. A `properties.<slug>` clause needs `profileSlug` naming a kind that declares it. An unknown or secret property, or a malformed filter, is an error — never ignored. Only narrows what you already read.",
-            "items": {
-              "type": "object",
-              "properties": {
-                "field": { "type": "string" },
-                "operator": { "type": "string" },
-                "value": {}
-              },
-              "required": ["field", "operator"]
-            }
+            "items": { "type": "object" },
+            "description": "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading."
           },
           "includeFacets": {
             "type": "boolean",
-            "description": "true = each row also carries `facetSlugs` and `facets` (each role facet with its overlay `properties` and `status`, e.g. a lead's stage), on rows wearing at least one role. Default false."
+            "description": "Rows also carry their role facets."
           },
           "limit": {
             "type": "number",
