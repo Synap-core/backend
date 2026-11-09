@@ -1043,6 +1043,8 @@ export class EventRepository {
    *
    * @param filters.userId      owner clamp (required)
    * @param filters.workspaceId optional workspace narrowing
+   * @param filters.sessionId   optional focus-session narrowing (the id rides
+   *                            in data->>'sessionId', written by POST /agent-runs)
    * @param filters.limit       default 50
    * @param filters.cursor      timestamp keyset cursor — return runs strictly
    *                            older than this ISO timestamp (for pagination)
@@ -1050,6 +1052,7 @@ export class EventRepository {
   async listAgentRuns(filters: {
     userId: string;
     workspaceId?: string;
+    sessionId?: string;
     limit?: number;
     cursor?: Date;
   }): Promise<EventRecord[]> {
@@ -1070,6 +1073,12 @@ export class EventRepository {
       // Real column (0223) with JSONB fallback for un-backfilled rows.
       query += ` AND COALESCE(workspace_id, data->>'workspaceId') = $${paramIndex}`;
       params.push(filters.workspaceId);
+      paramIndex++;
+    }
+
+    if (filters.sessionId) {
+      query += ` AND data->>'sessionId' = $${paramIndex}`;
+      params.push(filters.sessionId);
       paramIndex++;
     }
 

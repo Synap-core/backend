@@ -200,6 +200,7 @@ async function insertRun(opts: {
   tokensOut: number;
   runStatus: "succeeded" | "failed";
   workspaceId?: string;
+  data?: Record<string, unknown>;
 }) {
   const ts = new Date(Date.now() - opts.daysAgo * 86_400_000);
   await db.execute(drizzleSql`
@@ -208,7 +209,7 @@ async function insertRun(opts: {
       is_agent, cost_usd, tokens_in, tokens_out, run_status, workspace_id
     ) VALUES (
       ${randomUUID()}, ${ts.toISOString()}, 'agentRun.create.completed',
-      ${randomUUID()}, 'agent_run', ${drizzleSql`'{}'::jsonb`}, 'api', ${opts.userId},
+      ${randomUUID()}, 'agent_run', ${JSON.stringify(opts.data ?? {})}::jsonb, 'api', ${opts.userId},
       true, ${opts.costUsd}, ${opts.tokensIn}, ${opts.tokensOut},
       ${opts.runStatus}, ${opts.workspaceId ?? null}
     )
@@ -318,5 +319,65 @@ describe.skipIf(!dbAvailable)("agentRuns.summary — SQL aggregate", () => {
     });
     expect(out.total.runCount).toBe(1);
     expect(out.total.costUsd).toBeCloseTo(99, 6);
+  });
+});
+
+describe.skipIf(!dbAvailable)("agentRuns.list — sessionId filter", () => {
+  const SESSION = randomUUID();
+  const caller = () =>
+    agentRunsRouter.createCaller({
+      authenticated: true,
+      userId: USER,
+    } as never);
+
+  beforeAll(async () => {
+    await cleanup();
+    for (const [id, email] of [
+      [USER, "spend-summary@test.synap"],
+      [OTHER_USER, "spend-summary-other@test.synap"],
+    ] as const) {
+      await db
+        .insert(users)
+        .values({ id, email, userType: "human" })
+        .onConflictDoNothing();
+    }
+    const run = {
+      costUsd: null,
+      tokensIn: 1,
+      tokensOut: 1,
+      runStatus: "succeeded" as const,
+    };
+    await insertRun({
+      ...run,
+      userId: USER,
+      daysAgo: 0,
+      data: { sessionId: SESSION },
+    });
+    await insertRun({
+      ...run,
+      userId: USER,
+      daysAgo: 1,
+      data: { sessionId: randomUUID() },
+    });
+    await insertRun({ ...run, userId: USER, daysAgo: 2 });
+    // Another user's run in the SAME session must never leak in.
+    await insertRun({
+      ...run,
+      userId: OTHER_USER,
+      daysAgo: 0,
+      data: { sessionId: SESSION },
+    });
+  });
+
+  afterAll(cleanup);
+
+  it("returns only that session's runs, clamped to the owner", async () => {
+    const out = await caller().list({ sessionId: SESSION });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.sessionId).toBe(SESSION);
+  });
+
+  it("without sessionId the list is unchanged (all of the owner's runs)", async () => {
+    expect(await caller().list({})).toHaveLength(3);
   });
 });
