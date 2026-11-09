@@ -9259,6 +9259,27 @@
             "description": "With projection=lean: comma-separated property keys or columns returned whole on every row (e.g. the keys a row listed in `omitted`).",
             "name": "fields",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "JSON array of view filters, ANDed, exactly as on `GET /entities` (`[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`). A `properties.<slug>` clause needs `profileSlug`. Malformed JSON, too many clauses, an unknown or secret property is a 400. Only narrows what the caller reads."
+            },
+            "required": false,
+            "description": "JSON array of view filters, ANDed, exactly as on `GET /entities` (`[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`). A `properties.<slug>` clause needs `profileSlug`. Malformed JSON, too many clauses, an unknown or secret property is a 400. Only narrows what the caller reads.",
+            "name": "filters",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"],
+              "description": "`true` = each row also carries `facetSlugs` and `facets`, as on `GET /entities`. Default `false`."
+            },
+            "required": false,
+            "description": "`true` = each row also carries `facetSlugs` and `facets`, as on `GET /entities`. Default `false`.",
+            "name": "includeFacets",
+            "in": "query"
           }
         ],
         "responses": {
@@ -9281,7 +9302,7 @@
             }
           },
           "400": {
-            "description": "Bad request — the wrapped door refused the input",
+            "description": "Malformed `filters` (unparseable JSON, too many clauses, a property filter without profileSlug, an unknown or secret property).",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
