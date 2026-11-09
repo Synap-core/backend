@@ -1749,7 +1749,11 @@ export interface ThingBlockerWhy {
 	waitKind: WaitKind;
 	/** An owed slot's class of blocker ("what to build"), else null. */
 	blockedReason: string | null;
-	/** An owed slot's domain name (`not_connected`), else null. */
+	/**
+	 * The lead wait's stable name: an owed slot's declared domain name
+	 * (`not_connected`), a pending proposal's type (`messaging.external.send`)
+	 * or a held send's reason (`not_connected`); else null.
+	 */
 	blockerKey: string | null;
 }
 export interface ThingBlocker {
@@ -9039,6 +9043,51 @@ export interface WorkspacePlacement {
  * gravity".
  */
 export type ProjectResolutionRung = 1 | 2 | 3 | 3.5 | 4;
+/** What a run used: recorded in the run's definition snapshot. */
+export interface GuidanceUsed {
+	ref: string;
+	label: string;
+	/** Content hash of the item (its declaration and current rows). */
+	hash: string;
+	rows: Array<{
+		id: string;
+		replaces?: string;
+		version: string | null;
+	}>;
+}
+export interface GuidanceLeftOut {
+	ref: string;
+	label: string;
+	/** Over the budget: how the agent loads it. Not available: why. */
+	reason: string;
+}
+export interface RenderedGuidance {
+	/** The section; "" when the playbook declares no guidance. */
+	text: string;
+	/** cyrb53 of `text`; `null` when there is no section. */
+	hash: string | null;
+	/** The items rendered in full, in declared order. */
+	used: GuidanceUsed[];
+	/** Items left out to stay within the budget (named in the section). */
+	demoted: Array<GuidanceLeftOut & {
+		hash: string;
+	}>;
+	/** Items with no current version (named in the section). */
+	missing: GuidanceLeftOut[];
+	/** Estimated tokens of the heading plus the rendered items. */
+	tokens: number;
+}
+/** What a run records in its definition snapshot under `guidance`. */
+export type GuidanceSnapshot = {
+	demoted: RenderedGuidance["demoted"];
+	hash: string | null;
+	missing: GuidanceLeftOut[];
+	status: "ok";
+	used: GuidanceUsed[];
+} | {
+	error: string;
+	status: "unavailable";
+};
 /**
  * Write-free preview of what `createWorkspaceFromDefinition` WOULD do to the pod
  * catalog — computed by running the REAL create-path resolver
@@ -11628,6 +11677,13 @@ export interface Context {
 	 * Cannot be spoofed by a human JWT session.
 	 */
 	isHubProtocol?: boolean;
+	/**
+	 * Set ONLY by a Hub door that acts as the person (their own app token,
+	 * past `rejectAgentReviewer`) on the caller context it builds: the session
+	 * roster of the human doors applies there (`rosterReadFor`). Never set from
+	 * a request; ignored with an acting agent.
+	 */
+	personRoster?: boolean;
 	/**
 	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
 	 * its workspace binding, threaded from api-key-auth middleware. They let the
@@ -15199,6 +15255,16 @@ export interface PlaybookRunDetail {
 	/** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
 	agents: RunAgent[];
 	/**
+	 * The rules the run was given, as the POD stamped them on its definition
+	 * snapshot when it rendered the method (`recordRunGuidance`): the refs used
+	 * (with label, content hash, row ids + versions), those left out of the
+	 * prompt for budget (`demoted`), those with no approved version (`missing`),
+	 * or `status: "unavailable"` when they could not be read. `null` = the run
+	 * carries no stamp (declared none, or an older run): never "no rules were
+	 * checked". Absent when the session is private.
+	 */
+	guidance?: GuidanceSnapshot | null;
+	/**
 	 * A TRIAL run (the rule lab, design b199a3a4 slice 1b): the drafts it
 	 * rendered in place of current versions, and what it drafted (the agent's
 	 * last reply in its room; null until it answers). Absent on any other run.
@@ -15909,6 +15975,7 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"conflict",
 	"kind_missing",
 	"not_connected",
+	"do_not_contact",
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
@@ -16078,6 +16145,21 @@ export interface PresenceSensitivityChoice {
  */
 /** The state of a person's recovery request, as every surface reads it. */
 export type PresenceRecoveryStatus = "cancelled" | "completed" | "pending";
+/** What the new device will add once approved. */
+export type DeviceLinkKind = "device_key" | "passkey";
+declare const DEVICE_LINK_STATUSES: readonly [
+	"pending",
+	"approved",
+	"declined",
+	"redeemed",
+	"replaced"
+];
+export type DeviceLinkStatus = (typeof DEVICE_LINK_STATUSES)[number];
+/**
+ * A request's status as a reader sees it: `expired` is DERIVED (a pending
+ * request past its wait, or an approval nobody redeemed in time), never stored.
+ */
+export type DeviceLinkReadStatus = DeviceLinkStatus | "expired";
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
 	runId: string;
@@ -35159,7 +35241,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string | undefined;
 				failure?: {
 					enableProposalId?: string | undefined;
-					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
+					errorClass: "auth" | "conflict" | "do_not_contact" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
 						kind: "add" | "connect" | "enable" | "none" | "run";
@@ -35467,12 +35549,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: Record<string, never> | undefined;
 			meta: object;
 			output: {
-				count?: undefined;
 				message: string;
-				seeded: boolean;
-			} | {
-				count: number;
-				message?: undefined;
 				seeded: boolean;
 			};
 		}>;
@@ -49173,7 +49250,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				request: {
 					id: string;
-					kind: "app_connection_request" | "device_enroll" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
+					kind: "app_connection_request" | "device_enroll" | "device_link" | "device_request" | "intelligence_mcp" | "key_request" | "marketplace_key" | "mcp_server" | "oauth_consent" | "passkey_change" | "presence_mode" | "presence_sensitivity" | "recovery_codes" | "skill" | "tool" | "totp_enroll" | "trusted_issuer";
 				};
 			} | {
 				action: {
@@ -49218,6 +49295,124 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			};
 		}>;
+		deviceLink: import("@trpc/server").TRPCBuiltRouter<{
+			ctx: Context;
+			errorShape: {
+				code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+				data: {
+					candidates?: {
+						id: string;
+						title: string | null;
+						type: string;
+					}[] | undefined;
+					captureQuestionStatus?: string | undefined;
+					causeUrl?: string | undefined;
+					code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+					currentStatus?: string | null;
+					errorId?: `${string}-${string}-${string}-${string}-${string}` | undefined;
+					expectedStatus?: string | null;
+					fieldErrors?: FieldErrors;
+					httpStatus: number;
+					opRef?: string | undefined;
+					path?: string;
+					pendingProposalId?: string | undefined;
+					proposalId?: string | undefined;
+					reasonCode?: string;
+					stack?: string;
+				};
+				message: string;
+			};
+			meta: object;
+			transformer: true;
+		}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+			approve: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+					number: string;
+					presence?: {
+						challengeId: string;
+						keyId: string;
+						kind: "device_key";
+						signature: string;
+					} | {
+						challengeId: string;
+						credential: {
+							authenticatorAttachment?: string | null | undefined;
+							clientExtensionResults?: Record<string, unknown> | undefined;
+							id: string;
+							rawId: string;
+							response: {
+								authenticatorData: string;
+								clientDataJSON: string;
+								signature: string;
+								userHandle?: string | null | undefined;
+							};
+							type: "public-key";
+						};
+						kind: "passkey";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "totp";
+					} | {
+						challengeId: string;
+						code: string;
+						kind: "recovery_code";
+					} | undefined;
+				};
+				meta: object;
+				output: {
+					approved: true;
+				};
+			}>;
+			decline: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					id: string;
+				};
+				meta: object;
+				output: {
+					status: DeviceLinkReadStatus;
+				};
+			}>;
+			pending: import("@trpc/server").TRPCQueryProcedure<{
+				input: void;
+				meta: object;
+				output: {
+					choices: string[];
+					createdAt: string;
+					expiresAt: string;
+					id: string;
+					kind: DeviceLinkKind;
+					label: string;
+				}[];
+			}>;
+			request: import("@trpc/server").TRPCMutationProcedure<{
+				input: {
+					keyFingerprint?: string | undefined;
+					kind: "device_key" | "passkey";
+					label: string;
+				};
+				meta: object;
+				output: {
+					needed: false;
+				} | {
+					expiresAt: string;
+					id: string;
+					needed: true;
+					number: string;
+				};
+			}>;
+			status: import("@trpc/server").TRPCQueryProcedure<{
+				input: {
+					id: string;
+				};
+				meta: object;
+				output: {
+					expiresAt: string;
+					status: DeviceLinkReadStatus;
+				};
+			}>;
+		}>>;
 		devices: import("@trpc/server").TRPCBuiltRouter<{
 			ctx: Context;
 			errorShape: {
@@ -49251,6 +49446,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			enroll: import("@trpc/server").TRPCMutationProcedure<{
 				input: {
 					challengeId: string;
+					deviceLinkId?: string | undefined;
 					label: string;
 					presence?: {
 						challengeId: string;
@@ -49346,6 +49542,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				mode: PresenceMode;
 				source: "default" | "env" | "setting";
+			};
+		}>;
+		passkeyChangeReady: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				ready: boolean;
+				until: string | null;
 			};
 		}>;
 		recovery: import("@trpc/server").TRPCBuiltRouter<{

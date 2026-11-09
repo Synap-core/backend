@@ -54,7 +54,7 @@
           "detail": {
             "type": "string",
             "enum": ["lean", "full"],
-            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows."
+            "description": "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, `truncated` names it with its full length); `omitted` lists the keys left out. full = unprojected rows."
           },
           "fields": {
             "type": "array",
@@ -77,7 +77,7 @@
           },
           "projectId": {
             "type": "string",
-            "description": "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL."
+            "description": "Optional: narrow to a project (entity id). Orthogonal to workspaceId; usually pre-set by the connection URL."
           },
           "facetSlug": {
             "type": "string",
@@ -95,7 +95,7 @@
           },
           "lastInteractionBefore": {
             "type": "string",
-            "description": "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Who haven't I spoken to in a month' = facetSlug 'lead' or 'client', lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting that happened, sent outreach, a dated conversation."
+            "description": "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Not spoken to in a month' = lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting, outreach sent, a dated conversation."
           },
           "lastInteractionAfter": {
             "type": "string",
@@ -104,6 +104,17 @@
           "includeNever": {
             "type": "boolean",
             "description": "With a lastInteraction window: also return the people never contacted (no interaction recorded). Default false."
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading."
+          },
+          "includeFacets": {
+            "type": "boolean",
+            "description": "Rows also carry their role facets."
           },
           "limit": {
             "type": "number",
@@ -859,7 +870,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity. To retire knowledge or a decision that stopped being true, set supersededBy with synap_update_entity (reversible, no review); delete only what was never true.",
+      "description": "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity. To retire knowledge or a decision that stopped being true, set supersededBy with synap_update_entity (reversible, no review); delete only what was never true. On an error, do not retry the same id: the error says why.",
       "inputSchema": {
         "type": "object",
         "properties": {

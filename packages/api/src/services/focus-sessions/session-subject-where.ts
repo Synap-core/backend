@@ -83,20 +83,37 @@ function thingIdsText(subject: SessionSubject): SQL {
 
 /** THE predicate: the session's subject is one of the things, or it targets one as a worker. */
 export function sessionSubjectWhere(subject: SessionSubject): SQL {
-  const things = thingIdsText(subject);
+  return sessionOnThingsIn(thingIdsText(subject));
+}
+
+/** {@link sessionSubjectWhere} over `things`, any SQL a text `IN (…)` takes. */
+function sessionOnThingsIn(things: SQL): SQL {
   return drizzleSql`(${focusSessions.subjectEntityId}::text IN (${things}) OR EXISTS (SELECT 1 FROM ${links} sl WHERE sl.from_type = 'session' AND sl.from_id = ${focusSessions.id}::text AND sl.to_type = 'entity' AND sl.link_type = 'targets' AND sl.metadata->>'role' = ${WORKER_TARGET_LINK_ROLE} AND sl.to_id IN (${things})))`;
 }
 
 /**
  * THE proposal half of "on these things": targets one (as an entity, or as a
- * facet op on it), creates one / attaches the role (the slug in `data` —
- * nested request envelope first, flat legacy shape second, the executor's
- * own read order), or was filed in a session on one (`sessionSubjectWhere`).
+ * facet op on it), names one as its SUBJECT (`data.entityId`: a message
+ * draft targets its channel and names the person it goes to), creates one /
+ * attaches the role (the slug in `data` — nested request envelope first,
+ * flat legacy shape second, the executor's own read order), or was filed in
+ * a session on one (`sessionSubjectWhere`: a draft written in a lead's
+ * outreach run is on that lead).
  */
 export function proposalOnThingsWhere(lens: ThingsLens): SQL {
-  const things = thingIdsText(lens.subject);
   const bySlug = lens.profileSlug
     ? drizzleSql` OR coalesce(${proposals.data}->'data'->>'profileSlug', ${proposals.data}->>'profileSlug') = ${lens.profileSlug}`
     : drizzleSql``;
-  return drizzleSql`((${proposals.targetType} IN ('entity', 'entity_facet') AND ${proposals.targetId} IN (${things}))${bySlug} OR ${proposals.sessionId} IN (SELECT ${focusSessions.id} FROM ${focusSessions} WHERE ${sessionSubjectWhere(lens.subject)}))`;
+  return drizzleSql`(${proposalOnThingsIn(thingIdsText(lens.subject))}${bySlug})`;
+}
+
+/**
+ * {@link proposalOnThingsWhere} by id, over `things` — any SQL a text
+ * `IN (…)` takes: a list of ids, or ONE id column (`x` of an `unnest`) to
+ * say which asked things each proposal is on (THE waiting-on collector,
+ * `status-facts.ts`). One rule, so "Needs you" and a thing's blocker never
+ * disagree on which proposals are about it.
+ */
+export function proposalOnThingsIn(things: SQL): SQL {
+  return drizzleSql`((${proposals.targetType} IN ('entity', 'entity_facet') AND ${proposals.targetId} IN (${things})) OR ${proposals.data}->>'entityId' IN (${things}) OR ${proposals.sessionId} IN (SELECT ${focusSessions.id} FROM ${focusSessions} WHERE ${sessionOnThingsIn(things)}))`;
 }

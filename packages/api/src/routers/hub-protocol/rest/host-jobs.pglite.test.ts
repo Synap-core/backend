@@ -17,7 +17,12 @@
  *     only: health is derived at read time, never stored);
  *   - a tool's verify job stores what the runner observed (version, os, arch,
  *     verify, masked) and moves no lifecycle; a failed verify reads failed;
- *     an install job on an installed tool is a repair (installed → installing).
+ *     an install job on an installed tool is a repair (installed → installing);
+ *     a verify that passes on a FAILED tool makes it installed (self-heal);
+ *     every failed lifecycle finish asks the self-heal door, which files ONE
+ *     "try again" card when that failure reaches the cap (its own test:
+ *     installations.pglite.test.ts); a runner that comes back (a new
+ *     process id, or a long gap) has every tool checked again.
  *
  * Logs: never sent unasked; a person's request turns `logsRequested` on, the
  * report carrying the log turns it off, and the stored log is scrubbed of
@@ -33,7 +38,22 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   db: null as unknown,
+  stoppedChecks: [] as string[],
 }));
+
+vi.mock(
+  "../../../services/installations/self-heal-notice.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<Record<string, unknown>>();
+    return {
+      ...actual,
+      askToTryAgainIfStopped: async (installationId: string) => {
+        h.stoppedChecks.push(installationId);
+        return false;
+      },
+    };
+  }
+);
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -48,8 +68,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerHostJobsRoutes } from "./host-jobs.js";
+import { reconcileComputer } from "../../../services/installations/installations.js";
 import {
   installationHealth,
+  noteHostRunner,
   hostJobReadStatus,
   isoDurationSeconds,
   requestHostJobLogs,
@@ -571,6 +593,110 @@ describe("host-jobs routes — a tool", () => {
       verify: { ok: true, exitCode: 0 },
     });
     expect((await readHealth(INST_TOOL)).health).toBe("drifted");
+  });
+
+  it("self-heal: a check that passes on a tool recorded failed makes it installed, with the version seen", async () => {
+    // Tonight's ffmpeg: the install's check timed out (failed), the tool works.
+    await q(
+      `UPDATE installations SET status = 'failed', status_detail = 'ffmpeg took longer than 30 s and was stopped' WHERE id = $1`,
+      [INST_TOOL]
+    );
+    const job = await queue("verify");
+    const fin = await post(mac(), `/host-jobs/${job.id}/finish`, {
+      leaseId: job.leaseId,
+      status: "done",
+      observedVersion: "1.2.0",
+      verify: { ok: true, exitCode: 0 },
+    });
+    expect(await fin.json()).toMatchObject({ installationStatus: "installed" });
+    const row = await q<{
+      status_detail: string | null;
+      observed_version: string;
+    }>(
+      `SELECT status_detail, observed_version FROM installations WHERE id = $1`,
+      [INST_TOOL]
+    );
+    expect(row.rows[0]).toEqual({
+      status_detail: null,
+      observed_version: "1.2.0",
+    });
+    expect((await readHealth(INST_TOOL)).health).toBe("ok");
+  });
+
+  it("self-heal: a failed check on a failed tool leaves it failed, and every failed lifecycle finish asks the try-again door", async () => {
+    await q(`UPDATE installations SET status = 'failed' WHERE id = $1`, [
+      INST_TOOL,
+    ]);
+    h.stoppedChecks.length = 0;
+    const job = await queue("verify");
+    const fin = await post(mac(), `/host-jobs/${job.id}/finish`, {
+      leaseId: job.leaseId,
+      status: "failed",
+      verify: { ok: false, exitCode: 1 },
+    });
+    expect(await fin.json()).toMatchObject({ installationStatus: "failed" });
+    expect(h.stoppedChecks).toEqual([INST_TOOL]);
+    // A job that finished done asks nothing.
+    await q(`UPDATE installations SET status = 'installed' WHERE id = $1`, [
+      INST_TOOL,
+    ]);
+    const ok = await queue("verify");
+    await post(mac(), `/host-jobs/${ok.id}/finish`, {
+      leaseId: ok.leaseId,
+      status: "done",
+      observedVersion: "1.2.0",
+      verify: { ok: true, exitCode: 0 },
+    });
+    expect(h.stoppedChecks).toEqual([INST_TOOL]);
+  });
+
+  it("self-heal: a runner that comes back (a new process, or a long gap) has every tool checked again", async () => {
+    const runner = { machineUserId: MAC, ownerUserId: PERSON };
+    const openFor = async () =>
+      (
+        await q<{ kind: string }>(
+          `SELECT kind FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+          [INST_TOOL]
+        )
+      ).rows;
+    await q(
+      `UPDATE host_jobs SET status = 'done' WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+      [INST_TOOL]
+    );
+    // Checked an hour ago, due daily: nothing is due by the cadence.
+    await q(
+      `UPDATE installations SET status = 'installed', observed_version = desired_version, verified_at = now() - interval '1 hour',
+              health = '{"verify":{"ok":true,"exitCode":0}}'::jsonb WHERE id = $1`,
+      [INST_TOOL]
+    );
+    const A = randomUUID();
+    const B = randomUUID();
+    expect(await noteHostRunner(runner, A)).toBe(true);
+    // The same process, seconds later: not a return.
+    expect(await noteHostRunner(runner, A)).toBe(false);
+    await reconcileComputer(runner, { recheckTools: false });
+    expect(await openFor()).toEqual([]);
+    // Through the lease route: a new runner process (the worker restarted).
+    const res = await post(mac(), "/host-jobs/lease", { runner: B });
+    expect(res.status).toBe(200);
+    const queued = await q<{ kind: string }>(
+      `SELECT kind FROM host_jobs WHERE installation_id = $1 AND queued_at > now() - interval '1 minute'`,
+      [INST_TOOL]
+    );
+    expect(queued.rows).toEqual([{ kind: "verify" }]);
+    // An older runner sends no id: a long gap (the computer slept) is a return too.
+    await q(
+      `UPDATE users SET agent_metadata = jsonb_set(agent_metadata, '{hostRunner,seenAt}',
+         to_jsonb(to_char((now() - interval '2 hours') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))) WHERE id = $1`,
+      [MAC]
+    );
+    expect(await noteHostRunner(runner, null)).toBe(true);
+    expect(await noteHostRunner(runner, null)).toBe(false);
+    // Leave the tool's queue as the next case expects it.
+    await q(
+      `UPDATE host_jobs SET status = 'done' WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+      [INST_TOOL]
+    );
   });
 
   it("an install job on an installed tool is a repair at the approved version", async () => {

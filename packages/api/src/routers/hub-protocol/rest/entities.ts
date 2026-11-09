@@ -45,12 +45,8 @@ import {
   MAX_LINKED_FILES_PER_ROW,
   loadLinkedFileRefs,
 } from "../../../utils/stored-file-access.js";
-import {
-  ENTITY_LIST_MAX_FILTERS,
-  EntityListFiltersSchema,
-  filteredPropertySlugs,
-} from "../../../utils/entity-list-filters.js";
-import type { ViewFilter } from "@synap-core/types";
+import { ENTITY_LIST_MAX_FILTERS } from "../../../utils/entity-list-filters.js";
+import { parseEntityListFiltersInput } from "../../../utils/entity-list-filters-input.js";
 
 import {
   uploadBufferAsFileEntity,
@@ -341,6 +337,23 @@ export function registerEntitiesRoutes(app: HubHono): void {
               "returned whole on every row (e.g. the keys a row listed in " +
               "`omitted`)."
           ),
+        filters: z
+          .string()
+          .optional()
+          .describe(
+            "JSON array of view filters, ANDed, exactly as on `GET /entities` " +
+              '(`[{"field":"properties.stage","operator":"equals","value":"won"}]`). ' +
+              "A `properties.<slug>` clause needs `profileSlug`. Malformed " +
+              "JSON, too many clauses, an unknown or secret property is a 400. " +
+              "Only narrows what the caller reads."
+          ),
+        includeFacets: z
+          .enum(["true", "false"])
+          .optional()
+          .describe(
+            "`true` = each row also carries `facetSlugs` and `facets`, as on " +
+              "`GET /entities`. Default `false`."
+          ),
       }),
     },
     responses: {
@@ -362,6 +375,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
             ]),
           },
         },
+      },
+      400: {
+        description:
+          "Malformed `filters` (unparseable JSON, too many clauses, a property " +
+          "filter without profileSlug, an unknown or secret property).",
+        content: { "application/json": { schema: ErrorSchema } },
       },
       401: {
         description: "Unauthorized",
@@ -410,6 +429,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const profileSlug = query.profileSlug || query.type || undefined;
     const limit = query.limit;
     const workspaceId = query.workspaceId || null;
+    const parsedUserFilters = parseEntityListFiltersInput(
+      query.filters,
+      profileSlug
+    );
+    if (!parsedUserFilters.ok) {
+      return c.json({ error: parsedUserFilters.error }, 400);
+    }
+    const userFilters = parsedUserFilters.filters;
     try {
       // A workspaceId PINS the caller to it (podProcedure checks membership and
       // refuses an archived one: an explicit choice). Without one the caller
@@ -432,6 +459,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // a project- or role-narrowed ask answered for the whole floor.
         ...(query.projectId ? { projectId: query.projectId } : {}),
         ...(query.facetSlug ? { facetSlug: query.facetSlug } : {}),
+        // Declared and forwarded like the two above: a filter this door
+        // accepts and drops answers 200 with the whole list.
+        ...(userFilters ? { filters: userFilters } : {}),
+        ...(query.includeFacets === "true" ? { includeFacets: true } : {}),
         // This is the user-wide FLOOR read (the agent's door). `list` is
         // scoped-by-default, so without this a workspace lens drops pod-wide
         // profiles (person/company/contact live at workspace_id NULL) — which
@@ -825,37 +856,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // FILTERS (APP-ACCESS plan §3 R2): the view filter grammar, capped. The
     // shape is checked here (a 400 the caller can read); `entities.list`
     // checks the properties against the kind and compiles them.
-    let filters: ViewFilter[] | undefined;
-    if (query.filters !== undefined && query.filters.trim() !== "") {
-      let raw: unknown;
-      try {
-        raw = JSON.parse(query.filters);
-      } catch {
-        return c.json(
-          { error: "filters must be a JSON array of view filters" },
-          400
-        );
-      }
-      const parsed = EntityListFiltersSchema.safeParse(raw);
-      if (!parsed.success) {
-        return c.json(
-          {
-            error: `Invalid filters: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-          },
-          400
-        );
-      }
-      filters = parsed.data.length > 0 ? parsed.data : undefined;
-      const propertySlugs = filters ? filteredPropertySlugs(filters) : [];
-      if (propertySlugs.length > 0 && !profileSlug) {
-        return c.json(
-          {
-            error: `A filter on a property (${propertySlugs.map((s) => `properties.${s}`).join(", ")}) needs profileSlug: properties are declared per kind`,
-          },
-          400
-        );
-      }
+    const parsedFilters = parseEntityListFiltersInput(
+      query.filters,
+      profileSlug
+    );
+    if (!parsedFilters.ok) {
+      return c.json({ error: parsedFilters.error }, 400);
     }
+    const filters = parsedFilters.filters;
 
     // CREATION-DATE WINDOW. Parsed HERE rather than handed on as a string so an
     // unparseable date is a 400 the caller can see, not a silent `Invalid Date`

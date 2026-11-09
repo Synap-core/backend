@@ -116,8 +116,11 @@ const { invalidatePresenceMode, readPresenceMode, writePresenceMode } =
   await import("./mode.js");
 const { PRESENCE_NO_FACTOR_HINT } = await import("./gate.js");
 const { changePresenceMode } = await import("./mode-change.js");
-const { redeemPasskeyChangeGrant, assertMayRemovePasskey } =
-  await import("./passkey-change.js");
+const {
+  redeemPasskeyChangeGrant,
+  assertMayRemovePasskey,
+  stampPasskeyChangeGrant,
+} = await import("./passkey-change.js");
 const { writePresenceSensitivity, readPresenceSensitivity } =
   await import("./mode.js");
 const { changePresenceSensitivity } = await import("./sensitivity-change.js");
@@ -367,10 +370,12 @@ describe("proof of presence: the gate", () => {
     `);
     // The recovery ladder's tables, from the migrations as written (0294:
     // recovery codes; 0405: 2FA app, typed-code failures, recovery requests,
-    // disowned passkeys).
+    // disowned passkeys; 0412: device links, and the session a passkey-change
+    // grant is bound to).
     for (const file of [
       "0294_account_recovery_codes.sql",
       "0405_presence_recovery.sql",
+      "0412_presence_device_links.sql",
     ]) {
       await h.client!.exec(
         readFileSync(
@@ -998,32 +1003,82 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     expect(typeof mintPresencePass).toBe("function");
   });
 
-  it("GUARDRAIL: one passkey-change proof is redeemed once, and only within 5 minutes", async () => {
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+  it("GUARDRAIL: one passkey-change proof is redeemed once, by the session that proved it, and only within 5 minutes", async () => {
+    const A = "kratos:session-a";
+    const B = "kratos:session-b";
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
     const proof = await proofFor(`passkey_change:${PERSON}`);
-    await assertPresenceForRequest({
+    const verdict = await assertPresenceForRequest({
       userId: PERSON,
       kind: "passkey_change",
       id: PERSON,
       proof,
       door: "test",
     });
-    expect(await redeemPasskeyChangeGrant(OTHER)).toBe(false);
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(true);
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+    // Not yet bound to a session: nobody redeems it (founder, 9 Nov 2026).
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
+    expect(
+      await stampPasskeyChangeGrant({
+        userId: PERSON,
+        challengeId: verdict!.challengeId,
+        sessionKey: A,
+      })
+    ).toBe(true);
+    // Bound once: a second stamp cannot move it to another session.
+    expect(
+      await stampPasskeyChangeGrant({
+        userId: PERSON,
+        challengeId: verdict!.challengeId,
+        sessionKey: B,
+      })
+    ).toBe(false);
+    expect(await redeemPasskeyChangeGrant(OTHER, A)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, B)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, null)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(true);
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
     // An old grant does not redeem.
     const old = await proofFor(`passkey_change:${PERSON}`);
-    await assertPresenceForRequest({
+    const oldVerdict = await assertPresenceForRequest({
       userId: PERSON,
       kind: "passkey_change",
       id: PERSON,
       proof: old,
       door: "test",
     });
+    await stampPasskeyChangeGrant({
+      userId: PERSON,
+      challengeId: oldVerdict!.challengeId,
+      sessionKey: A,
+    });
     await h.client!.exec(
       `update presence_challenges set consumed_at = now() - interval '6 minutes' where redeemed_at is null`
     );
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
+  });
+
+  it("GUARDRAIL: a grant proved before grants were bound to a session (no grant_session) is not redeemable", async () => {
+    const legacy = await proofFor(`passkey_change:${PERSON}`);
+    await assertPresenceForRequest({
+      userId: PERSON,
+      kind: "passkey_change",
+      id: PERSON,
+      proof: legacy,
+      door: "test",
+    });
+    const [row] = (
+      await (
+        h.client as unknown as {
+          query: (s: string, p: unknown[]) => Promise<{ rows: unknown[] }>;
+        }
+      ).query(`select grant_session from presence_challenges where id = $1`, [
+        legacy.challengeId,
+      ])
+    ).rows as Array<{ grant_session: string | null }>;
+    expect(row!.grant_session).toBeNull();
+    for (const key of ["kratos:any", "device:any", null]) {
+      expect(await redeemPasskeyChangeGrant(PERSON, key)).toBe(false);
+    }
   });
 
   it("the router enrols through enrollDeviceKey, which decides the factor under the lock BEFORE it spends the challenge", async () => {

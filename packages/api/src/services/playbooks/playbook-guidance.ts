@@ -363,6 +363,36 @@ export async function recordRunGuidance(
 }
 
 /**
+ * The guidance a run's definition snapshot carries (`recordRunGuidance`'s
+ * stamp), or null when the run was never stamped (no guidance declared, an
+ * older run, a malformed value). Pure: the run page and the turn ledger read
+ * the SAME stamp through it, so neither re-derives what the run used.
+ */
+export function stampedGuidanceOf(snapshot: unknown): GuidanceSnapshot | null {
+  const g = (snapshot as { guidance?: unknown } | null | undefined)?.guidance;
+  if (!g || typeof g !== "object") return null;
+  const status = (g as { status?: unknown }).status;
+  if (status === "unavailable") {
+    const error = (g as { error?: unknown }).error;
+    return {
+      status: "unavailable",
+      error:
+        typeof error === "string" ? error : "the run could not read its rules",
+    };
+  }
+  if (status !== "ok") return null;
+  const list = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+  const hash = (g as { hash?: unknown }).hash;
+  return {
+    status: "ok",
+    hash: typeof hash === "string" ? hash : null,
+    used: list<GuidanceUsed>((g as { used?: unknown }).used),
+    demoted: list((g as { demoted?: unknown }).demoted),
+    missing: list((g as { missing?: unknown }).missing),
+  };
+}
+
+/**
  * What a send drafted in a playbook run carries (slice 1b): the rules the run
  * USED, copied from its definition snapshot by the POD when the send is filed
  * (`proposals.data.guidance`) and kept on the sent message

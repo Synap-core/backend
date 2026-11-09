@@ -27,18 +27,34 @@ import {
 /** One card: the thing, the status it stands on and the lifecycle it moves on. */
 export interface ThingBlockerAsk {
   id: string;
+  /**
+   * The ROLE the card is (a lead board's card is a person or company wearing
+   * the lead role): its step is the facet's, on the role's lifecycle. Null
+   * for a kind's own card.
+   */
+  facetId?: string | null;
   status: string | null;
   /** Its declared lifecycle (the board's columns); null without one. */
   lifecycle: { readonly options: readonly LifecycleOption[] } | null;
 }
 
-/** THE question one thing's blocker asks: every wait but a hold. */
-export function thingBlockerQuestion(id: string): WaitingOnQuestion {
+/**
+ * THE question one thing's blocker asks: every wait but a hold. Its
+ * proposals are the ones ON it (it is their target or their subject, or they
+ * were filed in a session on it: a send draft to a lead). With `facetId`, the
+ * step is that role's.
+ */
+export function thingBlockerQuestion(
+  id: string,
+  facetId?: string | null
+): WaitingOnQuestion {
   return {
     owed: { blocking: [id] },
-    proposals: { targetIds: [id] },
+    proposals: { targetIds: [id], onThings: [id] },
     blockedNodes: [{ kind: "entity", id }],
-    steps: [{ subjectType: "entity", subjectId: id }],
+    steps: [
+      { subjectType: "entity", subjectId: id, ...(facetId ? { facetId } : {}) },
+    ],
   };
 }
 
@@ -51,7 +67,7 @@ export async function readThingBlockers(
   if (unique.length === 0) return new Map();
   const sources = await readWaitingOnSourcesFor(
     reader,
-    new Map(unique.map((t) => [t.id, thingBlockerQuestion(t.id)]))
+    new Map(unique.map((t) => [t.id, thingBlockerQuestion(t.id, t.facetId)]))
   );
   return new Map(
     unique.map((t) => [

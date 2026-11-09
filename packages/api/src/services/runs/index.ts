@@ -12,6 +12,7 @@
  */
 
 import { readTrialDraft } from "../playbooks/trial-run.js";
+import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
   db,
   and,
@@ -2563,6 +2564,7 @@ async function loadPlaybookRunDetail(
       verificationReport: focusSessions.verificationReport,
       channelId: focusSessions.channelId,
       metadata: focusSessions.metadata,
+      runSnapshot: playbookRuns.definitionSnapshot,
     })
     .from(playbookRuns)
     .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
@@ -2618,6 +2620,7 @@ async function loadPlaybookRunDetail(
     produced,
     proposals: proposalResult.items,
     agents,
+    guidance: stampedGuidanceOf(sess.runSnapshot),
     ...(trial ? { trial } : {}),
   };
 }
