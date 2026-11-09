@@ -800,6 +800,20 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      */
     mode?: "run" | "appointment" | "propose";
     /**
+     * AWAIT the run (runner engine slice 5, spec 7111934d §4): the step starts
+     * the run as usual, then the automation run WAITS for it to end and
+     * resumes with its verdict and outputs (`steps.<node>.output.{status,
+     * sessionId, summary, outputs.<label>}`). Run mode only, top level only
+     * (refused inside a loop). Absent ⇒ the step returns at once, unchanged.
+     */
+    await?: boolean;
+    /**
+     * With `await`: how long to wait (`30m`, `12h`, `7d`), at most 30 days;
+     * absent ⇒ 7 days. Past it the step fails ("the run it waited on did not
+     * finish in <timeout>") and the run it started keeps going.
+     */
+    awaitTimeout?: string;
+    /**
      * STAGE WORKER — present when this node is an ENABLED worker (work model
      * L4): a playbook activator compiled for a scope. Carries what the runner
      * needs to decide whether to start, and how big the run is. Absent ⇒ an

@@ -30,6 +30,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { postRunSummary } from "../utils/post-run-summary.js";
 import { closeSessionViaDoor } from "../utils/session-close.js";
+import { failTimedOutAwaitingSteps } from "../utils/automation-parent-settle.js";
 
 const logger = createLogger({ module: "automation-run-reaper" });
 
@@ -71,6 +72,10 @@ const STALE_RUN_ERROR_MESSAGE =
  * this ONE predicate. Empty-steps runs make the inner EXISTS false → NOT EXISTS
  * true → NOT exempt (correctly reaped).
  *
+ * An AWAITING `playbook_run` step (runner engine slice 5) suspends the walk
+ * the same way, bounded by its own `resumeAfter` (the await timeout): the
+ * pass below fails such a step first, so the exemption never outlives it.
+ *
  * The `resumeAfter` bound is what stops the exemption from being a permanent
  * leak (see REAPER_DELAY_GRACE_MINUTES). The delay node writes it as an ISO
  * string alongside the marker (`automation-executor.ts`, case "delay"), so the
@@ -95,7 +100,7 @@ const STALE_RUN_ERROR_MESSAGE =
 export const RUN_NOT_DELAY_SUSPENDED = drizzleSql`NOT EXISTS (
   SELECT 1 FROM automation_step_runs s
   WHERE s.run_id = ${automationRuns.id}
-    AND s.output->>'status' = 'delayed'
+    AND s.output->>'status' IN ('delayed', 'awaiting')
     AND CASE
           WHEN s.output->>'resumeAfter' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}'
             THEN (s.output->>'resumeAfter')::timestamptz
@@ -132,6 +137,17 @@ const RUN_IS_STALE = and(
 /** Called by the cron scheduler every ~5 minutes. */
 export async function handleAutomationRunReaper(): Promise<void> {
   try {
+    // 000. AWAIT TIMEOUT: a step that waited past its timeout for the run it
+    //      started fails ("did not finish in <timeout>"); that run keeps
+    //      going. Its automation run fails (or walks on, `continueOnError`).
+    const timedOut = await failTimedOutAwaitingSteps();
+    if (timedOut > 0) {
+      logger.info(
+        { timedOut },
+        "Automation run reaper timed out steps awaiting a playbook run"
+      );
+    }
+
     // 00. UNPARK: a run marked waiting whose session no longer owes the
     //     person (answered, closed, gone) is live again — back to `running`,
     //     so the stale sweep below applies to it like any other run. Without

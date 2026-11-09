@@ -43,7 +43,10 @@
 // It exists only to bind the runtime arrays below to the schema union at compile
 // time (the drift guard after the constants).
 import type { AutomationNodeBase, OutputNodeDef } from "@synap/database";
-import { PLAYBOOK_RUN_MODES } from "@synap-core/types/automations";
+import {
+  PLAYBOOK_RUN_MODES,
+  parseAwaitTimeout,
+} from "@synap-core/types/automations";
 
 // ── Contract constants (mirror schema/automations.ts — keep in sync) ──────────
 
@@ -208,6 +211,12 @@ export interface FlowValidationResolvers {
     playbookId?: string;
     playbookName?: string;
   }) => boolean;
+  /**
+   * May a run be handed to this agent (`playbook_run.handToAgentId`)? The
+   * route's verdict for the rule's owner, pre-loaded (`namedVerdicts` with
+   * the hand-off reaches): `null` = yes, else the sentence that says why not.
+   */
+  handOffVerdict?: (agentUserId: string) => string | null;
 }
 
 // ── Loose input shapes (the flow arrives as untyped JSON at the door) ──────────
@@ -418,6 +427,60 @@ export function validateFlowDefinition(
               data.mode
             )}; expected one of ${PLAYBOOK_RUN_MODES.join(", ")}.`,
           });
+        }
+        // A hand-off and an await are about a RUN: beside an appointment or a
+        // proposal the step would refuse them when it fires, so the author is
+        // told now (runner engine slice 5).
+        const runMode = data.mode === undefined || data.mode === "run";
+        const handTo = nonEmptyString(data.handToAgentId)
+          ? data.handToAgentId.trim()
+          : undefined;
+        if (!runMode && (handTo || data.await === true)) {
+          errors.push({
+            nodeId,
+            code: "playbook_run_needs_run_mode",
+            message: `Playbook-run node "${nodeId}" ${
+              handTo ? "hands its run to an agent" : "awaits its run"
+            }, but its mode is ${JSON.stringify(
+              data.mode
+            )}: only mode "run" starts a run. Use mode "run" or drop ${
+              handTo ? "handToAgentId" : "await"
+            }.`,
+          });
+        }
+        if (data.await !== undefined && typeof data.await !== "boolean") {
+          errors.push({
+            nodeId,
+            code: "playbook_run_bad_await",
+            message: `Playbook-run node "${nodeId}" has await ${JSON.stringify(
+              data.await
+            )}; it is true or false.`,
+          });
+        }
+        if (
+          data.awaitTimeout !== undefined &&
+          (data.await !== true || parseAwaitTimeout(data.awaitTimeout) === null)
+        ) {
+          errors.push({
+            nodeId,
+            code: "playbook_run_bad_await_timeout",
+            message:
+              data.await !== true
+                ? `Playbook-run node "${nodeId}" has awaitTimeout but does not await its run: set await to true or drop awaitTimeout.`
+                : `Playbook-run node "${nodeId}" has awaitTimeout ${JSON.stringify(
+                    data.awaitTimeout
+                  )}; it is a duration of at most 30 days, like "12h" or "7d".`,
+          });
+        }
+        if (handTo && resolvers?.handOffVerdict) {
+          const refusal = resolvers.handOffVerdict(handTo);
+          if (refusal) {
+            errors.push({
+              nodeId,
+              code: "playbook_run_bad_hand_off",
+              message: `Playbook-run node "${nodeId}" hands its run to agent ${handTo}: ${refusal}`,
+            });
+          }
         }
         break;
       }

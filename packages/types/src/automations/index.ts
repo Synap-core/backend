@@ -115,6 +115,13 @@ export interface AutomationExecutionContext {
  */
 export const MAX_AUTOMATION_CHAIN_DEPTH = 3;
 
+// ── Await on a playbook_run step (runner engine slice 5) ────────────────────
+export {
+  PLAYBOOK_RUN_AWAIT_DEFAULT,
+  PLAYBOOK_RUN_AWAIT_MAX_MS,
+  parseAwaitTimeout,
+} from "./playbook-run-await.js";
+
 // ── Rule run policy: THEN mode, daily cap, skip reasons ─────────────────────
 export {
   PLAYBOOK_RUN_MODES,

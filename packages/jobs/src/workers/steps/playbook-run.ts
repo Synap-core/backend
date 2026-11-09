@@ -9,6 +9,7 @@ import {
   isNull,
   entities,
   events,
+  automationStepRuns,
   countWorkerPendingApprovals,
   WORKER_HELD_OUTPUT_KEY,
   type PlaybookRunWorkerSpec,
@@ -165,6 +166,14 @@ export async function executePlaybookRun(
      */
     mode?: PlaybookRunMode;
     /**
+     * AWAIT (runner engine slice 5): the walk waits for the run this step
+     * starts (`automation-executor.ts` suspends after this returns). Run mode
+     * only: refused below beside an appointment or a proposal.
+     */
+    await?: boolean;
+    /** With `await`: how long the walk waits (the executor reads it). */
+    awaitTimeout?: string;
+    /**
      * STAGE WORKER spec (work model L4) — forwarded WHOLE to the spine with
      * the enablement's automation id; the spine gates the fire and runs a
      * per_moment batch. A per_thing worker in propose mode is held back here
@@ -186,9 +195,20 @@ export async function executePlaybookRun(
   producerAgentUserId?: string | null,
   // Workflow attribution (D3a) — the executing step run + flow node, stamped on
   // a propose-mode proposal so `proposals.list({ automationId })` finds it.
-  attribution?: { nodeId: string; stepRunId: string }
+  attribution?: { nodeId: string; stepRunId: string },
+  // WHO did the step (0418): the run's agent, its computer and the session the
+  // step started are written on `attribution.stepRunId`. A loop step runs
+  // several children on one row and passes false.
+  opts: { recordWho?: boolean } = {}
 ): Promise<Record<string, unknown>> {
   const mode = readPlaybookRunMode(data.mode);
+  // Awaiting a run needs a run: an appointment waits for a person and a
+  // proposal starts nothing.
+  if (data.await === true && mode !== "run") {
+    throw new Error(
+      `playbook_run: await waits for a RUN, but this node's mode is "${mode}" — use mode "run" or drop await`
+    );
+  }
 
   // A hand-off names who does the RUN. An appointment waits for the person and
   // a proposal starts nothing, so neither can carry one: fail the step by name
@@ -616,6 +636,23 @@ export async function executePlaybookRun(
     automationContext?.triggerEventId,
     result.session.id
   );
+
+  // WHO did it: the agent the spine handed the run to (NULL = the pod), its
+  // computer, and the run's session (what an awaiting step waits on).
+  if (opts.recordWho !== false && attribution?.stepRunId) {
+    const runOn = (result.run?.runOn ?? null) as {
+      agentUserId?: string | null;
+      computerUserId?: string | null;
+    } | null;
+    await db
+      .update(automationStepRuns)
+      .set({
+        agentUserId: runOn?.agentUserId ?? null,
+        computerUserId: runOn?.computerUserId ?? null,
+        childSessionId: result.session.id,
+      })
+      .where(eq(automationStepRuns.id, attribution.stepRunId));
+  }
 
   // Preserve the step-output contract downstream nodes read
   // (steps.<id>.output.{runId|sessionId|status}, or the reuse shape).

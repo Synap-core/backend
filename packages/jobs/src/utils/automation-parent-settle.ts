@@ -57,6 +57,9 @@ import {
   tripGoalWorkerBreaker,
 } from "../workers/automation-breaker.js";
 import { logger } from "../workers/automation-executor-logger.js";
+import { getBoss } from "@synap/events";
+import { closeSessionViaDoor } from "./session-close.js";
+import { postRunSummary } from "./post-run-summary.js";
 
 /** Parent statuses a child failure re-settles (a live run settles itself). */
 const RESETTLEABLE = ["completed", "blocked_by_policy"] as const;
@@ -111,6 +114,9 @@ export function childBudgetStopMessage(
 export async function settleParentAutomationRunFromChild(input: {
   playbookRunId: string;
 }): Promise<ParentSettleOutcome> {
+  // FIRST: a step that AWAITS this run resumes with its verdict (runner engine
+  // slice 5). Independent of the rule below, and never throws.
+  await resumeAwaitingStepForRun(input.playbookRunId);
   try {
     const [child] = await db
       .select({
@@ -343,4 +349,306 @@ function reportError(
     "Could not re-settle the parent automation run from a child's outcome — the parent keeps its earlier verdict and the breakers did not see this failure"
   );
   return { kind: "error", message };
+}
+
+// ── AWAIT: a step that waits for the run it started (runner engine slice 5) ──
+
+/**
+ * Where an awaiting step keeps what its walk needs to resume (the delay
+ * re-enqueue's payload): stripped from the step's output once it resumes.
+ */
+export const AWAIT_RESUME_KEY = "awaitResume";
+
+interface AwaitResume {
+  automationId: string;
+  workspaceId: string;
+  automationContext: unknown;
+  completedNodeIds: string[];
+  producerAgentUserId: string | null;
+  continueOnError: boolean;
+}
+
+/** How the awaited run ended, as the step's `output.status` says it. */
+export type AwaitVerdict = "completed" | "failed" | "cancelled" | "timed_out";
+
+const TERMINAL_RUN_STATUSES = ["completed", "failed", "cancelled"] as const;
+
+export type AwaitResumeOutcome =
+  | { kind: "none" }
+  | { kind: "resumed"; stepRunId: string; runId: string }
+  | { kind: "run_failed"; stepRunId: string; runId: string }
+  | { kind: "error"; message: string };
+
+/** The run's own sentence when the step it waited on did not get its run done. */
+export function awaitFailureMessage(
+  verdict: Exclude<AwaitVerdict, "completed">,
+  timeout: string | null,
+  error: string | null
+): string {
+  if (verdict === "timed_out") {
+    return `The run it waited on did not finish in ${timeout ?? "its timeout"}.`;
+  }
+  const cause = error?.trim() ? `: ${error.trim().slice(0, REASON_MAX)}` : ".";
+  return `The run it waited on ${verdict === "cancelled" ? "was cancelled" : "failed"}${cause}`;
+}
+
+/** Each delivered slot of the run's session, by label: `{kind, ref}`. Pure. */
+export function deliveredOutputs(
+  expectedOutputs: unknown
+): Record<string, { kind: string | null; ref: unknown }> {
+  const out: Record<string, { kind: string | null; ref: unknown }> = {};
+  if (!Array.isArray(expectedOutputs)) return out;
+  for (const o of expectedOutputs as Array<Record<string, unknown>>) {
+    if (!o || o.status !== "done" || o.retiredAt != null) continue;
+    if (typeof o.label !== "string" || !o.label.trim()) continue;
+    out[o.label] = {
+      kind: typeof o.kind === "string" ? o.kind : null,
+      ref: o.ref ?? null,
+    };
+  }
+  return out;
+}
+
+/**
+ * THE RESUME: the step that awaits the run of `childSessionId` gets the run's
+ * verdict, summary and delivered outputs in its `output` (`{status, sessionId,
+ * summary, outputs: {<label>: {kind, ref}}}`, read downstream as
+ * `{{steps.<node>.output.outputs.<label>}}`), then:
+ *   - the run completed, or the node continues on error: the step is settled
+ *     and the walk re-enqueued past it (`completedNodeIds`), as a delay does;
+ *   - otherwise the automation run fails with the reason, its session closes
+ *     through the one door and the run is narrated.
+ * Compare and set on `output.status = 'awaiting'`: a second end (a replay, or
+ * the timeout racing the close) does nothing. Never throws.
+ */
+export async function resumeAwaitingStep(input: {
+  childSessionId: string;
+  verdict: AwaitVerdict;
+  error?: string | null;
+  summary?: string | null;
+}): Promise<AwaitResumeOutcome> {
+  try {
+    const [waiting] = await db
+      .select({
+        id: automationStepRuns.id,
+        runId: automationStepRuns.runId,
+        output: automationStepRuns.output,
+      })
+      .from(automationStepRuns)
+      .where(
+        and(
+          eq(automationStepRuns.childSessionId, input.childSessionId),
+          drizzleSql`${automationStepRuns.output}->>'status' = 'awaiting'`
+        )
+      )
+      .limit(1);
+    if (!waiting) return { kind: "none" };
+    const before = (waiting.output ?? {}) as Record<string, unknown>;
+    const resume = before[AWAIT_RESUME_KEY] as AwaitResume | undefined;
+    const [session] = await db
+      .select({ expectedOutputs: focusSessions.expectedOutputs })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, input.childSessionId))
+      .limit(1);
+    const delivered = input.verdict === "completed";
+    const message = delivered
+      ? null
+      : awaitFailureMessage(
+          input.verdict as Exclude<AwaitVerdict, "completed">,
+          typeof before.awaitTimeout === "string" ? before.awaitTimeout : null,
+          input.error ?? null
+        );
+    const { [AWAIT_RESUME_KEY]: _resume, ...kept } = before;
+    void _resume;
+    const output: Record<string, unknown> = {
+      ...kept,
+      status: input.verdict,
+      sessionId: input.childSessionId,
+      summary: input.summary ?? null,
+      outputs: deliveredOutputs(session?.expectedOutputs),
+      ...(message ? { error: message } : {}),
+    };
+    const [settled] = await db
+      .update(automationStepRuns)
+      .set({
+        status: delivered ? "completed" : "failed",
+        output,
+        errorMessage: message,
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(automationStepRuns.id, waiting.id),
+          drizzleSql`${automationStepRuns.output}->>'status' = 'awaiting'`
+        )
+      )
+      .returning({ id: automationStepRuns.id });
+    if (!settled) return { kind: "none" };
+
+    if (resume && (delivered || resume.continueOnError)) {
+      await db
+        .update(automationRuns)
+        .set(
+          delivered
+            ? {
+                stepsCompleted: drizzleSql`${automationRuns.stepsCompleted} + 1`,
+              }
+            : { stepsFailed: drizzleSql`${automationRuns.stepsFailed} + 1` }
+        )
+        .where(eq(automationRuns.id, waiting.runId));
+      await getBoss().send("automation-execute", {
+        runId: waiting.runId,
+        automationId: resume.automationId,
+        workspaceId: resume.workspaceId,
+        automationContext: resume.automationContext,
+        completedNodeIds: resume.completedNodeIds,
+        producerAgentUserId: resume.producerAgentUserId ?? undefined,
+      });
+      return { kind: "resumed", stepRunId: waiting.id, runId: waiting.runId };
+    }
+
+    await failAwaitingRun(
+      waiting.runId,
+      message ?? "The run it waited on did not finish.",
+      input.verdict === "timed_out"
+    );
+    return { kind: "run_failed", stepRunId: waiting.id, runId: waiting.runId };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(
+      { err, childSessionId: input.childSessionId },
+      "Could not resume the automation step that awaits this run — it resumes on its timeout"
+    );
+    return { kind: "error", message };
+  }
+}
+
+/** The automation run ends `failed` with `message`; its session closes, it is narrated. */
+async function failAwaitingRun(
+  runId: string,
+  message: string,
+  timedOut: boolean
+): Promise<void> {
+  const [failed] = await db
+    .update(automationRuns)
+    .set({
+      status: "failed",
+      errorMessage: message,
+      completedAt: new Date(),
+      stepsFailed: drizzleSql`${automationRuns.stepsFailed} + 1`,
+    })
+    .where(
+      and(eq(automationRuns.id, runId), eq(automationRuns.status, "running"))
+    )
+    .returning({ id: automationRuns.id });
+  if (!failed) return;
+  const open = await db
+    .select({ id: focusSessions.id, userId: focusSessions.userId })
+    .from(focusSessions)
+    .where(
+      and(
+        drizzleSql`${focusSessions.status} IN ('active', 'stale')`,
+        drizzleSql`${focusSessions.metadata}->>'automationRunId' = ${runId}`
+      )
+    );
+  for (const s of open) {
+    await closeSessionViaDoor({
+      sessionId: s.id,
+      userId: s.userId,
+      terminalStatus: "closed",
+      summary: message,
+    });
+  }
+  await postRunSummary(runId, timedOut ? { reason: "timeout" } : {});
+}
+
+/** The terminal writer's entry: the run's own row says how it ended. */
+async function resumeAwaitingStepForRun(playbookRunId: string): Promise<void> {
+  try {
+    const [run] = await db
+      .select({
+        sessionId: playbookRuns.sessionId,
+        status: playbookRuns.status,
+        error: playbookRuns.error,
+        summary: playbookRuns.summary,
+      })
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, playbookRunId))
+      .limit(1);
+    if (
+      !run?.sessionId ||
+      !(TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)
+    ) {
+      return;
+    }
+    await resumeAwaitingStep({
+      childSessionId: run.sessionId,
+      verdict: run.status as AwaitVerdict,
+      error: run.error,
+      summary: run.summary,
+    });
+  } catch (err) {
+    logger.error(
+      { err, playbookRunId },
+      "Could not read the run an automation step awaits"
+    );
+  }
+}
+
+/**
+ * The walk just suspended on a run that may ALREADY have ended (it failed at
+ * once, before anything waited): settle it now rather than at the timeout.
+ */
+export async function resumeAwaitingStepIfChildEnded(
+  childSessionId: string
+): Promise<void> {
+  const [run] = await db
+    .select({ id: playbookRuns.id })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, childSessionId),
+        inArray(playbookRuns.status, [...TERMINAL_RUN_STATUSES])
+      )
+    )
+    .limit(1);
+  if (run) await resumeAwaitingStepForRun(run.id);
+}
+
+/**
+ * The reaper's half: every step whose wait passed its `resumeAfter` fails
+ * ("did not finish in <timeout>"); the run it started keeps going. Returns
+ * how many it settled. Never throws.
+ */
+export async function failTimedOutAwaitingSteps(): Promise<number> {
+  try {
+    const due = await db
+      .select({ childSessionId: automationStepRuns.childSessionId })
+      .from(automationStepRuns)
+      .where(
+        and(
+          drizzleSql`${automationStepRuns.output}->>'status' = 'awaiting'`,
+          // CASE, not AND: the cast throws on a malformed string and AND does
+          // not order its operands (the reaper's delay predicate, same rule).
+          drizzleSql`CASE
+            WHEN ${automationStepRuns.output}->>'resumeAfter' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}'
+              THEN (${automationStepRuns.output}->>'resumeAfter')::timestamptz < now()
+            ELSE false
+          END`
+        )
+      );
+    let n = 0;
+    for (const d of due) {
+      if (!d.childSessionId) continue;
+      const r = await resumeAwaitingStep({
+        childSessionId: d.childSessionId,
+        verdict: "timed_out",
+      });
+      if (r.kind === "resumed" || r.kind === "run_failed") n += 1;
+    }
+    return n;
+  } catch (err) {
+    logger.error({ err }, "Could not time out awaiting automation steps");
+    return 0;
+  }
 }

@@ -156,7 +156,8 @@ export interface PlaybookRunnerInput {
 }
 
 export interface PlaybookRunnerResult {
-  run: { id: string; status: string } | null;
+  /** `runOn`: who the run was given to (`playbook_runs.run_on`), as stored. */
+  run: { id: string; status: string; runOn?: unknown } | null;
   /** Null only when `skipped` is set — nothing was started. */
   session: { id: string; channelId: string | null } | null;
   reused?: boolean;
