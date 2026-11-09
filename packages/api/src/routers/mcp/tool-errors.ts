@@ -30,6 +30,25 @@ export function toolError(text: string): CallToolResult {
 }
 
 /**
+ * Terminal, actionable error for an id argument that is not a full UUID (a
+ * shortened id from a listing is the usual cause). Retrying a variant of the
+ * same string fails the same way, so the text says what to pass instead.
+ * Returns null when `value` is a UUID.
+ */
+export function fullUuidError(
+  toolName: string,
+  field: string,
+  value: string
+): CallToolResult | null {
+  if (isUuid(value)) return null;
+  return toolError(
+    `Tool '${toolName}': ${field} must be the full 36-character UUID (8-4-4-4-12), but you sent ${value.length} characters. ` +
+      `A shortened id will never work, so do not retry with another variant. ` +
+      `Get the full id from synap_get_entity, synap_find or synap_ask, or from the id in the review link.`
+  );
+}
+
+/**
  * Lens args that land in a `uuid` DB column (workspaces.id / projects.id).
  * A non-UUID string here reaches postgres and throws 22P02
  * (invalid_text_representation), whose driver error embeds the whole query —

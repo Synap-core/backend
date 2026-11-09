@@ -42,7 +42,8 @@ import {
   type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
-import { toolError } from "../tool-errors.js";
+import { toolError, fullUuidError } from "../tool-errors.js";
+import { TRPCError } from "@trpc/server";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 import {
   TITLE_HARD_MAX,
@@ -476,13 +477,28 @@ export const entityHandlers: McpHandlerMap = {
     if (typeof entityId !== "string" || entityId === "") {
       return toolError("entityId is required.");
     }
+    const badId = fullUuidError(toolName, "entityId", entityId);
+    if (badId) return badId;
     const reasoning = readReasoning(args);
-    const result = (await lensCaller.entities.deleteEntity({
-      entityId,
-      userId,
-      ...(agentUserId ? { agentUserId } : {}),
-      ...(reasoning ? { reasoning } : {}),
-    })) as { status: string } & Record<string, unknown>;
+    let result: { status: string } & Record<string, unknown>;
+    try {
+      result = (await lensCaller.entities.deleteEntity({
+        entityId,
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        ...(reasoning ? { reasoning } : {}),
+      })) as { status: string } & Record<string, unknown>;
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
+        // Nothing here can tell "already deleted" from "not visible to this
+        // key" from "another pod": say all three, and that a retry is futile.
+        return toolError(
+          `Entity not found: ${entityId}. It is already deleted, not visible to this key, or belongs to another pod. ` +
+            `Retrying this id will fail the same way. Check it with synap_get_entity; if a delete may already be pending, look in synap_list_proposals.`
+        );
+      }
+      throw err;
+    }
     const supersedeHint = await supersedeHintFor(entityId, userId, agentUserId);
     // Say what landed: a proposal deleted nothing yet; a completed call (only
     // a non-agent principal reaches it) soft-deleted the row.
