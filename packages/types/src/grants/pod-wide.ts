@@ -57,6 +57,8 @@ export const POD_WIDE_READ_SUBJECTS = [
  * both ways).
  */
 export function isPodWideReadPermission(permission: string): boolean {
+  // The SDK tripwire reads this literal on one line, so it is not wrapped:
+  // prettier-ignore
   return /^(?:entity\.(?:[a-z0-9][a-z0-9_-]*\.)?read|(?:playbook|session|view|document|relation|project|automation|proposal|channel)\.read)$/.test(permission);
 }
 

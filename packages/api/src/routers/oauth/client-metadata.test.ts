@@ -821,11 +821,14 @@ describe("synap_requests[].scope: a pod-wide READ of one kind, nothing else (dec
     "automation.read",
     "proposal.read",
     "channel.read",
-  ])("accepts the read %s asked pod-wide (a person's own assistant app)", (permission) => {
-    expect(asked({ permission, scope: "pod" }).requestedPodWide).toEqual([
-      permission,
-    ]);
-  });
+  ])(
+    "accepts the read %s asked pod-wide (a person's own assistant app)",
+    (permission) => {
+      expect(asked({ permission, scope: "pod" }).requestedPodWide).toEqual([
+        permission,
+      ]);
+    }
+  );
 
   it("refuses an unknown scope value, and one permission declared both pod-wide and per space", () => {
     expect(() =>

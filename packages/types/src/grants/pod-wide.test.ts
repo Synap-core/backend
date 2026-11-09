@@ -16,7 +16,11 @@ import {
 
 describe("isPodWideReadPermission", () => {
   it("accepts a read of one named kind (decision e1b59d38 B, unchanged)", () => {
-    for (const p of ["entity.decision.read", "entity.task.read", "entity.a-b_c1.read"])
+    for (const p of [
+      "entity.decision.read",
+      "entity.task.read",
+      "entity.a-b_c1.read",
+    ])
       expect(isPodWideReadPermission(p), p).toBe(true);
   });
 
@@ -29,9 +33,23 @@ describe("isPodWideReadPermission", () => {
   it("is a closed list of READS: no listed subject admits a verb, and the list has a floor", () => {
     expect(POD_WIDE_READ_SUBJECTS.length).toBeGreaterThanOrEqual(9);
     for (const subject of POD_WIDE_READ_SUBJECTS) {
-      for (const verb of ["create", "update", "delete", "run", "approve", "transition", "stream", "*"])
-        expect(isPodWideReadPermission(`${subject}.${verb}`), `${subject}.${verb}`).toBe(false);
-      expect(isPodWideReadPermission(subject), `${subject} (every verb)`).toBe(false);
+      for (const verb of [
+        "create",
+        "update",
+        "delete",
+        "run",
+        "approve",
+        "transition",
+        "stream",
+        "*",
+      ])
+        expect(
+          isPodWideReadPermission(`${subject}.${verb}`),
+          `${subject}.${verb}`
+        ).toBe(false);
+      expect(isPodWideReadPermission(subject), `${subject} (every verb)`).toBe(
+        false
+      );
     }
   });
 
@@ -62,30 +80,47 @@ describe("isPodWideReadPermission", () => {
 // callers read: they must be the same set, in both directions. Read from the source so a subject added to one and
 // not the other is red; the extraction itself is asserted so this cannot go vacuous.
 describe("POD_WIDE_READ_SUBJECTS is the regex's subject alternation", () => {
-  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "pod-wide.ts"), "utf8");
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "pod-wide.ts"),
+    "utf8"
+  );
   const fn = src.slice(src.indexOf("export function isPodWideReadPermission"));
   const alternation = /\(\?:([a-z_|]+)\)\\\.read\)\$/.exec(fn)?.[1];
 
   it("finds the alternation in the source", () => {
-    expect(alternation, "the subject alternation in isPodWideReadPermission").toBeDefined();
+    expect(
+      alternation,
+      "the subject alternation in isPodWideReadPermission"
+    ).toBeDefined();
     expect(alternation!.split("|").length).toBeGreaterThanOrEqual(9);
   });
 
   it("lists exactly the exported subjects", () => {
-    expect([...alternation!.split("|")].sort()).toEqual([...POD_WIDE_READ_SUBJECTS].sort());
+    expect([...alternation!.split("|")].sort()).toEqual(
+      [...POD_WIDE_READ_SUBJECTS].sort()
+    );
   });
 });
 
 describe("isPodWideReadScope", () => {
-  const scope = (permissions: string[], extra = {}) => ({ permissions, ...extra });
+  const scope = (permissions: string[], extra = {}) => ({
+    permissions,
+    ...extra,
+  });
 
   it("is a scope with no space, project or object limit whose every permission is a pod-wide read", () => {
-    expect(isPodWideReadScope(scope(["playbook.read", "entity.read"]))).toBe(true);
+    expect(isPodWideReadScope(scope(["playbook.read", "entity.read"]))).toBe(
+      true
+    );
   });
 
   it("is not one when a single permission writes, or when it names a space", () => {
-    expect(isPodWideReadScope(scope(["playbook.read", "playbook.run"]))).toBe(false);
-    expect(isPodWideReadScope(scope(["playbook.read"], { workspaceIds: ["w"] }))).toBe(false);
+    expect(isPodWideReadScope(scope(["playbook.read", "playbook.run"]))).toBe(
+      false
+    );
+    expect(
+      isPodWideReadScope(scope(["playbook.read"], { workspaceIds: ["w"] }))
+    ).toBe(false);
     expect(isPodWideReadScope(scope([]))).toBe(false);
   });
 });
