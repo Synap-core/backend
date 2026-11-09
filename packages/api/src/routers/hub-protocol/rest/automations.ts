@@ -235,8 +235,8 @@ export function registerAutomationsRoutes(app: HubHono): void {
           nodes: Record<string, unknown>[];
           edges: Record<string, unknown>[];
         },
-        status: ((body.status as string) ?? "draft") as
-          "draft" | "active" | "paused" | "error",
+        status: body.status as
+          "draft" | "active" | "paused" | "error" | undefined,
         metadata: body.metadata as Record<string, unknown> | undefined,
       });
       return jsonGoverned(c, result);

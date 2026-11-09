@@ -70,9 +70,11 @@ export function registerAutomationExecutors(): void {
             nodes: Array<Record<string, unknown>>;
             edges: Array<Record<string, unknown>>;
           },
+          // An approval IS the activation: unstated → `active`; a stated
+          // `draft`/`paused` is kept.
           status:
             (innerData.status as
-              "draft" | "active" | "paused" | "error" | undefined) ?? "draft",
+              "draft" | "active" | "paused" | "error" | undefined) ?? "active",
           metadata: innerData.metadata as Record<string, unknown> | undefined,
           state: innerData.state as Record<string, unknown> | undefined,
           source: "ai" as const,

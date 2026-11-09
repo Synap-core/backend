@@ -355,6 +355,9 @@ describe("automation/create approval preserves governed provenance", () => {
       "agentUserId: automationAuthorId"
     );
     expect(AUTOMATION_CREATE_BLOCK).toContain("stableId: proposal.targetId");
+    // An approval IS the activation: unstated status lands active.
+    expect(AUTOMATION_CREATE_BLOCK).toMatch(/\?\? "active"/);
+    expect(AUTOMATION_CREATE_BLOCK).not.toMatch(/\?\? "draft"/);
     expect(AUTOMATION_CREATE_BLOCK).toContain(
       "metadata: innerData.metadata as Record<string, unknown> | undefined"
     );

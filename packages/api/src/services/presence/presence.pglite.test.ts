@@ -430,6 +430,19 @@ describe("proof of presence: the gate", () => {
     ).toBe("PRESENCE_REQUIRED");
   });
 
+  it("GUARDRAIL: approving an automation or playbook create with no proof is refused (it lands active)", async () => {
+    for (const [targetType, proposalType] of [
+      ["automation", "create"],
+      ["playbook", "create"],
+    ] as const) {
+      expect(
+        await refusal(
+          gate({ id: crypto.randomUUID(), targetType, proposalType })
+        )
+      ).toBe("PRESENCE_REQUIRED");
+    }
+  });
+
   it("report mode lets a sensitive approval through and records it; a request made AS THE PERSON is refused in every mode", async () => {
     delete process.env.SYNAP_PRESENCE_PROOF;
     await reportByChoice();

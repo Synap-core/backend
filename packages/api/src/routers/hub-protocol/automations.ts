@@ -32,7 +32,7 @@ export const hubAutomationsRouter = router({
           nodes: z.array(z.record(z.string(), z.unknown())),
           edges: z.array(z.record(z.string(), z.unknown())),
         }),
-        status: z.enum(["draft", "active", "paused", "error"]).default("draft"),
+        status: z.enum(["draft", "active", "paused", "error"]).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         state: z.record(z.string(), z.unknown()).optional(),
       })
