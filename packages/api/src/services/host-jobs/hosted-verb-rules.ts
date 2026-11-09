@@ -17,6 +17,7 @@ import {
   renderRecipe,
   type Recipe,
 } from "@synap-core/types/capability-manifest";
+import { isUuid } from "@synap-core/types/property-render";
 import {
   matchComputer,
   type ComputerMatch,
@@ -219,8 +220,6 @@ export function fileIdsOf(
   return out;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * Do these values fill this recipe? The SAME `renderRecipe` the runner calls,
  * with stand-in paths for files and outputs, so a run refused here would have
@@ -241,7 +240,7 @@ export function recipeValuesProblem(
         return `${name} is one pod file id, not a list`;
       if (ids.length === 0) return `${name} names no file`;
       for (const id of ids)
-        if (typeof id !== "string" || !UUID.test(id))
+        if (!isUuid(id))
           return `${name} must be a pod file id (a file entity's uuid), got ${JSON.stringify(id)}`;
       stand[name] =
         p.type === "files"
