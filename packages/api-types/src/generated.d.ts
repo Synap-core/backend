@@ -17594,7 +17594,13 @@ export interface RankComparison {
 		overlapAtN: number;
 	};
 }
-export type SubstrateKind = "episodic" | "library" | "procedural" | "semantic" | "structured";
+/**
+ * `catalog` is the pod's own HOW: instruction skills, rules and playbooks,
+ * found through the find door (`findByIntent`, catalogs `skills` +
+ * `playbooks`). It runs only for a how-to or which-tool question (see
+ * `CATALOG_CUES`).
+ */
+export type SubstrateKind = "catalog" | "episodic" | "library" | "procedural" | "semantic" | "structured";
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
 	sessionId: string;
@@ -19521,7 +19527,7 @@ export interface AppliedLens {
  * read-text index could not be asked (items findable only by what was read may
  * be missing).
  */
-export type DegradedTag = SubstrateKind | "library:text-down" | "semantic:vector-down";
+export type DegradedTag = SubstrateKind | "catalog:partial" | "library:text-down" | "semantic:vector-down";
 export interface AskAnswer {
 	substrate: SubstrateKind;
 	items: Record<string, unknown>[];
@@ -19598,7 +19604,96 @@ export interface AskResult {
 	 */
 	queue?: AskQueueBlock;
 }
-export type RunPosture = "auto" | "propose";
+/**
+ * What can start agents on a computer: its runner, online or not, and the
+ * computer's "Wakes agents" switch. `null` = nothing on it can start agents.
+ */
+export interface ComputerWaker {
+	online: boolean;
+	wakesAgents: boolean;
+}
+/** Where a principal's newest key stands — ONE derivation, server-side. */
+export type MachineKeyState = "active" | "expired" | "expiring" | "none" | "revoked";
+export interface MachineKeyView {
+	id: string;
+	state: MachineKeyState;
+	expiresAt: Date | null;
+}
+export interface HostedAgentView {
+	id: string;
+	agentType: string | null;
+	/** "Claude Code" */
+	name: string;
+	/** "Claude Code on devbox" — `agentDisplayName`, the one phrasing. */
+	displayName: string;
+	lastSeenAt: Date | null;
+	key: MachineKeyView | null;
+}
+export interface MachineView {
+	id: string;
+	name: string;
+	hostname: string | null;
+	platform: string | null;
+	/** The processor (`process.arch`), when the computer reported it. */
+	arch: string | null;
+	createdAt: Date;
+	/** Newest `last_used_at` over the computer's own keys. */
+	lastSeenAt: Date | null;
+	/** The computer's newest key (the live one when there is one). */
+	key: MachineKeyView | null;
+	/** The computer's own lifetime override; null = the pod default. */
+	keyTtlDays: number | null;
+	/** What a key minted now would last (override → pod default → 90). */
+	effectiveKeyTtlDays: number;
+	minKeyTtlDays: number;
+	maxKeyTtlDays: number;
+	/** The live key's access, by the grant's name ("AI — read & propose"). */
+	accessName: string | null;
+	/** "Runs scripts" is on: the computer leases its person's box runs. */
+	runsScripts: boolean;
+	/** "Wakes agents" is on: the pod may count on this computer's waker. */
+	wakesAgents: boolean;
+	/**
+	 * Its waker, as THE wake rule reads it (`computerWakerOf`): `null` = no
+	 * waker ever ran on it; `online` = it polled within the wake lease.
+	 */
+	waker: ComputerWaker | null;
+	/** "Installs from the pod" is on: the computer installs software on itself. */
+	hostsServices: boolean;
+	/** Whose computer it is (0388). Null only on a row written before it. */
+	belongsTo: ComputerBelongsTo | null;
+	agents: HostedAgentView[];
+}
+/** Who a computer belongs to: the person who approved it on `/device`. */
+export interface MachineOwnerView {
+	id: string;
+	/** Their display name, else their email. */
+	name: string;
+}
+export interface AdminMachineView extends MachineView {
+	/** null = the approver's row is gone (or was never recorded). */
+	owner: MachineOwnerView | null;
+}
+/** A computer as an agent chooses among them. */
+export interface ComputerChoice {
+	id: string;
+	name: string;
+	system: string | null;
+	arch: string | null;
+	installsFromPod: boolean;
+	/** Can this capability go on it? Absent when no capability is in question. */
+	canInstall?: boolean;
+	/** Why not, in words. */
+	why?: string;
+}
+/** Where a catalog capability runs, as both catalog reads show it. */
+export interface CatalogPlacement {
+	/** Absent for an entry that is not a capability, or carries no definition. */
+	runsOn?: Array<"computer" | "pod">;
+	systems?: string[];
+	licence?: string | null;
+	computers?: ComputerChoice[];
+}
 /**
  * Why a candidate matched, for an agent choosing between results: the query
  * terms it hit, rarest (highest-weighted) first, and the fields they hit.
@@ -19607,6 +19702,46 @@ export interface TermMatch {
 	terms: string[];
 	fields: string[];
 }
+export interface RunnableActionConnection {
+	required: boolean;
+	state: "connected" | "missing";
+	provider: string;
+}
+export interface RunnableCapabilityAction {
+	/** Backing skill UUID (standalone skills) or verb id (tool-owned verbs). */
+	skillId?: string;
+	verbId?: string;
+	label: string;
+	description?: string | null;
+	tool: string | null;
+	/** This projection never emits a disconnected action; included for UI truth. */
+	connection?: RunnableActionConnection;
+	/**
+	 * Run posture — what running this action does for an agent: `auto` runs now,
+	 * `propose` files a review. Derived by `runPosture`, never the approval gate.
+	 */
+	governance: "auto" | "propose";
+	/** The enable/approval gate. Always true here: unapproved rows are omitted. */
+	enabled: true;
+	/** The active grant's execution mode where a tool verb has one. */
+	executionMode?: string;
+	/**
+	 * Direction axis of a tool verb — `read` = pull (data IN), `write`/`action` =
+	 * push (mutation OUT). Straight off `ToolVerb.kind`; lets the client bucket a
+	 * verb by direction. Undefined for a skill-only action (no tool verb) — the
+	 * client renders honest-unknown, NEVER a defaulted "read".
+	 */
+	kind?: "action" | "read" | "write";
+	/**
+	 * Vendor-independent routing intent (`ABSTRACT_VERBS`) — off `ToolVerb.intent`.
+	 * OPTIONAL by nature: a verb that fits none of the 13 closed values, and every
+	 * skill-only action, leave it undefined (honest-unknown, never invented).
+	 */
+	intent?: string;
+	/** Actual parameter schema; never a fabricated form shape. */
+	parameters: Record<string, unknown>;
+}
+export type RunPosture = "auto" | "propose";
 /**
  * A verb read-model row PLUS the declarative subset's `responseShape` — the
  * projection of what a provider verb RETURNS.
@@ -19768,6 +19903,250 @@ export interface CapabilityGrantRow {
 	revokedAt: string | null;
 	createdAt: string;
 	active: boolean;
+}
+/** One verb that declares an intent, carried with the capability it lives on. */
+export interface IntentVerbMatch {
+	intent: string;
+	/** The CONCRETE verb id to pass to `synap_run_capability` / executeCapability. */
+	verbId: string;
+	verbLabel: string;
+	/** read = pull · write/action = push. */
+	verbKind: "action" | "read" | "write";
+	/** Grant state, straight off the registry row — never re-derived here. */
+	granted: boolean;
+	/**
+	 * The GATE'S ACTUAL POSTURE for this verb — what a run meets, not the verb's
+	 * declared exec mode. Named `runPosture`, NOT `effectiveExecMode`: the two are
+	 * different axes. `ExecMode` is `"auto" | "dry-run" | "propose"` and comes from
+	 * the grant; `RunPosture` is `"auto" | "propose"` and is what
+	 * {@link runPosture} returns after short-circuiting on `granted` /
+	 * `declaredReadOnly`. Keeping the old name on the new value made the field read
+	 * as an exec mode while `dry-run` had silently become inexpressible — an agent
+	 * consuming this would take it as a mode it can set.
+	 */
+	runPosture: "auto" | "propose";
+	/** False when no visible active+approved backing skill can execute the verb. */
+	backingSkillExecutable: boolean;
+	/** The capability kind this verb came from — `tool` | `builtin-tool` | `source-provider` | `skill` | `teaching-doc` | `command`. Carried so `foldVerbsByIntent` can prefer tool rows in O(1) without re-scanning `caps`. */
+	sourceKind: string;
+	capabilityId: string;
+	capabilityName: string;
+	/** Whether the provider tool is connected, when the registry knows. */
+	connected?: boolean;
+}
+declare const OBJECT_CATALOGS: readonly [
+	"skills",
+	"automations",
+	"sessions",
+	"goals",
+	"projects",
+	"views",
+	"documents"
+];
+export type ObjectCatalog = (typeof OBJECT_CATALOGS)[number];
+/** What a found row IS. `skill` and `rule` share the skills catalog. */
+export type FoundObjectKind = "automation" | "document" | "goal" | "project" | "rule" | "session" | "skill" | "view";
+/** One object the query's words landed on, with how to open it. */
+export interface FoundObject {
+	kind: FoundObjectKind;
+	id: string;
+	title: string;
+	/** One line: what it is or what it is for. `null` when the row says nothing. */
+	why: string | null;
+	/** `/open/<id>` — the app resolves the kind from the id. */
+	open: string;
+	/** Skills and rules: the slug `synap_load_skill({ ref })` reads. */
+	ref?: string;
+	workspaceId: string | null;
+	score: number;
+	/** `score` ÷ the best score in THIS catalog's block. */
+	confidence: number;
+	match: TermMatch;
+	/** How many of the query's search terms this row hit. ABSOLUTE. */
+	termCoverage: {
+		hit: number;
+		of: number;
+	};
+}
+/** `matches` and `error` are mutually exclusive: a failed read is `error`. */
+export type FindObjects = {
+	matches: FoundObject[];
+} | {
+	error: string;
+};
+declare const FIND_CATALOGS: readonly [
+	"capabilities",
+	"intents",
+	"playbooks",
+	"spaces",
+	"skills",
+	"automations",
+	"sessions",
+	"goals",
+	"projects",
+	"views",
+	"documents"
+];
+export type FindCatalog = (typeof FIND_CATALOGS)[number];
+/**
+ * One runnable action that matched — the projection's own row, plus why it
+ * matched and what it takes.
+ */
+export interface CapabilityIntentMatch {
+	/** The launchable action, straight off `projectRunnableActions`. */
+	action: RunnableCapabilityAction;
+	/**
+	 * The verb's DECLARED arg schema (`ToolVerbCatalogEntry.argsSchema`) — carried
+	 * as DATA, not as a tool definition, so it works on every MCP client
+	 * regardless of `listChanged` support. Absent when the catalog entry declares
+	 * none (a skill-only action has no catalog entry at all: read
+	 * `action.parameters`, which is derived from the real contract).
+	 */
+	argsSchema?: Record<string, unknown>;
+	/** The capability's own description — when to reach for this. `null` when it has none. */
+	whenToUse: string | null;
+	/** Raw `rankByTerms` score over the runnable-action pool. */
+	score: number;
+	/** `score` ÷ the best score in THIS catalog. See `scoring`. */
+	confidence: number;
+	/** Which query terms hit, rarest first, and which fields. */
+	match: TermMatch;
+	/** How many of the query's search terms this row hit, out of how many. ABSOLUTE. */
+	termCoverage: {
+		hit: number;
+		of: number;
+	};
+}
+/** One abstract intent the query's words landed on, with the verbs that declare it. */
+export interface AbstractIntentMatch {
+	intent: string;
+	/** Verbs declaring it under this caller's lens. `[]` is a real answer. */
+	verbs: IntentVerbMatch[];
+	score: number;
+	confidence: number;
+	match: TermMatch;
+	termCoverage: {
+		hit: number;
+		of: number;
+	};
+}
+/**
+ * One marketplace capability package a caller can install, with where it
+ * runs (`catalogPlacementReader`, the same projection `market.search`
+ * applies): for a capability that runs on a computer, its systems, licence
+ * and the person's computers that can take it.
+ */
+export type MarketplaceCapabilityMatch = {
+	description: string | null;
+	kind: string;
+	name: string;
+	slug: string;
+} & CatalogPlacement;
+/**
+ * Marketplace follow-up for an intent the pod does not serve.
+ * `matches` and `error` are mutually exclusive: a thrown catalog read is
+ * `error`, never a fake empty list.
+ */
+export type FindMarketplace = {
+	matches: MarketplaceCapabilityMatch[];
+} | {
+	error: string;
+};
+/** One member space the query's words landed on. */
+export interface SpaceIntentMatch {
+	workspaceId: string;
+	name: string;
+	/** `resolveSpacePurpose`, one line. Absent when the space declares none. */
+	purpose?: string;
+	/**
+	 * Up to 3 kinds to WRITE there: the ones the query's words named (ranked
+	 * over this space's own kinds), else the space's lead kinds (template
+	 * `collect` order first). Absent when the space declares no kinds.
+	 */
+	kinds?: string[];
+	score: number;
+	confidence: number;
+	match: TermMatch;
+	termCoverage: {
+		hit: number;
+		of: number;
+	};
+}
+/**
+ * The spaces block. `matches` and `error` are mutually exclusive: a failed
+ * read is `error`, never a fake empty list.
+ */
+export type FindSpaces = {
+	matches: SpaceIntentMatch[];
+} | {
+	error: string;
+};
+/** What each catalog's numbers mean. Named on the wire so they are never compared. */
+export type FindScoring = Partial<Record<FindCatalog, ScaleNote>>;
+export interface ScaleNote {
+	ranker: string;
+	scale: string;
+	note: string;
+}
+/** How much was searched — the answer to "is the index incomplete, or is the pod?" */
+export interface FindCoverage {
+	/** Registry rows read under this lens. */
+	capabilityRows: number;
+	/** Of those, how many projected to a launchable action. */
+	runnableActions: number;
+	/** Verb catalog entries seen across those rows. */
+	verbs: number;
+	/**
+	 * How many of `verbs` declare an abstract `intent`. The intent axis can only
+	 * ever answer for these — the rest are invisible to an `intent` lookup, which
+	 * is why an empty intent result is not proof of absence.
+	 */
+	verbsDeclaringIntent: number;
+	/** Size of the closed abstract vocabulary. */
+	abstractVerbs: number;
+	/** Search terms the query reduced to (stopwords dropped, stemmed). */
+	queryTerms: string[];
+}
+export interface NoConfidentMatch {
+	reason: string;
+	coverage: FindCoverage;
+	/** The real doors, in order. Every rung exists — none is invented here. */
+	escalation: Array<{
+		door: string;
+		when: string;
+	}>;
+}
+/**
+ * Each object catalog's block (`skills`, `automations`, `sessions`, `goals`,
+ * `projects`, `views`, `documents`): ABSENT when not searched, `matches`
+ * (possibly empty) when searched, `error` when that read failed.
+ */
+export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindObjects>> {
+	intent: string;
+	lens: {
+		workspaceId: string | null;
+	};
+	/** ABSENT when not searched; `matches: []` when searched and nothing fit. */
+	capabilities?: {
+		matches: CapabilityIntentMatch[];
+	};
+	intents?: {
+		matches: AbstractIntentMatch[];
+	};
+	/** The EXACT block `start_session` ships. ABSENT when not searched. */
+	playbooks?: SessionPlaybookCandidates;
+	/**
+	 * Capability packages from the pod catalog cache. Present when a returned
+	 * intent has no installed verbs, or the best intent match is weak (it
+	 * missed a query term). ABSENT when that lookup did not run.
+	 */
+	marketplace?: FindMarketplace;
+	/** Member spaces to route the work to. ABSENT when not searched. */
+	spaces?: FindSpaces;
+	scoring: FindScoring;
+	coverage: FindCoverage;
+	/** Present only when no catalog produced a single match. */
+	noConfidentMatch?: NoConfidentMatch;
 }
 /** A skill or tool row. `kind` absent = skill (the execute door's shape). */
 export interface CapabilityRef {
@@ -22080,76 +22459,6 @@ export interface SetAgentJobResult {
 	role: string | null;
 	name: string;
 	seat: string | null;
-}
-/**
- * What can start agents on a computer: its runner, online or not, and the
- * computer's "Wakes agents" switch. `null` = nothing on it can start agents.
- */
-export interface ComputerWaker {
-	online: boolean;
-	wakesAgents: boolean;
-}
-/** Where a principal's newest key stands — ONE derivation, server-side. */
-export type MachineKeyState = "active" | "expired" | "expiring" | "none" | "revoked";
-export interface MachineKeyView {
-	id: string;
-	state: MachineKeyState;
-	expiresAt: Date | null;
-}
-export interface HostedAgentView {
-	id: string;
-	agentType: string | null;
-	/** "Claude Code" */
-	name: string;
-	/** "Claude Code on devbox" — `agentDisplayName`, the one phrasing. */
-	displayName: string;
-	lastSeenAt: Date | null;
-	key: MachineKeyView | null;
-}
-export interface MachineView {
-	id: string;
-	name: string;
-	hostname: string | null;
-	platform: string | null;
-	/** The processor (`process.arch`), when the computer reported it. */
-	arch: string | null;
-	createdAt: Date;
-	/** Newest `last_used_at` over the computer's own keys. */
-	lastSeenAt: Date | null;
-	/** The computer's newest key (the live one when there is one). */
-	key: MachineKeyView | null;
-	/** The computer's own lifetime override; null = the pod default. */
-	keyTtlDays: number | null;
-	/** What a key minted now would last (override → pod default → 90). */
-	effectiveKeyTtlDays: number;
-	minKeyTtlDays: number;
-	maxKeyTtlDays: number;
-	/** The live key's access, by the grant's name ("AI — read & propose"). */
-	accessName: string | null;
-	/** "Runs scripts" is on: the computer leases its person's box runs. */
-	runsScripts: boolean;
-	/** "Wakes agents" is on: the pod may count on this computer's waker. */
-	wakesAgents: boolean;
-	/**
-	 * Its waker, as THE wake rule reads it (`computerWakerOf`): `null` = no
-	 * waker ever ran on it; `online` = it polled within the wake lease.
-	 */
-	waker: ComputerWaker | null;
-	/** "Installs from the pod" is on: the computer installs software on itself. */
-	hostsServices: boolean;
-	/** Whose computer it is (0388). Null only on a row written before it. */
-	belongsTo: ComputerBelongsTo | null;
-	agents: HostedAgentView[];
-}
-/** Who a computer belongs to: the person who approved it on `/device`. */
-export interface MachineOwnerView {
-	id: string;
-	/** Their display name, else their email. */
-	name: string;
-}
-export interface AdminMachineView extends MachineView {
-	/** null = the approver's row is gone (or was never recorded). */
-	owner: MachineOwnerView | null;
 }
 export type PresenceMode = "enforce" | "report";
 export interface PresenceModeState {
@@ -43544,6 +43853,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				truncated: SynthesisTruncation | undefined;
 				verdict: RetrievalVerdict;
 			};
+		}>;
+		find: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				catalogs?: ("automations" | "capabilities" | "documents" | "goals" | "intents" | "playbooks" | "projects" | "sessions" | "skills" | "spaces" | "views")[] | undefined;
+				limit?: number | undefined;
+				query: string;
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: FindByIntentResult;
 		}>;
 		search: import("@trpc/server").TRPCQueryProcedure<{
 			input: {

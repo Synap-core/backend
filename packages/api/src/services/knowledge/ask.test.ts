@@ -32,6 +32,18 @@ vi.mock("../../utils/pending-capture-dedup.js", () => ({
   findPendingTextMatches: vi.fn().mockResolvedValue([]),
 }));
 
+// The catalog lane (skills, rules, playbooks through the find door) has its
+// own PGlite suite (__tests__/ask-catalog-lane.pglite.test.ts); here the door
+// answers "searched, nothing fit" per catalog unless a test says otherwise.
+const findByIntentMock = vi.fn();
+vi.mock("../capabilities/find-intent.js", () => ({
+  findByIntent: (...args: unknown[]) => findByIntentMock(...args),
+}));
+const emptyFind = async (input: { catalogs?: string[] }) =>
+  input.catalogs?.includes("playbooks")
+    ? { playbooks: { candidates: [], optOut: "pass templateId: null" } }
+    : { skills: { matches: [] } };
+
 const { ask } = await import("./ask.js");
 
 const baseParams = {
@@ -59,6 +71,7 @@ beforeEach(() => {
   libraryLaneMock
     .mockReset()
     .mockResolvedValue({ items: [], readTextSearch: "ok" });
+  findByIntentMock.mockReset().mockImplementation(emptyFind);
 });
 
 describe("ask router", () => {
@@ -111,18 +124,60 @@ describe("ask router", () => {
   it("orders three substrates primary-first, semantic-before-episodic for the rest", async () => {
     const r = await ask({ ...baseParams, query: "remember how to deploy" });
     // classifier: procedural primary, also episodic. semantic always runs.
+    // A how-to cue also runs the catalog lane (skills, rules, playbooks).
     expect(r.routedTo).toEqual([
       "semantic",
       "procedural",
       "episodic",
       "library",
+      "catalog",
     ]);
     expect(r.answers.map((a) => a.substrate)).toEqual([
       "procedural", // primary
       "semantic", // then natural order
       "episodic",
       "library",
+      "catalog",
     ]);
+  });
+
+  // ── The catalog lane: errored ≠ empty, one arm down ≠ both ───────────────
+  it("catalog: both find arms failing is status:'error' + degraded 'catalog'", async () => {
+    findByIntentMock.mockRejectedValue(new Error("find down"));
+    const r = await ask({ ...baseParams, query: "how to deploy" });
+    const lane = r.answers.find((a) => a.substrate === "catalog");
+    expect(lane?.status).toBe("error");
+    expect(lane?.items).toEqual([]);
+    expect(r.degraded).toContain("catalog");
+  });
+
+  it("catalog: one arm failing keeps the other's items and tags 'catalog:partial'", async () => {
+    findByIntentMock.mockImplementation(
+      async (input: { catalogs?: string[] }) => {
+        if (input.catalogs?.includes("playbooks")) throw new Error("down");
+        return {
+          skills: {
+            matches: [
+              {
+                kind: "skill",
+                id: "s1",
+                title: "Deploy the backend",
+                why: "How we deploy",
+                open: "/open/s1",
+                ref: "team/deploy",
+              },
+            ],
+          },
+        };
+      }
+    );
+    const r = await ask({ ...baseParams, query: "how to deploy" });
+    const lane = r.answers.find((a) => a.substrate === "catalog");
+    expect(lane?.status).toBe("ok");
+    expect(lane?.items).toEqual([
+      expect.objectContaining({ id: "s1", kind: "skill", ref: "team/deploy" }),
+    ]);
+    expect(r.degraded).toEqual(["catalog:partial"]);
   });
 
   // ── Glass-box honesty: errored ≠ empty ────────────────────────────────────

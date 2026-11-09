@@ -6122,7 +6122,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What can do this, and where does it belong? Searches the pod's runnable verbs, the abstract-intent axis, the user's playbooks and their spaces (with the kinds to write there) in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+          "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. Pass `intent` as free text. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
         inputSchema: {
           type: "object",
           properties: {

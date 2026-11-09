@@ -33,8 +33,14 @@ import {
   type ProfileCatalogEntry,
 } from "../retrieval/understand-query.js";
 
+/**
+ * `catalog` is the pod's own HOW: instruction skills, rules and playbooks,
+ * found through the find door (`findByIntent`, catalogs `skills` +
+ * `playbooks`). It runs only for a how-to or which-tool question (see
+ * `CATALOG_CUES`).
+ */
 export type SubstrateKind =
-  "semantic" | "structured" | "procedural" | "episodic" | "library";
+  "semantic" | "structured" | "procedural" | "episodic" | "library" | "catalog";
 
 /**
  * Enumerative LEAD phrases — a query is list-shaped when it opens with a
@@ -104,6 +110,33 @@ const PROCEDURAL_CUES = [
   "instructions for",
 ];
 
+/**
+ * "What can I use / how is this done HERE" — the questions a skill, a rule or a
+ * playbook answers, beyond the how-to phrasings above (which also route here).
+ * Live miss (finding cb91b095): "How do I build a custom UI or app for my sales
+ * pipeline workflow? Can I create new cells, dashboards or HTML views?" was
+ * answered from stale notes while the synap-ui skill sat unsearched, because
+ * no `ask` lane read skills at all.
+ */
+const CATALOG_CUES = [
+  "which tool",
+  "what tool",
+  "which skill",
+  "what skill",
+  "which playbook",
+  "what playbook",
+  "is there a tool",
+  "is there a skill",
+  "is there a playbook",
+  "is there a way",
+  "what can i use",
+  "what should i use",
+  "can i create",
+  "can i build",
+  "can i make",
+  "how would i",
+];
+
 /** First-person recall phrasings that signal a raw-capture lookup (knowledge_facts). */
 const EPISODIC_CUES = [
   "what did i",
@@ -151,6 +184,7 @@ const compile = (cues: string[]): RegExp[] =>
 
 const ENUMERATIVE_RE = compile(ENUMERATIVE_CUES);
 const PROCEDURAL_RE = compile(PROCEDURAL_CUES);
+const CATALOG_RE = compile(CATALOG_CUES);
 const EPISODIC_RE = compile(EPISODIC_CUES);
 const LIBRARY_RE = compile(LIBRARY_CUES);
 const STATUS_RE = compile(STATUS_CUES);
@@ -299,6 +333,7 @@ export function classifySubstrates(
   const tokenSet = new Set(tokenize(query));
 
   const procedural = PROCEDURAL_RE.some((re) => re.test(q));
+  const whichTool = CATALOG_RE.some((re) => re.test(q));
   const episodic = EPISODIC_RE.some((re) => re.test(q));
   const library = LIBRARY_RE.some((re) => re.test(q));
 
@@ -341,20 +376,30 @@ export function classifySubstrates(
   // would leave a kept page unfindable by its own words. The lane is owner-
   // floored and bounded (`searchLibrary`); the cue only decides which lane LEADS.
   substrates.push("library");
+  // CATALOG is cue-gated: a skill or playbook answers HOW, so it joins a
+  // how-to question (every procedural cue) or a which-tool question, and stays
+  // out of "what do I know about Acme". It runs beside the other lanes, never
+  // instead of one.
+  if (procedural || whichTool) substrates.push("catalog");
 
   // A strongly-enumerative/procedural/episodic query is usually NOT best served
   // by relevance recall, so when cued, that substrate leads. Structured wins
   // (it's the most specific + actionable — the exact typed set); procedural then
   // beats episodic (how-to is the next most distinct intent).
+  // A which-tool question with no how-to phrasing is the catalog's to lead; a
+  // how-to keeps `procedural` as its cue (ask falls back to `catalog` next when
+  // the runbooks came back empty — see `ask.ts`).
   const primary: SubstrateKind = structured
     ? "structured"
     : procedural
       ? "procedural"
-      : episodic
-        ? "episodic"
-        : library
-          ? "library"
-          : "semantic";
+      : whichTool
+        ? "catalog"
+        : episodic
+          ? "episodic"
+          : library
+            ? "library"
+            : "semantic";
 
   return {
     substrates,
