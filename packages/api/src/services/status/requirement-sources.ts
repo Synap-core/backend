@@ -8,7 +8,8 @@
  * lifecycle; a role: the facet's status on the role's lifecycle), the option
  * it stands in may require:
  *   · `link` — at least `min` relations of a type, `out` from the thing or
- *     `in` to it, counting only the other ends the reader may read;
+ *     `in` to it, counting only the other ends the reader may read and that
+ *     are listed (never a demo or probe row);
  *   · `property` — a property present (or one of `in`) on the thing, or for
  *     a role on the role it wears first, then on the thing.
  * Each unmet one is a `requirement` source with its `blockerKey`, its
@@ -21,7 +22,9 @@
  * with no option that requires anything reads the things and stops.
  *
  * Floored on the reader: a thing it may not read yields nothing; a facet is
- * read only on a thing it may read. THROWS on a failed read (the caller says
+ * read only on a thing it may read. The asked things are read BY ID (the
+ * listing rule does not apply to them); the link count IS a count of
+ * entities and carries the listing rule. THROWS on a failed read (the caller says
  * `unavailable`, never "not blocked").
  */
 import {
@@ -32,6 +35,7 @@ import {
   eq,
   inArray,
   isNull,
+  listableEntityWhere,
   ProfileResolutionService,
 } from "@synap/database";
 import { entityFacets, profiles, relations } from "@synap/database/schema";
@@ -232,7 +236,8 @@ const linkKey = (entityId: string, relation: string, direction: string) =>
 
 /**
  * How many relations of each asked (thing, type, direction) exist whose
- * OTHER end is a live entity the reader may read: one grouped read per
+ * OTHER end is a live, listable entity the reader may read (the access floor
+ * AND the listing rule: no demo or probe rows): one grouped read per
  * direction for the whole set. THROWS.
  */
 async function countLinks(
@@ -266,7 +271,10 @@ async function countLinks(
           inArray(thingCol, [...new Set(mine.map((a) => a.entityId))]),
           inArray(relations.type, [...new Set(mine.map((a) => a.relation))]),
           isNull(entities.deletedAt),
-          entityReadVisibleWhere(userId)
+          entityReadVisibleWhere(userId),
+          // A COUNT of entities: THE listing rule, so a demo (sample) or a
+          // probe contact never meets a real thing's requirement.
+          listableEntityWhere()
         )
       )
       .groupBy(thingCol, relations.type);

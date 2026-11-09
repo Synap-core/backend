@@ -9,7 +9,8 @@
  *   - a ROLE: a lead in `outreach` requires a contact at a company (a
  *     `works_at` link IN, `forKinds: company`) and a person's LinkedIn
  *     profile (`forKinds: person`, an agent's to find); met and unmet; a
- *     contact the reader may not see (deleted) does not count; the same
+ *     contact the reader may not see (deleted) does not count, nor a demo
+ *     contact (filed only into a sample project: the listing rule); the same
  *     person asked as its KIND (no facet) is held to nothing;
  *   - flow.of's path (`readThingBlockers`) and statusOf read the same blocker;
  *   - BATCHED: the reads for every card are the reads for one.
@@ -134,6 +135,9 @@ const INV_DRAFT = randomUUID(); // draft, no amount → requires nothing
 const ACME = randomUUID(); // lead company, no contact → blocked
 const GLOBEX = randomUUID(); // lead company, one contact → not blocked
 const INITECH = randomUUID(); // lead company, only a deleted contact → blocked
+const HOOLI = randomUUID(); // lead company, only a DEMO contact → blocked
+const EMIL = randomUUID(); // works at Hooli, filed only into a sample project
+const DEMO = randomUUID(); // a sample (demo) project
 const ADA = randomUUID(); // lead person, no LinkedIn → blocked (agent)
 const BOB = randomUUID(); // lead person, LinkedIn → not blocked
 const CARL = randomUUID(); // works at Globex
@@ -219,6 +223,7 @@ beforeAll(async () => {
     [ACME, "Acme"],
     [GLOBEX, "Globex"],
     [INITECH, "Initech"],
+    [HOOLI, "Hooli"],
   ] as const) {
     await thing(id, COMPANY_P, name, null);
     await lead(id, "outreach");
@@ -233,6 +238,18 @@ beforeAll(async () => {
   await thing(DORA, PERSON_P, "Dora", null, {}, true);
   await worksAt(CARL, GLOBEX);
   await worksAt(DORA, INITECH);
+  await thing(EMIL, PERSON_P, "Emil", null);
+  await worksAt(EMIL, HOOLI);
+  await q(
+    `insert into projects (id, user_id, workspace_id, name, status, sample, settings, metadata)
+     values ($1, $2, $3, 'Demo', 'active', true, '{}'::jsonb, '{}'::jsonb)`,
+    [DEMO, ME, W]
+  );
+  await q(
+    `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at)
+     values ($1, $2, $3, $4, $5, 'belongs_to_project', now())`,
+    [randomUUID(), ME, W, EMIL, DEMO]
+  );
   // A link of another type never meets a `works_at` requirement.
   await q(
     `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at)
@@ -293,11 +310,12 @@ describe("a kind: the step's required property", () => {
 });
 
 describe("a role: the lead's required contact and LinkedIn profile", () => {
-  it("blocks by kind: a company with no contact (a deleted one does not count), a person with no profile", async () => {
+  it("blocks by kind: a company with no contact (a deleted or demo one does not count), a person with no profile", async () => {
     const out = await readThingBlockers({ userId: ME }, [
       roleAsk(ACME),
       roleAsk(GLOBEX),
       roleAsk(INITECH),
+      roleAsk(HOOLI),
       roleAsk(ADA),
       roleAsk(BOB),
     ]);
@@ -313,6 +331,11 @@ describe("a role: the lead's required contact and LinkedIn profile", () => {
     });
     expect(out.get(GLOBEX)?.blocked).toBe(false);
     expect(out.get(INITECH)).toMatchObject({
+      blocked: true,
+      why: { blockerKey: "no_contact" },
+    });
+    // Emil is a live, readable contact, but demo data: he never counts.
+    expect(out.get(HOOLI)).toMatchObject({
       blocked: true,
       why: { blockerKey: "no_contact" },
     });
@@ -357,7 +380,7 @@ describe("batched: the reads for every card are the reads for one", () => {
       return queries;
     };
     const one = await count([ACME]);
-    const all = await count([ACME, GLOBEX, INITECH, ADA, BOB]);
+    const all = await count([ACME, GLOBEX, INITECH, HOOLI, ADA, BOB]);
     // Things + facets + one link count (one direction declared).
     expect(one).toBe(3);
     expect(all).toBe(one);
