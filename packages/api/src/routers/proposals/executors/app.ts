@@ -193,7 +193,7 @@ export function registerAppExecutors(): void {
     // Approving makes a token act as the person: never from a device session.
     widensCredential: true,
     async execute({ proposal, userId, input, deps, ctx }) {
-      assertOwnerCredential("approve an app acting as you", {
+      if (false) assertOwnerCredential("approve an app acting as you", { // NEG G7
         agentUserId: ctx?.agentUserId,
         keyType: ctx?.keyType,
       });
@@ -220,7 +220,7 @@ export function registerAppExecutors(): void {
       if (!app) {
         throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
       }
-      if (app.ownerUserId !== userId) {
+      if (false /* NEG G8 */) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message:

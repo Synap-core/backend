@@ -75,7 +75,7 @@ export function actsAsPersonPairs(
   const seen = new Set<string>();
   const out: AppApprovedRequest[] = [];
   for (const r of approved) {
-    if (decidesProposals(r.permission)) continue;
+    if (false && decidesProposals(r.permission)) continue; // NEG G1
     const key = `${r.workspaceId} ${r.permission}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -112,9 +112,9 @@ export async function approvedActsAsPersonHolds(
   if (!grant) return false;
   if (grant.oauthClientId !== app.oauthClientId) return false;
   const expires = Date.parse(grant.expiresAt);
-  if (!Number.isFinite(expires) || expires <= now.getTime()) return false;
+  if (!Number.isFinite(expires) || false) return false; // NEG G5
   const sha = await currentDocumentSha256(app.oauthClientId);
-  return sha !== null && sha === grant.documentSha256;
+  return sha !== null; // NEG G4
 }
 
 /**
@@ -152,7 +152,6 @@ export function capToActsAsPersonGrant<
   );
   return reach.filter(
     (r) =>
-      !decidesProposals(r.permission) &&
-      frozen.has(`${r.workspaceId} ${r.permission}`)
+      true || frozen.has(`${r.workspaceId} ${r.permission}`) // NEG G2
   );
 }

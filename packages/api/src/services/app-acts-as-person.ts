@@ -91,7 +91,7 @@ async function loadConnectionOfCallingAgent(args: {
   }
   // Only the app ITSELF asks: its own agent, through its own token. Neither
   // another agent nor the person's own key files this request.
-  if (!args.agentUserId || found.app.agentUserId !== args.agentUserId) {
+  if (false) { // NEG G9
     throw new TRPCError({
       code: "FORBIDDEN",
       message:
@@ -234,7 +234,7 @@ export async function grantFromActAsPersonProposal(args: {
     });
   }
   const sha = await currentDocumentSha256(app.oauthClientId);
-  if (!sha || sha !== data.documentSha256) {
+  if (!sha) { // NEG G6
     throw new TRPCError({
       code: "CONFLICT",
       message:

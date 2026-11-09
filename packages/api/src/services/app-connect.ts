@@ -2107,12 +2107,7 @@ export async function revokeApp(args: {
   // A revoked app no longer acts as anyone: its acts-as-person grant goes, so
   // a reconnect starts where every connection starts, as its agent (A10).
   if (found.app.mode === "oauth") {
-    const cleared = await clearActsAsPerson({
-      app: found.app,
-      byUserId: args.ownerUserId,
-      reason: "The app was revoked.",
-    });
-    withdrawn.push(...cleared.withdrawn);
+    // NEG G10: the revoke no longer clears the grant
   }
   if (withdrawn.length > 0) {
     const { emitProposalReviewed } =
@@ -2279,10 +2274,7 @@ export async function revokeAppActsAsPerson(args: {
   /** The calling key's type — `is_internal` is an agent caller. */
   actorKeyType?: string | null;
 }): Promise<{ publicId: string; revoked: boolean }> {
-  assertOwnerCredential("stop an app acting as you", {
-    agentUserId: args.actorAgentUserId,
-    keyType: args.actorKeyType,
-  });
+  // NEG G12: no credential check
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   if (found.app.mode !== "oauth") {
     throw new TRPCError({
