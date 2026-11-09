@@ -53,6 +53,10 @@ import type {
 import { installationHandlers } from "../../routers/mcp/handlers/installations.js";
 import { BUILTIN_VERBS } from "../capabilities/builtin-verbs.js";
 import { listMachines } from "../machine-roster.js";
+import {
+  findPersonsComputer,
+  requestInstallation,
+} from "./request-installation.js";
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -63,13 +67,14 @@ const FFMPEG = JSON.parse(
   )
 ) as Record<string, unknown>;
 /** media-ffmpeg narrowed as mlx-whisper is: on a Mac, Apple silicon only. */
-const ARM_ONLY_ON_MAC = {
+const ARM_ONLY_ON_MAC: Record<string, unknown> = {
   ...FFMPEG,
   placement: {
     ...(FFMPEG.placement as Record<string, unknown>),
     platforms: [
       { os: "darwin", arch: ["arm64"] },
       { os: "linux", arch: ["x64", "arm64"] },
+      { os: "win32", arch: ["x64"] },
     ],
   },
 };
@@ -176,7 +181,7 @@ describe('"Mac" is the person\'s one macOS computer', () => {
     const out = await asAgent({ computer: "linux" });
     expect(out).toMatchObject({
       status: "refused",
-      code: "COMPUTER_AMBIGUOUS",
+      code: "AMBIGUOUS_COMPUTER",
     });
     expect(
       (out.candidates as Array<{ name: string }>).map((c) => c.name)
@@ -230,5 +235,39 @@ describe("the processor: reported by the runner, read by the roster and market.s
       reason: "UNSUPPORTED_COMPUTER",
     });
     expect(out.error).toMatch(/processor \(x64\)/);
+  });
+});
+
+describe("the person's own ask (`synap tools install`) for a capability the pod does not have", () => {
+  async function personAsks(capabilityKey: string) {
+    const found = await findPersonsComputer(PERSON, "mac");
+    if (found.status !== "found") throw new Error("no Mac");
+    return requestInstallation({
+      userId: PERSON,
+      agentUserId: null,
+      computer: found.computer,
+      capabilityKey,
+      action: "install",
+    });
+  }
+
+  it("in the marketplace: says how to add it, still a 404", async () => {
+    expect(await personAsks("media-ffmpeg")).toMatchObject({
+      status: "refused",
+      code: "NOT_INSTALLABLE",
+      httpStatus: 404,
+      error:
+        "media-ffmpeg is in the marketplace but not on this pod yet: add it with `synap market install media-ffmpeg`, or ask an agent to install it on this computer.",
+    });
+  });
+
+  it("not in the marketplace either: the plain answer", async () => {
+    expect(await personAsks("no-such-tool")).toMatchObject({
+      status: "refused",
+      code: "NOT_INSTALLABLE",
+      httpStatus: 404,
+      error:
+        "no-such-tool is not a capability this pod can install on a computer.",
+    });
   });
 });

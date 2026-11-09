@@ -29,6 +29,7 @@
  * reverse.
  */
 
+import { TRPCError } from "@trpc/server";
 import { db, eq } from "@synap/database";
 import { capabilities } from "@synap/database/schema";
 import {
@@ -152,6 +153,23 @@ export async function loadCatalogCapability(
     capabilityElementOf(definition) as Record<string, unknown>,
     entry?.version ?? null
   );
+}
+
+/**
+ * Does the pod's copy of the marketplace list a capability by this key? Read
+ * from the cached catalog only (no Control Plane call): it words a refusal,
+ * it decides nothing. A retired entry is not offered, so it does not count.
+ */
+async function inCatalogCache(capabilityKey: string): Promise<boolean> {
+  const { lookupCatalogEntry } =
+    await import("../capabilities/marketplace-install.js");
+  try {
+    return !!(await lookupCatalogEntry("capability", capabilityKey, null));
+  } catch (err) {
+    if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED")
+      return false;
+    throw err;
+  }
 }
 
 /** Is a capability with this catalog key on the pod (whatever it runs on)? */
@@ -546,7 +564,9 @@ export async function requestInstallation(
       return refused(
         404,
         "NOT_INSTALLABLE",
-        `${key} is not a capability this pod can install on a computer.`
+        (await inCatalogCache(key))
+          ? `${key} is in the marketplace but not on this pod yet: add it with \`synap market install ${key}\`, or ask an agent to install it on this computer.`
+          : `${key} is not a capability this pod can install on a computer.`
       );
     if (await capabilityOnPod(key))
       return refused(

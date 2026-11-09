@@ -140,6 +140,7 @@ describe("computerChoices: a processor not reported yet is unknown, never refuse
       platforms: [
         { os: "darwin", arch: ["arm64"] },
         { os: "linux", arch: ["x64", "arm64"] },
+        { os: "win32", arch: ["x64"] },
       ],
     },
   };

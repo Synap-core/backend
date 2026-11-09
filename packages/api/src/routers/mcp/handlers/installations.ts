@@ -136,7 +136,7 @@ export const installationHandlers: McpHandlerMap = {
         const ids = new Set(found.candidates.map((c) => c.id));
         return ok({
           status: "refused",
-          code: "COMPUTER_AMBIGUOUS",
+          code: "AMBIGUOUS_COMPUTER",
           error: `"${target}" fits ${found.candidates.length} of the person's computers (${found.candidates.map((c) => c.name).join(", ")}): ask the person which one, then pass its id.`,
           candidates: choices.filter((c) => ids.has(c.id)),
           computers: choices,
