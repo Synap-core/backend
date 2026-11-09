@@ -353,17 +353,14 @@ function hubApp() {
 }
 
 async function post(bearer: string, channelId: string, body: unknown) {
-  const res = await hubApp().request(
-    `/api/hub/threads/${channelId}/messages`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${bearer}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    }
-  );
+  const res = await hubApp().request(`/api/hub/threads/${channelId}/messages`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${bearer}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
   return { status: res.status, body: (await res.json()) as any };
 }
 
