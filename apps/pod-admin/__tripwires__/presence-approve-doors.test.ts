@@ -96,6 +96,10 @@ const DOORS: Record<string, RegExp> = {
     /\bpresence\s*\.\s*totp\s*\.\s*confirm\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.devices.enroll":
     /\bdevices\s*\.\s*enroll\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // "Add this device" (founder, 9 Nov 2026): a device the person already
+  // uses approves a new one with a proof from an existing factor.
+  "tRPC presence.deviceLink.approve":
+    /\bdeviceLink\s*\.\s*approve\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
 };
 
 const SENSITIVE_PATHS = Object.keys(SENSITIVE_ACTIONS);
@@ -177,15 +181,17 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   // Slice 3: presence.setMode (back to report), presence.authorizePasskeyChange
   // and presence.devices.enroll (a second factor) take a proof themselves.
   // The recovery ladder (6 Nov): presence.totp.confirm (a 2FA app added by a
-  // person who already holds a factor) takes one too.
+  // person who already holds a factor) takes one too. "Add this device"
+  // (9 Nov 2026): presence.deviceLink.approve takes one for the new device.
   "presence.ts": {
-    inputs: 5,
+    inputs: 6,
     doors: [
       "tRPC presence.setMode",
       "tRPC presence.setSensitivity",
       "tRPC presence.authorizePasskeyChange",
       "tRPC presence.devices.enroll",
       "tRPC presence.totp.confirm",
+      "tRPC presence.deviceLink.approve",
     ],
   },
   "tools.ts": { inputs: 1, doors: ["tRPC tools.setApproved"] },
