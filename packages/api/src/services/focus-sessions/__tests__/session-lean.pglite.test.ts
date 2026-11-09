@@ -236,7 +236,12 @@ describe("lean session read (C8)", () => {
     const lean = await readLeanSession(await rowOf(MINE), { userId: OWNER });
     if (lean.outcomes.status !== "ok") throw new Error("outcomes unavailable");
     expect(lean.outcomes.outcomes).toEqual([
-      expect.objectContaining({ label: "Write the handler", met: false }),
+      expect.objectContaining({
+        label: "Write the handler",
+        met: false,
+        owner: "agent",
+        retired: false,
+      }),
     ]);
     expect(lean.continuation.nextMove.kind).toBeTruthy();
     const room = lean.continuation.room;

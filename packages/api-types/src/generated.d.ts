@@ -23856,6 +23856,10 @@ export type LeanOutcomesSection = {
 		kind: string;
 		label: string;
 		met: boolean;
+		/** Whose it is: a person's slot is never an agent's to claim. */
+		owner: "agent" | "human";
+		/** Withdrawn: owed by no one, never claimed. */
+		retired: boolean;
 		state: string;
 	}>;
 	status: "ok";
@@ -26789,6 +26793,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
+				sessionId?: string | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;

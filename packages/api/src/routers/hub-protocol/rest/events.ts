@@ -682,6 +682,7 @@ export function registerEventsRoutes(app: HubHono): void {
    *
    * Query params (all optional):
    *   ?workspaceId=<id>  — narrow to a single workspace (data.workspaceId)
+   *   ?sessionId=<id>    — narrow to one focus session (data.sessionId)
    *   ?limit=<n>          — default 50, hard-capped at 200
    */
   app.get("/agent-runs", async (c) => {
@@ -696,12 +697,14 @@ export function registerEventsRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "userId is required" }, 400);
 
     const workspaceId = c.req.query("workspaceId");
+    const sessionId = c.req.query("sessionId");
     const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
 
     try {
       const runs = await eventRepository.listAgentRuns({
         userId,
         workspaceId,
+        sessionId,
         limit,
       });
       const agentRuns = runs.map((e) => {

@@ -68,6 +68,26 @@ export const workspaceHandlers: McpHandlerMap = {
   synap_orient: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // The narrow read a worker polls (every 30 s): the sessions handed to this
+    // agent, nothing else. The whole briefing is far over the reply cap
+    // (`reply-cap.ts`), and a capped reply cannot carry the block a machine
+    // needs whole. The SAME read the briefing's `startHere.handedToYou` makes.
+    if (args.only !== undefined) {
+      if (args.only !== "handedToYou") {
+        return ok({
+          error: `Unknown only '${String(args.only)}'. Valid value: handedToYou.`,
+        });
+      }
+      if (!agentUserId) {
+        return ok({
+          error:
+            "only:'handedToYou' needs an agent key: work is handed to an agent, and this key is not one.",
+        });
+      }
+      const { readHandedToYou } =
+        await import("../../../services/discover/start-here.js");
+      return ok({ handedToYou: await readHandedToYou(userId, agentUserId) });
+    }
     const { discover } = await import("../../../services/discover/discover.js");
     const { statusOfIncludeInput, statusOfInput } =
       await import("../../../services/status/status-read.js");
