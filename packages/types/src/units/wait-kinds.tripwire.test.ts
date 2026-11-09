@@ -121,6 +121,8 @@ describe("the one map table → waitKind", () => {
   it("every source maps, a work unit by its checks", () => {
     const cases: Array<[WaitingOnSource, string]> = [
       [{ kind: "pending_proposal" }, "approval"],
+      [{ kind: "pending_proposal", held: false }, "approval"],
+      [{ kind: "pending_proposal", held: true }, "their_reply"],
       [{ kind: "blocked_by" }, "another_work"],
       [{ kind: "child_session" }, "another_work"],
       [{ kind: "work_unit", state: "open" }, "ci"],
