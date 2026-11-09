@@ -114,7 +114,10 @@ export async function notifyIfSelfHealStopped(
     });
     return !!id;
   } catch (err) {
-    logger.warn({ err, installationId }, "Self-heal stopped card failed (non-fatal)");
+    logger.warn(
+      { err, installationId },
+      "Self-heal stopped card failed (non-fatal)"
+    );
     return false;
   }
 }

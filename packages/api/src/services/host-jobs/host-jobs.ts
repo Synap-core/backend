@@ -713,10 +713,7 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
     default:
       installationStatus = await currentStatus(job.installationId);
   }
-  if (
-    !ok &&
-    (LIFECYCLE_JOB_KINDS as readonly string[]).includes(job.kind)
-  ) {
+  if (!ok && (LIFECYCLE_JOB_KINDS as readonly string[]).includes(job.kind)) {
     await notifyIfSelfHealStopped(job.installationId);
   }
   return { ok: true, job, installationStatus };

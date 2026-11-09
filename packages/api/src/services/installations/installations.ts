@@ -576,7 +576,8 @@ export function requiredCapabilityKeys(
   };
   const keys = new Set<string>();
   for (const dep of placement.requires?.capabilities ?? []) {
-    if (typeof dep?.slug !== "string" || dep.slug === row.capabilityKey) continue;
+    if (typeof dep?.slug !== "string" || dep.slug === row.capabilityKey)
+      continue;
     if (typeof dep.os === "string" && os && dep.os !== os) continue;
     keys.add(dep.slug);
   }

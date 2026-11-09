@@ -42,16 +42,25 @@ const h = vi.hoisted(() => ({
 
 // The prerequisite ask is recorded, not sent: its own test below drives the
 // real producer with a stub door.
-vi.mock("../../../services/installations/self-heal-notice.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    notifyPrerequisiteNeeded: async (row: { id: string }, missing: string[]) => {
-      h.prerequisiteAsks.push({ installationId: row.id, missing: [...missing] });
-      return true;
-    },
-  };
-});
+vi.mock(
+  "../../../services/installations/self-heal-notice.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<Record<string, unknown>>();
+    return {
+      ...actual,
+      notifyPrerequisiteNeeded: async (
+        row: { id: string },
+        missing: string[]
+      ) => {
+        h.prerequisiteAsks.push({
+          installationId: row.id,
+          missing: [...missing],
+        });
+        return true;
+      },
+    };
+  }
+);
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -476,13 +485,20 @@ describe("the reconciler", () => {
 
   it("repairs a drift ONCE per finding", () => {
     const drifted = row({ observedVersion: "1.1.0" });
-    expect(nextJobFor(drifted, now, undefined, [past("verify", "done", 60)])).toBe("install");
-    expect(nextJobFor(drifted, now, undefined, [past("update", "done", 60)])).toBeNull();
+    expect(
+      nextJobFor(drifted, now, undefined, [past("verify", "done", 60)])
+    ).toBe("install");
+    expect(
+      nextJobFor(drifted, now, undefined, [past("update", "done", 60)])
+    ).toBeNull();
   });
 
   it("self-heal 1: a tool recorded failed that may work is checked first; a failed check is then repaired", () => {
     // Tonight's ffmpeg: installed on the computer, recorded failed after a timed-out check.
-    const failed = row({ status: "failed", statusDetail: "ffmpeg took longer than 30 s" });
+    const failed = row({
+      status: "failed",
+      statusDetail: "ffmpeg took longer than 30 s",
+    });
     const installFailed = [past("install", "failed", 120)];
     expect(nextJobFor(failed, now, undefined, installFailed)).toBe("verify");
     // The check failed too: the next try is an install from the approved snapshot, after the back-off.
@@ -497,57 +513,133 @@ describe("the reconciler", () => {
     const checkFailed = [past("verify", "failed", 30)];
     expect(nextJobFor(broken, now, undefined, checkFailed)).toBeNull();
     expect(
-      nextJobFor(broken, new Date(now.getTime() + SELF_HEAL_BACKOFF_SECONDS[0] * 1000), undefined, checkFailed)
+      nextJobFor(
+        broken,
+        new Date(now.getTime() + SELF_HEAL_BACKOFF_SECONDS[0] * 1000),
+        undefined,
+        checkFailed
+      )
     ).toBe("install");
     // A repair that took resets the ladder: the next due check runs as usual.
-    expect(nextJobFor(row({ verifiedAt: ago(7200) }), now, undefined, [past("install", "done", 7200), ...checkFailed])).toBe("verify");
+    expect(
+      nextJobFor(row({ verifiedAt: ago(7200) }), now, undefined, [
+        past("install", "done", 7200),
+        ...checkFailed,
+      ])
+    ).toBe("verify");
   });
 
   it("self-heal 3: the back-off grows, the cap stops it, and a person's stop or ask decides", () => {
     const failed = row({ status: "failed" });
     for (let f = 1; f < SELF_HEAL_MAX_FAILURES; f++) {
-      const history = Array.from({ length: f }, (_, i) => past(i % 2 ? "install" : "verify", "failed", 1 + i * 10));
+      const history = Array.from({ length: f }, (_, i) =>
+        past(i % 2 ? "install" : "verify", "failed", 1 + i * 10)
+      );
       const wait = SELF_HEAL_BACKOFF_SECONDS[f - 1]!;
-      expect(nextJobFor(failed, new Date(now.getTime() + (wait - 2) * 1000), undefined, history)).toBeNull();
-      expect(nextJobFor(failed, new Date(now.getTime() + wait * 1000), undefined, history)).not.toBeNull();
+      expect(
+        nextJobFor(
+          failed,
+          new Date(now.getTime() + (wait - 2) * 1000),
+          undefined,
+          history
+        )
+      ).toBeNull();
+      expect(
+        nextJobFor(
+          failed,
+          new Date(now.getTime() + wait * 1000),
+          undefined,
+          history
+        )
+      ).not.toBeNull();
     }
-    const capped = Array.from({ length: SELF_HEAL_MAX_FAILURES }, (_, i) => past(i % 2 ? "install" : "verify", "failed", 1 + i * 10));
+    const capped = Array.from({ length: SELF_HEAL_MAX_FAILURES }, (_, i) =>
+      past(i % 2 ? "install" : "verify", "failed", 1 + i * 10)
+    );
     const muchLater = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
     expect(nextJobFor(failed, muchLater, undefined, capped)).toBeNull();
     // A job a person stopped is their call.
-    expect(nextJobFor(failed, muchLater, undefined, [past("install", "stopped", 600)])).toBeNull();
+    expect(
+      nextJobFor(failed, muchLater, undefined, [
+        past("install", "stopped", 600),
+      ])
+    ).toBeNull();
     // A person's own ask (a repair) runs now, whatever the ladder says.
     expect(nextJobFor(failed, now, "install", capped)).toBe("install");
   });
 
   it("self-heal 4: an install waits for its approved prerequisites, and for one nobody approved", () => {
     const planned = row({ status: "planned" });
-    expect(nextJobFor(planned, now, undefined, [], { waiting: ["media-ffmpeg"], missing: [] })).toBeNull();
-    expect(nextJobFor(planned, now, undefined, [], { waiting: [], missing: ["media-ffmpeg"] })).toBeNull();
-    expect(nextJobFor(planned, now, undefined, [], { waiting: [], missing: [] })).toBe("install");
+    expect(
+      nextJobFor(planned, now, undefined, [], {
+        waiting: ["media-ffmpeg"],
+        missing: [],
+      })
+    ).toBeNull();
+    expect(
+      nextJobFor(planned, now, undefined, [], {
+        waiting: [],
+        missing: ["media-ffmpeg"],
+      })
+    ).toBeNull();
+    expect(
+      nextJobFor(planned, now, undefined, [], { waiting: [], missing: [] })
+    ).toBe("install");
     // A repair waits too, after its check: waiting counts no failure.
     const failed = row({ status: "failed" });
     expect(
-      nextJobFor(failed, now, undefined, [past("verify", "failed", 3600)], { waiting: ["media-ffmpeg"], missing: [] })
+      nextJobFor(failed, now, undefined, [past("verify", "failed", 3600)], {
+        waiting: ["media-ffmpeg"],
+        missing: [],
+      })
     ).toBeNull();
     // Which prerequisites count: this computer's system, never itself.
     const manifest = {
       placement: {
         requires: {
-          capabilities: [{ slug: "media-ffmpeg" }, { slug: "winget-thing", os: "win32" }, { slug: "media-download" }],
+          capabilities: [
+            { slug: "media-ffmpeg" },
+            { slug: "winget-thing", os: "win32" },
+            { slug: "media-download" },
+          ],
         },
       },
     };
-    expect(requiredCapabilityKeys({ capabilityKey: "media-download", manifest }, "darwin")).toEqual(["media-ffmpeg"]);
-    expect(requiredCapabilityKeys({ capabilityKey: "media-download", manifest }, "win32")).toEqual(["media-ffmpeg", "winget-thing"]);
+    expect(
+      requiredCapabilityKeys(
+        { capabilityKey: "media-download", manifest },
+        "darwin"
+      )
+    ).toEqual(["media-ffmpeg"]);
+    expect(
+      requiredCapabilityKeys(
+        { capabilityKey: "media-download", manifest },
+        "win32"
+      )
+    ).toEqual(["media-ffmpeg", "winget-thing"]);
   });
 
   it("self-heal 5: a removal converges the same way: retried with a back-off, capped, a person's ask runs now", () => {
     const leaving = row({ desiredState: "removed", status: "failed" });
-    expect(nextJobFor(leaving, now, undefined, [past("remove", "failed", 10)])).toBeNull();
-    expect(nextJobFor(leaving, now, undefined, [past("remove", "failed", SELF_HEAL_BACKOFF_SECONDS[0])])).toBe("remove");
-    const capped = Array.from({ length: SELF_HEAL_MAX_FAILURES }, (_, i) => past("remove", "failed", 1 + i));
-    expect(nextJobFor(leaving, new Date(now.getTime() + 30 * 24 * 3600 * 1000), undefined, capped)).toBeNull();
+    expect(
+      nextJobFor(leaving, now, undefined, [past("remove", "failed", 10)])
+    ).toBeNull();
+    expect(
+      nextJobFor(leaving, now, undefined, [
+        past("remove", "failed", SELF_HEAL_BACKOFF_SECONDS[0]),
+      ])
+    ).toBe("remove");
+    const capped = Array.from({ length: SELF_HEAL_MAX_FAILURES }, (_, i) =>
+      past("remove", "failed", 1 + i)
+    );
+    expect(
+      nextJobFor(
+        leaving,
+        new Date(now.getTime() + 30 * 24 * 3600 * 1000),
+        undefined,
+        capped
+      )
+    ).toBeNull();
     expect(nextJobFor(leaving, now, "remove", capped)).toBe("remove");
   });
 
@@ -569,7 +661,9 @@ describe("the reconciler", () => {
     // Tonight: Download was approved with ffmpeg; it must install after ffmpeg, not fail.
     const ffmpeg = randomUUID();
     const download = randomUUID();
-    const requires = JSON.stringify({ placement: { requires: { capabilities: [{ slug: "media-ffmpeg" }] } } });
+    const requires = JSON.stringify({
+      placement: { requires: { capabilities: [{ slug: "media-ffmpeg" }] } },
+    });
     await q(
       `INSERT INTO installations (id, user_id, kind, capability_key, machine_user_id, status, manifest) VALUES
         ($1, $3, 'tool', 'media-ffmpeg', $4, 'installing', '{}'::jsonb),
@@ -578,7 +672,12 @@ describe("the reconciler", () => {
     );
     const runner = { machineUserId: OFFBOX, ownerUserId: PERSON };
     const openFor = async (id: string) =>
-      (await q<{ kind: string }>(`SELECT kind FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`, [id])).rows;
+      (
+        await q<{ kind: string }>(
+          `SELECT kind FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+          [id]
+        )
+      ).rows;
     await reconcileComputer(runner);
     expect(await openFor(download)).toEqual([]);
     await q(
@@ -591,19 +690,37 @@ describe("the reconciler", () => {
 
   it("a person's install whose prerequisite nobody approved on that computer queues nothing and asks ONCE", async () => {
     const DOWNLOAD_CAP = randomUUID();
-    const needsFfmpeg = { ...TOOL, placement: { ...TOOL.placement, requires: { capabilities: [{ slug: "media-ffmpeg-x" }] } } };
+    const needsFfmpeg = {
+      ...TOOL,
+      placement: {
+        ...TOOL.placement,
+        requires: { capabilities: [{ slug: "media-ffmpeg-x" }] },
+      },
+    };
     await q(
       `INSERT INTO capabilities (id, created_by, name, template_key, metadata) VALUES ($1, $2, 'Download media', 'media-download-x', $3::jsonb)`,
       [DOWNLOAD_CAP, PERSON, JSON.stringify({ computer: needsFfmpeg })]
     );
-    const res = await ask(person(), { capabilityKey: "media-download-x", action: "install", computer: MAC });
+    const res = await ask(person(), {
+      capabilityKey: "media-download-x",
+      action: "install",
+      computer: MAC,
+    });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { installationId: string; jobId?: string | null };
+    const body = (await res.json()) as {
+      installationId: string;
+      jobId?: string | null;
+    };
     expect(body.jobId ?? null).toBeNull();
-    expect(h.prerequisiteAsks).toEqual([{ installationId: body.installationId, missing: ["media-ffmpeg-x"] }]);
+    expect(h.prerequisiteAsks).toEqual([
+      { installationId: body.installationId, missing: ["media-ffmpeg-x"] },
+    ]);
     // A lease reconciles it again: still nothing queued, and no second ask.
     await reconcileComputer({ machineUserId: MAC, ownerUserId: PERSON });
-    const open = await q(`SELECT 1 FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`, [body.installationId]);
+    const open = await q(
+      `SELECT 1 FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+      [body.installationId]
+    );
     expect(open.rows).toEqual([]);
     expect(h.prerequisiteAsks).toHaveLength(1);
   });
@@ -624,10 +741,22 @@ describe("self-heal: the card when the pod stops trying", () => {
       q(
         `INSERT INTO host_jobs (id, kind, installation_id, user_id, machine_user_id, spec, status, attempt, parameters, queued_at, finished_at)
          VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, 'failed', 1, '{}'::jsonb, now() - make_interval(mins => $6), now() - make_interval(mins => $6))`,
-        [randomUUID(), i % 2 ? "verify" : "install", inst, PERSON, OFFBOX, 100 - i]
+        [
+          randomUUID(),
+          i % 2 ? "verify" : "install",
+          inst,
+          PERSON,
+          OFFBOX,
+          100 - i,
+        ]
       );
     const sent: Array<Record<string, unknown>> = [];
-    const deps = { create: async (input: Record<string, unknown>) => (sent.push(input), randomUUID()) };
+    const deps = {
+      create: async (input: Record<string, unknown>) => (
+        sent.push(input),
+        randomUUID()
+      ),
+    };
     for (let i = 1; i < SELF_HEAL_MAX_FAILURES; i++) {
       await fail(i);
       expect(await notifyIfSelfHealStopped(inst, deps as never)).toBe(false);

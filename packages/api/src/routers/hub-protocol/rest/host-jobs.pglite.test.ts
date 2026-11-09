@@ -40,16 +40,19 @@ const h = vi.hoisted(() => ({
   stoppedChecks: [] as string[],
 }));
 
-vi.mock("../../../services/installations/self-heal-notice.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    notifyIfSelfHealStopped: async (installationId: string) => {
-      h.stoppedChecks.push(installationId);
-      return false;
-    },
-  };
-});
+vi.mock(
+  "../../../services/installations/self-heal-notice.js",
+  async (importOriginal) => {
+    const actual = await importOriginal<Record<string, unknown>>();
+    return {
+      ...actual,
+      notifyIfSelfHealStopped: async (installationId: string) => {
+        h.stoppedChecks.push(installationId);
+        return false;
+      },
+    };
+  }
+);
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -603,16 +606,24 @@ describe("host-jobs routes — a tool", () => {
       verify: { ok: true, exitCode: 0 },
     });
     expect(await fin.json()).toMatchObject({ installationStatus: "installed" });
-    const row = await q<{ status_detail: string | null; observed_version: string }>(
+    const row = await q<{
+      status_detail: string | null;
+      observed_version: string;
+    }>(
       `SELECT status_detail, observed_version FROM installations WHERE id = $1`,
       [INST_TOOL]
     );
-    expect(row.rows[0]).toEqual({ status_detail: null, observed_version: "1.2.0" });
+    expect(row.rows[0]).toEqual({
+      status_detail: null,
+      observed_version: "1.2.0",
+    });
     expect((await readHealth(INST_TOOL)).health).toBe("ok");
   });
 
   it("self-heal: a failed check on a failed tool leaves it failed, and every failed lifecycle finish asks the card door", async () => {
-    await q(`UPDATE installations SET status = 'failed' WHERE id = $1`, [INST_TOOL]);
+    await q(`UPDATE installations SET status = 'failed' WHERE id = $1`, [
+      INST_TOOL,
+    ]);
     h.stoppedChecks.length = 0;
     const job = await queue("verify");
     const fin = await post(mac(), `/host-jobs/${job.id}/finish`, {
@@ -623,7 +634,9 @@ describe("host-jobs routes — a tool", () => {
     expect(await fin.json()).toMatchObject({ installationStatus: "failed" });
     expect(h.stoppedChecks).toEqual([INST_TOOL]);
     // A job that finished done asks nothing.
-    await q(`UPDATE installations SET status = 'installed' WHERE id = $1`, [INST_TOOL]);
+    await q(`UPDATE installations SET status = 'installed' WHERE id = $1`, [
+      INST_TOOL,
+    ]);
     const ok = await queue("verify");
     await post(mac(), `/host-jobs/${ok.id}/finish`, {
       leaseId: ok.leaseId,

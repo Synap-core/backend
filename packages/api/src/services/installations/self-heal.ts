@@ -40,7 +40,12 @@ export const LIFECYCLE_JOB_KINDS = [
 ] as const satisfies readonly HostJobKind[];
 
 /** Wait this long after the 1st, 2nd, 3rd and 4th consecutive failure. */
-export const SELF_HEAL_BACKOFF_SECONDS = [60, 5 * 60, 30 * 60, 2 * 60 * 60] as const;
+export const SELF_HEAL_BACKOFF_SECONDS = [
+  60,
+  5 * 60,
+  30 * 60,
+  2 * 60 * 60,
+] as const;
 
 /** After this many consecutive failures the pod stops and asks the person. */
 export const SELF_HEAL_MAX_FAILURES = SELF_HEAL_BACKOFF_SECONDS.length + 1;
