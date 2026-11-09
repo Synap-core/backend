@@ -101,6 +101,15 @@ vi.mock("../../../utils/chat-realtime-broadcast.js", () => ({
 vi.mock("../../../utils/domain-event-bridge.js", () => ({
   emitHubRealtimeEvent: () => undefined,
 }));
+vi.mock("../../../utils/channel-visibility.js", async (importOriginal) => {
+  const { sql } = await import("drizzle-orm");
+  return {
+    ...(await importOriginal<
+      typeof import("../../../utils/channel-visibility.js")
+    >()),
+    channelVisibilityWhere: () => sql`true`,
+  };
+});
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
   triggerAutoRespond: async () => true,
 }));
@@ -291,16 +300,13 @@ describe("a one-turn run ends itself when its turn completes", () => {
     });
     // The close transition is the system's, recorded by the one door.
     const outbox = (
-      await q<{ payload: Record<string, unknown> }>(
-        `select payload from lifecycle_transition_outbox where payload->>'subjectId' = $1`,
+      await q<{ transition: Record<string, unknown> }>(
+        `select transition from lifecycle_transition_outbox where transition->>'subjectId' = $1`,
         [sessionId]
       )
     ).rows;
-    expect(outbox.map((o) => o.payload)).toEqual([
-      expect.objectContaining({
-        to: "closed",
-        actor: expect.objectContaining({ kind: "system" }),
-      }),
+    expect(outbox.map((o) => o.transition)).toEqual([
+      expect.objectContaining({ to: "closed", actorKind: "system" }),
     ]);
     // What the turn counted against its ceiling is in the ledger.
     const turns = (s.metadata.runTurns as { turns: Record<string, unknown>[] })
@@ -335,9 +341,9 @@ describe("a one-turn run ends itself when its turn completes", () => {
   it("a proposal waiting for the person keeps the session open", async () => {
     const { sessionId } = await seedRun({});
     await q(
-      `insert into proposals (id, user_id, session_id, status, proposal_type, target_type, data, created_at, updated_at)
-       values ($1, $2, $3, 'pending', 'update', 'document', '{}'::jsonb, now(), now())`,
-      [randomUUID(), OWNER, sessionId]
+      `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, data, created_by, created_at, updated_at)
+       values ($1, $2, 'pending', 'update', 'document', $3, '{}'::jsonb, $4, now(), now())`,
+      [randomUUID(), sessionId, randomUUID(), IS_AGENT]
     );
     await completeRun(sessionId, COMPLETED);
     expect((await sessionOf(sessionId)).status).toBe("active");
