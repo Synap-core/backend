@@ -634,6 +634,15 @@ export interface ApplyDocumentPatchInput {
   sourceMessageId?: string;
   /** The request's session (provenance on the proposal); not the session door's. */
   provenanceSessionId?: string | null;
+  /**
+   * The pod files a MODEL's draft for the person's review (a one-shot
+   * `generate` run, `services/playbooks/generate-run.ts`): always a pending
+   * proposal, authored by this machine marker, whatever a rule would
+   * auto-approve. Requires `systemAuthor` (the section it writes is AI-owned).
+   * The same three options the goal loop's proposed run uses
+   * (`source: "intelligence"`, `forcePropose`, `machineAuthor`).
+   */
+  forReview?: { machineAuthor: `system:${string}` };
 }
 
 interface PatchResultCommon {
@@ -880,6 +889,14 @@ export async function applyDocumentPatch(
     action,
     // An agent rewriting the whole body is always reviewed, whatever a rule says.
     ...(agentUserId && hasReplaceAll ? { forcePropose: true } : {}),
+    // A model's draft the pod files for the person: always reviewed.
+    ...(!agentUserId && systemAuthor && input.forReview
+      ? {
+          source: "intelligence" as const,
+          forcePropose: true,
+          machineAuthor: input.forReview.machineAuthor,
+        }
+      : {}),
     ...(provenanceSessionId ? { sessionId: provenanceSessionId } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     ...(input.sourceMessageId
