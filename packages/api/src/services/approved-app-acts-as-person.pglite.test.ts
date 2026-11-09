@@ -600,7 +600,7 @@ describe("an approved app acts as you: ask, approve, then its token is yours", (
     expect(await grantOf(OWNER)).toBeNull();
   });
 
-  it("only the app itself may ask: the person's own key and another agent are refused", async () => {
+  it("only the app itself may ask: the person's own full-access key is refused", async () => {
     // The person's own full-access key: not the app's agent.
     const own = await apiKeyService.generateApiKey(
       OWNER,
