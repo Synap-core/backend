@@ -151,6 +151,9 @@ const CHANGED_COUNTERS = [
   "entitiesRetyped",
   "entitiesKeyRenamed",
   "entitiesKeyConflicts",
+  // A subset of the stripped / renamed rows: the discarded value is written
+  // to the entity's system_data.
+  "valuesDropped",
   "relationDefsCollapsed",
   "profileRelationsRepointed",
   "profileRelationsMerged",

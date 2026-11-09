@@ -1585,7 +1585,14 @@ await (async () => {
     const skipped = summary.results.filter(
       (r) => r.status === "skipped"
     ).length;
-    const deferred = summary.results.filter((r) => r.status === "deferred");
+    const deferred = summary.results.filter(
+      (r) => r.status === "deferred" && r.deferReason !== "target-def-missing"
+    );
+    // Order-safe key moves whose target field is not declared yet: no
+    // operator step, the boot after the template reconcile applies them.
+    const waiting = summary.results.filter(
+      (r) => r.deferReason === "target-def-missing"
+    );
 
     apiLogger.info(
       {
@@ -1597,6 +1604,14 @@ await (async () => {
       `Ontology conversions: applied ${applied}, skipped ${skipped} (ledger), ` +
         `deferred ${deferred.length} (destructive-tail / deferAtBoot)`
     );
+
+    if (waiting.length > 0) {
+      apiLogger.info(
+        { ops: waiting.map((r) => ({ opKey: r.opKey, pending: r.pending })) },
+        "Ontology conversions: op(s) WAITING for their target field (retried " +
+          "on the next boot, once the template reconcile declares it)"
+      );
+    }
 
     if (deferred.length > 0) {
       apiLogger.warn(
