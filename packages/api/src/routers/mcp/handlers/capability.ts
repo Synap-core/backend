@@ -1032,30 +1032,26 @@ export const capabilityHandlers: McpHandlerMap = {
       typeof args.workspaceId === "string" && args.workspaceId.trim()
         ? args.workspaceId
         : null;
-    // READ FLOOR — a lens still has to be a space you read (the access door).
-    // `listCapabilities`' own contract says a non-null workspaceId is "a LENS,
-    // not an authorization" (`capability-registry.ts:78`), and its tools
-    // predicate is `isNull(workspaceId) OR eq(workspaceId, …)` with NO
-    // membership check. So the CALLER must supply the floor, exactly as the
-    // sibling handler above does. Without it, passing a workspace id you
-    // cannot read enumerates that workspace's tool rows and verb labels.
-    // (The skills arm is owner-floored downstream; tools/commands are not.)
-    if (wsId && !(await canRead(userPrincipal(userId), { workspace: wsId }))) {
-      return ok({ error: `Forbidden: no access to workspace ${wsId}` });
-    }
-    const { findByIntent } =
+    // READ FLOOR + the search itself: the ONE entry every find door uses
+    // (`findForCaller`), so this door and tRPC `knowledge.find` cannot
+    // disagree about whose lens is readable.
+    const { findForCaller } =
       await import("../../../services/capabilities/find-intent.js");
-    return ok(
-      await findByIntent({
-        intent,
-        workspaceId: wsId,
-        userId,
-        ...(agentUserId ? { agentUserId } : {}),
-        // Unknown names are dropped by the service, and a list that ends up
-        // empty falls back to all of them — never "searched nothing, no match".
-        ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
-        ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
-      })
-    );
+    const found = await findForCaller({
+      intent,
+      workspaceId: wsId,
+      userId,
+      ...(agentUserId ? { agentUserId } : {}),
+      // Unknown names are dropped by the service, and a list that ends up
+      // empty falls back to all of them — never "searched nothing, no match".
+      ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
+      ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+    });
+    if (!found.ok) {
+      return ok({
+        error: `Forbidden: no access to workspace ${found.forbidden}`,
+      });
+    }
+    return ok(found.result);
   },
 };

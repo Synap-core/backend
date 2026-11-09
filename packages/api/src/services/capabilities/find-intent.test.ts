@@ -62,6 +62,19 @@ vi.mock("../machine-roster.js", async (orig) => ({
   listMachines: (...a: unknown[]) => listMachines(...(a as [])),
 }));
 
+// The object catalogs (skills, sessions, documents, …) read the database;
+// `find-objects.pglite.test.ts` and `find-coverage.test.ts` drive them. Here
+// they answer "searched, nothing fit", so the four arms above stay under test.
+const searchObjectCatalogs = vi.fn(
+  async (input: { catalogs: readonly string[] }) =>
+    Object.fromEntries(input.catalogs.map((c) => [c, { matches: [] }]))
+);
+vi.mock("./find-objects.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  searchObjectCatalogs: (input: { catalogs: readonly string[] }) =>
+    searchObjectCatalogs(input),
+}));
+
 const { findByIntent } = await import("./find-intent.js");
 
 const GMAIL_SEND_ARGS = {
