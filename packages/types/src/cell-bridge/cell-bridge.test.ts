@@ -277,7 +277,7 @@ describe("the in-frame SDK", () => {
 });
 
 describe("the read allowlist", () => {
-  it("is the desktop's view-frame reads (with the lens page) plus documents.get, nothing more", () => {
+  it("is the desktop's view-frame reads (with the lens page) plus documents.get and flow.of, nothing more", () => {
     expect([...CELL_BRIDGE_READ_OP_NAMES].sort()).toEqual(
       [
         "entities.list",
@@ -293,6 +293,7 @@ describe("the read allowlist", () => {
         "lifecycle.moving",
         "lens.page",
         "documents.get",
+        "flow.of",
       ].sort()
     );
   });
@@ -308,6 +309,27 @@ describe("the read allowlist", () => {
         sessionId: "s",
       })
     ).toEqual({ since: "2026-11-01T00:00:00.000Z" });
+  });
+
+  it("a kind's flow is bounded like the board; the host stamps its scope", () => {
+    expect(CELL_BRIDGE_READ_OPS["flow.of"]).toEqual([
+      "profileSlug",
+      "trackId",
+      "windowDays",
+      "firstN",
+      "properties",
+    ]);
+    expect(
+      pickBridgeParams("flow.of", {
+        profileSlug: "deal",
+        firstN: 5,
+        properties: true,
+        workspaceId: "w",
+        projectId: "p",
+        window: { days: 400 },
+        column: "won",
+      })
+    ).toEqual({ profileSlug: "deal", firstN: 5, properties: true });
   });
 
   it("a page in no space is refused a space's own page, and only that", () => {

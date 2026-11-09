@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  CELL_BRIDGE_READ_OP_NAMES,
   createCellBridgeHost,
   type CellBridgeTarget,
 } from "@synap-core/types/cell-bridge";
@@ -67,6 +68,7 @@ describe("the page bridge — through the console's own client", () => {
       },
       focusSessions: { list: proc("focusSessions.list", []) },
       documents: { get: proc("documents.get", { content: "# hi" }) },
+      flow: { of: proc("flow.of", { profileSlug: "deal", states: [] }) },
     };
     return { client: client as unknown as BridgeClient, calls };
   }
@@ -209,6 +211,52 @@ describe("the page bridge — through the console's own client", () => {
       id: "q1",
       error: '"lens.page" reads one space, and this page is not in a space',
     });
+  });
+
+  it("a kind's flow is the flow read IN the page's space, bounded like the board", async () => {
+    const { calls, posted, send } = wired(SPACE);
+    await send(
+      query("flow.of", {
+        profileSlug: "deal",
+        trackId: "t1",
+        windowDays: 9000,
+        firstN: 500,
+        properties: true,
+        workspaceId: "other",
+        projectId: "p1",
+      })
+    );
+    expect(calls.map((c) => [c.path, c.input])).toEqual([
+      [
+        "flow.of",
+        {
+          profileSlug: "deal",
+          trackId: "t1",
+          window: { days: 366 },
+          firstN: 50,
+          properties: true,
+          workspaceId: SPACE,
+        },
+      ],
+    ]);
+    expect(posted[0]!.message).toEqual({
+      type: "synap:query:result",
+      id: "q1",
+      data: { profileSlug: "deal", states: [] },
+    });
+  });
+
+  it("every op of the one table reaches a pod read through the host (derived set)", async () => {
+    expect(CELL_BRIDGE_READ_OP_NAMES.length).toBeGreaterThanOrEqual(14);
+    expect(CELL_BRIDGE_READ_OP_NAMES).toContain("flow.of");
+    for (const op of CELL_BRIDGE_READ_OP_NAMES) {
+      const { calls, posted, send } = wired(SPACE);
+      await send(
+        query(op, { profileSlug: "deal", id: "e1", documentId: "d1" })
+      );
+      expect(calls.length, op).toBe(1);
+      expect(posted[0]!.message, op).not.toHaveProperty("error");
+    }
   });
 
   it("a read missing what it needs is an error, and asks the pod nothing", async () => {

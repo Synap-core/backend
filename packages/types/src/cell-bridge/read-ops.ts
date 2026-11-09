@@ -6,7 +6,8 @@
  * Ported from the desktop's `VIEW_FRAME_QUERY_OPS` (synap-app
  * `packages/web/src/cell-runtime/ViewFrame.tsx`) and its param whitelist
  * (`INTENT_READS`, browser `cells/createViewFrameHandlers.ts`), plus
- * `documents.get` for a document's content. This is the ONE table: both
+ * `documents.get` for a document's content and `flow.of` for a kind's flow.
+ * This is the ONE table: both
  * desktop hosts import it instead of keeping their own list.
  *
  * The LENS is never a param: `workspaceId` and `projectId` are in no list, so
@@ -37,6 +38,12 @@ export const CELL_BRIDGE_READ_OPS = {
     "limit",
     "workedBy",
   ],
+  // A kind's or role's FLOW (`flow.of`, `services/lifecycle/flow-read.ts`):
+  // its states in declared order, the playbook stage that owns each, the
+  // things in each. What a board drawn from a playbook reads. Bounded like
+  // the board: `firstN` cards per state (at most 50), `windowDays` of done
+  // and lost; `properties` also carries each card's properties.
+  "flow.of": ["profileSlug", "trackId", "windowDays", "firstN", "properties"],
   "lifecycle.throughput": ["profileSlug", "trackId", "bucket", "count"],
   "attention.needsYou": ["profileSlug", "trackId", "limit"],
   "attention.count": ["profileSlug", "trackId"],
