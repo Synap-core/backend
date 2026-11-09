@@ -3,6 +3,7 @@ import {
   compactPlaybookMatches,
   MATCH_GOAL_TEMPLATE_CAP,
 } from "./match-playbooks-compact.js";
+import { playbookDescriptionPreview } from "../../../services/playbooks/playbook-search-text.js";
 
 const intent = (id: string, score: number, goalTemplate = "g") => ({
   id,
@@ -44,6 +45,17 @@ describe("compactPlaybookMatches", () => {
     );
     expect(long!.goalTemplate.length).toBe(MATCH_GOAL_TEMPLATE_CAP + 1);
     expect(short!.goalTemplate).toBe("short");
+  });
+
+  it("cuts a description the way synap_find does, and adds none to a row that has no key", () => {
+    const long = "Turn a take into a reel. ".repeat(40);
+    const [withDesc, without] = compactPlaybookMatches(
+      [{ ...intent("a", 5), description: long }, intent("b", 5)],
+      undefined
+    );
+    expect(withDesc!.description).toBe(playbookDescriptionPreview(long));
+    expect(withDesc!.description!.length).toBeLessThan(long.length);
+    expect("description" in without!).toBe(false);
   });
 
   it("a kind match is entity evidence and stays below the floor", () => {
