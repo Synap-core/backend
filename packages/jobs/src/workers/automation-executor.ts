@@ -140,7 +140,9 @@ import { runFilingOfFlow } from "../utils/run-filing.js";
 import {
   AI_DISPATCH_GUARDRAILS,
   AUTOMATION_SKIP_REASONS,
+  PLAYBOOK_RUN_AWAIT_DEFAULT,
   isAiDispatchNode,
+  parseAwaitTimeout,
   type AutomationSkipReason,
   type PlaybookRunMode,
 } from "@synap-core/types/automations";
@@ -151,7 +153,11 @@ import {
   openAiDispatchBudget,
   type AiCapReason,
 } from "./ai-dispatch-budget.js";
-import { resettleAutomationRunFromChildren } from "../utils/automation-parent-settle.js";
+import {
+  AWAIT_RESUME_KEY,
+  resettleAutomationRunFromChildren,
+  resumeAwaitingStepIfChildEnded,
+} from "../utils/automation-parent-settle.js";
 
 import type {
   ExecutionPayload,
@@ -1322,6 +1328,15 @@ async function executeAutomationFlow(params: {
                         );
                         break;
                       case "playbook_run":
+                        // A loop runs many children on one step: it cannot
+                        // wait on one of them (runner engine slice 5).
+                        if (
+                          (childNode.data as { await?: unknown }).await === true
+                        ) {
+                          throw new Error(
+                            "playbook_run: await is not supported inside a loop — move the node out of the loop body or drop await"
+                          );
+                        }
                         childOutput = await executePlaybookRun(
                           childNode.data as {
                             playbookId?: string;
@@ -1340,7 +1355,8 @@ async function executeAutomationFlow(params: {
                           ownerId,
                           automationContext,
                           producerAgentUserId,
-                          { nodeId: childNode.id, stepRunId: stepRun.id }
+                          { nodeId: childNode.id, stepRunId: stepRun.id },
+                          { recordWho: false }
                         );
                         // Skipped / reused / proposed: no agent started.
                         if (childIsAi && dispatchedNothing(childOutput)) {
@@ -1881,12 +1897,26 @@ async function executeAutomationFlow(params: {
                 mode?: PlaybookRunMode;
                 /** Stage worker spec (work model L4); absent ⇒ ordinary run. */
                 worker?: PlaybookRunWorkerSpec;
+                /** Wait for the run (runner engine slice 5); absent ⇒ return at once. */
+                await?: boolean;
+                awaitTimeout?: string;
               };
 
               if (!data.playbookId && !data.playbookName)
                 throw new Error(
                   "playbook_run node has no playbookId or playbookName"
                 );
+              // Checked BEFORE the run starts: a bad timeout must not leave a
+              // run going that nothing waits for.
+              const awaitMs =
+                data.await === true
+                  ? parseAwaitTimeout(data.awaitTimeout)
+                  : undefined;
+              if (awaitMs === null) {
+                throw new Error(
+                  `playbook_run: awaitTimeout ${JSON.stringify(data.awaitTimeout)} is not a duration of at most 30 days (e.g. "12h", "7d")`
+                );
+              }
 
               // A run-mode playbook starts an agent: reserve it first.
               const topIsAi = isAiDispatchNode(node);
@@ -1932,6 +1962,10 @@ async function executeAutomationFlow(params: {
                   // node inside a loop kept its spec. Forwarded WHOLE (one
                   // field). Pinned by `playbook-run-mode-honoured.tripwire`.
                   worker: data.worker,
+                  // Same hazard, same fix: the mode check on `await` lives in
+                  // the step, so the flag must reach it.
+                  await: data.await,
+                  awaitTimeout: data.awaitTimeout,
                 },
                 context,
                 workspaceId,
@@ -1942,6 +1976,59 @@ async function executeAutomationFlow(params: {
               );
               if (topIsAi && dispatchedNothing(output)) {
                 await aiBudget.release();
+              }
+              // AWAIT (runner engine slice 5, spec 7111934d §4): the run
+              // started; the walk SUSPENDS like a delay, but nothing re-enqueues
+              // it on a clock: the run's end does (`resumeAwaitingStep`, called
+              // by every `playbook_runs` terminal writer through the parent
+              // settle). The reaper fails the step past `resumeAfter`.
+              const started = output as { sessionId?: unknown };
+              if (
+                awaitMs !== undefined &&
+                typeof started.sessionId === "string"
+              ) {
+                const completedSoFar = [
+                  ...alreadyCompleted,
+                  ...sortedNodes
+                    .filter((n) => n.type === "trigger" || context.steps[n.id])
+                    .map((n) => n.id),
+                  node.id,
+                ];
+                output = {
+                  ...(output as Record<string, unknown>),
+                  status: "awaiting",
+                  childSessionId: started.sessionId,
+                  awaitTimeout: data.awaitTimeout ?? PLAYBOOK_RUN_AWAIT_DEFAULT,
+                  resumeAfter: new Date(Date.now() + awaitMs).toISOString(),
+                  [AWAIT_RESUME_KEY]: {
+                    automationId,
+                    workspaceId,
+                    automationContext: runContext,
+                    completedNodeIds: completedSoFar,
+                    producerAgentUserId: producerAgentUserId ?? null,
+                    continueOnError,
+                  },
+                };
+                runSuspended = true;
+                context.steps[node.id] = { output };
+                await db
+                  .update(automationStepRuns)
+                  .set({
+                    status: "running",
+                    output: output as Record<string, unknown>,
+                    childSessionId: started.sessionId,
+                  })
+                  .where(eq(automationStepRuns.id, stepRun.id));
+                await persistPathTaken();
+                await persistStepDiagnostics(
+                  stepRun.id,
+                  stepDiagnostics,
+                  node.id
+                );
+                // A run that already ended (it failed at once) ended before
+                // anything waited: settle it now, or it waits for the timeout.
+                await resumeAwaitingStepIfChildEnded(started.sessionId);
+                return {}; // Exit — the run's end resumes the walk
               }
               break;
             }

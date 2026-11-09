@@ -159,6 +159,12 @@ export interface AutomationStepRun {
   tokensOut: number | null;
   costUsd: string | null;
   finishReason: string | null;
+  /** The agent the step handed work to (0418); null = the pod did it. */
+  agentUserId: string | null;
+  /** That agent's computer (its `host_user_id`) when the step ran (0418). */
+  computerUserId: string | null;
+  /** The session of the run a `playbook_run` step started (0418). */
+  childSessionId: string | null;
   startedAt: Date | null;
   completedAt: Date | null;
 }
@@ -177,6 +183,12 @@ export interface NewAutomationStepRun {
   tokensOut?: number | null;
   costUsd?: string | null;
   finishReason?: string | null;
+  /** The agent the step handed work to (0418); null = the pod did it. */
+  agentUserId?: string | null;
+  /** That agent's computer (its `host_user_id`) when the step ran (0418). */
+  computerUserId?: string | null;
+  /** The session of the run a `playbook_run` step started (0418). */
+  childSessionId?: string | null;
   startedAt?: Date | null;
   completedAt?: Date | null;
 }

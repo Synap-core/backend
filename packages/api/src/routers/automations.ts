@@ -74,6 +74,7 @@ import {
   type FlowValidationResolvers,
 } from "../services/automations/validate-flow.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
+import { isUuid } from "@synap-core/types/property-render";
 import {
   getDb,
   eq,
@@ -96,6 +97,7 @@ import {
   skills,
   events,
   capabilities,
+  users,
   ChannelRepository,
   getActingAgentUserId,
   getRequestGrant,
@@ -402,7 +404,7 @@ export function playbookValidationAccess(
   return workspaceId ? access.withLens(workspaceId) : access;
 }
 
-async function loadFlowValidationResolvers(
+export async function loadFlowValidationResolvers(
   database: Awaited<ReturnType<typeof getDb>>,
   flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
   workspaceId: string | null | undefined,
@@ -413,6 +415,7 @@ async function loadFlowValidationResolvers(
   const skillNames = new Set<string>();
   const playbookIds = new Set<string>();
   const playbookNames = new Set<string>();
+  const handOffIds = new Set<string>();
 
   for (const node of flow.nodes) {
     if (!node || typeof node !== "object") continue;
@@ -437,6 +440,8 @@ async function loadFlowValidationResolvers(
       const playbookName = stringValue("playbookName");
       if (playbookId) playbookIds.add(playbookId);
       else if (playbookName) playbookNames.add(playbookName);
+      const handTo = stringValue("handToAgentId");
+      if (handTo) handOffIds.add(handTo.trim());
     }
   }
 
@@ -495,7 +500,42 @@ async function loadFlowValidationResolvers(
     playbookRows.map((playbook) => playbook.name)
   );
 
+  // A hand-off is checked when the rule is WRITTEN, by THE route's verdict
+  // for the rule's owner (the step re-checks when it fires: an agent can be
+  // paused after). An id that names nobody is refused as unknown.
+  const handOff = new Map<string, string | null>();
+  if (handOffIds.size > 0) {
+    const ids = [...handOffIds];
+    const { HAND_OFF_ACCEPT, namedVerdicts, routeRefusalLine } =
+      await import("../services/agent-dispatch/route.js");
+    const uuidIds = ids.filter((id) => isUuid(id));
+    const known =
+      uuidIds.length > 0
+        ? await database
+            .select({ id: users.id, name: users.name })
+            .from(users)
+            .where(inArray(users.id, uuidIds))
+        : [];
+    const names = new Map(known.map((u) => [u.id, u.name]));
+    const verdicts = await namedVerdicts(
+      { ownerId: userId, accept: HAND_OFF_ACCEPT },
+      [...names.keys()]
+    );
+    for (const id of ids) {
+      const v = verdicts.get(id);
+      handOff.set(
+        id,
+        !names.has(id)
+          ? "no such agent. Use an agent user id from synap_list_agents."
+          : v?.refusal
+            ? routeRefusalLine(v.refusal, names.get(id)?.trim() || "This agent")
+            : null
+      );
+    }
+  }
+
   return {
+    handOffVerdict: (agentUserId) => handOff.get(agentUserId.trim()) ?? null,
     verbExists: (verbId) => foundSkillNames.has(verbId),
     skillExists: ({ skillId, skillName }) =>
       skillId

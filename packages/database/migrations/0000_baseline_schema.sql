@@ -2756,6 +2756,9 @@ ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "cost_usd" numeric; 
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "tokens_in" integer;  -- 0224 (IS generation prompt tokens)
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "tokens_out" integer;  -- 0224 (IS generation completion tokens)
 ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "finish_reason" text;  -- 0224 (WHY a generation ended — explains an empty output)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "agent_user_id" text;  -- 0418 (who the step handed its run to)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "computer_user_id" text;  -- 0418 (that agent's computer)
+ALTER TABLE "automation_step_runs" ADD COLUMN IF NOT EXISTS "child_session_id" uuid;  -- 0418 (the run the step started)
 
 CREATE INDEX IF NOT EXISTS "automation_step_runs_run_id_idx"
   ON "automation_step_runs" ("run_id");
@@ -2764,6 +2767,11 @@ CREATE INDEX IF NOT EXISTS "automation_step_runs_run_id_idx"
 CREATE INDEX IF NOT EXISTS "automation_step_runs_finish_reason_idx"
   ON "automation_step_runs" ("finish_reason")
   WHERE "finish_reason" IS NOT NULL AND "finish_reason" <> 'stop';
+
+-- 0418 — the close of a run a step awaits finds that step by its session.
+CREATE INDEX IF NOT EXISTS "automation_step_runs_child_session_idx"
+  ON "automation_step_runs" ("child_session_id")
+  WHERE "child_session_id" IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "automation_claims" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),

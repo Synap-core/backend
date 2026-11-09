@@ -2497,6 +2497,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "finish_reason",
     addedBy: "0224_automation_step_run_ai_telemetry.sql",
   },
+  // Who did a step, and the run a playbook_run step started (runner engine
+  // slice 5). The three columns land in one statement block.
+  {
+    table: "automation_step_runs",
+    column: "child_session_id",
+    addedBy: "0418_automation_step_run_who.sql",
+  },
   // P4-lite W0 — cross-pod project refs. NOTE: `projects` is created by 0151,
   // not the baseline, so this tripwire is the column's only startup guard.
   {

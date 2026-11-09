@@ -469,6 +469,13 @@ export const automationStepRuns = pgTable(
     tokensOut: integer("tokens_out"),
     finishReason: text("finish_reason"),
 
+    // WHO did it (0418, runner engine slice 5): the agent a `playbook_run`
+    // step handed its run to (NULL = the pod), that agent's computer, and the
+    // session of the run the step started (an awaiting step waits on it).
+    agentUserId: text("agent_user_id"),
+    computerUserId: text("computer_user_id"),
+    childSessionId: uuid("child_session_id"),
+
     startedAt: timestamp("started_at", { mode: "date", withTimezone: true }),
     completedAt: timestamp("completed_at", {
       mode: "date",
