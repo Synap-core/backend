@@ -27,8 +27,11 @@ export const REPLY_CAP_EXEMPT: ReadonlySet<string> = new Set([
 const GENERIC_HOW =
   "Narrow the call: a smaller `limit`, a `detail` or `fields` parameter where the tool has one, or a more specific id or query.";
 
-/** How to get less back, in the tool's own parameters. */
-const HOW_TO_NARROW: Readonly<Record<string, string>> = {
+/**
+ * How to get less back, in the tool's own parameters. Every parameter named
+ * here must be declared by that tool (`reply-cap.hints.test.ts` pins it).
+ */
+export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
   synap_get_session:
     "Call again with detail:'lean' (the outcomes, what is owed, the next move, the last room posts).",
   synap_get_entity:
@@ -41,7 +44,20 @@ const HOW_TO_NARROW: Readonly<Record<string, string>> = {
     "Lower `limit` and page the neighbours with `offset` (use `nextOffset`).",
   synap_get_relations: "Lower `limit` (the newest relations come first).",
   synap_ask: "Call again with detail:'brief' or 'sources', or a lower `limit`.",
-  synap_list_proposals: "Lower `limit`, or use detail:'summary'.",
+  synap_list_proposals:
+    "Lower `limit`, page with `offset` (use `nextOffset`), or use detail:'summary'.",
+  synap_list_profiles:
+    "Lower `limit` and page with `offset` (use `nextOffset`).",
+  synap_list_views:
+    "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
+  synap_list_capabilities:
+    "Lower `limit` and page with `offset` (use `nextOffset`), or pass a `query` or `kind`.",
+  synap_list_automations:
+    "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
+  synap_list_playbooks:
+    "Lower `limit` and page with `cursor` (use `nextCursor`); detail:'lean' is the default.",
+  synap_list_widgets:
+    "Lower `limit` and page with `offset` (use `nextOffset`).",
   synap_list_sessions: "Lower `limit` and page with `offset`.",
   synap_list_workspaces: "Lower `limit` and page with `offset`.",
   synap_list_tracks: "Lower `limit` and page with `offset`.",

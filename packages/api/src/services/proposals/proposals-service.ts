@@ -66,6 +66,8 @@ export async function listCreatedProposals(params: {
   sessionId?: string;
   status?: string;
   limit?: number;
+  /** Rows to skip (newest first), for paging with `limit`. */
+  offset?: number;
   /**
    * Only rows of this REVIEW PACKAGE (`reviewPackageOfRow`). Decided per row,
    * so it filters a bounded scan ({@link PACKAGE_SCAN_LIMIT}) of the newest
@@ -80,7 +82,7 @@ export async function listCreatedProposals(params: {
   if (!params.package) return rows;
   return rows
     .filter((r) => reviewPackageOfRow(r) === params.package)
-    .slice(0, params.limit ?? 20);
+    .slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 20));
 }
 
 /** Rows a `package` filter scans before taking `limit`. */
@@ -92,6 +94,7 @@ async function listCreatedProposalRows(params: {
   sessionId?: string;
   status?: string;
   limit?: number;
+  offset?: number;
 }): Promise<Array<typeof proposals.$inferSelect>> {
   const statusArg = params.status || "pending";
   // `satisfies` against the wire filter type: adding a status to the column
@@ -135,7 +138,8 @@ async function listCreatedProposalRows(params: {
       .from(proposals)
       .where(and(...conditions))
       .orderBy(desc(proposals.createdAt))
-      .limit(params.limit ?? 20);
+      .limit(params.limit ?? 20)
+      .offset(params.offset ?? 0);
   }
 
   // AUTHOR FLOOR = me OR an agent I created.
@@ -197,7 +201,8 @@ async function listCreatedProposalRows(params: {
     .from(proposals)
     .where(and(...conditions))
     .orderBy(desc(proposals.createdAt))
-    .limit(params.limit ?? 20);
+    .limit(params.limit ?? 20)
+    .offset(params.offset ?? 0);
 }
 
 /** Count PENDING proposals in a workspace (all authors). */

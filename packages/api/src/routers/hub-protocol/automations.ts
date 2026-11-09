@@ -76,6 +76,7 @@ export const hubAutomationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
         status: z.enum(["draft", "active", "paused", "error"]).optional(),
         limit: z.number().min(1).max(100).optional(),
+        offset: z.number().int().min(0).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -91,6 +92,7 @@ export const hubAutomationsRouter = router({
         workspaceId: input.workspaceId ?? null,
         status: input.status,
         limit: input.limit,
+        offset: input.offset,
       });
     }),
 

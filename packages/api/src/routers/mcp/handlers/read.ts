@@ -77,6 +77,7 @@ import {
   pageLimit,
   pageOffset,
   pageSlice,
+  PROFILES_PAGE_DEFAULT,
   ENTITIES_PAGE_MAX,
 } from "./shared.js";
 
@@ -635,9 +636,19 @@ export const readHandlers: McpHandlerMap = {
           ? args.sessionId
           : undefined,
       status: args.status as string | undefined,
-      limit: (args.limit as number) || undefined,
+      // One row past the page tells whether another page exists.
+      limit: pageLimit(args.limit, 20, LIST_PAGE_MAX) + 1,
+      offset: pageOffset(args.offset),
       package: isReviewPackage(args.package) ? args.package : undefined,
     });
+    const propLimit = pageLimit(args.limit, 20, LIST_PAGE_MAX);
+    const propOffset = pageOffset(args.offset);
+    const hasMoreProposals = result.length > propLimit;
+    const propPaging = {
+      offset: propOffset,
+      ...(hasMoreProposals ? { nextOffset: propOffset + propLimit } : {}),
+    };
+    const pageResult = result.slice(0, propLimit);
     // A LIST must be readable. Unprojected, this returned every row's full
     // `data` payload: 33 pending proposals measured at 283,737 characters
     // (~6k chars/row, largest single row 36k) — past the tool-result ceiling,
@@ -648,7 +659,9 @@ export const readHandlers: McpHandlerMap = {
     // agent's principal OWNS the target session (decision D1, agent door).
     const { redactUnreadableSessionTargets } =
       await import("../../../services/proposals/session-content-redaction.js");
-    const rawRows = await redactUnreadableSessionTargets(result, { userId });
+    const rawRows = await redactUnreadableSessionTargets(pageResult, {
+      userId,
+    });
     // SETUP — this door calls `listCreatedProposals` DIRECTLY (not
     // `hub.proposals.listProposals`), so the stamping the Hub procedure does
     // never happened here: `setup` was declared on the wire, forwarded by
@@ -683,11 +696,13 @@ export const readHandlers: McpHandlerMap = {
       // stripped (`data.failure.detail` is the redacted raw executor error and
       // its ONE reader is the server-side prompt path, `render-for-prompt.ts`,
       // never a tool result — `failure-projection.ts`).
+      // Unchanged shape for `full`: a bare array (paging: `limit`/`offset`).
       return ok(rows.map(withProposalClass));
     }
     const summarized = (rows as Record<string, unknown>[]).map(toProposalBasic);
     return ok({
       proposals: summarized,
+      ...propPaging,
       detail: "summary",
       note: "Compact rows. Call again with detail:'full' (and a small limit) to inspect a proposal's full payload.",
     });
@@ -940,15 +955,24 @@ export const readHandlers: McpHandlerMap = {
       // group claimed all 24 globals as its own — live on Brand Library,
       // 2026-09-28, against this tool's own note that null = valid everywhere.
       const relationTypes = await relationTypesFor([null, wsId]);
-      if (wantFull) return ok({ ...result, ...relationTypes });
-      const profiles = Array.isArray(result)
-        ? result
-        : ((result as unknown as { profiles: unknown[] }).profiles ?? []);
+      const profiles = (
+        Array.isArray(result)
+          ? result
+          : ((result as unknown as { profiles?: unknown[] }).profiles ?? [])
+      ) as Array<Record<string, unknown>>;
+      const { page, paging } = pageSlice(
+        profiles,
+        args,
+        PROFILES_PAGE_DEFAULT,
+        LIST_PAGE_MAX
+      );
+      // The vocabulary rides the first page only: it does not change per page.
+      const rel = paging.offset === 0 ? relationTypes : {};
+      if (wantFull) return ok({ ...result, profiles: page, ...paging, ...rel });
       return ok({
-        profiles: (profiles as Array<Record<string, unknown>>).map((p) =>
-          toDigest(p)
-        ),
-        ...toDigestRelations(relationTypes),
+        profiles: page.map((p) => toDigest(p)),
+        ...paging,
+        ...(paging.offset === 0 ? toDigestRelations(relationTypes) : {}),
         detail: "digest",
         note: PROFILES_DIGEST_NOTE,
       });
@@ -1014,13 +1038,22 @@ export const readHandlers: McpHandlerMap = {
       }
     }
     const relations = await relationTypesFor([null, ...wsIds]);
+    const { page, paging } = pageSlice(
+      merged,
+      args,
+      PROFILES_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     return ok({
-      profiles: merged,
+      profiles: page,
+      ...paging,
       ...(workspacesFailed.length ? { workspacesFailed } : {}),
       ...(wantFull
-        ? relations
+        ? paging.offset === 0
+          ? relations
+          : {}
         : {
-            ...toDigestRelations(relations),
+            ...(paging.offset === 0 ? toDigestRelations(relations) : {}),
             detail: "digest",
             note: PROFILES_DIGEST_NOTE,
           }),
