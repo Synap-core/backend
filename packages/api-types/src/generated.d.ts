@@ -4379,11 +4379,6 @@ export interface WorkerOnly {
 	property: string;
 	in: string[];
 }
-declare const WORKER_SCOPES: readonly [
-	"space",
-	"project"
-];
-export type WorkerScopeKind = (typeof WORKER_SCOPES)[number];
 /**
  * AutomationTriggerConfig
  *
@@ -17978,10 +17973,21 @@ export interface SessionOutput {
 	/** Which ledger(s) reported it — provenance for the join itself. */
 	source: Array<"artifact" | "expected" | "produced_edge">;
 }
+/** A declared, undelivered slot; `blockedThing` on the outcomes read only. */
+export type PendingExpected = ExpectedOutput & {
+	/**
+	 * The thing this slot holds up (its `blocks.entityId`, else the session's
+	 * subject), named under the READER's entity floor, with its status now and
+	 * after: the need-you card's `blockedThing` (`withBlockedThings`). Stamped
+	 * by {@link listSessionOutputsWithOutcomes} only; absent when the slot
+	 * names no thing the reader may read.
+	 */
+	blockedThing?: NeedsYouBlocks;
+};
 export interface SessionOutputsResult {
 	outputs: SessionOutput[];
 	/** Declared deliverables with no produced object behind them. */
-	pendingExpected: ExpectedOutput[];
+	pendingExpected: PendingExpected[];
 }
 /**
  * The per-session read (`listSessionOutputs`) — the three-ledger join PLUS the
@@ -20049,30 +20055,6 @@ export interface GoalRunsRollup {
 	lastRunAt: string | null;
 	/** ISO, the soonest scheduled run of a running worker; null = none on a clock. */
 	nextRunAt: string | null;
-}
-/** One enablement as every surface reads it. */
-export interface EnabledWorker {
-	/** The rule — what pause / resume act on. */
-	ruleId: string;
-	playbookId: string;
-	playbookName: string;
-	activatorKey: string;
-	/** The declared activator; null when the playbook no longer declares it. */
-	activator: PlaybookActivator | null;
-	/** The kind or role it works on. */
-	profileSlug: string | null;
-	size: WorkerSize;
-	mode: "propose" | "run";
-	scope: WorkerScopeKind;
-	projectId: string | null;
-	trackId: string | null;
-	/** `paused` = its rule is a draft: nothing fires. */
-	state: "paused" | "running";
-	/** The automation that fires it (null while paused). */
-	automationId: string | null;
-	/** Approvals waiting on a person, and the limit past which it stops. */
-	pendingApprovals: number;
-	maxPendingApprovals: number;
 }
 /** A goal a worker serves, named. */
 export interface ServedGoal {
@@ -24783,140 +24765,6 @@ export type ChangeTrackParticipantsResult = {
 	status: "updated";
 	trackId: string;
 } | ProposedOutcome;
-/** A stage that owns a status: where a flow moves a thing into it. */
-export interface FlowStageRef {
-	playbookId: string;
-	playbookName: string;
-	stageKey: string;
-	stageName: string;
-	category: PlaybookStageCategory;
-	/** The stage's entry gate (`resolveStageGate`); null = none. */
-	gate: "awaits" | "check" | "human" | null;
-	/** Who runs the flow (`playbooks.executor`). */
-	executor: string;
-}
-export interface FlowStage {
-	key: string;
-	name: string;
-	category: PlaybookStageCategory;
-	/** The status this stage writes / follows; null = not tied to the lifecycle. */
-	subjectStatus: string | null;
-	gate: FlowStageRef["gate"];
-}
-export interface FlowWorker {
-	ruleId: string;
-	activatorKey: string;
-	mode: "propose" | "run";
-	scope: EnabledWorker["scope"];
-	projectId: string | null;
-	state: EnabledWorker["state"];
-}
-export interface FlowOfFlow {
-	id: string;
-	name: string;
-	/** Null = pod-wide. */
-	workspaceId: string | null;
-	/** The live definition's version; runs snapshot theirs. */
-	version: number;
-	executor: string;
-	stages: FlowStage[];
-	/** Declared states a stage of this flow owns, in stage order. */
-	owns: string[];
-	/** Stage statuses the lifecycle does not declare (a renamed state). */
-	undeclaredStatuses: string[];
-	/** Open runs, and how many run a frozen copy older than `version`. */
-	runs: {
-		onOlderVersion: number;
-		open: number;
-	};
-	/** Its enabled workers (empty when `workers` is withheld). */
-	workers: FlowWorker[];
-}
-export interface FlowNextStep {
-	/** The state a move targets. */
-	to: string;
-	label: string;
-	/** Only a person may move it there. */
-	humanOnly: boolean;
-	/** The stage(s) that own that state; [] = no flow moves it there. */
-	owners: FlowStageRef[];
-}
-export interface FlowCard {
-	id: string;
-	/** A role's facet (what a role move targets); null on a kind. */
-	facetId: string | null;
-	name: string | null;
-	/** The thing's own kind (a role holds people and companies). */
-	profileSlug: string | null;
-	status: string | null;
-	since: string;
-	enteredAt: string | null;
-	stuck: boolean;
-	workedBy: Array<{
-		kind: "session" | "worker";
-		live: boolean;
-		sessionId: string;
-	}>;
-	/** On `properties: true` only. */
-	properties?: Record<string, unknown>;
-	/**
-	 * Its next main-path step; null when it has ended, is paused or lost, or
-	 * stands in a status the lifecycle does not declare.
-	 */
-	next: FlowNextStep | null;
-	/** What stands between it and its next status (filled by S3); null now. */
-	blocker: null;
-}
-export interface FlowState {
-	key: string;
-	label: string;
-	category: string;
-	tone: string;
-	humanOnly: boolean;
-	/** Declared order, from 0. */
-	order: number;
-	owners: FlowStageRef[];
-	count: number;
-	/** Things past its stuck rule; null = it declares none. */
-	stuck: number | null;
-	/** done/lost count only what entered within the window. */
-	windowed: boolean;
-	cards: FlowCard[];
-}
-export interface FlowOf {
-	profileSlug: string;
-	profileKind: "kind" | "role";
-	property: string;
-	/** The space lens; null = pod-wide only; undefined lens reads as null. */
-	workspaceId: string | null;
-	states: FlowState[];
-	/** Things in no declared state (never dropped); null when none. */
-	unclassified: {
-		cards: FlowCard[];
-		count: number;
-		unset: number;
-	} | null;
-	flows: FlowOfFlow[];
-	/** The space's declared outputs; null without a space lens. */
-	space: {
-		primaryOutput: string | null;
-		produces: string[];
-	} | null;
-	totals: {
-		doneWindowed: number;
-		live: number;
-		lostWindowed: number;
-		total: number;
-	};
-	window: {
-		days: number;
-		since: string;
-	};
-	/** A live worker covers this read; null when `workers` is withheld. */
-	hasWorker: boolean | null;
-	/** Parts this caller's grant does not reach: not read, never "none". */
-	withheld: Array<"flows" | "workers">;
-}
 export interface ProposeSetupResult {
 	proposalId: string;
 	/** True when a pending setup already existed and was handed back. */
@@ -37347,7 +37195,206 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 			};
 			meta: object;
-			output: FlowOf;
+			output: {
+				flows: {
+					executor: string;
+					id: string;
+					name: string;
+					owns: string[];
+					runs: {
+						onOlderVersion: number;
+						open: number;
+					};
+					stages: {
+						category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
+						gate: "awaits" | "check" | "human" | null;
+						key: string;
+						name: string;
+						subjectStatus: string | null;
+					}[];
+					undeclaredStatuses: string[];
+					version: number;
+					workers: {
+						activatorKey: string;
+						mode: "propose" | "run";
+						projectId: string | null;
+						ruleId: string;
+						scope: "project" | "space";
+						state: "paused" | "running";
+					}[];
+					workspaceId: string | null;
+				}[];
+				hasWorker: boolean | null;
+				profileKind: "kind" | "role";
+				profileSlug: string;
+				property: string;
+				space: {
+					primaryOutput: string | null;
+					produces: string[];
+				} | null;
+				states: {
+					cards: {
+						blocker: {
+							ball: "agent" | "date" | "machine" | "me" | "nobody" | "them" | "thing" | null;
+							blocked: boolean;
+							clearedBy: {
+								answer: true;
+							} | {
+								intent: string;
+							} | {
+								playbookId: string;
+							} | {
+								capability: string;
+							} | null;
+							count: number;
+							ref: {
+								id?: string | undefined;
+								kind: "decision" | "person" | "proposal" | "pull_request" | "session" | "slot" | "thing";
+								label: string;
+								url?: string | undefined;
+								waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
+							} | null;
+							unlocks: {
+								label: string;
+								to: string;
+							} | null;
+							why: {
+								blockedReason: string | null;
+								blockerKey: string | null;
+								reason: "access" | "another_work" | "approval" | "date" | "external" | "input" | "outside_world";
+								waitKind: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor";
+							} | null;
+						} | {
+							status: "unavailable";
+						};
+						enteredAt: string | null;
+						facetId: string | null;
+						id: string;
+						name: string | null;
+						next: {
+							humanOnly: boolean;
+							label: string;
+							owners: {
+								category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
+								executor: string;
+								gate: "awaits" | "check" | "human" | null;
+								playbookId: string;
+								playbookName: string;
+								stageKey: string;
+								stageName: string;
+							}[];
+							to: string;
+						} | null;
+						profileSlug: string | null;
+						properties?: Record<string, unknown> | undefined;
+						since: string;
+						status: string | null;
+						stuck: boolean;
+						workedBy: {
+							kind: "session" | "worker";
+							live: boolean;
+							sessionId: string;
+						}[];
+					}[];
+					category: string;
+					count: number;
+					humanOnly: boolean;
+					key: string;
+					label: string;
+					order: number;
+					owners: {
+						category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
+						executor: string;
+						gate: "awaits" | "check" | "human" | null;
+						playbookId: string;
+						playbookName: string;
+						stageKey: string;
+						stageName: string;
+					}[];
+					stuck: number | null;
+					tone: string;
+					windowed: boolean;
+				}[];
+				totals: {
+					doneWindowed: number;
+					live: number;
+					lostWindowed: number;
+					total: number;
+				};
+				unclassified: {
+					cards: {
+						blocker: {
+							ball: "agent" | "date" | "machine" | "me" | "nobody" | "them" | "thing" | null;
+							blocked: boolean;
+							clearedBy: {
+								answer: true;
+							} | {
+								intent: string;
+							} | {
+								playbookId: string;
+							} | {
+								capability: string;
+							} | null;
+							count: number;
+							ref: {
+								id?: string | undefined;
+								kind: "decision" | "person" | "proposal" | "pull_request" | "session" | "slot" | "thing";
+								label: string;
+								url?: string | undefined;
+								waitKind?: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor" | undefined;
+							} | null;
+							unlocks: {
+								label: string;
+								to: string;
+							} | null;
+							why: {
+								blockedReason: string | null;
+								blockerKey: string | null;
+								reason: "access" | "another_work" | "approval" | "date" | "external" | "input" | "outside_world";
+								waitKind: "access" | "agent_stopped" | "agent_work" | "another_work" | "answer" | "approval" | "ci" | "date" | "decide" | "deploy" | "devbox_job" | "merge_queue" | "nobody" | "payment" | "red_main" | "send" | "signature" | "their_document" | "their_reply" | "try_it" | "vendor";
+							} | null;
+						} | {
+							status: "unavailable";
+						};
+						enteredAt: string | null;
+						facetId: string | null;
+						id: string;
+						name: string | null;
+						next: {
+							humanOnly: boolean;
+							label: string;
+							owners: {
+								category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
+								executor: string;
+								gate: "awaits" | "check" | "human" | null;
+								playbookId: string;
+								playbookName: string;
+								stageKey: string;
+								stageName: string;
+							}[];
+							to: string;
+						} | null;
+						profileSlug: string | null;
+						properties?: Record<string, unknown> | undefined;
+						since: string;
+						status: string | null;
+						stuck: boolean;
+						workedBy: {
+							kind: "session" | "worker";
+							live: boolean;
+							sessionId: string;
+						}[];
+					}[];
+					count: number;
+					unset: number;
+				} | null;
+				window: {
+					days: number;
+					since: string;
+				};
+				withheld: ("flows" | "workers")[];
+				workspaceId: string | null;
+			};
 		}>;
 	}>>;
 	focusSessions: import("@trpc/server").TRPCBuiltRouter<{
