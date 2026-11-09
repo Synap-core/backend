@@ -45,12 +45,8 @@ import {
   parseEntityListSort,
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
-import type { ViewFilter } from "@synap-core/types";
 import { toolError } from "../tool-errors.js";
-import {
-  EntityListFiltersSchema,
-  filteredPropertySlugs,
-} from "../../../utils/entity-list-filters.js";
+import { parseEntityListFiltersInput } from "../../../utils/entity-list-filters-input.js";
 import {
   listEffectiveRelationTypes,
   type EffectiveRelationType,
