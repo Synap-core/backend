@@ -34,7 +34,7 @@ import {
   presenceRequestSubject,
 } from "@synap-core/types/presence";
 import { TRPCError } from "@trpc/server";
-import { redeemDeviceLink } from "./device-link.js";
+import { approvedDeviceLinkUntil, redeemDeviceLink } from "./device-link.js";
 import { readPresenceMode } from "./mode.js";
 import { readPasskeys } from "./proof.js";
 
@@ -68,6 +68,56 @@ export async function stampPasskeyChangeGrant(args: {
     )
     .returning({ id: presenceChallenges.id });
   return Boolean(stamped);
+}
+
+/**
+ * May THIS session add a passkey now, with nothing more to confirm? A read
+ * (nothing is redeemed): a `passkey_change` grant it proved, unused and in
+ * time, or an approved "Add this device" request it asked for. Pod admin's
+ * passkeys card reads it so a page opened AFTER the approval (the desktop's
+ * Touch ID setup window, a reload) goes straight to "Create a passkey"
+ * instead of asking again for a factor this device does not hold (founder
+ * decision of 9 Nov 2026). `until` is when the permission runs out.
+ */
+export async function passkeyChangeReady(
+  userId: string,
+  sessionKey: string | null
+): Promise<{ ready: boolean; until: Date | null }> {
+  if (!sessionKey) return { ready: false, until: null };
+  const now = Date.now();
+  const [grant] = await db
+    .select({ consumedAt: presenceChallenges.consumedAt })
+    .from(presenceChallenges)
+    .where(
+      and(
+        eq(presenceChallenges.userId, userId),
+        eq(
+          presenceChallenges.subject,
+          presenceRequestSubject("passkey_change", userId)
+        ),
+        eq(presenceChallenges.grantSession, sessionKey),
+        gt(
+          presenceChallenges.consumedAt,
+          new Date(now - PASSKEY_CHANGE_GRANT_SECONDS * 1000)
+        ),
+        isNull(presenceChallenges.redeemedAt)
+      )
+    )
+    .orderBy(drizzleSql`${presenceChallenges.consumedAt} desc`)
+    .limit(1);
+  const grantUntil = grant?.consumedAt
+    ? new Date(grant.consumedAt.getTime() + PASSKEY_CHANGE_GRANT_SECONDS * 1000)
+    : null;
+  const linkUntil = await approvedDeviceLinkUntil({
+    userId,
+    sessionKey,
+    kind: "passkey",
+  });
+  const until =
+    grantUntil && linkUntil
+      ? new Date(Math.max(grantUntil.getTime(), linkUntil.getTime()))
+      : (grantUntil ?? linkUntil);
+  return { ready: until !== null, until };
 }
 
 /**

@@ -95,6 +95,7 @@ import {
   assertMayRemovePasskey,
   PASSKEY_CHANGE_GRANT_SECONDS,
   stampPasskeyChangeGrant,
+  passkeyChangeReady,
 } from "../services/presence/passkey-change.js";
 import {
   approveDeviceLink,
@@ -475,6 +476,23 @@ export const presenceRouter = router({
         proof: input.presence ?? null,
       });
     }),
+
+  /**
+   * May THIS session add a passkey now with nothing more to confirm (an
+   * unused grant it proved, or an approved "Add this device" request it
+   * asked for)? A read: nothing is redeemed. Pod admin's passkeys card goes
+   * straight to "Create a passkey" when it is true (the desktop's setup
+   * window opens AFTER the approval). A caller with no session to bind
+   * reads false.
+   */
+  passkeyChangeReady: protectedProcedure.query(async ({ ctx }) => {
+    assertSignedInPerson(ctx, SIGNED_IN);
+    const { ready, until } = await passkeyChangeReady(
+      ctx.userId,
+      callerSessionKey(ctx)
+    );
+    return { ready, until: until ? until.toISOString() : null };
+  }),
 
   /**
    * Before a passkey change in Kratos' settings flow (adding or removing one)

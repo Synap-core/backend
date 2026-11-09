@@ -37,11 +37,14 @@ export function passkeyAddStep(input: {
   /** A grant is held and still in time. */
   granted: boolean;
 }): PasskeyAddStep {
-  if (input.passkeys > 0) return input.granted ? "create" : "authorize";
+  // A permission this session holds (a grant it proved, or an approved "Add
+  // this device" request) lets it create, whatever protects the account.
+  if (input.granted) return "create";
+  if (input.passkeys > 0) return "authorize";
   if (input.deviceKeys === null || input.codes === null) return "devicesFailed";
   // A code is a factor too: Kratos' guard refuses a plain add, but a typed
   // code gives the grant in this browser (the dialog opens on the code).
-  if (input.codes) return input.granted ? "create" : "authorize";
+  if (input.codes) return "authorize";
   return input.deviceKeys > 0 ? "relayOnly" : "add";
 }
 

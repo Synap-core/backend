@@ -54,6 +54,15 @@ describe("passkeyAddStep", () => {
     ).toBe("create");
   });
 
+  it("a permission this session holds (an approved request) creates, whatever protects the account", () => {
+    expect(passkeyAddStep({ passkeys: 0, deviceKeys: 1, granted: true })).toBe(
+      "create"
+    );
+    expect(
+      passkeyAddStep({ passkeys: 0, deviceKeys: null, granted: true })
+    ).toBe("create");
+  });
+
   it("an unread factor list with no passkey is a failed read, not an open door", () => {
     expect(
       passkeyAddStep({

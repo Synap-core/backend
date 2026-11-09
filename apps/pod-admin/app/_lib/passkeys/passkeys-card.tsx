@@ -116,6 +116,13 @@ export function PasskeysCard({
     retry: false,
     staleTime: 60_000,
   });
+  // A permission this SESSION already holds (an approved "Add this device"
+  // request, or an unused grant): a page opened after the approval (the
+  // desktop's Touch ID setup window, a reload) goes straight to "Create".
+  // A failed read is "not known": the confirm step stays, nothing is skipped.
+  const ready = trpc.presence.passkeyChangeReady.useQuery(undefined, {
+    retry: false,
+  });
   // The mode in force: the last passkey stays while it is `enforce` (W5).
   const sensitivity = usePodSensitivity();
   const authorize = useAuthorizePasskeyChange();
@@ -202,6 +209,7 @@ export function PasskeysCard({
         // The count of ways in beside this card (and the top bar's mark)
         // reads `presence.factors`: a passkey added or removed changes it.
         void utils.presence.factors.invalidate();
+        void utils.presence.passkeyChangeReady.invalidate();
       }
     } else if (r.kind === "redirect") window.location.assign(r.to);
     else if (r.kind === "session") void start();
@@ -284,7 +292,11 @@ export function PasskeysCard({
     codes: factors.isError
       ? null
       : Boolean(factors.data?.totp) || (factors.data?.recoveryCodes ?? 0) > 0,
-    granted: grantedUntil !== null && Date.now() < grantedUntil,
+    granted:
+      (grantedUntil !== null && Date.now() < grantedUntil) ||
+      (ready.data?.ready === true &&
+        ready.data.until !== null &&
+        Date.now() < Date.parse(ready.data.until)),
   });
   const enabled =
     load.kind === "ready" &&
