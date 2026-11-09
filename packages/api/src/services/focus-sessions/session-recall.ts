@@ -65,6 +65,16 @@
  * and on the sweep, unless its playbook opts in with
  * `metadata.recallOnAutomatedRuns: true`. A MANUAL "recall again" always runs.
  *
+ * ── NOISE: a playbook run gets no automatic recall (founder, 9 Nov 2026) ───
+ * Start recall is for a session a PERSON opens without a playbook. A run
+ * (`projectSessionKind` = `run`: origin `playbook`, or a playbook id with no
+ * `followedVia` mark) already has its subject and its method, so the recall
+ * only posts siblings in the run's room ("Found 5 things…" on a caption run,
+ * matched on "don" and "own"). It is `skipped: playbook_run` on start and on the
+ * sweep; a MANUAL "recall again" still runs ("runs recall on demand"). A
+ * person's session that FOLLOWS a playbook (`followedVia`) stays `work` and is
+ * still recalled; so is an agent-opened session with no playbook.
+ *
  * IDEMPOTENT per session: `recalled` is REPLACED, and the room message carries
  * an idempotency key derived from the recalled id set, so a re-run that finds
  * the same things posts nothing new.
@@ -96,7 +106,7 @@ import {
   type RecalledItem,
   type RecallSkipReason,
 } from "@synap-core/types/focus-sessions";
-import { startedByAutomation } from "./session-kind.js";
+import { projectSessionKind, startedByAutomation } from "./session-kind.js";
 import { tokenize } from "../routing/suggest-routes.js";
 import { lensAffinity, type LensFocus } from "../retrieval/lens-signal.js";
 
@@ -488,6 +498,15 @@ export async function runSessionRecall(
         ?.recallOnAutomatedRuns !== true
     ) {
       return await skip("automation");
+    }
+    // NOISE: a playbook run is not recalled on its own (an automation run that
+    // opted in above stays recalled: `startedByAutomation` ends that branch).
+    if (
+      input.trigger !== "manual" &&
+      !startedByAutomation(priorMeta) &&
+      projectSessionKind(session) === "run"
+    ) {
+      return await skip("playbook_run");
     }
     // PRIVACY: who else reads this session decides what may be recalled.
     const shared = await d.sharedWithOthers({

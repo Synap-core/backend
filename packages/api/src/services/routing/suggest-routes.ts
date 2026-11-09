@@ -132,12 +132,28 @@ const WEIGHT = {
 } as const;
 
 /** Words too common to be evidence of anything. Pod-wide: `tokenize` is also
- * the lexical tokenizer of session recall, so this list is exactly main's. */
+ * the lexical tokenizer of session recall, so this list is exactly main's.
+ * "own" (added 9 Nov 2026): a determiner-like word ("You don't own your digital
+ * life") that pulled unrelated carousels into a caption run's recall on its own;
+ * it names no domain object. The measured sibling "don" is NOT listed: it was a
+ * fragment of "don't", which `tokenize` now drops whole (`CONTRACTION`). */
 const STOPWORDS: ReadonlySet<string> = new Set(
-  "the and for with this that from into your you our are was were will have has had not but can all any its about when then than them they what which who how why also just more some such only very".split(
+  "the and for with this that from into your you our are was were will have has had not but can all any its about when then than them they what which who how why also just more some such only very own".split(
     " "
   )
 );
+
+/**
+ * English contractions that are function words end to end: "don't", "can't",
+ * "you're", "we've", "they'll", "I'd", "I'm". Splitting on the apostrophe made
+ * fragments ("don" + "t") that rode through as evidence, so the whole word is
+ * dropped. A possessive "'s" ("Alice's report") keeps its stem, so it is NOT
+ * here (`POSSESSIVE` strips just the suffix). Only these English suffixes: a
+ * French elision ("l'agent", "aujourd'hui") must still split into its words.
+ */
+const CONTRACTION =
+  /\p{L}+(?:n['\u2019]t|['\u2019](?:re|ve|ll|d|m))(?![\p{L}\p{N}])/giu;
+const POSSESSIVE = /(\p{L})['\u2019]s(?![\p{L}\p{N}])/giu;
 
 /**
  * The generic vocabulary of describing work itself ("every work session binds
@@ -168,7 +184,10 @@ export function tokenize(
   extraStopwords?: ReadonlySet<string>
 ): Map<string, string> {
   const out = new Map<string, string>();
-  for (const raw of (text ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+  const plain = (text ?? "")
+    .replace(CONTRACTION, " ")
+    .replace(POSSESSIVE, "$1");
+  for (const raw of plain.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     if (raw.length < 3 || STOPWORDS.has(raw) || extraStopwords?.has(raw))
       continue;
     const s = stem(raw);

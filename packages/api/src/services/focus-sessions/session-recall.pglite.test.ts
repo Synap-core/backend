@@ -193,7 +193,7 @@ beforeAll(async () => {
   );
   await q(
     `insert into focus_sessions (id, user_id, workspace_id, goal, status, playbook_id, subject_entity_id, channel_id, metadata, started_at, created_at, updated_at)
-     values ($1, $2, $3, 'DJ set tonight', 'active', $4, $5, $6, '{"titleSource":"derived"}'::jsonb, now(), now(), now())`,
+     values ($1, $2, $3, 'DJ set tonight', 'active', $4, $5, $6, '{"titleSource":"derived","followedVia":"attach"}'::jsonb, now(), now(), now())`,
     [SESSION, USER, WS, PLAYBOOK, SUBJECT, CHANNEL]
   );
   await q(
@@ -205,9 +205,10 @@ beforeAll(async () => {
 
 describe("runSessionRecall — the DJ example", () => {
   beforeEach(async () => {
+    // A PERSON's session that follows a playbook: kind `work`, so it is recalled.
     await q(
-      `update focus_sessions set metadata = '{"titleSource":"derived"}'::jsonb where id = $1`,
-      [SESSION]
+      `update focus_sessions set metadata = '{"titleSource":"derived","followedVia":"attach"}'::jsonb, origin = 'human', playbook_id = $2 where id = $1`,
+      [SESSION, PLAYBOOK]
     );
   });
 
@@ -329,8 +330,8 @@ describe("PRIVACY — recall never shows a room what a member could not open", (
       `delete from channel_members; delete from workspace_members; delete from users;`
     );
     await q(
-      `update focus_sessions set metadata = '{}'::jsonb, workspace_id = $2 where id = $1`,
-      [SESSION, WS]
+      `update focus_sessions set metadata = '{"followedVia":"attach"}'::jsonb, origin = 'human', playbook_id = $3, workspace_id = $2 where id = $1`,
+      [SESSION, WS, PLAYBOOK]
     );
     await q(
       `insert into users (id, email, user_type) values ($1,'o@x','human'), ($2,'b@x','human'), ('agent-1','a@x','agent')`,
@@ -398,6 +399,51 @@ describe("PRIVACY — recall never shows a room what a member could not open", (
       recallSkipped: "shared_without_workspace",
     });
     expect(posts).toHaveLength(0);
+  });
+});
+
+describe("NOISE — a playbook run is not recalled on its own (founder, 9 Nov 2026)", () => {
+  const asRun = (origin: string | null, playbook: string | null, meta = "{}") =>
+    q(
+      `update focus_sessions set origin = $2, playbook_id = $3, metadata = $4::jsonb, workspace_id = $5 where id = $1`,
+      [SESSION, origin, playbook, meta, WS]
+    );
+
+  it("a playbook run (origin playbook): start and sweep are skipped, nothing retrieved or posted", async () => {
+    for (const trigger of ["start", "sweep"] as const) {
+      await asRun("playbook", PLAYBOOK);
+      const { d, posts, asked } = deps();
+      const out = await runSessionRecall({ sessionId: SESSION, trigger }, d);
+      expect(out).toEqual({ status: "skipped", reason: "playbook_run" });
+      expect(asked).toEqual([]);
+      expect(posts).toEqual([]);
+      expect((await meta()).recallSkipped).toBe("playbook_run");
+    }
+  });
+
+  it("a run is recalled on demand: a MANUAL recall runs and clears the skip", async () => {
+    await asRun("playbook", PLAYBOOK);
+    await runSessionRecall({ sessionId: SESSION }, deps().d);
+    const out = await runSessionRecall(
+      { sessionId: SESSION, trigger: "manual" },
+      deps().d
+    );
+    expect(out.status).toBe("ok");
+    expect((await meta()).recallSkipped).toBeUndefined();
+  });
+
+  it("a person's session with NO playbook is still recalled on start", async () => {
+    await asRun("human", null);
+    const { d, posts } = deps();
+    const out = await runSessionRecall({ sessionId: SESSION }, d);
+    expect(out.status).toBe("ok");
+    expect(posts).toHaveLength(1);
+  });
+
+  it("an agent-opened session with no playbook is still recalled on start", async () => {
+    await asRun("agent", null);
+    const out = await runSessionRecall({ sessionId: SESSION }, deps().d);
+    expect(out.status).toBe("ok");
   });
 });
 

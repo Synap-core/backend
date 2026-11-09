@@ -758,8 +758,10 @@ export async function instantiateSessionRow(
 
   await createLinks(edges);
 
-  // Recall for the run that just started (the ONE funnel behind every run
-  // door). Background, never fails the run; the sweep is the floor.
+  // The ONE funnel behind every run door. The runner skips a playbook run
+  // (`skipped: playbook_run`, founder 9 Nov 2026: runs recall on demand), so
+  // this only stamps the skip: no retrieval, no room post. Background, never
+  // fails the run; the sweep is the floor.
   void enqueueSessionRecall(session.id, "start");
 
   return session as FocusSession;
