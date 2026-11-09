@@ -2165,6 +2165,7 @@ export async function applyRenamePropertyKey(
   op: RenamePropertyKeyOp
 ): Promise<OpCounts> {
   const keepTarget = op.onConflict === "keepTarget";
+  const prependSource = op.onConflict === "prependSource";
   const r = await tx<Array<{ renamed: number; conflicts: number }>>`
     WITH picked AS (
       SELECT e.id, (e.properties ? ${op.targetKey}::text) AS had_target
@@ -2178,6 +2179,21 @@ export async function applyRenamePropertyKey(
       SET properties = CASE
             WHEN picked.had_target AND ${keepTarget}::boolean
               THEN e.properties - ${op.sourceKey}::text
+            -- prependSource: the source text becomes the first paragraph of the
+            -- target. Nothing is discarded; a target that already opens with
+            -- the source (a re-run, or the same words) is not doubled.
+            WHEN picked.had_target AND ${prependSource}::boolean
+              THEN (e.properties - ${op.sourceKey}::text)
+                || jsonb_build_object(${op.targetKey}::text,
+                     CASE
+                       WHEN (e.properties ->> ${op.targetKey}::text) = (e.properties ->> ${op.sourceKey}::text)
+                         OR left(e.properties ->> ${op.targetKey}::text,
+                                 length((e.properties ->> ${op.sourceKey}::text) || E'\n\n'))
+                            = (e.properties ->> ${op.sourceKey}::text) || E'\n\n'
+                         THEN e.properties -> ${op.targetKey}::text
+                       ELSE to_jsonb((e.properties ->> ${op.sourceKey}::text) || E'\n\n'
+                                     || (e.properties ->> ${op.targetKey}::text))
+                     END)
             ELSE (e.properties - ${op.sourceKey}::text)
               || jsonb_build_object(${op.targetKey}::text, e.properties -> ${op.sourceKey}::text)
           END,
@@ -2192,7 +2208,9 @@ export async function applyRenamePropertyKey(
   `;
   const counts: OpCounts = {};
   if (r[0]?.renamed) counts.entitiesKeyRenamed = r[0].renamed;
-  if (r[0]?.conflicts) counts.entitiesKeyConflicts = r[0].conflicts;
+  // A prepend discards nothing, so it is not a conflict.
+  if (r[0]?.conflicts && !prependSource)
+    counts.entitiesKeyConflicts = r[0].conflicts;
   return counts;
 }
 
