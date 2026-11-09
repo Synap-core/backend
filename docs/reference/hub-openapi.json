@@ -48402,6 +48402,116 @@
         }
       }
     },
+    "/host-jobs/{id}/uploads": {
+      "post": {
+        "tags": ["HostJobs"],
+        "summary": "Get an upload ticket for one output file of a hosted verb run",
+        "description": "A presigned PUT minted for the run's requester (their session and space), never for the computer. Pass the returned `uploadToken` in the finish's `files`. Only a `verb` job returns files. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "leaseId": { "type": "string", "format": "uuid" },
+                  "filename": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "mimeType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "size": { "type": "integer", "exclusiveMinimum": 0 }
+                },
+                "required": ["leaseId", "filename", "mimeType", "size"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The upload ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploadUrl": { "type": "string" },
+                    "method": { "type": "string", "enum": ["PUT"] },
+                    "headers": {
+                      "type": "object",
+                      "additionalProperties": { "type": "string" }
+                    },
+                    "uploadToken": { "type": "string" }
+                  },
+                  "required": ["uploadUrl", "method", "headers", "uploadToken"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a computer, or no host.runner scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job for an installation on this computer",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The lease is no longer held",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is too large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/host-jobs/{id}/finish": {
       "post": {
         "tags": ["HostJobs"],
@@ -48465,6 +48575,33 @@
                     "items": { "type": "string", "maxLength": 300 },
                     "maxItems": 100
                   },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "param": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 255
+                        },
+                        "size": { "type": "integer", "minimum": 0 },
+                        "uploadToken": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "error": { "type": "string", "maxLength": 500 }
+                      },
+                      "required": ["param", "name"]
+                    },
+                    "maxItems": 20
+                  },
                   "observedVersion": {
                     "type": ["string", "null"],
                     "maxLength": 128
@@ -48512,7 +48649,11 @@
                       "type": "string",
                       "enum": ["done", "failed", "stopped"]
                     },
-                    "installationStatus": { "type": "string" }
+                    "installationStatus": { "type": "string" },
+                    "files": {
+                      "type": "array",
+                      "items": { "type": "object", "additionalProperties": {} }
+                    }
                   },
                   "required": ["id", "status", "installationStatus"]
                 }
