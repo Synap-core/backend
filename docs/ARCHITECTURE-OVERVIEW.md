@@ -33,15 +33,15 @@ describe the product wrong.
 | Layer                | What it is                                                           | Is it the feature?                       |
 | -------------------- | -------------------------------------------------------------------- | ---------------------------------------- |
 | **The data model**   | Kinds, Roles (facets), Views. Typed records, relations, projections. | **No — this is the substrate.**          |
-| **The unit of work** | Project → Track → Session, plus Playbooks and Automations.           | **Yes — this is what you actually buy.** |
+| **The unit of work** | Project → Goal (track) → Session, plus Playbooks and Automations.    | **Yes — this is what you actually buy.** |
 
 The data model is what makes the pod _queryable_. The unit of work is what
 makes it _yours_: every agent you connect works against the **same unit of
 work**, in the same channel bound to it, so the work compounds instead of
 scattering across private chats.
 
-Source: `packages/database/src/schema/project-tracks.ts:1-16` (header states the
-model explicitly), `projects.ts`, `focus-sessions.ts`.
+Source: `projects.ts`, `focus-sessions.ts`, `project-tracks.ts` (its header still
+describes the legacy staged track; a goal has no stages).
 
 ---
 
@@ -80,13 +80,12 @@ rather than a slogan.
 ```
 Project    — long-lived intent. Months. A thing you're actually doing.
   │
-  ├── Track    — a METHOD running inside one project
-  │              (e.g. "Business model", "Content", "Build").
-  │              A project runs N of these.
+  ├── Goal (a "track" in tools and tables) — a direction with criteria.
+  │     It has no stages. Its work is sessions; a judge closes it.
   │
-  │   ├── Session  — short-lived, one task type. Filed at a track + stage.
+  │   ├── Session  — one unit of work, about a thing or a batch.
   │   └── Session
-  └── Track
+  └── Goal
 
 Or just a Session on its own — most of them are.
 ```
@@ -94,23 +93,50 @@ Or just a Session on its own — most of them are.
 - A **Project** is long-lived intent. It has a `phase` (where the work is) and
   an optional `targetDate`; progress is **derived** from contained work, never
   stored as a percentage. (`projects.ts:62-78`.)
-- A **Track** is a _method_ — a reusable way of making progress (a project-scope
-  playbook) — running inside one project. A track **pins the definition it
-  started from**, so editing the method later never silently rewrites the
-  vocabulary a live track sits in. (`project-tracks.ts`, migration 0272/0274.)
-- A **Session** is a bounded unit of work toward one goal, with a scope and a
-  checkpoint you accept before it runs. When one is filed into a track it
-  carries `trackId` + the stage — but that is optional, and a session may be
-  workspace-scoped with no project at all. (`focus-sessions.ts:103-121`.)
-  Note the schema's "never re-derived" comment on `trackStage` is **stale**:
-  both the update service and the tRPC patch route accept a new value
-  (`update-session.ts:143`, `routers/focus-sessions.ts:1563`).
+- A **Goal** (a _track_ in `start_track`, `trackId` and the `project_tracks`
+  table) is a direction inside one project: an owner, criteria that say when it
+  is done, and the workers it turns on. It has **no stages**: its work is the
+  sessions filed into it, and a person or its judge closes it with a verdict.
+  Staged tracks (a method pinned at start, `current_stage`, `stageHistory`,
+  `definitionSnapshot.stages`) are **legacy**: old rows keep them, new goals do
+  not have them. (`project-tracks.ts`.)
+- A **Session** is a bounded unit of work toward one aim, with a scope and a
+  checkpoint you accept before it runs. It may be about one **thing** (an entity
+  of a kind: `subjectEntityId`) or a batch (`targets`). Filed into a goal it
+  carries `trackId`; that is optional, and a session may be workspace-scoped with
+  no project at all. (`focus-sessions.ts:103-121`.) `trackStage` is the legacy
+  stage key of a staged track; a goal without stages leaves it empty.
+
+### Work moves the thing it is about
+
+A thing has ONE status, from the lifecycle its kind declares once. A session
+works a thing by following a **playbook**, and each stage of the playbook can
+**own** one status of the thing (`stages[].subjectStatus`). So the session's step
+and the thing's status are the same fact, both ways: entering a stage moves the
+thing, and moving the thing moves the session to the stage that owns the new
+status. A stage with no `subjectStatus` leaves the thing where it is. Every move
+goes through the one status door (`moveStatus`), which classifies it, governs it
+and writes it with the transition; an agent passes `expectedStatus` and gets
+`conflict` if the thing moved meanwhile.
+
+- **One read draws a kind's flow:** `flow.of` (tRPC `flow.of`, Hub
+  `GET /api/hub/flow`, MCP `synap_get_flow`; `services/lifecycle/flow-read.ts`).
+  It returns the lifecycle's states in order, the stage that owns each, the things
+  in each with who works them and their next step.
+- **What holds a thing up is a slot, not a status.** A session slot can declare
+  `blocks`, `blockerKey` and `clearedBy`; `deriveThingBlocker`
+  (`packages/types/src/units/thing-blocker.ts`) says whose move it is and what
+  clearing it unlocks. The thing stays in its status.
+
+Models and fields: skills `system/synap/work-model`, `focus-sessions`, `concepts`.
 
 ### Repeatability
 
 - A **Playbook** is a session _shape_ you can run again. A playbook can be
   `scope: 'session'` (a template for one kind of work) or `scope: 'project'`
-  (a method a project runs as a track). (`playbooks.ts:105`.)
+  (the legacy goal template: a method a project ran as a staged track).
+  (`playbooks.ts:105`.) A playbook that works a kind has stages that own the
+  statuses of the thing it works (see "Work moves the thing it is about").
 - An **Automation** binds a playbook to a trigger — `event`, `cron`, `webhook`,
   or `manual`. ("When X happens, run this process.") (`automations.ts:902-903`.)
 
@@ -131,7 +157,7 @@ in-band rather than locked in a private transcript. (`focus-sessions.ts:225`,
 `channels.ts`.)
 
 > ⚠️ **Honest scope.** The channel is created on session start and wired back
-> onto the row, so it is nullable until then. And the track layer is
+> onto the row, so it is nullable until then. And the goal layer is
 > **optional** — `focus_sessions.trackId` is documented as "NULL for almost
 > every session" (`focus-sessions.ts:107-108`). A session may be
 > workspace-scoped with no project at all. The hierarchy is where multi-week
@@ -141,17 +167,6 @@ in-band rather than locked in a private transcript. (`focus-sessions.ts:225`,
 This is the differentiator: not "an AI that answers you" but a place where
 several agents and you work the same goal, on the same records, and you stay in
 the approval seat.
-
-> ⚠️ **What is real, and what is only declared.** Tracks are genuinely started
-> and genuinely stepped — a live track on this pod has advanced through 3
-> stages with a real `stageHistory`. But the hierarchy is **never started
-> automatically**: `startTrack` is only ever called from a human or agent
-> door, and no seeder or reconciler creates one. The `params` chain (declare →
-> pin → answer → hand to the session → render) is fully wired end to end, but
-> the one live track's method declares no params, so no data on this pod yet
-> exercises it. `focus_sessions.status = 'forming'` is **unproduced** — reads
-> only, zero writers. And a `command` node in an automation flow is an explicit
-> dead end. Say "you can start a track," not "projects get tracks."
 
 ---
 

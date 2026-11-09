@@ -3,7 +3,7 @@
  * plan 64072312 U7; the ONE wire for both kinds, reconciliation f75fbb48
  * §3.2). The wire is `@synap-core/types/host-jobs`.
  *
- *   POST /host-jobs/lease            {capacity?}              → {job | null}
+ *   POST /host-jobs/lease            {capacity?, os?, arch?}  → {job | null}
  *   POST /host-jobs/:id/heartbeat    {leaseId, phase}         → {leaseExpiresAt, stopRequested, logsRequested}
  *   POST /host-jobs/:id/report       {leaseId, health?, verify?, observedVersion?, os?, arch?, log?} → {installationId, status}
  *   POST /host-jobs/:id/finish       {leaseId, status, …}     → {id, status, installationStatus}
@@ -213,7 +213,7 @@ export function registerHostJobsRoutes(app: HubHono): void {
       // gets the ONE job it is due (a verify past its cadence, a repair),
       // so a computer waking from sleep finds one job each, never a pile.
       await reconcileComputer(who.runner);
-      const job = await leaseHostJob(who.runner);
+      const job = await leaseHostJob(who.runner, parsed.data);
       return c.json({ job });
     } catch (err) {
       logger.error({ err }, "host-jobs lease failed");

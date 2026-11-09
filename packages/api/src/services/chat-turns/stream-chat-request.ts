@@ -34,6 +34,8 @@ import {
   reopenChatTurn,
 } from "../../services/chat-turns/chat-turn-store.js";
 import { resolveChatTarget } from "../../utils/resolve-chat-target.js";
+import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
+import { synapAiGate } from "../synap-ai-ceiling.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -63,6 +65,35 @@ export interface ChatStreamOptions {
    * Unset (an API key): the person's own token, as the external door always did.
    */
   appGrant?: Record<string, unknown> | null;
+}
+
+/**
+ * The delegation headers of one chat turn. An app's turn (`appGrant`) names the person's own Synap AI (their personal
+ * agent) as the acting agent: the hub then bounds the turn by the standing grant they gave it
+ * (`resolveSynapAiCeiling`), narrowed by the app's. With no such grant set the hub behaves as before (the app's claim
+ * bounds the turn). A turn with no app grant (an API key) is the person's own token, as the external door always did.
+ * Throws when the token cannot be signed: the caller refuses the turn, the AI service never falls back to a stored key.
+ */
+export async function chatTurnDelegation(opts: {
+  userId: string;
+  appGrant?: Record<string, unknown> | null;
+  turn: {
+    isUrl: string;
+    operatorUserId: string;
+    channelId: string;
+    runId: string;
+  };
+}): Promise<Record<string, string>> {
+  const { userId, appGrant, turn } = opts;
+  return appGrant
+    ? {
+        [IS_DELEGATION_HEADER]: mintIsDelegationToken({
+          ...turn,
+          appGrant,
+          agentUserId: await ensurePersonalAgentUser(userId),
+        }),
+      }
+    : isDelegationHeaders(turn);
 }
 
 export async function handleChatStream<E extends Env>(
@@ -106,6 +137,13 @@ export async function handleChatStream<E extends Env>(
       { error: "This chat is outside the grant this app holds" },
       403
     );
+  }
+
+  // An app's turn runs through the person's connected Synap AI (the grant they set once on the Keys page): not
+  // connected (or paused) is refused BEFORE the turn starts, with the page where they connect it.
+  if (appGrant) {
+    const gate = await synapAiGate(userId, new URL(c.req.url).origin);
+    if (!gate.open) return c.json(gate.body, gate.status);
   }
 
   // ── Step 3: Reserve durable chat_turn ────────────────────────────────────
@@ -292,11 +330,7 @@ export async function handleChatStream<E extends Env>(
       channelId: resolvedChannelId,
       runId: durableTurn.id,
     };
-    delegationHeaders = appGrant
-      ? {
-          [IS_DELEGATION_HEADER]: mintIsDelegationToken({ ...turn, appGrant }),
-        }
-      : isDelegationHeaders(turn);
+    delegationHeaders = await chatTurnDelegation({ userId, appGrant, turn });
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },

@@ -684,7 +684,7 @@ function loadSkillRefArg(args: Record<string, unknown>): string {
  * unlocks more — in a tool RESULT, which every client shows its model (some
  * drop the MCP `instructions`). Tool names are this door's (`pod__*` for the
  * claude.ai connector's key). A failed profile read is said, never guessed;
- * an error or non-object result passes through untouched.
+ * an error or non-object result, and a reply the cap cut, pass through untouched.
  */
 async function withYourTools(
   result: CallToolResult,
@@ -702,6 +702,10 @@ async function withYourTools(
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
     return result;
+  // A reply the cap already cut (`reply-cap.ts`) keeps its envelope's shape and
+  // budget: adding a block to it made `{yourTools, truncated, head}`, over the
+  // cap and no longer the envelope a caller recognises.
+  if ("truncated" in parsed && "head" in parsed) return result;
   let yourTools: Record<string, unknown>;
   try {
     const [access, door] = await Promise.all([
@@ -2427,7 +2431,7 @@ export const tools = {
               type: "string",
               enum: ["light", "full"],
               description:
-                "light (default) = startHere + names/ids/domain/counts + onboarding goal, empty domains and the entity-type inventory omitted; full = every workspace, descriptions, full onboarding spec, per-workspace profiles, and the lens-model explanation in `note`.",
+                "light (default) or full, as the tool description says.",
             },
             explain: {
               type: "boolean",
@@ -2469,6 +2473,12 @@ export const tools = {
               maxItems: STATUS_OF_INCLUDES.length,
               description:
                 "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals. An unknown part is refused.",
+            },
+            only: {
+              type: "string",
+              enum: ["handedToYou"],
+              description:
+                "Agent keys: answer only `{ handedToYou }` (a worker's poll).",
             },
           },
           required: [],
@@ -6218,7 +6228,7 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          'Ask to install a capability on one of the person\'s computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person\'s computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. After the computer\'s worker runs it, read the result with synap_list_installations.',
+          'Ask to install a capability on one of the person\'s computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person\'s computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
         inputSchema: {
           type: "object",
           properties: {
@@ -6230,7 +6240,7 @@ export const tools = {
             computer: {
               type: "string",
               description:
-                'Where it goes: one of the person\'s computers by name or id (market.search `computers`), or "pod" for a capability that runs on the pod.',
+                'One of the person\'s computers (market.search `computers`) by id, name, a word of it, or "mac"/"linux"/"windows" for their only one; or "pod" for a pod capability.',
             },
             action: {
               type: "string",
@@ -6957,6 +6967,8 @@ export const tools = {
           keyWorkspaceId,
           signal
         );
+        // The narrow read (`only`) is a machine's poll: the block it asked for, nothing added.
+        if (args.only !== undefined) return result;
         return await withYourTools(result, agentUserId, toolAccess?.keyId);
       }
       if (name === "synap_load_skill") {

@@ -304,6 +304,10 @@ describe("host-jobs routes — the computer's own work", () => {
       `SELECT status, observed_version, verified_at, health FROM installations WHERE id = $1`,
       [INST]
     );
+    const computerBefore = await q<Record<string, unknown>>(
+      `SELECT agent_metadata FROM users WHERE id = $1`,
+      [DEVBOX]
+    );
     const forged = {
       leaseId: job.leaseId,
       observedVersion: "9.9.9",
@@ -325,6 +329,15 @@ describe("host-jobs routes — the computer's own work", () => {
       [INST]
     );
     expect(after.rows).toEqual(before.rows);
+    // Nor what the computer is: only its own key says that.
+    expect(
+      (
+        await q<Record<string, unknown>>(
+          `SELECT agent_metadata FROM users WHERE id = $1`,
+          [DEVBOX]
+        )
+      ).rows
+    ).toEqual(computerBefore.rows);
     const jobRow = await q<{ status: string; lease_id: string }>(
       `SELECT status, lease_id FROM host_jobs WHERE id = $1`,
       [job.id]
@@ -518,6 +531,16 @@ describe("host-jobs routes — a tool", () => {
       observed_arch: "arm64",
     });
     expect(row.rows[0]!.verified_at).not.toBeNull();
+    // What the runner saw of the computer is kept on the computer too: the
+    // roster and the placement check read its processor from there.
+    const computer = await q<{ m: Record<string, unknown> }>(
+      `SELECT agent_metadata AS m FROM users WHERE id = $1`,
+      [MAC]
+    );
+    expect(computer.rows[0]!.m).toMatchObject({
+      platform: "darwin",
+      arch: "arm64",
+    });
     expect(row.rows[0]!.health.verify.excerpt).not.toContain("sk-live-abc123");
     expect((await readHealth(INST_TOOL)).health).toBe("ok");
   });

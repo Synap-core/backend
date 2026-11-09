@@ -29,6 +29,8 @@ export const agentRunsRouter = router({
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
+        /** Only the runs of this focus session (data.sessionId). */
+        sessionId: z.string().optional(),
         limit: z.number().min(1).max(200).default(50),
       })
     )
@@ -39,6 +41,7 @@ export const agentRunsRouter = router({
       const runs = await eventRepo.listAgentRuns({
         userId,
         workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
         limit: input.limit,
       });
 

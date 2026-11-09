@@ -17,7 +17,7 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
-How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order); a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
+How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order) and `flow.of` reads it with the stage that owns each status; a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
 ### Three tenses of a thing
 
@@ -38,11 +38,28 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 - A refusal naming the valid options means the value is not in the declared lifecycle: pick one of them.
   Never invent a status, never keep your own stage field.
 
+### Where a kind stands: the flow read and the blocker
+
+**`flow.of` is the one read of a kind's flow.** tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`: one function, three doors. Input: `profileSlug` (a kind, or a role, which reads its kinds together), `workspaceId`, optional `projectId`, `trackId`, `firstN` (cards per state, default 10), `window` (days of done and lost, default 30), `properties`. A key bounded by a grant names the space. It returns:
+
+| Part     | What it says                                                                                                                                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `states` | the lifecycle in declared order; each with `owners` (the playbook stages that move things into it; none = nothing moves things there, two = a conflict to fix), `count`, `stuck`, `cards` |
+| a card   | the thing, `since`, `stuck`, `workedBy` (the sessions and runners on it), `next` (the next status, the stage that owns it, its gate and executor)                                         |
+| `flows`  | the playbooks working the kind: stages and the status each owns, open runs, runs on an older version, `undeclaredStatuses`                                                                |
+| the rest | `unclassified` things, the space's `primaryOutput`, totals, `withheld` (what a grant does not reach)                                                                                      |
+
+An app that draws a kind (a board, a thing's page) reads this. It does not rebuild columns from `lifecycle.get` plus a playbook list, and it keeps no stage list of its own. Each card's `blocker` is reserved: card blocker: coming.
+
+**A blocker is a slot, not a status.** A slot that declares `blocks {entityId?, to?}` (with `blockerKey` and `clearedBy`, see `focus-sessions` and `asks`) holds a thing up. One pure function, `deriveThingBlocker`, says how: `{blocked, count, why, ball (whose move), unlocks (the status clearing it lets the thing reach), clearedBy, ref}`. The thing stays in its status; a hold (a paused status) never blocks, because the hold is the status itself. Defaults: an agent's slot blocks only when it declares `blocks` and its session is open and accepted; an undeclared target is the thing's next status. Where it shows today: `statusOf` (`GET /api/hub/orient?statusOf=<id>`) returns `blocker`, and a needs-you row carries `blocks {thing, statusNow, statusNext}`, so the answer is given with its consequence in view.
+
+**Work moves a thing's status through the playbook that works its kind** (the stage owns the status) or by hand through the one door above, never through a status field of your own.
+
 ### Session size
 
 - **Per thing** when each item needs its own thinking: a post, a feature, a deal in negotiation.
 - **Per batch** when items are interchangeable: one session for "find 10 leads today" or "today's follow-ups".
-- A session's **step is its subject's status**: move the thing, the step follows.
+- A session's **step is its subject's status**, both ways: move the thing and the step follows; set a stage that owns a status and the thing moves (through the same door). A stage with no `subjectStatus` leaves the thing where it is.
 - **Set the subject.** A session about one thing names it: `subjectEntityId` on `start_session`, or on `update_session` the moment the thing exists (a batch names its things as targets). A session on no thing shows on the homes as "No thing yet · attach one", outside every pipeline.
 - Following a method does not turn your session into a run; it stays your work and still shows in the method's runs.
 - **Targets get a result each**: a worker session holds its things as targets. Your own move of a target marks it `done`; someone else's move marks it `skipped`; targets left at close are `skipped`. Put the outcome on each thing, not only in a summary.
@@ -84,7 +101,7 @@ Read them to answer "what is going on" before you list sessions one by one.
 
 ### A kind's dashboard
 
-A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`.
+A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`. An app outside the frame draws the same kind from `flow.of` (above); the cell bridge reads `lifecycle.board`, the board lens `flow.of` is built on.
 
 ### Rules of thumb
 

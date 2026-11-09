@@ -33,7 +33,15 @@ import {
   sessionPostDeliveryNote,
   type ResolvedSessionPost,
 } from "../../../services/messaging/session-post.js";
-import { recordOwnerRoomReply } from "../../../services/focus-sessions/session-answer.js";
+import {
+  answerGrantWrite,
+  recordOwnerRoomReply,
+} from "../../../services/focus-sessions/session-answer.js";
+import { resolveRoomSession } from "../../../services/messaging/room-session.js";
+import {
+  grantWriteDenial,
+  type GrantWriteInput,
+} from "../../../utils/grant-write-check.js";
 import {
   checkRoomQuestionSlot,
   fileRoomQuestionOnSlot,
@@ -103,21 +111,23 @@ import {
 } from "../../../utils/message-anchor.js";
 
 /**
- * Channel WRITE floor for the two message-append doors below.
+ * Channel floor for the write doors in this file: the channel the caller may
+ * reach, or null.
  *
- * Neither door used to verify that the caller may write to `threadId` at all:
- * any key holding `hub-protocol.write` plus a known channel UUID could append
- * to that channel — and, with `autoRespond`, make an agent answer inside it.
+ * Neither message door used to verify that the caller may reach `threadId` at
+ * all: any key holding `hub-protocol.write` plus a known channel UUID could
+ * append to that channel — and, with `autoRespond`, make an agent answer
+ * inside it.
  *
  * The predicate is `channelVisibilityWhere` — the canonical channel access
  * predicate, the SAME one the list route below and `hub-protocol/sessions.ts`
  * (`assertChannelVisible`) floor on. It is deliberately not a new rule.
  *
- * ⚠️ It is a READ predicate: "can SEE the channel" is APPROXIMATING "may WRITE
- * to the channel", because no write-side channel predicate exists today. A
- * true write predicate would additionally have to honor a read-only membership
- * role (`channel_members` carries no role column) and an archived/closed
- * channel state — neither of which is modelled yet.
+ * ⚠️ It is a READ predicate: "can SEE the channel". The two message doors add
+ * the key's WRITE grant on top (`roomPostGrantWrite`); a true write predicate
+ * would additionally have to honor a read-only membership role
+ * (`channel_members` carries no role column) and an archived/closed channel
+ * state — neither of which is modelled yet.
  *
  * `userId` MUST be the AUTHENTICATED key owner (`c.get("userId")`), never a
  * body- or item-supplied author: a service key legitimately mirrors messages
@@ -132,14 +142,47 @@ import {
 async function callerMayWriteToChannel(
   channelId: string,
   userId: string
-): Promise<boolean> {
-  if (!isUuid(channelId)) return false;
+): Promise<{ id: string; workspaceId: string | null } | null> {
+  if (!isUuid(channelId)) return null;
   const row = await db
-    .select({ id: channels.id })
+    .select({ id: channels.id, workspaceId: channels.workspaceId })
     .from(channels)
     .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
     .limit(1);
-  return !!row[0];
+  return row[0] ?? null;
+}
+
+/**
+ * The GRANT request a post into this channel is, for the two message-append
+ * doors (plan "The run's room inside the app", lane 1, 9 Nov 2026). The floor
+ * above only says the key's owner can SEE the channel; without this, a key
+ * whose grant may merely READ a room could write in it, and a person's post
+ * there answers the session's open question (`recordOwnerRoomReply`) without
+ * the grant the answer door asks.
+ *
+ *  - a SESSION's room (`resolveRoomSession`, the one rule the answer loop and
+ *    the room notifier use): `session.update` at the session's own space and
+ *    project — the rung of answering its asks (`answerGrantWrite`), since
+ *    talking in a session's room is taking part in that session;
+ *  - any other channel: `message.create` on the channel's own workspace (D4,
+ *    the rule of `assertChannelWrite`; null = a pod-wide channel = pod scope,
+ *    so a key pinned to spaces fails closed).
+ *
+ * `grantWriteDenial` is a no-op without a grant (a signed-in session, the
+ * IS delegation's full grant).
+ */
+async function roomPostGrantWrite(channel: {
+  id: string;
+  workspaceId: string | null;
+}): Promise<GrantWriteInput> {
+  const session = await resolveRoomSession(channel.id);
+  if (session) return answerGrantWrite(session.id);
+  return {
+    subjectType: "message",
+    action: "create",
+    workspaceId: channel.workspaceId,
+    data: { id: channel.id },
+  };
 }
 
 /**
@@ -1053,15 +1096,19 @@ export function registerThreadsRoutes(app: HubHono): void {
     // Schema enforces min(1), max(100), and per-item required fields.
 
     try {
-      // WRITE FLOOR — the caller must be able to reach this channel BEFORE any
-      // identity work or insert. See `callerMayWriteToChannel` for why the
-      // floor is the authenticated key owner and why a read predicate is
-      // standing in for a write one.
+      // WRITE FLOOR — the caller must be able to reach this channel, and its
+      // key's grant must allow a post in it, BEFORE any identity work or
+      // insert. See `callerMayWriteToChannel` (why the floor is the
+      // authenticated key owner) and `roomPostGrantWrite` (the grant).
       const authUserId = c.get("userId") as string | undefined;
       if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-      if (!(await callerMayWriteToChannel(threadId, authUserId))) {
+      const room = await callerMayWriteToChannel(threadId, authUserId);
+      if (!room) {
         return c.json({ error: "Thread not found or not accessible" }, 403);
       }
+      // The key's WRITE grant on this room (`roomPostGrantWrite`).
+      const denial = await grantWriteDenial(await roomPostGrantWrite(room));
+      if (denial) return c.json({ error: denial }, 403);
 
       // SECURITY — the acting identity of EVERY item MUST come from the
       // verified auth context, never the per-item `userId` (governed-agent-
@@ -1268,9 +1315,14 @@ export function registerThreadsRoutes(app: HubHono): void {
       // `hub-protocol.write` and a known channel UUID could post into any
       // channel on the pod. See `callerMayWriteToChannel`.
       const authUserId = c.get("userId") as string;
-      if (!(await callerMayWriteToChannel(threadId, authUserId))) {
+      const room = await callerMayWriteToChannel(threadId, authUserId);
+      if (!room) {
         return c.json({ error: "Thread not found or not accessible" }, 403);
       }
+      // The key's WRITE grant on this room (`roomPostGrantWrite`): a key that
+      // may only read a session's room cannot talk in it.
+      const denial = await grantWriteDenial(await roomPostGrantWrite(room));
+      if (denial) return c.json({ error: denial }, 403);
 
       const anchorGate = await gateMessageAnchor(
         body.metadata,

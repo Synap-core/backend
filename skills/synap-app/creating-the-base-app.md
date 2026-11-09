@@ -1,5 +1,7 @@
 # Creating the base app
 
+> **Retired.** The HeroUI base app and `synap-app/apps/*` are retired (founder, 2026-11-08): no new app starts from this template. A new app is a Website Factory app (shadcn + Tailwind v4) or an app on the SDK (`using-the-sdk.md`). This page stays only to read an existing base-app project.
+
 The base app is an opinionated, batteries-included starter: **Next.js 16 (App
 Router) + React 19 + HeroUI + Tailwind**, with auth (incl. TOTP), an app shell
 (tabs + slide-in right panel), a Cmd+K command palette, a realtime bridge, and a
