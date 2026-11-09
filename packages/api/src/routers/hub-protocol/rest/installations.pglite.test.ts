@@ -59,6 +59,35 @@ vi.mock(
   }
 );
 
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const { PGlite } = await import("@electric-sql/pglite");
+  const { drizzle } = await import("drizzle-orm/pglite");
+  const schema = await import("@synap/database/schema");
+  const client = new PGlite();
+  h.client = client as unknown as typeof h.client;
+  h.db = drizzle(client, { schema });
+  return { ...actual, db: h.db, getDb: async () => h.db };
+});
+
+vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
+      h.gate.push(opts);
+      return opts.agentUserId
+        ? {
+            granted: false,
+            proposalId: randomUUID(),
+            proposalType: "installation.request",
+            reviewUrl: "https://pod.example/review",
+          }
+        : { granted: true };
+    },
+  };
+});
+
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerInstallationsRoutes } from "./installations.js";
 import {
