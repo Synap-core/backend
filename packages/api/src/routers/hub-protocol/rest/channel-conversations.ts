@@ -410,6 +410,9 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
     if (blocked) return blocked;
     const userId = c.get("userId") as string | undefined;
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    // Past `rejectAgentReviewer` the caller is the person (their own token):
+    // the review ladder reads their sessions with the human doors' roster.
+    const personRoster = !c.get("agentUserId");
     const channelId = c.req.param("channelId");
     if (!z.string().uuid().safeParse(channelId).success) {
       return c.json({ error: "Invalid channelId" }, 400);
@@ -483,6 +486,7 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
               },
             },
             actorId: userId,
+            roster: personRoster,
             ...(expectedRevision !== undefined ? { expectedRevision } : {}),
           });
           const seen = Array.isArray(draft.revisionHistory)
@@ -532,6 +536,7 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
         userId,
         c.get("scopes") as string[]
       );
+      ctx.personRoster = personRoster;
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
@@ -674,6 +679,8 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
             },
           },
           actorId: userId,
+          // The person (past `rejectAgentReviewer`): the human doors' roster.
+          roster: !c.get("agentUserId"),
           ...(expectedRevision !== undefined ? { expectedRevision } : {}),
         });
       } else {
