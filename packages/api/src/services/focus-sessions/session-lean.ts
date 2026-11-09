@@ -130,6 +130,8 @@ export interface LeanContinuation {
   /** `ownerDeploys` holds THIS session's deploys only (`detail: 'deploys'` reads the rest). */
   gates: ContinuationPacket["gates"];
   live: ContinuationPacket["live"];
+  /** Who works each step (the same section as the full packet: a wake needs it). */
+  stageRuns: ContinuationPacket["stageRuns"];
 }
 
 /** The lean projection of a packet built with `ownerDeploys: 'own'`. */
@@ -149,6 +151,7 @@ export function projectLeanContinuation(
     room: leanRoom(packet.room, packet.inbox),
     gates: packet.gates,
     live: packet.live,
+    stageRuns: packet.stageRuns,
   };
 }
 
