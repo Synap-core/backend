@@ -155,10 +155,15 @@ export interface PlaybookParam {
   default?: unknown;
   required?: boolean;
   /**
-   * Where the value comes from when the caller gives none, as a reference
-   * (`subject.<field>`: a field of the subject entity). Read, never enforced,
-   * by the doors that know a subject (`snippet.render`); a playbook run
-   * ignores it. Absent on every param that does not declare one.
+   * Where the value comes from when the caller gives none, as a reference:
+   * `subject.<field>` (the subject entity's `title`, `preview` or a property)
+   * or, on an entity param, `subject` (the subject itself). Read by the doors
+   * that know a subject: `snippet.render`, and every playbook run (the run
+   * funnel fills it through `fillParamsFromSubject` before validating, so a
+   * run an activator starts on a post answers `platform` from the post's
+   * `post-platform`). A field with no usable value fills nothing: a required
+   * param then stays missing and the run is refused, naming it. Absent on
+   * every param that does not declare one.
    */
   from?: string;
 }
