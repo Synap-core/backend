@@ -28,6 +28,7 @@ import {
   type KeyGrant,
 } from "@synap/database";
 import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { meetScope } from "@synap-core/types/grants";
 import { ensurePersonalAgentUser } from "../utils/personal-agent-user.js";
 import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
@@ -189,10 +190,13 @@ export async function ensureSynapAiKey(
   // same way, and retire ours: the person must never see two "Synap AI" rows where revoking one leaves the other's grants live.
   const winner = await oldestHeld();
   if (winner && winner.id !== key.id) {
-    await db
-      .update(apiKeys)
-      .set({ isActive: false, revokedAt: new Date() })
-      .where(eq(apiKeys.id, key.id));
+    // The ONE revoke door (it also drops the verification cache, so the loser cannot validate for a TTL).
+    await revokeApiKeys(db, {
+      where: eq(apiKeys.id, key.id),
+      revokedBy: operatorUserId,
+      reason:
+        "A second Synap AI key made by racing first turns; the oldest is kept",
+    });
     return { agentUserId, keyId: winner.id };
   }
   return { agentUserId, keyId: key.id };
