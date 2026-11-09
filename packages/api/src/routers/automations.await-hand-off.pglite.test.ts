@@ -197,3 +197,60 @@ describe("hand-off and await are about a run", () => {
     ]);
   });
 });
+
+describe("await inside a loop is refused when the rule is written", () => {
+  const loopFlow = (
+    edges: Array<{ id: string; source: string; target: string }>
+  ) => ({
+    nodes: [
+      { id: "trigger", type: "trigger", data: { triggerType: "manual" } },
+      {
+        id: "q",
+        type: "query",
+        data: { profileSlug: "client", limit: 20 },
+      },
+      {
+        id: "loop",
+        type: "loop",
+        data: {
+          iteratorExpression: "steps.q.output.entities",
+          itemVariable: "item",
+        },
+      },
+      {
+        id: "render",
+        type: "playbook_run",
+        data: { playbookName: "Render a cut", await: true },
+      },
+    ],
+    edges,
+  });
+  const codes = (flow: ReturnType<typeof loopFlow>) =>
+    validateFlowDefinition(flow, { playbookExists: () => true }).errors.map(
+      (e) => [e.nodeId, e.code]
+    );
+
+  it("an awaited playbook_run in a loop body is refused", () => {
+    expect(
+      codes(
+        loopFlow([
+          { id: "e0", source: "trigger", target: "q" },
+          { id: "e1", source: "q", target: "loop" },
+          { id: "e2", source: "loop", target: "render" },
+        ])
+      )
+    ).toEqual([["render", "playbook_run_await_in_loop"]]);
+  });
+
+  it("the same node outside the loop is accepted", () => {
+    expect(
+      codes(
+        loopFlow([
+          { id: "e0", source: "trigger", target: "q" },
+          { id: "e1", source: "q", target: "loop" },
+          { id: "e2", source: "q", target: "render" },
+        ])
+      )
+    ).toEqual([]);
+  });
+});
