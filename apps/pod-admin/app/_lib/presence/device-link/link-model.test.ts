@@ -2,7 +2,8 @@
  * "Add this device", the new device's panel: each state, and the line every
  * presence surface holds: a failed READ is never "declined" or "expired".
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { KratosFlow } from "../../../../lib/kratos-flow";
 import {
   PRESENCE_DEVICE_LINK_GONE,
   PRESENCE_DEVICE_LINK_MISMATCH,
@@ -16,6 +17,7 @@ import {
   reasonCodeOf,
   registrationEvent,
   shouldPoll,
+  startPasskeyStep,
   timeLeft,
   type LinkEvent,
   type LinkState,
@@ -148,8 +150,18 @@ describe("linkReducer: creating the passkey", () => {
 
   it("a closed prompt goes back to the press; a failure keeps the approval for another try", () => {
     expect(
-      run(asked, approved, { type: "create" }, { type: "create-cancelled" })
-    ).toEqual({ kind: "approved", id: ID, expiresAt: IN_5_MIN });
+      run(
+        asked,
+        approved,
+        { type: "create" },
+        { type: "create-cancelled", detail: "NotAllowedError: not allowed" }
+      )
+    ).toEqual({
+      kind: "approved",
+      id: ID,
+      expiresAt: IN_5_MIN,
+      closed: { detail: "NotAllowedError: not allowed" },
+    });
     const failed = run(
       asked,
       approved,
@@ -244,5 +256,44 @@ describe("helpers", () => {
       type: "redirect",
       to: "/x",
     });
+  });
+});
+
+describe("startPasskeyStep: the prompt opens from the press", () => {
+  const FLOW = { id: "flow-1", ui: { nodes: [] } } as unknown as KratosFlow;
+
+  it("with the flow held, opens the prompt in the same tick as the press", () => {
+    const register = vi.fn(() => Promise.resolve("ok"));
+    const readFlow = vi.fn(() => Promise.resolve({ flow: FLOW }));
+    void startPasskeyStep({ flow: FLOW }, readFlow, register);
+    // Synchronously: no await between the tap and credentials.create.
+    expect(register).toHaveBeenCalledWith(FLOW);
+    expect(readFlow).not.toHaveBeenCalled();
+  });
+
+  it("with none held, reads the flow first, then registers", async () => {
+    const register = vi.fn(() => Promise.resolve("ok"));
+    const pending = startPasskeyStep(
+      null,
+      () => Promise.resolve({ flow: FLOW }),
+      register
+    );
+    expect(register).not.toHaveBeenCalled();
+    await expect(pending).resolves.toEqual({
+      kind: "registered",
+      result: "ok",
+    });
+    expect(register).toHaveBeenCalledWith(FLOW);
+  });
+
+  it("a sign-in with no settings flow signs in again; a failed read rejects", async () => {
+    const register = vi.fn(() => Promise.resolve("ok"));
+    await expect(
+      startPasskeyStep({ signInRequired: true }, vi.fn(), register)
+    ).resolves.toEqual({ kind: "reauth" });
+    await expect(
+      startPasskeyStep(null, () => Promise.reject(new Error("down")), register)
+    ).rejects.toThrow("down");
+    expect(register).not.toHaveBeenCalled();
   });
 });
