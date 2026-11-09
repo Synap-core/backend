@@ -69,6 +69,10 @@ async function loadApprovedRunnableSkill(
       // runner mints them after this approval (`file-parameters.ts`).
       parameters: skills.parameters,
       executionMode: skills.executionMode,
+      // A send intent's recipient is checked for do not contact at the run
+      // (`send-recipient-consent.ts`), read through the verb's input map.
+      intent: skills.intent,
+      inputMap: skills.inputMap,
       approved: skills.approved,
     })
     .from(skills)
