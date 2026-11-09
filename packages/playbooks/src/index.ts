@@ -2318,7 +2318,8 @@ export interface CapabilityToolDef {
    * template-local vault `ref` (resolved to the created `vault://<id>`).
    */
   credentialRef?: string;
-  executor?: ExecutorRef;
+  /** A tool is never a one-shot playbook: `generate` is a playbook executor only. */
+  executor?: Exclude<ExecutorRef, "generate">;
   config?: Record<string, unknown>;
   /** Descriptive behavioral config stored in tool.metadata (does NOT reset approval). */
   metadata?: Record<string, unknown>;

@@ -976,7 +976,11 @@ export async function resolveRunChoice(
     playbook: Pick<Playbook, "id" | "executor">;
   }
 ): Promise<ResolvedRunChoice> {
-  const executor = input.playbook.executor;
+  // A one-shot (`generate`) playbook is run by the pod itself: Synap AI.
+  const executor =
+    input.playbook.executor === "generate"
+      ? ("is-agent" as const)
+      : input.playbook.executor;
   const synapAiAllowed = executor !== "external-agent";
   const named = input.handToAgentId?.trim() || null;
   if (input.runOn === "synap_ai") {
