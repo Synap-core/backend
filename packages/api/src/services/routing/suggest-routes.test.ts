@@ -351,6 +351,37 @@ describe("rankRouteCandidates — generic words are not evidence (matcher-fixes)
   });
 });
 
+describe("tokenize — contractions never yield fragment tokens", () => {
+  it('"You don\'t own your digital life" carries no "don" and no "own"', () => {
+    expect([...tokenize("You don't own your digital life").keys()]).toEqual([
+      "digital",
+      "life",
+    ]);
+  });
+
+  it.each([
+    "can't",
+    "won\u2019t",
+    "it's",
+    "you're",
+    "we've",
+    "they'll",
+    "I'd",
+    "I'm",
+    "doesn't",
+  ])("%s yields no token", (word) => {
+    expect([...tokenize(`${word} carousel`).keys()]).toEqual(["carousel"]);
+  });
+
+  it("a possessive keeps its stem; a French elision still splits", () => {
+    expect([...tokenize("Alice's report").keys()]).toEqual(["alice", "report"]);
+    expect([...tokenize("l'agent d'accord").keys()]).toEqual([
+      "agent",
+      "accord",
+    ]);
+  });
+});
+
 describe("tokenize — the pod-wide stop list is unchanged; generic work words are the ranker's own", () => {
   it("'Agents need goals per session' tokenizes exactly as on main (recall, dedup, find)", () => {
     expect([...tokenize("Agents need goals per session").keys()]).toEqual([

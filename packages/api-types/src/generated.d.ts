@@ -10758,7 +10758,7 @@ export interface ReconcileReport {
  *   ok        it found items (`recalled` non-empty)
  *   empty     it ran and found nothing
  *   skipped   it deliberately did not run (`recallSkipped`): a session an
- *             automation started (cost), or a shared session with no
+ *             automation started (cost), a playbook run (noise), or a shared session with no
  *             workspace to recall from (privacy)
  *   failed    it errored (`recallError`); what an EARLIER run found is kept
  *
@@ -10778,6 +10778,11 @@ export interface RecalledItem {
 export type RecallSkipReason = 
 /** Started by an automation with no person (cost); a manual recall still runs. */
 "automation"
+/** A playbook run (kind `run`): it already has its subject and its method, so
+ *  a start recall only posts noise in its room; a manual recall still runs. */
+ | "playbook_run"
+/** Opened by an agent, not a person: start recall is for a person's own session. */
+ | "agent_session"
 /** Others can read the session and it has no workspace to recall from. */
  | "shared_without_workspace";
 export type SessionRecallView = {
