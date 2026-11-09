@@ -25,10 +25,8 @@ vi.mock("../../entities.js", () => ({
     }),
   },
 }));
-vi.mock("../../../services/object-graph/graph-service.js", async (orig) => ({
-  ...(await orig<
-    typeof import("../../../services/object-graph/graph-service.js")
-  >()),
+vi.mock("./shared.js", async (orig) => ({
+  ...(await orig<typeof import("./shared.js")>()),
   buildGraphEnvelope: vi.fn(async () => {
     throw new Error("no graph in this test");
   }),
