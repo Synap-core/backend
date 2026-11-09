@@ -233,6 +233,35 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     ).toMatch(/kind: "oauth_consent"/);
   });
 
+  it("presence.deviceLink.approve (nested, so the scan above cannot name it) gates in its service before it approves", () => {
+    // "Add this device" (founder decision of 9 Nov 2026): the approve door is
+    // `presenceRouter.deviceLink.approve`, indented one router deeper than
+    // `decisionProcedures` reads, so it is pinned here by name. Its body
+    // hands off to `approveDeviceLink`, which must call the gate for
+    // `device_link` BEFORE the write that marks the request approved.
+    const router = FILES.find((f) => f.path === "routers/presence.ts")!.src;
+    const approve = router.slice(
+      router.indexOf("    approve: protectedProcedure")
+    );
+    expect(router.indexOf("    approve: protectedProcedure")).toBeGreaterThan(
+      0
+    );
+    expect(approve.slice(0, approve.indexOf("    decline:"))).toMatch(
+      /\bapproveDeviceLink\(/
+    );
+    const service = FILES.find(
+      (f) => f.path === "services/presence/device-link.ts"
+    )!.src;
+    const body = service.slice(
+      service.indexOf("export async function approveDeviceLink(")
+    );
+    const gateAt = body.search(/\bassertPresenceForRequest\(\{/);
+    const approveAt = body.indexOf('status: "approved"');
+    expect(gateAt).toBeGreaterThan(0);
+    expect(body.slice(gateAt, gateAt + 200)).toMatch(/kind: "device_link"/);
+    expect(approveAt).toBeGreaterThan(gateAt);
+  });
+
   it("every request kind is gated by a door, and the skip hooks are held by their one door each", () => {
     // The account-recovery doors (new recovery codes) live in the server app.
     const appDoors = walk(APP_API_SRC);

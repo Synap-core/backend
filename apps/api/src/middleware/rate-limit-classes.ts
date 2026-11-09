@@ -11,6 +11,8 @@ import {
   isPublicDoorPath,
   publicDoorTokenSegment,
 } from "@synap/api/public-doors";
+// Zero-import subpath too: how a `synap_call_tool` call names the tool it runs.
+import { effectiveToolCall } from "@synap/api/mcp-call-tool";
 
 /**
  * Request classes for the pod-edge rate limiter.
@@ -367,13 +369,12 @@ function mcpMessageKind(
   if (method !== "tools/call") return "write";
   const params = (m as { params?: { name?: unknown; arguments?: unknown } })
     .params;
-  const name = params?.name;
+  // A `synap_call_tool` call spends what the tool it runs spends: a dispatched
+  // read is a read, a dispatched `synap_ask` with an answer is `ai`, never a
+  // way around the AI budget.
+  const { name, args } = effectiveToolCall(params?.name, params?.arguments);
   if (typeof name !== "string") return "write";
   if (name === MCP_ASK_TOOL) {
-    const args = (params?.arguments ?? {}) as {
-      detail?: unknown;
-      compare?: unknown;
-    };
     return args.detail === "sources" || args.compare === true ? "read" : "ai";
   }
   return readOnlyTools.has(name) ? "read" : "write";

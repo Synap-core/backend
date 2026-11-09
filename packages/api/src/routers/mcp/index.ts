@@ -18,13 +18,18 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
   McpError,
+  type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { loadSkillPackagesFromDisk } from "../hub-protocol/rest/skills.js";
+import { resolveSkillDoor } from "../../services/capability-briefs/resolve-skill-door.js";
 import { resources } from "./resources/index.js";
 import { tools } from "./tools/index.js";
 import { prompts } from "./prompts/index.js";
-import { filterToolsForAccess } from "./tool-profiles.js";
+import { filterToolsForAccess, visibleToolNames } from "./tool-profiles.js";
 import { loadKeyToolAccess } from "./tool-access.js";
+import { CALL_TOOL_NAME } from "./call-tool-name.js";
+import { resolveDispatch, withInputSchemaOnError } from "./call-tool.js";
+import { doorToolName } from "./tool-guidance.js";
 import { ENTRY_REFLEX_PROSE } from "./entry-instructions.js";
 import { shadowUndeclaredArgs } from "./undeclared-args.js";
 import {
@@ -334,14 +339,36 @@ export function createMCPServer(
           "Use the HTTP MCP endpoint (POST /mcp) with Authorization: Bearer <api-key> instead."
       );
     }
+    // `synap_call_tool` (call-tool.ts) is unwrapped HERE, once, before
+    // anything judges the call: the fence, the shadow and `execute` below see
+    // only the INNER tool, exactly as its direct call. The dispatcher has no
+    // authority of its own, so its name is never what is judged.
+    const toolDefs = await tools.list();
+    let name = request.params.name;
+    let callArgs: Record<string, unknown> = request.params.arguments ?? {};
+    let dispatchedDef: Pick<Tool, "name" | "inputSchema"> | undefined;
+    if (name === CALL_TOOL_NAME) {
+      const dispatch = await resolveDispatch(
+        callArgs,
+        toolDefs,
+        toolAccessKeyId
+          ? visibleToolNames(await loadKeyToolAccess(toolAccessKeyId))
+          : null,
+        async () => {
+          const door = await resolveSkillDoor(agentUserId, toolAccessKeyId);
+          return (podName) => doorToolName(podName, door);
+        }
+      );
+      if (dispatch.kind === "answer") return dispatch.result;
+      name = dispatch.name;
+      callArgs = dispatch.args;
+      dispatchedDef = dispatch.def;
+    }
+
     // The key's refusals (attribution, W1 grant fence), before anything runs.
     // A JSON-RPC error, as the HTTP door's 403 body used to carry.
     if (callPrincipal) {
-      const refusal = toolCallRefusal(
-        request.params.name,
-        await tools.list(),
-        callPrincipal
-      );
+      const refusal = toolCallRefusal(name, toolDefs, callPrincipal);
       if (refusal) throw new McpError(MCP_CALL_REFUSED_CODE, refusal);
     }
     const userId =
@@ -361,7 +388,7 @@ export function createMCPServer(
       );
     }
 
-    const args = request.params.arguments ?? {};
+    const args = callArgs;
     // Auto-inject the URL's scope (?workspaceId= / ?projectId=) into every tool
     // call when the model didn't pass one. This is how the agent's MCP URL pins
     // its focus: workspace lens + project lens, both orthogonal, both opt-in.
@@ -378,15 +405,15 @@ export function createMCPServer(
     // W-C1 SHADOW: undeclared argument keys are logged, never refused yet
     // (W-C3 refuses after seven days of these numbers). The caller's own
     // arguments — the door-injected lens is never "unknown".
-    await shadowUndeclaredArgs(request.params.name, args);
+    await shadowUndeclaredArgs(name, args);
 
     // Session attribution is resolved SERVER-SIDE in the adapter (derived from
     // the caller's open sessions), so nothing session-shaped is spread into
     // `scopedArgs`. Every write tool declares an OPTIONAL `sessionId` (derived
     // in `tools.list()`, W-C1) — the handle a run that named no conversation
     // keeps itself together with — and an explicit one always wins.
-    return await tools.execute(
-      request.params.name,
+    const result = await tools.execute(
+      name,
       scopedArgs,
       userId,
       scopes,
@@ -399,10 +426,9 @@ export function createMCPServer(
         ? {
             keyId: toolAccessKeyId,
             // Related to THIS request, so a streaming transport carries it on
-            // the call's own response stream. NOTE: the HTTP door runs the
-            // stateless transport with `enableJsonResponse`, which DROPS
-            // request-related notifications — `synap_load_skill` therefore
-            // also returns the unlocked tools' schemas inline.
+            // the call's own response stream. The HTTP door answers JSON,
+            // which drops it: `synap_load_skill` returns the unlocked tools'
+            // schemas, and `synap_call_tool` runs them in the same turn.
             notifyToolsChanged: () =>
               extra.sendNotification({
                 method: "notifications/tools/list_changed",
@@ -412,6 +438,9 @@ export function createMCPServer(
       // Cancelled request / closed connection — long waits stop on it.
       extra.signal
     );
+    return dispatchedDef
+      ? withInputSchemaOnError(result, dispatchedDef)
+      : result;
   });
 
   // Register prompt handlers

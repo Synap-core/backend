@@ -1,7 +1,8 @@
 /**
  * Drift guard for the command-template reference grammar.
  *
- * `template-references.ts` exists twice — here (runtime substitution) and at
+ * `references.ts` exists twice: in `@synap-core/types/text-template` (the pod's
+ * copy) and at
  * `synap-app/packages/headless/src/command-template/unresolved.ts` (browser
  * authoring surfaces). Neither repo is a dependency of the other, so a single
  * shared module is not reachable today; see either file's header.
@@ -28,7 +29,10 @@ import {
   siblingSkipReason,
 } from "../../../../scripts/sibling-checkout.mjs";
 
-const OWN_COPY = join(import.meta.dirname, "template-references.ts");
+const OWN_COPY = join(
+  import.meta.dirname,
+  "../../../types/src/text-template/references.ts"
+);
 const SYNAP_APP = siblingCheckout("synap-app");
 const APP_COPY = join(
   SYNAP_APP ?? "<no synap-app checkout>",
@@ -38,7 +42,7 @@ if (!SYNAP_APP) {
   console.warn(siblingSkipReason("synap-app", "template-references-drift"));
 }
 
-describe("template-references.ts — no drift between the two copies", () => {
+describe("text-template/references.ts — no drift between the two copies", () => {
   it.runIf(SYNAP_APP !== null)(
     "synap-app's unresolved.ts is byte-identical to the backend copy",
     () => {
@@ -61,7 +65,7 @@ describe("template-references.ts — no drift between the two copies", () => {
       expect(
         appSrc,
         "synap-app/packages/headless/src/command-template/unresolved.ts has drifted " +
-          "from synap-backend's template-references.ts. The two must stay " +
+          "from synap-backend's packages/types/src/text-template/references.ts. The two must stay " +
           "byte-identical — copy one over the other (see the file headers)."
       ).toBe(readFileSync(OWN_COPY, "utf-8"));
     }

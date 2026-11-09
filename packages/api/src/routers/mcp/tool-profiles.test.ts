@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { tools } from "./tools/index.js";
 import {
   BUILDER_REF,
+  SKILL_PACKAGES_THAT_UNLOCK,
   SKILL_STEMS_THAT_UNLOCK,
   ENTRY_TOOLS,
   TOOL_GROUPS,
@@ -16,6 +17,7 @@ import {
   toolGroupRef,
   visibleToolNames,
 } from "./tool-profiles.js";
+import { BUILD_SKILLS } from "./tool-guidance.js";
 
 /**
  * Every seeded skill STEM on disk (`skills/<package>/*.md`) — what a bare
@@ -26,13 +28,16 @@ const SKILLS_ROOT = join(
   dirname(fileURLToPath(import.meta.url)),
   "../../../../../skills"
 );
-const SKILL_STEMS: string[] = readdirSync(SKILLS_ROOT, { withFileTypes: true })
+/** Every seeded skill as `system/<package>/<stem>`, the slug `ensureSystemSkills` gives it. */
+const SKILL_SLUGS: string[] = readdirSync(SKILLS_ROOT, { withFileTypes: true })
   .filter((d) => d.isDirectory())
   .flatMap((d) =>
     readdirSync(join(SKILLS_ROOT, d.name))
       .filter((f) => f.endsWith(".md"))
-      .map((f) => f.slice(0, -3).toLowerCase())
+      .map((f) => `system/${d.name}/${f.slice(0, -3).toLowerCase()}`)
   );
+const SKILL_STEMS: string[] = SKILL_SLUGS.map((s) => s.split("/")[2]!);
+const packageOfSlug = (slug: string) => slug.split("/")[1]!;
 
 /**
  * MCP tool profiles (V1 D4). The coverage half is DERIVED from the live
@@ -71,7 +76,7 @@ describe("tool profiles", () => {
     expect(named.filter((n) => !advertised.has(n))).toEqual([]);
   });
 
-  it("the entry surface is the 9 tools of D4 + the goal and pick-up tools of plan v5 T1 + the relay door + the ask-the-person door", () => {
+  it("the entry surface is the 9 tools of D4 + the goal and pick-up tools of plan v5 T1 + the relay door + the ask-the-person door + the dispatcher", () => {
     expect([...ENTRY_TOOLS].sort()).toEqual(
       [
         "synap_orient",
@@ -88,22 +93,23 @@ describe("tool profiles", () => {
         "synap_ask_person",
         "synap_complete_session",
         "synap_load_skill",
+        "synap_call_tool",
       ].sort()
     );
   });
 
-  it("legacy (NULL) and builder keys list every tool; an entry key lists 14 + its unlocked groups", () => {
+  it("legacy (NULL) and builder keys list every tool; an entry key lists 15 + its unlocked groups", () => {
     expect(visibleToolNames({ profile: null, groups: [] })).toBeNull();
     expect(visibleToolNames({ profile: "builder", groups: [] })).toBeNull();
 
     const entryOnly = visibleToolNames({ profile: "entry", groups: [] })!;
-    expect(entryOnly.size).toBe(14);
+    expect(entryOnly.size).toBe(15);
 
     const withSchema = visibleToolNames({
       profile: "entry",
       groups: ["schema", "not-a-group"],
     })!;
-    expect(withSchema.size).toBe(14 + TOOL_GROUPS.schema.length);
+    expect(withSchema.size).toBe(15 + TOOL_GROUPS.schema.length);
     expect(withSchema.has("synap_define_kind")).toBe(true);
     // An unknown stored group is ignored, never widened.
     expect(withSchema.has("synap_create_view")).toBe(false);
@@ -167,5 +173,73 @@ describe("tool profiles", () => {
     expect(
       SKILL_STEMS_THAT_UNLOCK.filter((stem) => !SKILL_STEMS.includes(stem))
     ).toEqual([]);
+  });
+
+  it("every package that unlocks a group is a real skill package", () => {
+    const packages = new Set(SKILL_SLUGS.map(packageOfSlug));
+    // Non-vacuity: the glob sees the packages the family rule exists for.
+    expect(SKILL_PACKAGES_THAT_UNLOCK).toContain("synap-ui");
+    expect(SKILL_PACKAGES_THAT_UNLOCK).toContain("synap-app");
+    expect(SKILL_PACKAGES_THAT_UNLOCK.filter((p) => !packages.has(p))).toEqual(
+      []
+    );
+  });
+
+  it("every chapter of synap-ui and synap-app unlocks build, by full slug and by package/stem (derived from disk)", () => {
+    const chapters = SKILL_SLUGS.filter((s) =>
+      ["synap-ui", "synap-app"].includes(packageOfSlug(s))
+    );
+    // Non-vacuity: both packages' chapters, including their SKILL.md bundles.
+    expect(chapters.length).toBeGreaterThan(20);
+    expect(chapters).toContain("system/synap-ui/skill");
+    expect(chapters).toContain("system/synap-app/overview");
+    const missing = chapters.filter(
+      (slug) =>
+        !groupsForLoadSkillRef(slug).includes("build") ||
+        !groupsForLoadSkillRef(slug.slice("system/".length)).includes("build")
+    );
+    expect(missing).toEqual([]);
+    // `.md` and case are forgiven, as for a stem.
+    expect(groupsForLoadSkillRef("System/Synap-UI/Views.md")).toContain(
+      "build"
+    );
+  });
+
+  it("the same stem in ANOTHER package does not borrow the family's groups (no stem-only over-unlock)", () => {
+    const familyStems = new Set(
+      SKILL_SLUGS.filter((s) =>
+        SKILL_PACKAGES_THAT_UNLOCK.includes(packageOfSlug(s))
+      ).map((s) => s.split("/")[2]!)
+    );
+    // The collisions this rule exists for: the same stem in another package.
+    const twins = SKILL_SLUGS.filter(
+      (s) =>
+        !SKILL_PACKAGES_THAT_UNLOCK.includes(packageOfSlug(s)) &&
+        familyStems.has(s.split("/")[2]!)
+    );
+    // Topic files only: a package's SKILL.md is generated (gitignored for
+    // synap-design), so a `*/skill` twin may be absent from a fresh checkout.
+    expect(twins).toContain("system/synap/governance");
+    expect(twins).toContain("system/synap-market/overview");
+    // A twin unlocks only what its OWN stem maps to, never `build` by family.
+    const borrowed = twins.filter(
+      (slug) =>
+        groupsForLoadSkillRef(slug).includes("build") &&
+        !groupsForLoadSkillRef(slug.split("/")[2]!).includes("build")
+    );
+    expect(borrowed).toEqual([]);
+    // A bare stem carries no package: only the stem map applies.
+    expect(groupsForLoadSkillRef("skill")).toEqual([]);
+    expect(groupsForLoadSkillRef("overview")).toEqual([]);
+    // Agent input never reaches Object.prototype.
+    expect(groupsForLoadSkillRef("constructor")).toEqual([]);
+    expect(groupsForLoadSkillRef("constructor/x")).toEqual([]);
+  });
+
+  it("the build path orient teaches (yourTools.build) names real skills that unlock build", () => {
+    for (const ref of Object.values(BUILD_SKILLS)) {
+      expect(SKILL_SLUGS).toContain(ref);
+      expect(groupsForLoadSkillRef(ref)).toContain("build");
+    }
   });
 });

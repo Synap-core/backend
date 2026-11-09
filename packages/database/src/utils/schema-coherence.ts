@@ -1427,6 +1427,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "credential_id",
     addedBy: "0405_presence_recovery.sql",
   },
+  // "Add this device" (0412, founder decision of 9 Nov 2026): every
+  // device-link request reads the table, and Kratos' settings guard reads
+  // `grant_session` on every passkey change; absence means each would 42P01 /
+  // 42703.
+  {
+    table: "presence_device_links",
+    column: "choices",
+    addedBy: "0412_presence_device_links.sql",
+  },
+  {
+    table: "presence_challenges",
+    column: "grant_session",
+    addedBy: "0412_presence_device_links.sql",
+  },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
   {

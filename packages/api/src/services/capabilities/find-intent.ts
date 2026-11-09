@@ -105,13 +105,27 @@ import {
   type SessionPlaybookCandidates,
 } from "../focus-sessions/match-session-template.js";
 import type { SpaceCandidate } from "../discover/space-catalog.js";
+import {
+  OBJECT_CATALOGS,
+  searchObjectCatalogs,
+  type FindObjects,
+  type ObjectCatalog,
+} from "./find-objects.js";
 
-/** The catalogs this door searches. A caller may narrow to some of them. */
+/**
+ * The catalogs this door searches. A caller may narrow to some of them. The
+ * first four answer "what can DO this / where does it belong"; the object
+ * catalogs (`find-objects.ts`) answer "what already says how — and where is
+ * it": skills and rules, automations, sessions, goals, projects, views and
+ * documents, each row carrying how to open it. `find-coverage.test.ts` holds
+ * every kind `/open/<id>` can open to a catalog here or a reasoned exemption.
+ */
 export const FIND_CATALOGS = [
   "capabilities",
   "intents",
   "playbooks",
   "spaces",
+  ...OBJECT_CATALOGS,
 ] as const;
 export type FindCatalog = (typeof FIND_CATALOGS)[number];
 
@@ -225,12 +239,7 @@ export interface SpaceIntentMatch {
 export type FindSpaces = { matches: SpaceIntentMatch[] } | { error: string };
 
 /** What each catalog's numbers mean. Named on the wire so they are never compared. */
-export interface FindScoring {
-  capabilities?: ScaleNote;
-  intents?: ScaleNote;
-  playbooks?: ScaleNote;
-  spaces?: ScaleNote;
-}
+export type FindScoring = Partial<Record<FindCatalog, ScaleNote>>;
 
 export interface ScaleNote {
   ranker: string;
@@ -265,7 +274,14 @@ export interface NoConfidentMatch {
   escalation: Array<{ when: string; door: string }>;
 }
 
-export interface FindByIntentResult {
+/**
+ * Each object catalog's block (`skills`, `automations`, `sessions`, `goals`,
+ * `projects`, `views`, `documents`): ABSENT when not searched, `matches`
+ * (possibly empty) when searched, `error` when that read failed.
+ */
+export interface FindByIntentResult extends Partial<
+  Record<ObjectCatalog, FindObjects>
+> {
   intent: string;
   lens: { workspaceId: string | null };
   /** ABSENT when not searched; `matches: []` when searched and nothing fit. */
@@ -484,6 +500,57 @@ async function searchSpaces(
   };
 }
 
+const OBJECT_SCALE =
+  "confidence = score ÷ the best score in THIS catalog's block";
+const OBJECT_NOTE =
+  "Relative, not a probability; termCoverage is the absolute signal. Open a row with its `open` link (or diagnose/get by its id). Searched across everything you can read: the workspaceId lens is not a filter here. `error` means the read failed — not that nothing fits.";
+
+/** What each object catalog's numbers mean (see `find-objects.ts`). */
+const OBJECT_SCORING: Record<ObjectCatalog, ScaleNote> = {
+  skills: {
+    ranker:
+      "searchInstructionSkills (services/skills/search.ts) reads the candidates — SQL rarity over every skill and rule you can see, the space's linked skills first — then rankByTerms over title/slug+topics+tags/description",
+    scale: OBJECT_SCALE,
+    note: `kind "skill" or "rule". Read one with synap_load_skill({ ref }). ${OBJECT_NOTE}`,
+  },
+  automations: {
+    ranker:
+      "rankByTerms over the best-matching non-archived automations you can see (name / description)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  sessions: {
+    ranker:
+      "rankByTerms over the best-matching sessions you own (title / goal)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  goals: {
+    ranker:
+      "rankByTerms over the best-matching goals of projects you can see (name / project name)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  projects: {
+    ranker:
+      "rankByTerms over the best-matching projects you can see (name / description)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  views: {
+    ranker:
+      "rankByTerms over the best-matching saved views you can see (name / view type / description)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  documents: {
+    ranker:
+      "rankByTerms over the best-matching documents you can read, by TITLE only (bodies are synap_ask's)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+};
+
 export async function findByIntent(
   input: FindByIntentInput
 ): Promise<FindByIntentResult> {
@@ -500,6 +567,21 @@ export async function findByIntent(
       ? (input.limit as number)
       : CATALOG_LIMIT;
   const terms = queryTerms(input.intent);
+
+  // The object catalogs are independent reads: start them now, in parallel
+  // with everything below, and collect them at the end. Each failure is that
+  // catalog's own `{ error }` (searchObjectCatalogs never throws for one).
+  const objectCatalogs = OBJECT_CATALOGS.filter((c) => catalogs.has(c));
+  const objectsP = objectCatalogs.length
+    ? searchObjectCatalogs({
+        query: input.intent,
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        catalogs: objectCatalogs,
+        limit,
+      })
+    : Promise.resolve({});
+
   const vocabulary = catalogs.has("intents") ? await listIntentSlugs() : [];
 
   const ctx: CapabilityRegistryContext = {
@@ -665,7 +747,21 @@ export async function findByIntent(
     };
   }
 
+  // ── Catalogs 5+: the objects that say how, and where they are ─────────────
+  const objects: Partial<Record<ObjectCatalog, FindObjects>> = await objectsP;
+  for (const catalog of objectCatalogs) {
+    const block = objects[catalog];
+    if (!block) continue;
+    result[catalog] = block;
+    scoring[catalog] = OBJECT_SCORING[catalog];
+  }
+  const objectMatches = objectCatalogs.reduce((sum, c) => {
+    const block = result[c];
+    return sum + (block && "matches" in block ? block.matches.length : 0);
+  }, 0);
+
   const total =
+    objectMatches +
     (result.capabilities?.matches.length ?? 0) +
     (result.intents?.matches.length ?? 0) +
     (result.playbooks?.candidates.length ?? 0) +
@@ -685,4 +781,35 @@ export async function findByIntent(
   }
 
   return result;
+}
+
+/**
+ * `findByIntent` behind the caller's READ FLOOR — the ONE entry every door
+ * uses (MCP `synap_find`, tRPC `knowledge.find`), so the lens rule cannot fork.
+ *
+ * A lens still has to be a space the caller reads. `listCapabilities`' own
+ * contract says a non-null workspaceId is "a LENS, not an authorization"
+ * (`capability-registry.ts`), and its tools predicate is
+ * `isNull(workspaceId) OR eq(workspaceId, …)` with NO membership check; the
+ * skills door reads the lens as a visibility tier. So the floor is checked
+ * here, before anything is read: passing a workspace id you cannot read is
+ * `forbidden`, never an enumeration of that space's tools.
+ */
+export type FindForCallerResult =
+  { ok: true; result: FindByIntentResult } | { ok: false; forbidden: string };
+
+export async function findForCaller(
+  input: FindByIntentInput
+): Promise<FindForCallerResult> {
+  if (input.workspaceId) {
+    const { canRead, userPrincipal } = await import("../../access/door.js");
+    if (
+      !(await canRead(userPrincipal(input.userId), {
+        workspace: input.workspaceId,
+      }))
+    ) {
+      return { ok: false, forbidden: input.workspaceId };
+    }
+  }
+  return { ok: true, result: await findByIntent(input) };
 }

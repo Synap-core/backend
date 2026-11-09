@@ -26,6 +26,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_attach_facet",
     "cp-connector": "pod__attach_facet",
   },
+  synap_call_tool: {
+    "pod-mcp": "synap_call_tool",
+    "cp-connector": "pod__call_tool",
+  },
   synap_capture: { "pod-mcp": "synap_capture", "cp-connector": "pod__capture" },
   synap_change_kind_scope: {
     "pod-mcp": "synap_change_kind_scope",

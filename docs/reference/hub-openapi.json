@@ -4755,6 +4755,81 @@
         },
         "required": ["text"]
       },
+      "ChannelDraftSaveResponse": {
+        "type": "object",
+        "properties": {
+          "draftId": { "type": "string" },
+          "revision": {
+            "type": "integer",
+            "description": "The draft's revision after the save (`revisionHistory.length`): pass it as `expectedRevision` on the send."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "false = the words were already these: nothing was recorded."
+          },
+          "status": {
+            "type": "string",
+            "description": "The draft's status after the save: `pending` (a failed send the person reworded is reopened as pending)."
+          }
+        },
+        "required": ["draftId", "revision", "changed", "status"]
+      },
+      "ChannelDraftSaveRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000,
+            "description": "The draft's words, as the person left them."
+          },
+          "subject": { "type": "string", "maxLength": 500 },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The draft's revision you read (`revisionHistory.length`): a draft revised since is refused (409)."
+          }
+        },
+        "required": ["text"]
+      },
+      "ChannelDraftVersionsResponse": {
+        "type": "object",
+        "properties": {
+          "draftId": { "type": "string" },
+          "revision": {
+            "type": "integer",
+            "description": "The draft's revision now (`revisionHistory.length`)."
+          },
+          "versions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ChannelDraftVersion" },
+            "description": "Oldest first; the last is the draft's words now."
+          }
+        },
+        "required": ["draftId", "revision", "versions"]
+      },
+      "ChannelDraftVersion": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "description": "1 = the first words, then each change in order."
+          },
+          "author": {
+            "type": "string",
+            "enum": ["ai", "person"],
+            "description": "ai = written by an agent; person = written by the person."
+          },
+          "authorId": { "type": ["string", "null"] },
+          "at": {
+            "type": "string",
+            "description": "When these words were written (ISO 8601)."
+          },
+          "text": { "type": "string" },
+          "subject": { "type": "string" }
+        },
+        "required": ["version", "author", "authorId", "at", "text"]
+      },
       "Channel": {
         "type": "object",
         "properties": {
@@ -5694,6 +5769,7 @@
                         "conflict",
                         "kind_missing",
                         "not_connected",
+                        "do_not_contact",
                         "unknown"
                       ]
                     },
@@ -9259,6 +9335,27 @@
             "description": "With projection=lean: comma-separated property keys or columns returned whole on every row (e.g. the keys a row listed in `omitted`).",
             "name": "fields",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "JSON array of view filters, ANDed, exactly as on `GET /entities` (`[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`). A `properties.<slug>` clause needs `profileSlug`. Malformed JSON, too many clauses, an unknown or secret property is a 400. Only narrows what the caller reads."
+            },
+            "required": false,
+            "description": "JSON array of view filters, ANDed, exactly as on `GET /entities` (`[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`). A `properties.<slug>` clause needs `profileSlug`. Malformed JSON, too many clauses, an unknown or secret property is a 400. Only narrows what the caller reads.",
+            "name": "filters",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"],
+              "description": "`true` = each row also carries `facetSlugs` and `facets`, as on `GET /entities`. Default `false`."
+            },
+            "required": false,
+            "description": "`true` = each row also carries `facetSlugs` and `facets`, as on `GET /entities`. Default `false`.",
+            "name": "includeFacets",
+            "in": "query"
           }
         ],
         "responses": {
@@ -9281,7 +9378,7 @@
             }
           },
           "400": {
-            "description": "Bad request — the wrapped door refused the input",
+            "description": "Malformed `filters` (unparseable JSON, too many clauses, a property filter without profileSlug, an unknown or secret property).",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -17513,27 +17610,6 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
-                                },
-                                "onEnd": {
-                                  "type": "object",
-                                  "properties": {
-                                    "closed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "cancelled": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "failed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    }
-                                  },
-                                  "additionalProperties": false
                                 }
                               },
                               "additionalProperties": {}
@@ -21369,27 +21445,6 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
-                                },
-                                "onEnd": {
-                                  "type": "object",
-                                  "properties": {
-                                    "closed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "cancelled": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "failed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    }
-                                  },
-                                  "additionalProperties": false
                                 }
                               },
                               "additionalProperties": {}
@@ -26991,27 +27046,6 @@
                           "maxLength": 200
                         },
                         "maxItems": 50
-                      },
-                      "onEnd": {
-                        "type": "object",
-                        "properties": {
-                          "closed": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200
-                          },
-                          "cancelled": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200
-                          },
-                          "failed": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200
-                          }
-                        },
-                        "additionalProperties": false
                       }
                     },
                     "additionalProperties": {},
@@ -29365,6 +29399,171 @@
           },
           "409": {
             "description": "The draft changed since it was read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{channelId}/drafts/{draftId}": {
+      "put": {
+        "tags": ["Channels"],
+        "summary": "Save the words of a draft on the person's own channel",
+        "description": "The person keeps their edit of an open draft (pending, held, or a failed send): `text` (and `subject`) become the draft's words, recorded as one revision by the person. Nothing is sent and nothing is approved; who it goes to stays pinned. A failed send whose words are saved is reopened as pending. The same words record nothing (`changed: false`). Does not need the right to send, only to revise (a key limited to spaces may change a message's body and subject only); an agent or integration key never saves the person's draft.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "channelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "draftId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelDraftSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The draft's words, saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDraftSaveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No conversation or open draft the caller can read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft changed since it was read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{channelId}/drafts/{draftId}/versions": {
+      "get": {
+        "tags": ["Channels"],
+        "summary": "Read the versions of a draft",
+        "description": "The words of a draft over time, oldest first: the words it was filed with (`ai` when an agent drafted it), then each change of its words, by whom and when. The last version is the draft's words now. Read from the draft itself, in any status (a sent draft keeps its history).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "channelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "draftId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The draft's versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDraftVersionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid channelId or draftId",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No conversation or draft the caller can read",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -43325,7 +43524,7 @@
       "get": {
         "tags": ["Lifecycle"],
         "summary": "The flow of a kind or role: states, owning stages, things",
-        "description": "`flow.of` — one read to draw a kind's or role's work in a space: `states` in declared order, each with the flow stage(s) that own it (`owners`), its count and its `cards` (who works each one, its `next` step and the stage that owns it, `blocker` reserved); `unclassified` things; `flows` (the active playbooks working it: stages with the status each owns, gate, executor, workers, open runs and those on an older version); the space's `primaryOutput`; `withheld` names the parts a key's grant does not reach. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+        "description": "`flow.of` — one read to draw a kind's or role's work in a space: `states` in declared order, each with the flow stage(s) that own it (`owners`), its count and its `cards` (who works each one, its `next` step and the stage that owns it, its `blocker`: the same value `statusOf` returns, or `{status: \"unavailable\"}`); `unclassified` things; `flows` (the active playbooks working it: stages with the status each owns, gate, executor, workers, open runs and those on an older version); the space's `primaryOutput`; `withheld` names the parts a key's grant does not reach. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -43382,8 +43581,841 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "properties": {},
-                  "additionalProperties": {}
+                  "properties": {
+                    "profileSlug": { "type": "string" },
+                    "profileKind": {
+                      "type": "string",
+                      "enum": ["kind", "role"]
+                    },
+                    "property": { "type": "string" },
+                    "workspaceId": { "type": ["string", "null"] },
+                    "states": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "key": { "type": "string" },
+                          "label": { "type": "string" },
+                          "category": { "type": "string" },
+                          "tone": { "type": "string" },
+                          "humanOnly": { "type": "boolean" },
+                          "order": { "type": "number" },
+                          "owners": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": { "type": "string" },
+                                "playbookName": { "type": "string" },
+                                "stageKey": { "type": "string" },
+                                "stageName": { "type": "string" },
+                                "category": {
+                                  "type": "string",
+                                  "enum": [
+                                    "backlog",
+                                    "planned",
+                                    "started",
+                                    "paused",
+                                    "completed",
+                                    "canceled"
+                                  ]
+                                },
+                                "gate": {
+                                  "type": ["string", "null"],
+                                  "enum": ["human", "check", "awaits", null]
+                                },
+                                "executor": { "type": "string" }
+                              },
+                              "required": [
+                                "playbookId",
+                                "playbookName",
+                                "stageKey",
+                                "stageName",
+                                "category",
+                                "gate",
+                                "executor"
+                              ]
+                            }
+                          },
+                          "count": { "type": "number" },
+                          "stuck": { "type": ["number", "null"] },
+                          "windowed": { "type": "boolean" },
+                          "cards": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": { "type": "string" },
+                                "facetId": { "type": ["string", "null"] },
+                                "name": { "type": ["string", "null"] },
+                                "profileSlug": { "type": ["string", "null"] },
+                                "status": { "type": ["string", "null"] },
+                                "since": { "type": "string" },
+                                "enteredAt": { "type": ["string", "null"] },
+                                "stuck": { "type": "boolean" },
+                                "workedBy": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "sessionId": { "type": "string" },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": ["session", "worker"]
+                                      },
+                                      "live": { "type": "boolean" }
+                                    },
+                                    "required": ["sessionId", "kind", "live"]
+                                  }
+                                },
+                                "properties": {
+                                  "type": "object",
+                                  "additionalProperties": {}
+                                },
+                                "next": {
+                                  "type": ["object", "null"],
+                                  "properties": {
+                                    "to": { "type": "string" },
+                                    "label": { "type": "string" },
+                                    "humanOnly": { "type": "boolean" },
+                                    "owners": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "playbookId": { "type": "string" },
+                                          "playbookName": { "type": "string" },
+                                          "stageKey": { "type": "string" },
+                                          "stageName": { "type": "string" },
+                                          "category": {
+                                            "type": "string",
+                                            "enum": [
+                                              "backlog",
+                                              "planned",
+                                              "started",
+                                              "paused",
+                                              "completed",
+                                              "canceled"
+                                            ]
+                                          },
+                                          "gate": {
+                                            "type": ["string", "null"],
+                                            "enum": [
+                                              "human",
+                                              "check",
+                                              "awaits",
+                                              null
+                                            ]
+                                          },
+                                          "executor": { "type": "string" }
+                                        },
+                                        "required": [
+                                          "playbookId",
+                                          "playbookName",
+                                          "stageKey",
+                                          "stageName",
+                                          "category",
+                                          "gate",
+                                          "executor"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "to",
+                                    "label",
+                                    "humanOnly",
+                                    "owners"
+                                  ]
+                                },
+                                "blocker": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "blocked": { "type": "boolean" },
+                                        "count": { "type": "number" },
+                                        "why": {
+                                          "type": ["object", "null"],
+                                          "properties": {
+                                            "reason": {
+                                              "type": "string",
+                                              "enum": [
+                                                "input",
+                                                "approval",
+                                                "access",
+                                                "another_work",
+                                                "outside_world",
+                                                "external",
+                                                "date"
+                                              ]
+                                            },
+                                            "waitKind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "answer",
+                                                "approval",
+                                                "send",
+                                                "try_it",
+                                                "access",
+                                                "decide",
+                                                "their_reply",
+                                                "their_document",
+                                                "signature",
+                                                "payment",
+                                                "vendor",
+                                                "agent_work",
+                                                "agent_stopped",
+                                                "ci",
+                                                "devbox_job",
+                                                "merge_queue",
+                                                "red_main",
+                                                "deploy",
+                                                "another_work",
+                                                "date",
+                                                "nobody"
+                                              ]
+                                            },
+                                            "blockedReason": {
+                                              "type": ["string", "null"]
+                                            },
+                                            "blockerKey": {
+                                              "type": ["string", "null"]
+                                            }
+                                          },
+                                          "required": [
+                                            "reason",
+                                            "waitKind",
+                                            "blockedReason",
+                                            "blockerKey"
+                                          ]
+                                        },
+                                        "ball": {
+                                          "type": ["string", "null"],
+                                          "enum": [
+                                            "me",
+                                            "them",
+                                            "agent",
+                                            "machine",
+                                            "thing",
+                                            "date",
+                                            "nobody",
+                                            null
+                                          ]
+                                        },
+                                        "unlocks": {
+                                          "type": ["object", "null"],
+                                          "properties": {
+                                            "to": { "type": "string" },
+                                            "label": { "type": "string" }
+                                          },
+                                          "required": ["to", "label"]
+                                        },
+                                        "clearedBy": {
+                                          "anyOf": [
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "answer": {
+                                                  "type": "boolean",
+                                                  "enum": [true]
+                                                }
+                                              },
+                                              "required": ["answer"]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "intent": { "type": "string" }
+                                              },
+                                              "required": ["intent"]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "playbookId": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": ["playbookId"]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "capability": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": ["capability"]
+                                            },
+                                            { "type": "null" }
+                                          ]
+                                        },
+                                        "ref": {
+                                          "type": ["object", "null"],
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "session",
+                                                "pull_request",
+                                                "person",
+                                                "decision",
+                                                "proposal",
+                                                "slot",
+                                                "thing"
+                                              ]
+                                            },
+                                            "id": { "type": "string" },
+                                            "url": { "type": "string" },
+                                            "label": { "type": "string" },
+                                            "waitKind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "answer",
+                                                "approval",
+                                                "send",
+                                                "try_it",
+                                                "access",
+                                                "decide",
+                                                "their_reply",
+                                                "their_document",
+                                                "signature",
+                                                "payment",
+                                                "vendor",
+                                                "agent_work",
+                                                "agent_stopped",
+                                                "ci",
+                                                "devbox_job",
+                                                "merge_queue",
+                                                "red_main",
+                                                "deploy",
+                                                "another_work",
+                                                "date",
+                                                "nobody"
+                                              ]
+                                            }
+                                          },
+                                          "required": ["kind", "label"]
+                                        }
+                                      },
+                                      "required": [
+                                        "blocked",
+                                        "count",
+                                        "why",
+                                        "ball",
+                                        "unlocks",
+                                        "clearedBy",
+                                        "ref"
+                                      ]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "status": {
+                                          "type": "string",
+                                          "enum": ["unavailable"]
+                                        }
+                                      },
+                                      "required": ["status"]
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "facetId",
+                                "name",
+                                "profileSlug",
+                                "status",
+                                "since",
+                                "enteredAt",
+                                "stuck",
+                                "workedBy",
+                                "next",
+                                "blocker"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "key",
+                          "label",
+                          "category",
+                          "tone",
+                          "humanOnly",
+                          "order",
+                          "owners",
+                          "count",
+                          "stuck",
+                          "windowed",
+                          "cards"
+                        ]
+                      }
+                    },
+                    "unclassified": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "count": { "type": "number" },
+                        "unset": { "type": "number" },
+                        "cards": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": { "type": "string" },
+                              "facetId": { "type": ["string", "null"] },
+                              "name": { "type": ["string", "null"] },
+                              "profileSlug": { "type": ["string", "null"] },
+                              "status": { "type": ["string", "null"] },
+                              "since": { "type": "string" },
+                              "enteredAt": { "type": ["string", "null"] },
+                              "stuck": { "type": "boolean" },
+                              "workedBy": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "sessionId": { "type": "string" },
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": ["session", "worker"]
+                                    },
+                                    "live": { "type": "boolean" }
+                                  },
+                                  "required": ["sessionId", "kind", "live"]
+                                }
+                              },
+                              "properties": {
+                                "type": "object",
+                                "additionalProperties": {}
+                              },
+                              "next": {
+                                "type": ["object", "null"],
+                                "properties": {
+                                  "to": { "type": "string" },
+                                  "label": { "type": "string" },
+                                  "humanOnly": { "type": "boolean" },
+                                  "owners": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "playbookId": { "type": "string" },
+                                        "playbookName": { "type": "string" },
+                                        "stageKey": { "type": "string" },
+                                        "stageName": { "type": "string" },
+                                        "category": {
+                                          "type": "string",
+                                          "enum": [
+                                            "backlog",
+                                            "planned",
+                                            "started",
+                                            "paused",
+                                            "completed",
+                                            "canceled"
+                                          ]
+                                        },
+                                        "gate": {
+                                          "type": ["string", "null"],
+                                          "enum": [
+                                            "human",
+                                            "check",
+                                            "awaits",
+                                            null
+                                          ]
+                                        },
+                                        "executor": { "type": "string" }
+                                      },
+                                      "required": [
+                                        "playbookId",
+                                        "playbookName",
+                                        "stageKey",
+                                        "stageName",
+                                        "category",
+                                        "gate",
+                                        "executor"
+                                      ]
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "to",
+                                  "label",
+                                  "humanOnly",
+                                  "owners"
+                                ]
+                              },
+                              "blocker": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "blocked": { "type": "boolean" },
+                                      "count": { "type": "number" },
+                                      "why": {
+                                        "type": ["object", "null"],
+                                        "properties": {
+                                          "reason": {
+                                            "type": "string",
+                                            "enum": [
+                                              "input",
+                                              "approval",
+                                              "access",
+                                              "another_work",
+                                              "outside_world",
+                                              "external",
+                                              "date"
+                                            ]
+                                          },
+                                          "waitKind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "answer",
+                                              "approval",
+                                              "send",
+                                              "try_it",
+                                              "access",
+                                              "decide",
+                                              "their_reply",
+                                              "their_document",
+                                              "signature",
+                                              "payment",
+                                              "vendor",
+                                              "agent_work",
+                                              "agent_stopped",
+                                              "ci",
+                                              "devbox_job",
+                                              "merge_queue",
+                                              "red_main",
+                                              "deploy",
+                                              "another_work",
+                                              "date",
+                                              "nobody"
+                                            ]
+                                          },
+                                          "blockedReason": {
+                                            "type": ["string", "null"]
+                                          },
+                                          "blockerKey": {
+                                            "type": ["string", "null"]
+                                          }
+                                        },
+                                        "required": [
+                                          "reason",
+                                          "waitKind",
+                                          "blockedReason",
+                                          "blockerKey"
+                                        ]
+                                      },
+                                      "ball": {
+                                        "type": ["string", "null"],
+                                        "enum": [
+                                          "me",
+                                          "them",
+                                          "agent",
+                                          "machine",
+                                          "thing",
+                                          "date",
+                                          "nobody",
+                                          null
+                                        ]
+                                      },
+                                      "unlocks": {
+                                        "type": ["object", "null"],
+                                        "properties": {
+                                          "to": { "type": "string" },
+                                          "label": { "type": "string" }
+                                        },
+                                        "required": ["to", "label"]
+                                      },
+                                      "clearedBy": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "answer": {
+                                                "type": "boolean",
+                                                "enum": [true]
+                                              }
+                                            },
+                                            "required": ["answer"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "intent": { "type": "string" }
+                                            },
+                                            "required": ["intent"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "playbookId": { "type": "string" }
+                                            },
+                                            "required": ["playbookId"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "capability": { "type": "string" }
+                                            },
+                                            "required": ["capability"]
+                                          },
+                                          { "type": "null" }
+                                        ]
+                                      },
+                                      "ref": {
+                                        "type": ["object", "null"],
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "session",
+                                              "pull_request",
+                                              "person",
+                                              "decision",
+                                              "proposal",
+                                              "slot",
+                                              "thing"
+                                            ]
+                                          },
+                                          "id": { "type": "string" },
+                                          "url": { "type": "string" },
+                                          "label": { "type": "string" },
+                                          "waitKind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "answer",
+                                              "approval",
+                                              "send",
+                                              "try_it",
+                                              "access",
+                                              "decide",
+                                              "their_reply",
+                                              "their_document",
+                                              "signature",
+                                              "payment",
+                                              "vendor",
+                                              "agent_work",
+                                              "agent_stopped",
+                                              "ci",
+                                              "devbox_job",
+                                              "merge_queue",
+                                              "red_main",
+                                              "deploy",
+                                              "another_work",
+                                              "date",
+                                              "nobody"
+                                            ]
+                                          }
+                                        },
+                                        "required": ["kind", "label"]
+                                      }
+                                    },
+                                    "required": [
+                                      "blocked",
+                                      "count",
+                                      "why",
+                                      "ball",
+                                      "unlocks",
+                                      "clearedBy",
+                                      "ref"
+                                    ]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "status": {
+                                        "type": "string",
+                                        "enum": ["unavailable"]
+                                      }
+                                    },
+                                    "required": ["status"]
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "facetId",
+                              "name",
+                              "profileSlug",
+                              "status",
+                              "since",
+                              "enteredAt",
+                              "stuck",
+                              "workedBy",
+                              "next",
+                              "blocker"
+                            ]
+                          }
+                        }
+                      },
+                      "required": ["count", "unset", "cards"]
+                    },
+                    "flows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "workspaceId": { "type": ["string", "null"] },
+                          "version": { "type": "number" },
+                          "executor": { "type": "string" },
+                          "stages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": { "type": "string" },
+                                "name": { "type": "string" },
+                                "category": {
+                                  "type": "string",
+                                  "enum": [
+                                    "backlog",
+                                    "planned",
+                                    "started",
+                                    "paused",
+                                    "completed",
+                                    "canceled"
+                                  ]
+                                },
+                                "subjectStatus": { "type": ["string", "null"] },
+                                "gate": {
+                                  "type": ["string", "null"],
+                                  "enum": ["human", "check", "awaits", null]
+                                }
+                              },
+                              "required": [
+                                "key",
+                                "name",
+                                "category",
+                                "subjectStatus",
+                                "gate"
+                              ]
+                            }
+                          },
+                          "owns": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          },
+                          "undeclaredStatuses": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                          },
+                          "runs": {
+                            "type": "object",
+                            "properties": {
+                              "open": { "type": "number" },
+                              "onOlderVersion": { "type": "number" }
+                            },
+                            "required": ["open", "onOlderVersion"]
+                          },
+                          "workers": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "ruleId": { "type": "string" },
+                                "activatorKey": { "type": "string" },
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["run", "propose"]
+                                },
+                                "scope": {
+                                  "type": "string",
+                                  "enum": ["space", "project"]
+                                },
+                                "projectId": { "type": ["string", "null"] },
+                                "state": {
+                                  "type": "string",
+                                  "enum": ["running", "paused"]
+                                }
+                              },
+                              "required": [
+                                "ruleId",
+                                "activatorKey",
+                                "mode",
+                                "scope",
+                                "projectId",
+                                "state"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "workspaceId",
+                          "version",
+                          "executor",
+                          "stages",
+                          "owns",
+                          "undeclaredStatuses",
+                          "runs",
+                          "workers"
+                        ]
+                      }
+                    },
+                    "space": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "primaryOutput": { "type": ["string", "null"] },
+                        "produces": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        }
+                      },
+                      "required": ["primaryOutput", "produces"]
+                    },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "total": { "type": "number" },
+                        "live": { "type": "number" },
+                        "doneWindowed": { "type": "number" },
+                        "lostWindowed": { "type": "number" }
+                      },
+                      "required": [
+                        "total",
+                        "live",
+                        "doneWindowed",
+                        "lostWindowed"
+                      ]
+                    },
+                    "window": {
+                      "type": "object",
+                      "properties": {
+                        "days": { "type": "number" },
+                        "since": { "type": "string" }
+                      },
+                      "required": ["days", "since"]
+                    },
+                    "hasWorker": { "type": ["boolean", "null"] },
+                    "withheld": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": ["flows", "workers"]
+                      }
+                    }
+                  },
+                  "required": [
+                    "profileSlug",
+                    "profileKind",
+                    "property",
+                    "workspaceId",
+                    "states",
+                    "unclassified",
+                    "flows",
+                    "space",
+                    "totals",
+                    "window",
+                    "hasWorker",
+                    "withheld"
+                  ]
                 }
               }
             }

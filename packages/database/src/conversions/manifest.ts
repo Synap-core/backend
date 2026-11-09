@@ -37,6 +37,8 @@ export type ConversionOp =
   | FoldRoleIntoStatusOp
   | RenameProfileOp
   | ProjectLifecycleColumnsOp
+  | FillFacetInitialStatusOp
+  | DropStaleLifecycleListsOp
   | FoldBookingDealIntoLeadOp
   | RekindByStatusOp;
 
@@ -463,6 +465,8 @@ export interface MoveBasePropertyToFacetOp extends BaseOp {
  *   - both present → `onConflict` decides: `keepTarget` keeps the existing
  *     target value, `keepSource` overwrites it with the source value; the
  *     losing value is discarded and counted (`entitiesKeyConflicts`);
+ *     `prependSource` (text values) discards neither: the target becomes
+ *     `<source>\n\n<target>`, unless it already opens with the source;
  *   - `sourceKey` is ALWAYS stripped.
  *
  * Idempotent: after a run no matching entity carries `sourceKey`, so a re-run
@@ -651,6 +655,7 @@ export const FOLD_ROLE_NO_TARGET = ["attachFirst", "park"] as const;
 export const RENAME_PROPERTY_KEY_CONFLICTS = [
   "keepTarget",
   "keepSource",
+  "prependSource",
 ] as const;
 export type RenamePropertyKeyConflict =
   (typeof RENAME_PROPERTY_KEY_CONFLICTS)[number];
@@ -667,6 +672,30 @@ export type RenamePropertyKeyConflict =
  */
 export interface ProjectLifecycleColumnsOp extends BaseOp {
   op: "projectLifecycleColumns";
+}
+
+/**
+ * Status-first wave (doors audit 1bb7b083, bug 6): a role's facet born with NO
+ * status gets its lifecycle's initial status — column, category and the
+ * `properties[<slug>]` mirror together, as a facet birth now does. Only a
+ * non-terminal, non-person-only initial status is filled (the birth rule);
+ * a facet that holds a mirror value is `projectLifecycleColumns`' to fill.
+ * Idempotent. (`services/lifecycle/heal-lifecycle-declarations.ts`)
+ */
+export interface FillFacetInitialStatusOp extends BaseOp {
+  op: "fillFacetInitialStatus";
+}
+
+/**
+ * Status-first wave (doors audit bug 5): ONE option list per lifecycle. The
+ * stale `uiHints.enumValues` key of every lifecycle def is DELETED (nobody
+ * writes it; `constraints.enumOptions` is the one list, never edited here) and
+ * its stale `constraints.defaultValue` is aligned with the declaring link's
+ * initial status. A def with no `enumOptions` is left alone. Idempotent.
+ * (`services/lifecycle/heal-lifecycle-declarations.ts`)
+ */
+export interface DropStaleLifecycleListsOp extends BaseOp {
+  op: "dropStaleLifecycleLists";
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -1846,6 +1875,17 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "projectLifecycleColumns",
       opKey: "w12.lifecycle.project-columns",
     },
+    // ─── Status-first wave: facets born without a status, one option list ────
+    // After the column fill, so a facet whose mirror holds a value is projected
+    // first and only a truly status-less facet gets the initial status.
+    {
+      op: "fillFacetInitialStatus",
+      opKey: "sf1.lifecycle.fill-facet-initial-status",
+    },
+    {
+      op: "dropStaleLifecycleLists",
+      opKey: "sf1.lifecycle.drop-stale-option-lists",
+    },
 
     {
       op: "renameProfile",
@@ -2162,6 +2202,74 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       toSlug: "research-finding",
       fromTemplate: "research-base",
     },
+
+    // ─── Snippet: `devplane_prompt_snippet` folds into the pod-wide `snippet` ───
+    //
+    // The DevPlane-only prompt snippet is retired from `ensureDevplaneProfiles`.
+    // Read on the one real pod (2026-11-09): ONE entity, `snippetCategory:
+    // workflow`, a `snippetDescription`, no body, no `isExecutable`/`linkedApp`.
+    //   - snippetBody -> body, then snippetDescription -> body as the FIRST
+    //     paragraph (`prependSource`: nothing discarded, never doubled).
+    //   - Known losses: `snippetCategory` has no field on `snippet` (every value
+    //     becomes `use: prompt`); `isExecutable` / `linkedApp` have no field and
+    //     stay only in the entity JSON. {{var}} / @{arg:x} bodies are not
+    //     rewritten (no `variables` can be derived).
+    //   - The merge repoints the entities; the scope reconcile makes the
+    //     workspace-stamped rows pod-wide like the kind.
+    // Operator-run (`deferAtBoot`), after the boot that seeds `snippet`; each
+    // step refuses until that canonical exists (`requiresCanonical`).
+    {
+      op: "renamePropertyKey",
+      opKey: "snippet.devplane-prompt-snippet.body",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetBody",
+      targetKey: "body",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "snippet.devplane-prompt-snippet.description-into-body",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetDescription",
+      targetKey: "body",
+      onConflict: "prependSource",
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "snippet.devplane-prompt-snippet.category-into-use",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetCategory",
+      targetKey: "use",
+      valueMap: {
+        deploy: "prompt",
+        debug: "prompt",
+        test: "prompt",
+        audit: "prompt",
+        review: "prompt",
+        workflow: "prompt",
+        custom: "prompt",
+      },
+    },
+    {
+      op: "mergeInto",
+      opKey: "snippet.merge.devplane-prompt-snippet-into-snippet",
+      deferAtBoot: true,
+      fromSlugs: ["devplane_prompt_snippet"],
+      intoSlug: "snippet",
+      intoScope: "system",
+    },
+    {
+      op: "reconcileEntityScope",
+      opKey: "snippet.reconcile.entity-scope",
+      deferAtBoot: true,
+      slug: "snippet",
+    },
   ],
 };
 
@@ -2187,6 +2295,8 @@ export const CONVERSION_OP_TYPES = [
   "foldRoleIntoStatus",
   "renameProfile",
   "projectLifecycleColumns",
+  "fillFacetInitialStatus",
+  "dropStaleLifecycleLists",
   "foldBookingDealIntoLead",
   "rekindByStatus",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
@@ -2478,6 +2588,8 @@ export function validateManifest(manifest: ConversionManifest): void {
         }
         break;
       case "projectLifecycleColumns":
+      case "fillFacetInitialStatus":
+      case "dropStaleLifecycleLists":
         break; // no parameters: every declared lifecycle
       case "renameProfile":
         requireSlug(op.opKey, op.slug);

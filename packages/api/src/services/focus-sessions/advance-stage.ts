@@ -332,6 +332,7 @@ export async function advanceSessionStage(
     projectId: session.projectId,
     channelId: session.channelId,
     playbookId: session.playbookId,
+    subjectEntityId: session.subjectEntityId,
     toStage,
     fromStage,
   });

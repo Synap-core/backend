@@ -42,7 +42,8 @@ import {
   TOOL_GROUP_PURPOSES,
   toolGroupRef,
 } from "./tool-profiles.js";
-import { loadSkillCall } from "./tool-guidance.js";
+import { BUILD_SKILLS, loadSkillCall } from "./tool-guidance.js";
+import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 
 type Result = { isError?: boolean; content: Array<{ text?: string }> };
 const text = (r: Result) => r.content.map((c) => c.text ?? "").join("\n");
@@ -96,7 +97,9 @@ describe("synap_orient carries `yourTools`", () => {
     expect(yt.ask).toMatch(/^synap_ask asks the pod/);
     expect(yt.unlock).toContain('synap_load_skill({ref: "tools:read"})');
     expect(yt.unlock).toContain(BUILDER_REF);
-    expect(yt.unlock).toContain("after you reconnect");
+    // An unlocked tool runs at once through the dispatcher: no reconnect.
+    expect(yt.unlock).toContain("synap_call_tool({tool, arguments})");
+    expect(yt.unlock).not.toMatch(/reconnect|next conversation/i);
     expect(yt.groups).toEqual(
       Object.fromEntries(
         TOOL_GROUP_NAMES.map((g) => [toolGroupRef(g), TOOL_GROUP_PURPOSES[g]])
@@ -104,6 +107,20 @@ describe("synap_orient carries `yourTools`", () => {
     );
     expect(access.loadKeyToolAccess).toHaveBeenCalledWith("key-1");
   });
+
+  it.each([
+    ["an entry key", { profile: "entry", groups: [] }],
+    ["a legacy key", { profile: null, groups: [] }],
+  ])(
+    "%s reads where building starts, as a load_skill call",
+    async (_label, stored) => {
+      access.loadKeyToolAccess.mockResolvedValue(stored);
+      const yt = (await orient("key-1")).yourTools as Record<string, unknown>;
+      for (const ref of Object.values(BUILD_SKILLS)) {
+        expect(yt.build).toContain(`synap_load_skill({ref: "${ref}"})`);
+      }
+    }
+  );
 
   it("names the groups already unlocked and offers only the others", async () => {
     access.loadKeyToolAccess.mockResolvedValue({
@@ -126,8 +143,12 @@ describe("synap_orient carries `yourTools`", () => {
     const yt = (await orient("key-cp")).yourTools as Record<string, unknown>;
     expect(yt.ask).toMatch(/^pod__ask /);
     expect(yt.unlock).toContain('pod__load_skill({ref: "tools:read"})');
-    // The connector lists unlocked tools with no reconnect; the pod door cannot.
-    expect(yt.unlock).toContain("nothing to reconnect");
+    // The connector's own name for the dispatcher, once its curated catalog
+    // carries it (the generated door table); the pod name until then.
+    expect(yt.unlock).toContain(
+      `${DOOR_TOOL_NAMES.synap_call_tool?.["cp-connector"] ?? "synap_call_tool"}({tool, arguments})`
+    );
+    expect(yt.unlock).not.toMatch(/reconnect|next conversation/i);
   });
 
   it("a key that lists every tool (legacy NULL, builder) or no key at all says so", async () => {

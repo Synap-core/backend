@@ -23,6 +23,7 @@ import {
   groupThingsByStatus,
   pageThingsInColumn,
   stuckAfterDaysOf,
+  stuckForDays,
 } from "./status-groups.js";
 import { loadWorkedBy } from "./worked-by.js";
 
@@ -116,7 +117,7 @@ export async function readBoard(
   const now = Date.now();
   const stuckOf = (status: string | null, sinceIso: string): boolean => {
     const days = status === null ? undefined : stuckDays.get(status);
-    return days !== undefined && Date.parse(sinceIso) < now - days * 86_400_000;
+    return stuckForDays(sinceIso, days, now) !== null;
   };
   const [groups, allCounts, stuckCounts] = await Promise.all([
     groupThingsByStatus({

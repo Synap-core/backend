@@ -35,6 +35,11 @@
       "import": "./dist/public-doors.js",
       "default": "./dist/public-doors.js"
     },
+    "./mcp-call-tool": {
+      "types": "./dist/routers/mcp/call-tool-name.d.ts",
+      "import": "./dist/mcp-call-tool.js",
+      "default": "./dist/mcp-call-tool.js"
+    },
     "./redact-secret-path": {
       "types": "./dist/middleware/redact-secret-path.d.ts",
       "import": "./dist/redact-secret-path.js",

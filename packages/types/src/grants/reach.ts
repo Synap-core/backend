@@ -143,7 +143,7 @@ export function parseRequestPlace(
       throw new PlaceError("A pod-wide request names no space.");
     if (!isPodWideReadPermission(permission))
       throw new PlaceError(
-        `Only a read of one named kind is pod-wide, not ${permission}.`
+        `Only a read (of a kind, or of a subject on the pod-wide list) is pod-wide, not ${permission}.`
       );
     return POD_PLACE;
   }

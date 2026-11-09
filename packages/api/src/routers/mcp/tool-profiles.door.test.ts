@@ -133,13 +133,15 @@ describe("synap_load_skill(<group>) unlocks on an entry key", () => {
     ]);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(out).toContain("Unlocked tool group: schema");
-    // Honest about delivery: the HTTP door drops list_changed.
-    expect(out).toContain("after you reconnect");
+    // The HTTP door drops list_changed: the reply says how to run them NOW,
+    // and never asks for a reconnect.
+    expect(out).toContain("synap_call_tool({tool, arguments})");
+    expect(out).not.toMatch(/reconnect|next conversation/i);
     expect(out).toContain('"name":"synap_define_kind"');
     expect(out).toContain('"inputSchema"');
   });
 
-  it("builder unlocks every group but names the tools instead of inlining ~70 schemas", async () => {
+  it("builder unlocks every group: one line per tool instead of ~70 schemas, and how to get one", async () => {
     access.loadKeyToolAccess.mockResolvedValue({
       profile: "entry",
       groups: [],
@@ -150,6 +152,19 @@ describe("synap_load_skill(<group>) unlocks on an entry key", () => {
     const out = text(await exec("tools:builder", { keyId: "key-1" }));
     expect(out).toContain("synap_create_view");
     expect(out).not.toContain('"inputSchema"');
+    // The connector strips the pod's note by its first words.
+    expect(out).toMatch(/^Unlocked tool groups: /);
+    expect(out).toContain(
+      "call synap_call_tool with the tool name and no arguments"
+    );
+    // One line per unlocked tool, each cut to a sentence of at most 140 chars.
+    const lines = out.split("\n").filter((l) => l.startsWith("- synap_"));
+    const unlocked = Object.values(TOOL_GROUPS).flat();
+    expect(lines).toHaveLength(unlocked.length);
+    for (const l of lines) {
+      expect(l.slice(l.indexOf(": ") + 2).length).toBeLessThanOrEqual(140);
+    }
+    expect(out).not.toMatch(/reconnect|next conversation/i);
   });
 
   it("an already-unlocked group changes nothing and does not ping", async () => {

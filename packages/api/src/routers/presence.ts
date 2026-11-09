@@ -18,6 +18,17 @@
  *    ways in under `enforce`.
  *  - `recovery.*`: "I lost my passkey": ask, cancel (any session of theirs,
  *    24 h), finish (a fresh sign-in at the pod), which clears every factor.
+ *  - `deviceLink.*`: "Add this device" (founder decision of 9 Nov 2026,
+ *    session 84c74a23): a NEW device asks (`request`, it shows a number), a
+ *    device the person already uses sees it (`pending`), picks that number
+ *    and proves presence with an existing factor (`approve`), or declines it
+ *    (`decline`, any session); the new device follows its request
+ *    (`status`), then adds its own passkey (Kratos' settings guard) or device
+ *    key (`devices.enroll`) with no further proof, once.
+ *
+ * Grants are bound to the SESSION that asked (`callerSessionKey`): a
+ * `passkey_change` proof and an approved device link are redeemed only by it,
+ * never by another session of the same person.
  *
  * Every act is a PERSON's, signed in: a key never asks for a challenge or
  * enrols a device (`assertSignedInPerson`). The 2FA app and the recovery are
@@ -40,6 +51,12 @@ import {
   type SensitiveActionPath,
   type PresenceRequestKind,
   PRESENCE_ENROLL_FRESH_SECONDS,
+  PRESENCE_DEVICE_LINK_GONE,
+  PRESENCE_DEVICE_LINK_MISMATCH,
+  PRESENCE_DEVICE_LINK_NO_SESSION,
+  PRESENCE_DEVICE_LINK_RATE,
+  PRESENCE_DEVICE_LINK_SELF,
+  DEVICE_LINK_KINDS,
   enrollmentSubject,
   presenceSensitivitySchema,
   presenceWaysIn,
@@ -77,7 +94,17 @@ import {
 import {
   assertMayRemovePasskey,
   PASSKEY_CHANGE_GRANT_SECONDS,
+  stampPasskeyChangeGrant,
+  passkeyChangeReady,
 } from "../services/presence/passkey-change.js";
+import {
+  approveDeviceLink,
+  callerSessionKey,
+  declineDeviceLink,
+  deviceLinkStatus,
+  pendingDeviceLinks,
+  requestDeviceLink,
+} from "../services/presence/device-link.js";
 import {
   missingSince,
   readPresenceMode,
@@ -163,10 +190,42 @@ async function countsOf(userId: string) {
   }
 }
 
+/**
+ * The session this caller's grants are bound to, or NO_SESSION: a request or
+ * a grant with no session to bind could be redeemed by any session of the
+ * person, which is what binding prevents (founder decision of 9 Nov 2026).
+ */
+function sessionKeyOrRefuse(
+  ctx: Parameters<typeof callerSessionKey>[0]
+): string {
+  const key = callerSessionKey(ctx);
+  if (!key) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This sign-in has no session to tie the approval to. Sign in again on this device, then try again.",
+      cause: { reasonCode: PRESENCE_DEVICE_LINK_NO_SESSION },
+    });
+  }
+  return key;
+}
+
+/** How each device-link refusal reaches the client; its reasonCode says which. */
+const DEVICE_LINK_TRPC_CODES: Record<
+  string,
+  "BAD_REQUEST" | "NOT_FOUND" | "FORBIDDEN" | "TOO_MANY_REQUESTS"
+> = {
+  [PRESENCE_DEVICE_LINK_MISMATCH]: "BAD_REQUEST",
+  [PRESENCE_DEVICE_LINK_GONE]: "NOT_FOUND",
+  [PRESENCE_DEVICE_LINK_SELF]: "FORBIDDEN",
+  [PRESENCE_DEVICE_LINK_NO_SESSION]: "FORBIDDEN",
+  [PRESENCE_DEVICE_LINK_RATE]: "TOO_MANY_REQUESTS",
+};
+
 function asTrpc(err: unknown): never {
   if (err instanceof PresenceError) {
     throw new TRPCError({
-      code: "FORBIDDEN",
+      code: DEVICE_LINK_TRPC_CODES[err.code] ?? "FORBIDDEN",
       message: err.message,
       cause: { reasonCode: err.code },
     });
@@ -419,11 +478,31 @@ export const presenceRouter = router({
     }),
 
   /**
+   * May THIS session add a passkey now with nothing more to confirm (an
+   * unused grant it proved, or an approved "Add this device" request it
+   * asked for)? A read: nothing is redeemed. Pod admin's passkeys card goes
+   * straight to "Create a passkey" when it is true (the desktop's setup
+   * window opens AFTER the approval). A caller with no session to bind
+   * reads false.
+   */
+  passkeyChangeReady: protectedProcedure.query(async ({ ctx }) => {
+    assertSignedInPerson(ctx, SIGNED_IN);
+    const { ready, until } = await passkeyChangeReady(
+      ctx.userId,
+      callerSessionKey(ctx)
+    );
+    return { ready, until: until ? until.toISOString() : null };
+  }),
+
+  /**
    * Before a passkey change in Kratos' settings flow (adding or removing one)
    * when the person already has a factor (founder decision 2): an existing
    * factor proves `passkey_change:<their user id>`. The consumed challenge is
    * the grant the settings guard redeems: one change per proof, within
-   * PASSKEY_CHANGE_GRANT_SECONDS. The person's first passkey needs no grant.
+   * PASSKEY_CHANGE_GRANT_SECONDS, and only by the session that proved it
+   * (`grant_session`, founder decision of 9 Nov 2026): a caller with no
+   * session to bind is refused before the proof is used. The person's first
+   * passkey needs no grant.
    */
   authorizePasskeyChange: protectedProcedure
     .input(
@@ -442,6 +521,7 @@ export const presenceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, SIGNED_IN);
+      const sessionKey = sessionKeyOrRefuse(ctx);
       if (input.change === "remove") {
         await assertMayRemovePasskey(ctx.userId);
         await assertKeepsTwoWaysIn({
@@ -456,8 +536,17 @@ export const presenceRouter = router({
         proof: input.presence,
         door: "presence.authorizePasskeyChange",
       });
+      // The consumed challenge IS the grant: bind it to this session, so only
+      // this browser's settings flow redeems it.
+      const bound =
+        verdict !== null &&
+        (await stampPasskeyChangeGrant({
+          userId: ctx.userId,
+          challengeId: verdict.challengeId,
+          sessionKey,
+        }));
       return {
-        authorized: verdict !== null,
+        authorized: bound,
         expiresInSeconds: PASSKEY_CHANGE_GRANT_SECONDS,
       };
     }),
@@ -526,13 +615,19 @@ export const presenceRouter = router({
            * 2): a stolen session alone never adds a key it controls.
            */
           presence: presenceProofSchema.optional(),
+          /**
+           * "Add this device" (founder decision of 9 Nov 2026): the device
+           * link a device the person already uses approved for this session
+           * and this key, instead of `presence`.
+           */
+          deviceLinkId: z.string().uuid().optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
         assertSignedInPerson(ctx, SIGNED_IN);
         // Proof of possession, then ONE first factor per person decided in
         // the transaction that stores the key (`enrollDeviceKey`).
-        let row: { id: string };
+        let row: { id: string; viaDeviceLink: boolean };
         try {
           row = await enrollDeviceKey({
             userId: ctx.userId,
@@ -541,6 +636,8 @@ export const presenceRouter = router({
             publicKey: input.publicKey,
             signature: input.signature,
             proof: input.presence ?? null,
+            sessionKey: callerSessionKey(ctx),
+            deviceLinkId: input.deviceLinkId ?? null,
           });
         } catch (err) {
           asTrpc(err);
@@ -552,7 +649,7 @@ export const presenceRouter = router({
           subjectId: row.id,
           userId: ctx.userId,
           workspaceId: null,
-          data: { label: input.label },
+          data: { label: input.label, viaDeviceLink: row.viaDeviceLink },
         });
         await notifyFactorChanged({
           userId: ctx.userId,
@@ -740,6 +837,119 @@ export const presenceRouter = router({
       });
       return { removed: true };
     }),
+  }),
+
+  deviceLink: router({
+    /**
+     * On the NEW device: ask to be approved. `needed: false` when the person
+     * holds no proof factor yet (their first one needs no approval). Else the
+     * number to show, and every device of the person is told. Asking again
+     * replaces the pending request; at most 5 requests per 15 minutes.
+     */
+    request: protectedProcedure
+      .input(
+        z.object({
+          kind: z.enum(DEVICE_LINK_KINDS),
+          label: z.string().trim().min(1).max(LABEL_MAX),
+          /** `device_key` only: `presenceKeyFingerprint` of the key it will enrol. */
+          keyFingerprint: z
+            .string()
+            .regex(/^[0-9a-f]{64}$/)
+            .optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        assertSignedInPerson(ctx, SIGNED_IN);
+        const sessionKey = sessionKeyOrRefuse(ctx);
+        try {
+          const asked = await requestDeviceLink({
+            userId: ctx.userId,
+            sessionKey,
+            kind: input.kind,
+            label: input.label,
+            keyFingerprint: input.keyFingerprint ?? null,
+          });
+          return asked.needed
+            ? { ...asked, expiresAt: asked.expiresAt.toISOString() }
+            : asked;
+        } catch (err) {
+          asTrpc(err);
+        }
+      }),
+
+    /** On the NEW device: where its own request stands (only the session that asked). */
+    status: protectedProcedure
+      .input(z.object({ id: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        assertSignedInPerson(ctx, SIGNED_IN);
+        const sessionKey = sessionKeyOrRefuse(ctx);
+        try {
+          const read = await deviceLinkStatus({
+            userId: ctx.userId,
+            sessionKey,
+            id: input.id,
+          });
+          return { ...read, expiresAt: read.expiresAt.toISOString() };
+        } catch (err) {
+          asTrpc(err);
+        }
+      }),
+
+    /**
+     * On a device the person already uses: the requests it may approve (asked
+     * by another session), each with three numbers to pick from, never which.
+     */
+    pending: protectedProcedure.query(async ({ ctx }) => {
+      assertSignedInPerson(ctx, SIGNED_IN);
+      const sessionKey = sessionKeyOrRefuse(ctx);
+      const rows = await pendingDeviceLinks({ userId: ctx.userId, sessionKey });
+      return rows.map((r) => ({
+        ...r,
+        createdAt: r.createdAt.toISOString(),
+        expiresAt: r.expiresAt.toISOString(),
+      }));
+    }),
+
+    /**
+     * On a device the person already uses: the number the new device shows,
+     * and a proof from an existing factor for `device_link:<id>`. A wrong
+     * number declines the request; the proof is checked only after it.
+     */
+    approve: protectedProcedure
+      .input(
+        z.object({
+          id: z.string().uuid(),
+          number: z.string().regex(/^\d{2}$/),
+          presence: presenceProofSchema.optional(),
+        })
+      )
+      .mutation(async ({ ctx, input }) => {
+        assertSignedInPerson(ctx, SIGNED_IN);
+        const sessionKey = sessionKeyOrRefuse(ctx);
+        try {
+          return await approveDeviceLink({
+            userId: ctx.userId,
+            sessionKey,
+            id: input.id,
+            number: input.number,
+            proof: input.presence ?? null,
+          });
+        } catch (err) {
+          asTrpc(err);
+        }
+      }),
+
+    /** Decline, from any session of the person: the new device cancels, or "not me". */
+    decline: protectedProcedure
+      .input(z.object({ id: z.string().uuid() }))
+      .mutation(async ({ ctx, input }) => {
+        assertSignedInPerson(ctx, SIGNED_IN);
+        try {
+          return await declineDeviceLink({ userId: ctx.userId, id: input.id });
+        } catch (err) {
+          asTrpc(err);
+        }
+      }),
   }),
 
   recovery: router({

@@ -2,11 +2,14 @@ name: synap-app
 description: >
   Use this skill when the user wants to BUILD THEIR OWN APP on top of Synap — a
   personal project or a product — using Synap as the backend (auth, typed data
-  API, realtime). Two paths: add the SDK (@synap-core/sdk) to an existing app,
-  or scaffold the opinionated Next.js + HeroUI base app (npx create-synap-app).
+  API, realtime). First check it needs an app at all: a tailored screen over
+  pod data is built in the pod (views, bento, cells: the `synap-ui` skill).
+  Paths: add the SDK (@synap-core/sdk) to an existing app; a server app people
+  sign in to with their own pod (@synap-core/sdk/connect, createPodAppAuth);
+  register an app on your pod (synap app init).
   Triggers: "build an app on Synap", "use Synap as my backend", "scaffold a
   Synap project", "add the Synap SDK", "connect my app to my pod",
-  "npx create-synap-app". NOT the `synap` skill (capture/recall in a pod) nor
+  "sign in with Synap". NOT the `synap` skill (capture/recall in a pod) nor
   `synap-ui` (views inside the pod's own UI) — this is about writing app CODE.
 metadata:
   synap:

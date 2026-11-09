@@ -51,6 +51,9 @@ export const en = {
   "nudge.codes.title": "Save your recovery codes",
   "nudge.codes.line":
     "If you lose your password and Synap Cloud, they are the only way back in without the server.",
+  "nudge.this-device.title": "Set up a passkey on this device",
+  "nudge.this-device.line": "Then you can approve from here too.",
+  "nudge.this-device.action": "Set up",
   "nudge.open": "Open Security",
   "nudge.skip": "Skip for now",
 } as const;
@@ -102,6 +105,9 @@ export const fr: Catalog<typeof en> = {
   "nudge.codes.title": "Enregistrez vos codes de secours",
   "nudge.codes.line":
     "Si vous perdez votre mot de passe et Synap Cloud, ils sont le seul moyen de revenir sans le serveur.",
+  "nudge.this-device.title": "Configurez une clé d’accès sur cet appareil",
+  "nudge.this-device.line": "Vous pourrez alors approuver d’ici aussi.",
+  "nudge.this-device.action": "Configurer",
   "nudge.open": "Ouvrir Sécurité",
   "nudge.skip": "Plus tard",
 };

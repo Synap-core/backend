@@ -3,11 +3,14 @@ name: synap-app
 description: >
   Use this skill when the user wants to BUILD THEIR OWN APP on top of Synap — a
   personal project or a product — using Synap as the backend (auth, typed data
-  API, realtime). Two paths: add the SDK (@synap-core/sdk) to an existing app,
-  or scaffold the opinionated Next.js + HeroUI base app (npx create-synap-app).
+  API, realtime). First check it needs an app at all: a tailored screen over
+  pod data is built in the pod (views, bento, cells: the `synap-ui` skill).
+  Paths: add the SDK (@synap-core/sdk) to an existing app; a server app people
+  sign in to with their own pod (@synap-core/sdk/connect, createPodAppAuth);
+  register an app on your pod (synap app init).
   Triggers: "build an app on Synap", "use Synap as my backend", "scaffold a
   Synap project", "add the Synap SDK", "connect my app to my pod",
-  "npx create-synap-app". NOT the `synap` skill (capture/recall in a pod) nor
+  "sign in with Synap". NOT the `synap` skill (capture/recall in a pod) nor
   `synap-ui` (views inside the pod's own UI) — this is about writing app CODE.
 metadata:
   synap:
@@ -27,6 +30,13 @@ metadata:
 
 Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from `flow.of` (the kind's lifecycle in order, the playbook stage that owns each status, the things in each with who works them and their next step; tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`), and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
+## Pod-native first (founder, 9 Nov 2026)
+
+A tailored UI over the person's pod is built IN the pod first: views, bento
+dashboards, cells, and HTML pages bound as a kind's renderer, shown on the
+desktop (load `system/synap-ui/skill`; cells: `system/synap/viewframe-cells`).
+Build a standalone site or app only when the person asks for one.
+
 Synap is a sovereign data pod with a complete, typed API. You build an app on it
 the same way you'd build on any backend — except the backend is the user's own
 pod, and **every write is governed** (see `governance.md`).
@@ -35,15 +45,18 @@ pod, and **every write is governed** (see `governance.md`).
 
 | The user has… | Do this | Read |
 |---|---|---|
+| a screen over their pod data (a dashboard, a board, a kind's page) | no app: a view, bento or cell in the pod | `system/synap-ui/skill` |
 | an existing app (any framework) | add the SDK | `using-the-sdk.md`, `install-commands.md` |
-| nothing yet, wants a full app fast | a Website Factory app (shadcn + Tailwind v4); the HeroUI base app is retired | `creating-the-base-app.md` (retired), `using-the-sdk.md` |
+| a server app people sign in to with their own pod | `@synap-core/sdk/connect` (`createPodAppAuth`, SDK 1.3+) | the SDK's own `AGENTS.md` (`node_modules/@synap-core/sdk/AGENTS.md`) |
+| an app on their own pod, with its own key | `synap app init`, then `synap app connect` | `install-commands.md` |
+| nothing yet, wants a full app fast | a Next.js app on shadcn + Tailwind v4, plus the SDK. A public starter is decided but not published yet; the HeroUI base app is retired | `using-the-sdk.md` |
 | a server / script / CLI (no browser) | SDK with a session token, or the REST client with an API key | `using-the-sdk.md` |
 
-Both paths use the same underlying packages; only the amount of scaffolding differs.
+Every path uses the same packages; only the amount of scaffolding differs.
 
 ## The packages (all published under `@synap-core/*`)
 
-- `@synap-core/sdk` — typed tRPC client. `createSynapClient({ podUrl, ... })`. **The one you almost always want.**
+- `@synap-core/sdk` — typed tRPC client. `createSynapClient({ podUrl, ... })`. **The one you almost always want.** Subpaths: `@synap-core/sdk/connect` (server-only pod-app sign-in, `createPodAppAuth`), `@synap-core/sdk/public` (a public site, no credentials), `@synap-core/sdk/testing` (a mock pod).
 - `@synap-core/react` — React/TanStack-Query bindings (`SynapProvider`, hooks).
 - `@synap-core/sdk-realtime` — Socket.IO "something changed" events (`createRealtimeClient`).
 - `@synap-core/hub-rest-client` — zero-dep REST client for API-key holders (`HubRestClient`, `setupAgent`).
@@ -73,32 +86,45 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
   missing or does not verify; `SYNAP_RELEASE_VERIFY=warn` only warns.
 - **Managed (paid):** sign up at synap.live and provision a pod.
 
+## Where the app shows
+
+- On the desktop Home, the person keeps your site under **Your apps** (they pin
+  it or keep it as a tool).
+- A space can open on your site: its start page (`settings.layout.primarySurface`,
+  set by the space's template) is `{ kind: "url", url, podApp: { clientId } }`,
+  `clientId` being the app's client metadata URL. The desktop then opens the site
+  with this pod's address, so the app starts the pod's own sign-in. It grants the
+  site nothing.
+
 ## Honest scope
 
-Building on the user's OWN pod is fully supported today. Building a **multi-tenant
-commercial app** where *other* people connect *their* pods is **not yet supported**
-— per-app data scoping is still being built. If the user asks for that, say so;
-don't architect around a capability that isn't there.
+- **The person's own pod**: fully supported.
+- **An app other people use with THEIR pods**: supported through
+  `@synap-core/sdk/connect`. Each person connects their own pod and approves what
+  the app asks for. Such an app acts as its own agent there: its writes come back
+  as proposals the person reviews (`proposed` is success). Only Synap's own apps
+  act as the person.
+- **Not built yet, do not promise them**: an app the person approved acting as
+  them (decided, not built) and a public app starter (decided, not published).
+  If the user asks, say so; don't architect around a capability that isn't there.
 
 ---
 
 # Install & scaffold commands
 
-## Scaffold a full app (recommended for a fresh start)
+## Start a fresh app
 
-> **Not published yet.** The scaffolder (`@synap-core/create-synap-app`) is not
-> on npm and the base template is not public, so `npx` returns 404 today. Use the
-> SDK path below until a release exists.
+> **No public starter yet.** A public starter is decided but not published. The
+> older scaffolder (`@synap-core/create-synap-app`, a Next.js + HeroUI base
+> template) was never published and is retired, so `npx` returns 404. Start a
+> Next.js app on shadcn + Tailwind v4 and add the SDK (below).
 
-Once published:
+## Register an app on your pod
 
 ```bash
-npx @synap-core/create-synap-app my-app
+synap app init      # writes synap.app.json (name, pod, what the app asks for) and registers the app on your pod
+synap app connect   # files ONE proposal for the app's access; once you approve it, writes the app's key into the deploy target (Vercel, or .env.local)
 ```
-
-It creates a Next.js + HeroUI project from the base template, with the SDK, auth,
-app shell, command palette, realtime, and mock mode pre-wired. It also drops an
-`AGENTS.md` into the project so your AI coding tool knows how to work with it.
 
 ## Add the SDK to an existing app
 
@@ -132,9 +158,8 @@ synap skill get synap-app
 synap connect --target=cursor        # or claude-code, claude-desktop, codex, …
 ```
 
-Once the scaffolder is published, the scaffolded project ships an `AGENTS.md` at its root — most AI
-coding tools read it automatically, so a freshly-scaffolded app teaches the AI
-how to build on it with zero extra setup.
+The SDK ships its own `AGENTS.md` (`node_modules/@synap-core/sdk/AGENTS.md`):
+point your AI coding tool at it, or link it from your project's own `AGENTS.md`.
 
 ## Verify an install actually works
 
@@ -286,10 +311,10 @@ mock mode — all pre-wired. You add your screens; the plumbing is done.
 
 ## Scaffold it
 
-> **Not published yet.** `@synap-core/create-synap-app` is not on npm and the
-> base template is not public, so this does not work today. Until a release
-> exists, build on the SDK directly (`using-the-sdk.md`). The rest of this page
-> describes the template as it will ship.
+> **Never published, and retired.** `@synap-core/create-synap-app` is not on npm
+> and the base template is not public, so this does not work and will not. Build
+> on the SDK directly (`using-the-sdk.md`). The rest of this page describes an
+> existing base-app project.
 
 ```bash
 npx @synap-core/create-synap-app my-app

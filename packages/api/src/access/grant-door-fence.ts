@@ -780,6 +780,15 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     /^\/channels\/[0-9a-fA-F-]{36}\/proposed-messages\/?$/,
     NARROWED("proposal", []),
   ],
+  // A draft's versions (`deriveDraftVersions`, services/channels/
+  // draft-versions.ts): the channel through `canUserSeeChannel` (404 when the
+  // grant does not reach it), the one draft through `proposalUserFloor`
+  // (`findDraftOnChannel`), derived from that row only. Admitted for a key
+  // holding `proposal.read`, like the channel's proposed messages.
+  [
+    /^\/channels\/[0-9a-fA-F-]{36}\/drafts\/[0-9a-fA-F-]{36}\/versions\/?$/,
+    NARROWED("proposal", []),
+  ],
   // A space's conversations (`listSpaceConversations`, services/channels/
   // space-conversations.ts, CRM Messages contract A): the people through
   // `entityReadVisibleWhere` + `roleInWorkspaceLensWhere`, their channels
@@ -1055,6 +1064,13 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     ),
     synap_relay_answer: WRITE,
     synap_ask_person: WRITE,
+    // The dispatcher: the tools/call door unwraps it BEFORE the fence runs
+    // (`routers/mcp/index.ts`), so a fenced key is judged on the tool it
+    // names, never this name. Refused here so that if the name ever did
+    // reach the fence, it would stay closed.
+    synap_call_tool: REFUSED(
+      "A dispatcher: the fence judges the tool it names, never this name."
+    ),
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
     synap_promote_session_to_playbook: WRITE,

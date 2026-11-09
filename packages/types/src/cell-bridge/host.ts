@@ -1,20 +1,24 @@
 /**
- * The console's side of the page bridge (`@synap-core/types/cell-bridge`):
- * one `message` handler per running page. Pure — no React, no tRPC — so its
- * every refusal is testable with a fake window.
+ * The host's side of the page bridge: one `message` handler per running HTML
+ * page. ONE implementation for every host (pod admin's `html-frame.tsx`, the
+ * desktop's `HtmlPageFrame.tsx`); each host only supplies its frame's window
+ * and its own read door. Pure, like the rest of this leaf: no React, no DOM
+ * types (the frame is anything with `postMessage`), no fetch — so every
+ * refusal is testable with a fake window.
  *
  * A message is answered only when ALL hold:
  *   - its `source` is THIS frame's window (`frameWindow()`), so another frame,
- *     a browser extension or the console itself can never ask;
+ *     a browser extension or the host app itself can never ask;
  *   - its `origin` is "null": the opaque origin of the sandboxed srcdoc. A
  *     page that navigated its frame to a real address (https://…) no longer
  *     has it, so the bridge is shut to it even before the host notices;
- *   - it parses as a bridge message.
- * Then: every write is refused; an op outside the shared table is refused;
- * an allowed op is read with only its own params, by `read` (the viewer's
- * session). The answer is posted back to that same window, only while it is
- * still the frame's, with targetOrigin "*" — an opaque-origin frame has no
- * origin to name; what is posted is only the answer the page asked for.
+ *   - it parses as a bridge message (`parseCellBridgeMessage`).
+ * Then: every write is refused (`CELL_BRIDGE_WRITE_REFUSED`); an op outside
+ * the shared table is refused; an allowed op is read with only its own params
+ * (`pickBridgeParams`), by `read` (the viewer's own session, the host's lens).
+ * The answer is posted back to that same window, only while it is still the
+ * frame's, with targetOrigin "*" — an opaque-origin frame has no origin to
+ * name; what is posted is only the answer the page asked for.
  *
  * A failed read is answered as an ERROR the page can show, never as an empty
  * answer. An answer too large to hand over is an error too, never a cut list.
@@ -23,29 +27,31 @@
 import {
   CELL_BRIDGE_WRITE_REFUSED,
   cellBridgeUnknownOp,
-  isCellBridgeReadOp,
   parseCellBridgeMessage,
-  pickBridgeParams,
   type CellBridgeHostMessage,
+} from "./protocol.js";
+import {
+  isCellBridgeReadOp,
+  pickBridgeParams,
   type CellBridgeParamValue,
   type CellBridgeReadOp,
-} from "@synap-core/types/cell-bridge";
+} from "./read-ops.js";
 
 /** What the host posts to: the frame's `contentWindow`. */
-export interface BridgeTarget {
+export interface CellBridgeTarget {
   postMessage(message: unknown, targetOrigin: string): void;
 }
 
 /** The slice of a `MessageEvent` the host reads. */
-export interface BridgeEventLike {
+export interface CellBridgeEventLike {
   source: unknown;
   origin: string;
   data: unknown;
 }
 
-export interface BridgeHostOptions {
+export interface CellBridgeHostOptions {
   /** The running frame's window, or null when there is none. Read per message. */
-  frameWindow: () => BridgeTarget | null;
+  frameWindow: () => CellBridgeTarget | null;
   /** One allowed read, as the viewer. Throws on a failed read. */
   read: (
     op: CellBridgeReadOp,
@@ -54,9 +60,9 @@ export interface BridgeHostOptions {
 }
 
 /** The largest answer handed to a page: 1 M characters of JSON. */
-export const BRIDGE_MAX_ANSWER_CHARS = 1_000_000;
+export const CELL_BRIDGE_MAX_ANSWER_CHARS = 1_000_000;
 /** Reads one page may have in flight at once. */
-export const BRIDGE_MAX_IN_FLIGHT = 8;
+export const CELL_BRIDGE_MAX_IN_FLIGHT = 8;
 
 const MAX_ERROR_CHARS = 300;
 
@@ -74,7 +80,7 @@ function errorText(err: unknown): string {
  * The answer as plain JSON data (dates → strings, no functions, no class
  * instances), or the reason it cannot be handed over.
  */
-export function answerMessage(
+export function cellBridgeAnswer(
   id: string,
   data: unknown
 ): CellBridgeHostMessage {
@@ -88,7 +94,7 @@ export function answerMessage(
       error: "The answer could not be handed to the page.",
     };
   }
-  if (json.length > BRIDGE_MAX_ANSWER_CHARS) {
+  if (json.length > CELL_BRIDGE_MAX_ANSWER_CHARS) {
     const mb = (json.length / 1_000_000).toFixed(1);
     return {
       type: "synap:query:result",
@@ -96,13 +102,13 @@ export function answerMessage(
       error: `The answer is too large to hand to the page (${mb} MB). Ask for fewer items.`,
     };
   }
-  return { type: "synap:query:result", id, data: JSON.parse(json) };
+  return { type: "synap:query:result", id, data: JSON.parse(json) as unknown };
 }
 
 /** The `message` handler for one running page. */
-export function createHtmlBridgeHost(options: BridgeHostOptions) {
+export function createCellBridgeHost(options: CellBridgeHostOptions) {
   let inFlight = 0;
-  return async function onMessage(event: BridgeEventLike): Promise<void> {
+  return async function onMessage(event: CellBridgeEventLike): Promise<void> {
     const frame = options.frameWindow();
     if (!frame || event.source !== frame) return;
     if (event.origin !== "null") return;
@@ -132,7 +138,7 @@ export function createHtmlBridgeHost(options: BridgeHostOptions) {
       });
       return;
     }
-    if (inFlight >= BRIDGE_MAX_IN_FLIGHT) {
+    if (inFlight >= CELL_BRIDGE_MAX_IN_FLIGHT) {
       reply({
         type: "synap:query:result",
         id: msg.id,
@@ -146,7 +152,7 @@ export function createHtmlBridgeHost(options: BridgeHostOptions) {
         msg.operation,
         pickBridgeParams(msg.operation, msg.params)
       );
-      reply(answerMessage(msg.id, data));
+      reply(cellBridgeAnswer(msg.id, data));
     } catch (err) {
       reply({ type: "synap:query:result", id: msg.id, error: errorText(err) });
     } finally {

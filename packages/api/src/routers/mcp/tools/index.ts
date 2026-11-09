@@ -96,7 +96,6 @@ import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
-  playbookOnEndSchema,
   playbookSubjectProfileSchema,
 } from "../../../schemas/playbook-process.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -114,11 +113,12 @@ import {
 } from "../tool-profiles.js";
 import { loadKeyToolAccess, unlockKeyToolGroups } from "../tool-access.js";
 import {
+  callToolNote,
   loadSkillCall,
-  RECONNECT_NOTE,
   toolGroupList,
   yourToolsBlock,
 } from "../tool-guidance.js";
+import { CALL_TOOL_NAME } from "../call-tool-name.js";
 import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
@@ -419,10 +419,6 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     playbookActivatorsSchema,
     "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
   ),
-  onEnd: deriveJsonSchema(
-    playbookOnEndSchema,
-    "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
-  ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
     "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
@@ -666,7 +662,7 @@ export interface ToolsListContext {
   door?: CapabilityBriefDoor;
 }
 
-/** Above this many newly listed tools, the unlock reply names them instead of inlining schemas. */
+/** Above this many newly listed tools, the unlock reply gives each one line instead of its schema. */
 const UNLOCK_INLINE_SCHEMA_MAX = 15;
 
 /** `synap_load_skill`'s ref: `ref`, else its aliases `skill` / `name`. */
@@ -718,7 +714,7 @@ async function withYourTools(
   } catch (err) {
     yourTools = {
       unavailable: `Could not read this key's tool list: ${err instanceof Error ? err.message : String(err)}`,
-      unlock: `${loadSkillCall("synap_load_skill")} unlocks more tools. ${RECONNECT_NOTE}`,
+      unlock: `${loadSkillCall("synap_load_skill")} unlocks more tools. ${callToolNote(CALL_TOOL_NAME)}`,
     };
   }
   const { startHere, ...rest } = parsed as Record<string, unknown>;
@@ -732,12 +728,14 @@ async function withYourTools(
 
 /**
  * `synap_load_skill`'s tool-depth half (V1 D4). Persists `groups` on an ENTRY
- * key, pings `list_changed`, and returns a short note for the reply — with the
- * new tools' schemas inline when the set is small, because the HTTP door
- * cannot deliver the notification (see `mcp/index.ts`). `text` is "" when
- * there is nothing to say. `isGroupRef`: the caller asked for tools by name
- * (`tools:<group>`), so every outcome is worth a sentence; a skill load only
- * mentions an unlock that happened.
+ * key, pings `list_changed`, and returns a short note for the reply: the new
+ * tools with their schemas (one line each above the cap), runnable at once
+ * through `synap_call_tool`, because the HTTP door cannot deliver the
+ * notification and most clients never list again mid-conversation (see
+ * `mcp/index.ts`, `call-tool.ts`). `text` is "" when there is nothing to
+ * say. `isGroupRef`: the caller asked for tools by name (`tools:<group>`), so
+ * every outcome is worth a sentence; a skill load only mentions an unlock that
+ * happened.
  */
 async function unlockToolGroupsForSkill(
   groups: ToolGroup[],
@@ -775,20 +773,28 @@ async function unlockToolGroupsForSkill(
     added.flatMap((g) => [...TOOL_GROUPS[g]] as string[])
   );
   const defs = (await tools.list()).filter((t) => names.has(t.name));
-  // Honest about delivery: this door answers with plain JSON, so the
-  // `list_changed` ping above does not reach the client — the tools show up
-  // in its list only when it lists again (reconnect / a new session).
-  const lead =
-    `Unlocked tool group${added.length > 1 ? "s" : ""}: ${added.join(", ")} (${defs.map((t) => t.name).join(", ")}). ` +
-    `They appear in your tool list after you reconnect the Synap MCP server or start a new session (Claude Code: /mcp); this connection cannot refresh it for you.`;
-  if (defs.length > UNLOCK_INLINE_SCHEMA_MAX) return { text: lead };
+  // The note opens with these words: the claude.ai connector strips it by
+  // them (`POD_UNLOCK_NOTE_RE`, control plane `routes/mcp.ts`).
+  const head = `Unlocked tool group${added.length > 1 ? "s" : ""}: ${added.join(", ")}`;
+  const oneLine = (t: Tool) => (t.description ?? "").split("\n")[0];
+  if (defs.length > UNLOCK_INLINE_SCHEMA_MAX) {
+    // One line each: the description's first sentence, cut at 140 chars.
+    const brief = (t: Tool) => {
+      const sentence = oneLine(t).split(/(?<=\.)\s/)[0] ?? "";
+      return sentence.length > 140 ? `${sentence.slice(0, 139)}…` : sentence;
+    };
+    const lines = defs.map((t) => `- ${t.name}: ${brief(t)}`).join("\n");
+    return {
+      text: `${head}. ${callToolNote(CALL_TOOL_NAME)} For a tool's input schema, call ${CALL_TOOL_NAME} with the tool name and no arguments.\n\n${lines}`,
+    };
+  }
   const schemas = defs.map((t) => ({
     name: t.name,
-    description: (t.description ?? "").split("\n")[0],
+    description: oneLine(t),
     inputSchema: t.inputSchema,
   }));
   return {
-    text: `${lead} Their schemas, for reference:\n\n\`\`\`json\n${JSON.stringify(schemas)}\n\`\`\``,
+    text: `${head} (${defs.map((t) => t.name).join(", ")}). ${callToolNote(CALL_TOOL_NAME)} Their schemas:\n\n\`\`\`json\n${JSON.stringify(schemas)}\n\`\`\``,
   };
 }
 
@@ -867,7 +873,7 @@ export const tools = {
               type: "string",
               enum: ["lean", "full"],
               description:
-                "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows.",
+                "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, `truncated` names it with its full length); `omitted` lists the keys left out. full = unprojected rows.",
             },
             fields: {
               type: "array",
@@ -891,7 +897,7 @@ export const tools = {
             projectId: {
               type: "string",
               description:
-                "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL.",
+                "Optional: narrow to a project (entity id). Orthogonal to workspaceId; usually pre-set by the connection URL.",
             },
             facetSlug: {
               type: "string",
@@ -913,7 +919,7 @@ export const tools = {
             lastInteractionBefore: {
               type: "string",
               description:
-                "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Who haven't I spoken to in a month' = facetSlug 'lead' or 'client', lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting that happened, sent outreach, a dated conversation.",
+                "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Not spoken to in a month' = lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting, outreach sent, a dated conversation.",
             },
             lastInteractionAfter: {
               type: "string",
@@ -924,6 +930,16 @@ export const tools = {
               type: "boolean",
               description:
                 "With a lastInteraction window: also return the people never contacted (no interaction recorded). Default false.",
+            },
+            filters: {
+              type: "array",
+              items: { type: "object" },
+              description:
+                "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading.",
+            },
+            includeFacets: {
+              type: "boolean",
+              description: "Rows also carry their role facets.",
             },
             limit: {
               type: "number",
@@ -1031,7 +1047,15 @@ export const tools = {
               ],
               default: "pending",
             },
-            limit: { type: "number", default: 20 },
+            limit: {
+              type: "number",
+              default: 20,
+              description: "Page size, default 20",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
+            },
             detail: {
               type: "string",
               enum: ["summary", "full"],
@@ -1255,6 +1279,14 @@ export const tools = {
               enum: ["full"],
               description:
                 "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 40",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
           required: [],
@@ -1640,7 +1672,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity. To retire knowledge or a decision that stopped being true, set supersededBy with synap_update_entity (reversible, no review); delete only what was never true.",
+          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity. To retire knowledge or a decision that stopped being true, set supersededBy with synap_update_entity (reversible, no review); delete only what was never true. On an error, do not retry the same id: the error says why.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2593,7 +2625,7 @@ export const tools = {
               items: { type: "string", format: "uuid" },
               maxItems: 100,
               description:
-                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already).",
+                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already).",
             },
             blockedBySessionIds: {
               type: "array",
@@ -3666,7 +3698,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size (1–100, default 50).",
+              description: "Page size (1–100, default 25).",
+            },
+            cursor: {
+              type: "string",
+              description: "nextCursor of the prior reply",
             },
             playbookId: {
               type: "string",
@@ -3739,7 +3775,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
         inputSchema: {
           type: "object",
           properties: {
@@ -3772,7 +3808,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             scope: {
               type: "string",
@@ -3832,7 +3867,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             status: {
               type: "string",
@@ -5740,6 +5774,14 @@ export const tools = {
               description:
                 "Optional profile UUID to filter views scoped to that entity type.",
             },
+            limit: {
+              type: "number",
+              description: "Page size, default 50",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
+            },
           },
         },
       },
@@ -5765,6 +5807,14 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace UUID. Include it so workspace-scoped generated cells appear.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 15",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
         },
@@ -6111,7 +6161,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What can do this, and where does it belong? Searches the pod's runnable verbs, the abstract-intent axis, the user's playbooks and their spaces (with the kinds to write there) in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+          "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. Pass `intent` as free text. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
         inputSchema: {
           type: "object",
           properties: {
@@ -6179,8 +6229,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Max entries to return (default 20 when `query` is set; unset otherwise).",
+              description: "Page size, default 20 (browse or query).",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
           // workspaceId is OPTIONAL — "what can this pod do?" is almost always
@@ -6369,7 +6422,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Max entries to return (default 50).",
+              description: "Page size, default 25, max 99.",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
         },
@@ -6424,7 +6481,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6879,6 +6936,40 @@ export const tools = {
           },
           // `ref` or one of its aliases; the handler refuses none of them set.
           required: [],
+        },
+      },
+      {
+        // Unwrapped by the tools/call door before anything judges the call
+        // (`mcp/index.ts`, `call-tool.ts`): the fence, governance and every
+        // limit apply to the tool it names, as to a direct call of that tool.
+        name: CALL_TOOL_NAME,
+        annotations: {
+          title: "Call a tool",
+          // It may run any write: a client approves it as one.
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description: `Run a tool this key has unlocked but your client does not list yet, in this turn: \`tool\` = its name, \`arguments\` = its input. Leave \`arguments\` out to get its input schema. Unlock a group first with ${loadSkillCall("synap_load_skill")}.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              description: "The tool to run, e.g. 'synap_create_document'.",
+            },
+            arguments: {
+              type: "object",
+              description:
+                "The tool's input. Omit it to get the tool's input schema instead of running it.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "Optional: passed to the tool as its `sessionId` when `arguments` has none.",
+            },
+          },
+          required: ["tool"],
         },
       },
     ];

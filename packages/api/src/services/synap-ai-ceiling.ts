@@ -17,6 +17,7 @@ import { randomBytes } from "node:crypto";
 import {
   and,
   ApiKeyRepository,
+  asc,
   db,
   EventRepository,
   eq,
@@ -27,6 +28,7 @@ import {
   type KeyGrant,
 } from "@synap/database";
 import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { meetScope } from "@synap-core/types/grants";
 import { ensurePersonalAgentUser } from "../utils/personal-agent-user.js";
 import { toPodAdminOrigin } from "../utils/pod-admin-origin.js";
@@ -149,19 +151,24 @@ export async function ensureSynapAiKey(
   operatorUserId: string
 ): Promise<{ agentUserId: string; keyId: string }> {
   const agentUserId = await ensurePersonalAgentUser(operatorUserId);
-  const [held] = await db
-    .select({ id: apiKeys.id })
-    .from(apiKeys)
-    .where(
-      and(
-        eq(apiKeys.userId, agentUserId),
-        eq(apiKeys.keyType, "service"),
-        eq(apiKeys.instanceId, SYNAP_AI_KEY_INSTANCE),
-        eq(apiKeys.isActive, true),
-        isNull(apiKeys.revokedAt)
-      )
-    )
-    .limit(1);
+  const oldestHeld = async () =>
+    (
+      await db
+        .select({ id: apiKeys.id })
+        .from(apiKeys)
+        .where(
+          and(
+            eq(apiKeys.userId, agentUserId),
+            eq(apiKeys.keyType, "service"),
+            eq(apiKeys.instanceId, SYNAP_AI_KEY_INSTANCE),
+            eq(apiKeys.isActive, true),
+            isNull(apiKeys.revokedAt)
+          )
+        )
+        .orderBy(asc(apiKeys.createdAt), asc(apiKeys.id))
+        .limit(1)
+    )[0];
+  const held = await oldestHeld();
   if (held) return { agentUserId, keyId: held.id };
   const secret = `synap_ai_${randomBytes(32).toString("hex")}`;
   const key = await new ApiKeyRepository(db, new EventRepository(sql)).create(
@@ -179,6 +186,19 @@ export async function ensureSynapAiKey(
     },
     operatorUserId
   );
+  // Nothing is unique on the held key, so two first turns racing each made one. Converge on the OLDEST, every racer the
+  // same way, and retire ours: the person must never see two "Synap AI" rows where revoking one leaves the other's grants live.
+  const winner = await oldestHeld();
+  if (winner && winner.id !== key.id) {
+    // The ONE revoke door (it also drops the verification cache, so the loser cannot validate for a TTL).
+    await revokeApiKeys(db, {
+      where: eq(apiKeys.id, key.id),
+      revokedBy: operatorUserId,
+      reason:
+        "A second Synap AI key made by racing first turns; the oldest is kept",
+    });
+    return { agentUserId, keyId: winner.id };
+  }
   return { agentUserId, keyId: key.id };
 }
 
