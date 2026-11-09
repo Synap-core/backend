@@ -17,7 +17,7 @@ ENVIRONMENT="production"       # publish-types.yml's environment on main
 # The CI check run names, all jobs of ci.yml (scripts/preflight.tripwire.test.ts
 # reads this list: each must fail at "Preflight red"). A renamed job must
 # be renamed here too, or every pull request waits on a check that never runs.
-REQUIRED_CHECKS=("Release gate" "Full suite" "API e2e" "Reference docs are current")
+REQUIRED_CHECKS=("Release gate" "Full suite" "API e2e" "Reference docs are current" "Dependent repos typecheck")
 
 usage() { echo "usage: $0 <release-app-id> [--approvals N] [--apply]" >&2; exit 2; }
 

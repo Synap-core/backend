@@ -577,7 +577,7 @@ describe("merge-bot: greenSince, when the required checks all went green", () =>
 });
 
 describe("merge-bot: the required checks", () => {
-  it("are the ruleset's four, posted by the app the ruleset names", () => {
+  it("are the ruleset's five, posted by the app the ruleset names", () => {
     const sh = readFileSync(
       join(REPO, "scripts/apply-main-protection.sh"),
       "utf8"
@@ -587,13 +587,13 @@ describe("merge-bot: the required checks", () => {
         /"([^"]+)"/g
       ),
     ].map((m) => m[1]);
-    expect(required.length).toBe(4);
+    expect(required.length).toBe(5);
     expect([...REQUIRED_CHECKS].sort()).toEqual([...required].sort());
     expect(Number(/^GITHUB_ACTIONS_APP_ID=(\d+)/m.exec(sh)?.[1])).toBe(
       GITHUB_ACTIONS_APP_ID
     );
   });
-  it("all four success on the head: ok", () => {
+  it("all five success on the head: ok", () => {
     expect(greenChecks().ok).toBe(true);
   });
   it.each(REQUIRED_CHECKS.map((n: string) => [n]))(
