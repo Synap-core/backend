@@ -119,6 +119,8 @@ const NO_ROW: Record<string, string> = {
   Thing: "any entity seen through its kind or a role — not a kind of its own",
   Status: "a lifecycle option, declared per kind or role — not an object kind",
   Pipeline: "a computed view of a lifecycle — a view type, never an object",
+  Flow: "a read (`flow.of`) of a kind's lifecycle with the stages that own it — not an object kind",
+  Blocker: "a slot declaration that marks a thing held up — not an object kind",
   Worker: "configuration (a playbook activator) — not an object kind",
 };
 

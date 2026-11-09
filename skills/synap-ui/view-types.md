@@ -107,11 +107,11 @@ Best for: articles, bookmarks, products, books, photos.
 
 ## `kanban`
 
-Status board for an enum with no declared lifecycle. Requires `groupBy` on an enum/status property. A kind or role with a declared lifecycle already has its pipeline (computed from the lifecycle): open it, don't build a kanban for it.
+Status board for an enum with no declared lifecycle. Requires `groupByField`, an enum/status property key. A kind or role with a declared lifecycle already has its pipeline (computed from the lifecycle): open it, don't build a kanban for it.
 
 ```ts
 config: {
-  groupBy: { property: string },  // MUST be set — column grouping
+  groupByField: string,           // MUST be set: the property whose values are the columns
   cardFields: string[],
   filters?: Filter[],
   sort?: Sort[],

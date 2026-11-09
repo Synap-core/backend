@@ -2,7 +2,7 @@
 
 ## Apps are views of pod state
 
-Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from `flow.of` (the kind's lifecycle in order, the playbook stage that owns each status, the things in each with who works them and their next step; tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`), and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
 Synap is a sovereign data pod with a complete, typed API. You build an app on it
 the same way you'd build on any backend — except the backend is the user's own
@@ -13,7 +13,7 @@ pod, and **every write is governed** (see `governance.md`).
 | The user has… | Do this | Read |
 |---|---|---|
 | an existing app (any framework) | add the SDK | `using-the-sdk.md`, `install-commands.md` |
-| nothing yet, wants a full app fast | scaffold the base app (scaffolder not published yet) | `creating-the-base-app.md`, `install-commands.md` |
+| nothing yet, wants a full app fast | a Website Factory app (shadcn + Tailwind v4); the HeroUI base app is retired | `creating-the-base-app.md` (retired), `using-the-sdk.md` |
 | a server / script / CLI (no browser) | SDK with a session token, or the REST client with an API key | `using-the-sdk.md` |
 
 Both paths use the same underlying packages; only the amount of scaffolding differs.
@@ -49,9 +49,6 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
   (`SYNAP_RELEASE_VERIFY=enforce`) it refuses a release whose signature is
   missing or does not verify; `SYNAP_RELEASE_VERIFY=warn` only warns.
 - **Managed (paid):** sign up at synap.live and provision a pod.
-
-You can develop the base app with **no pod at all** using its mock mode
-(`NEXT_PUBLIC_BASE_MOCK_MODE=true`).
 
 ## Honest scope
 
