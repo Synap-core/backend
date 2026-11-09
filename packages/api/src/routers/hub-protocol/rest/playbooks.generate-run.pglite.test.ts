@@ -306,7 +306,7 @@ beforeAll(async () => {
     [randomUUID(), KEY, PERSON]
   );
   await q(
-    `insert into profiles (id, slug, name, workspace_id, profile_kind) values ($1,'post','Post',null,'kind')`,
+    `insert into profiles (id, slug, display_name, scope, workspace_id, profile_kind) values ($1,'post','Post','system',null,'kind')`,
     [randomUUID()]
   );
   for (const [post, doc, title] of [
