@@ -390,6 +390,9 @@ chatStreamApp.post("/stream", async (c) => {
   // ── Resolve Intelligence Service endpoint ────────────────────────────────
   let isUrl: string;
   let isApiKey: string;
+  // The person's ONE personal AI (decision 6b45c6c3): the turn acts as it,
+  // named in the IS body and signed as the delegation's `act.sub`.
+  let actingAgentUserId: string | undefined;
   try {
     // ONE door, the same one triggerAutoRespond uses: capability-first
     // resolution. The channel's assigned agent drives `agentType` below, never
@@ -401,6 +404,7 @@ chatStreamApp.post("/stream", async (c) => {
     });
     isUrl = resolved.endpoint;
     isApiKey = resolved.serviceApiKey;
+    actingAgentUserId = resolved.agentUserId;
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },
@@ -417,6 +421,7 @@ chatStreamApp.post("/stream", async (c) => {
     query: input.query,
     threadId: input.threadId ?? resolvedChannelId,
     userId,
+    ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
     workspaceId: resolvedWorkspaceId,
     agentType: input.agentType ?? channelAgentSlug ?? "meta",
     ...getPodCallback(),
@@ -436,6 +441,7 @@ chatStreamApp.post("/stream", async (c) => {
         ...isDelegationHeaders({
           isUrl,
           operatorUserId: userId,
+          agentUserId: actingAgentUserId,
           channelId: isBody.threadId,
         }),
       },

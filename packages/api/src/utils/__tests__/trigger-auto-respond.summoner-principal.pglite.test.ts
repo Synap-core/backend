@@ -57,7 +57,7 @@ import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions, channels, messages, users } from "@synap/database";
 import { triggerAutoRespond } from "../trigger-auto-respond.js";
-import { resolveSummonedAgentUserId } from "../../services/messaging/turn-principal.js";
+import { resolveTurnAgentUserId } from "../../services/messaging/turn-principal.js";
 
 function ddlFor(table: PgTable): string {
   const cfg = getTableConfig(table);
@@ -169,24 +169,32 @@ describe("triggerAutoRespond — the turn runs as the SUMMONER (decision D)", ()
   });
 });
 
-describe("resolveSummonedAgentUserId — the interactive door's acting agent", () => {
-  const pick = (summonerId: string, teammateId: string) =>
-    resolveSummonedAgentUserId({
-      roomOwnerId: "owner",
-      summonerId,
-      teammateId,
-      summonerAgentUserId: "agent-of-summoner",
-    });
+describe("resolveTurnAgentUserId — the interactive door acts as the principal's ONE personal AI (decision 6b45c6c3)", () => {
+  async function personalAgentsOf(owner: string): Promise<string[]> {
+    const { rows } = await client.query<{ id: string }>(
+      `select id from users where created_by_user_id = $1 and is_personal_agent = true`,
+      [owner]
+    );
+    return rows.map((r) => r.id);
+  }
 
-  it("the owner summoning keeps the routed teammate (unchanged)", async () => {
-    expect(await pick("owner", "owner-agent")).toBe("owner-agent");
+  it("the owner summoning a persona teammate acts as the OWNER's personal AI, never the teammate", async () => {
+    const acting = await resolveTurnAgentUserId({ principalUserId: "owner" });
+    expect(acting).not.toBe("owner-agent");
+    expect(await personalAgentsOf("owner")).toEqual([acting]);
   });
 
-  it("a member summoning the OWNER's agent acts as the member's own agent", async () => {
-    expect(await pick("member", "owner-agent")).toBe("agent-of-summoner");
+  it("a member summoning the owner's @ai acts as the MEMBER's personal AI", async () => {
+    const acting = await resolveTurnAgentUserId({ principalUserId: "member" });
+    expect(await personalAgentsOf("member")).toEqual([acting]);
+    expect(await personalAgentsOf("owner")).toEqual([]);
   });
 
-  it("a member summoning their own agent keeps it", async () => {
-    expect(await pick("member", "member-agent")).toBe("member-agent");
+  it("the personal AI is found, not recreated, and is the same in every room", async () => {
+    const first = await resolveTurnAgentUserId({ principalUserId: "owner" });
+    expect(await resolveTurnAgentUserId({ principalUserId: "owner" })).toBe(
+      first
+    );
+    expect(await personalAgentsOf("owner")).toEqual([first]);
   });
 });
