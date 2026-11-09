@@ -49503,6 +49503,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				source: "default" | "env" | "setting";
 			};
 		}>;
+		passkeyChangeReady: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				ready: boolean;
+				until: string | null;
+			};
+		}>;
 		recovery: import("@trpc/server").TRPCBuiltRouter<{
 			ctx: Context;
 			errorShape: {
