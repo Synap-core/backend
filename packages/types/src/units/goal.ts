@@ -856,7 +856,21 @@ export type WaitingOnSource = (
       /** What clears it, as declared (`SlotClearedBy`). */
       clearedBy?: ThingBlockerClearedBy | null;
     }
-  | { kind: "pending_proposal" }
+  | {
+      kind: "pending_proposal";
+      /**
+       * A stable name for what holds the thing (a blocker key, as an owed
+       * slot's): the proposal's type (`messaging.external.send`: approve the
+       * draft), or, for a held send, why it cannot go yet (`not_connected`).
+       */
+      blockerKey?: string | null;
+      /**
+       * A send filed but HELD (`proposals.data.held`): it goes out once THEY
+       * act (accept the invitation). Approving it sends nothing, so it waits
+       * on them, not on a review.
+       */
+      held?: boolean;
+    }
   | { kind: "blocked_by" }
   | {
       kind: "hold";
@@ -898,7 +912,7 @@ export function waitingOnReasonOf(
 ): WaitingOnReason | null {
   switch (source.kind) {
     case "pending_proposal":
-      return "approval";
+      return source.held ? "external" : "approval";
     case "blocked_by":
     case "child_session":
       return "another_work";
@@ -932,7 +946,9 @@ export function waitingOnReasonOf(
 export function waitKindOf(source: WaitingOnSource): WaitKind {
   switch (source.kind) {
     case "pending_proposal":
-      return WAIT_KIND_FROM.source.pending_proposal;
+      return source.held
+        ? WAIT_KIND_FROM.source.held_send
+        : WAIT_KIND_FROM.source.pending_proposal;
     case "blocked_by":
       return WAIT_KIND_FROM.source.blocked_by;
     case "child_session":

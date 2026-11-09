@@ -335,7 +335,8 @@ export async function readFlowOf(
       board.columns.flatMap((c) =>
         c.items.map((i) => ({
           id: i.id,
-          facetId: i.facetId,
+          // A role board's card: its step is the facet's (a lead's wait).
+          facetId: i.facetId ?? null,
           status: i.status,
           lifecycle,
         }))

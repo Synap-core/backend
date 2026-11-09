@@ -28,8 +28,9 @@ import {
 export interface ThingBlockerAsk {
   id: string;
   /**
-   * The role's facet when the card is a role's (a lead): its status and the
-   * role's lifecycle decide which `requires` count. Absent = the kind's.
+   * The ROLE the card is (a lead board's card is a person or company wearing
+   * the lead role): its step is the facet's, on the role's lifecycle. Null
+   * for a kind's own card. The same facet decides which `requires` count.
    */
   facetId?: string | null;
   status: string | null;
@@ -37,16 +38,23 @@ export interface ThingBlockerAsk {
   lifecycle: { readonly options: readonly LifecycleOption[] } | null;
 }
 
-/** THE question one thing's blocker asks: every wait but a hold. */
+/**
+ * THE question one thing's blocker asks: every wait but a hold. Its
+ * proposals are the ones ON it (it is their target or their subject, or they
+ * were filed in a session on it: a send draft to a lead). With `facetId`, the
+ * step is that role's.
+ */
 export function thingBlockerQuestion(
   id: string,
   facetId?: string | null
 ): WaitingOnQuestion {
   return {
     owed: { blocking: [id] },
-    proposals: { targetIds: [id] },
+    proposals: { targetIds: [id], onThings: [id] },
     blockedNodes: [{ kind: "entity", id }],
-    steps: [{ subjectType: "entity", subjectId: id }],
+    steps: [
+      { subjectType: "entity", subjectId: id, ...(facetId ? { facetId } : {}) },
+    ],
     requirements: [{ entityId: id, ...(facetId ? { facetId } : {}) }],
   };
 }

@@ -156,6 +156,9 @@ export const WAIT_KIND_FROM = {
   },
   source: {
     pending_proposal: "approval",
+    // A send filed but held until THEY act (a LinkedIn invitation not
+    // accepted yet, `proposals.data.held`): approving it sends nothing.
+    held_send: "their_reply",
     blocked_by: "another_work",
     child_session: "another_work",
     work_unit_checks: "ci",

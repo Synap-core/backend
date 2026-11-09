@@ -929,7 +929,12 @@ export interface ThingBlockerWhy {
 	waitKind: WaitKind;
 	/** An owed slot's class of blocker ("what to build"), else null. */
 	blockedReason: string | null;
-	/** An owed slot's or a requirement's domain name (`not_connected`), else null. */
+	/**
+	 * The lead wait's stable name: an owed slot's declared domain name
+	 * (`not_connected`), a pending proposal's type (`messaging.external.send`)
+	 * a held send's reason (`not_connected`) or a step requirement's declared
+	 * name (`no_contact`); else null.
+	 */
 	blockerKey: string | null;
 }
 export interface ThingBlocker {
