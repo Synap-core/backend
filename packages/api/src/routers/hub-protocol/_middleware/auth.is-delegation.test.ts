@@ -53,6 +53,13 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
   };
 });
+const resolveCeiling = vi.fn();
+vi.mock("../../../services/synap-ai-ceiling.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../services/synap-ai-ceiling.js")
+  >()),
+  resolveSynapAiCeiling: (...a: unknown[]) => resolveCeiling(...a),
+}));
 vi.mock("@synap/intelligence-client", () => ({
   isIntelligenceServiceOrigin: async (origin: string) =>
     knownOrigins.has(origin),
@@ -163,6 +170,11 @@ async function callDoor(headers: Record<string, string>) {
     body: (await res.json()) as Record<string, unknown>,
   };
 }
+
+beforeEach(() => {
+  resolveCeiling.mockReset();
+  resolveCeiling.mockResolvedValue({ status: "not-applicable" });
+});
 
 describe("hub auth: IS delegation token", () => {
   it("authenticates AS sub, with the legacy is_internal principal and no api key id", async () => {
@@ -399,5 +411,110 @@ describe("IS delegation with an app grant (app_grant claim)", () => {
       Array.from({ length: 400 }, (_, i) => `chat.${"x".repeat(40)}${i}.read`)
     );
     expect(() => delegation({ appGrant: huge })).toThrow();
+  });
+});
+
+// ── Synap AI's ceiling (`act.sub` = the operator's personal agent) ──────────────
+
+const ceilingOf = (
+  permissions: string[],
+  workspaceIds: string[] | null = null
+) => ({
+  status: "ok" as const,
+  grant: {
+    scopes: [{ permissions, workspaceIds, projectIds: null, entityIds: null }],
+    clientId: "synap-ai",
+  },
+});
+
+describe("IS delegation naming the operator's Synap AI (act.sub)", () => {
+  it("(a) the ceiling is the turn's grant: a door it covers is admitted, one it does not is refused (403), never the full grant", async () => {
+    const headers = {
+      authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent" })}`,
+    };
+    resolveCeiling.mockResolvedValue(ceilingOf(["messaging.read"]));
+    const inside = await callAt("GET", "/api/hub/messaging/accounts", headers);
+    expect(inside.status).not.toBe(403);
+    expect(inside.body.fullGrant).not.toBe(true);
+    resolveCeiling.mockResolvedValue(ceilingOf(["entity.read"]));
+    const outside = await callAt("GET", "/api/hub/messaging/accounts", headers);
+    expect(outside.status).toBe(403);
+    expect(outside.body).toMatchObject({ code: "GRANT_DOOR_UNSUPPORTED" });
+    // The resolver is asked about the TOKEN's operator and agent (not a header's).
+    expect(resolveCeiling).toHaveBeenCalledWith(OPERATOR, "synap-ai-agent");
+  });
+
+  it("(b) an app's claim narrows the ceiling: a permission the ceiling has but the app does not is refused", async () => {
+    resolveCeiling.mockResolvedValue(
+      ceilingOf(["messaging.read", "entity.read"])
+    );
+    const onlyEntities = delegation({
+      agentUserId: "synap-ai-agent",
+      appGrant: appGrantOf(["entity.read"]),
+    });
+    const r = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${onlyEntities}`,
+    });
+    expect(r.status).toBe(403);
+    const both = delegation({
+      agentUserId: "synap-ai-agent",
+      appGrant: appGrantOf(["messaging.read"]),
+    });
+    const ok = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${both}`,
+    });
+    expect(ok.status).not.toBe(403);
+  });
+
+  it("(c) an app's claim cannot WIDEN the ceiling: an app that holds messaging.read over a ceiling without it gets nothing", async () => {
+    resolveCeiling.mockResolvedValue(ceilingOf(["entity.read"]));
+    const wider = delegation({
+      agentUserId: "synap-ai-agent",
+      appGrant: appGrantOf(["messaging.read", "entity.read"]),
+    });
+    const r = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${wider}`,
+    });
+    expect(r.status).toBe(403);
+  });
+
+  it("(d) no ceiling set (none) or another agent (not-applicable): today's behaviour, unchanged", async () => {
+    for (const status of ["none", "not-applicable"] as const) {
+      resolveCeiling.mockResolvedValue({ status });
+      const full = await callAt("GET", "/api/hub/anything-unlisted", {
+        authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent" })}`,
+      });
+      expect(full.body.fullGrant, status).toBe(true);
+      const app = await callAt("GET", "/api/hub/messaging/accounts", {
+        authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent", appGrant: appGrantOf(["entity.read"]) })}`,
+      });
+      expect(app.status, status).toBe(403); // the app's claim still bounds it
+    }
+  });
+
+  it("(e) a paused Synap AI is refused (401), not widened to the full grant", async () => {
+    resolveCeiling.mockResolvedValue({ status: "refused", reason: "paused" });
+    const r = await callAt("GET", "/api/hub/anything-unlisted", {
+      authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent" })}`,
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("(f) a ceiling that cannot be read fails the request; it never reads as 'none' and widens", async () => {
+    resolveCeiling.mockRejectedValue(new Error("database down"));
+    const r = await callAt("GET", "/api/hub/anything-unlisted", {
+      authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent" })}`,
+    });
+    expect(r.status).toBeGreaterThanOrEqual(500);
+    expect(r.body.fullGrant).not.toBe(true);
+  });
+
+  it("(g) a delegation that names no agent never asks (and keeps the full grant)", async () => {
+    const r = await callAt("GET", "/api/hub/anything-unlisted", {
+      authorization: `Bearer ${delegation({ agentUserId: null })}`,
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.fullGrant).toBe(true);
+    expect(resolveCeiling).not.toHaveBeenCalled();
   });
 });
