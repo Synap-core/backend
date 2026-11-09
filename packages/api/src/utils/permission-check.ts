@@ -2973,7 +2973,7 @@ function singularSubjectType(subjectType: string): string {
  * The cell a `renderer.set` payload actually binds, as a human word.
  *
  * `ref.cellKey` is NOT always the cell: `buildCellRendererRef`
- * (`routers/hub-protocol/profiles.ts`) wraps an iframe/native cell by rewriting
+ * (`services/renderers/renderer-target-checks.ts`) wraps an iframe/native cell by rewriting
  * `cellKey` to the shared host `"iframe-widget"` and moving the real typeKey
  * into `props.typeKey`. Reading `cellKey` alone would print the same word
  * ("Iframe widget") for every iframe cell ever proposed.

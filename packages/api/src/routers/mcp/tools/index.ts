@@ -66,6 +66,8 @@ import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../../../services/profiles/renderer-slots.js";
+// What a renderer can be bound to — the ONE target vocabulary.
+import { RENDERER_TARGET_KINDS } from "../../../services/renderers/renderer-targets.js";
 // The catalog names `synap_find` accepts — SPREAD from the service that owns
 // them, never re-typed, so a fourth catalog cannot be advertised without
 // existing (and vice versa). Same idiom as ABSTRACT_VERBS above.
@@ -3574,13 +3576,31 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | card | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
+          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as the renderer of a TARGET: a kind's records (profileSlug, or target {kind:'profile', slug}; slots list | detail | card | dashboard) or ONE capability, playbook or view (target {kind, id}; a playbook or view has the 'detail' slot, a capability 'detail' or 'dashboard'). The cell must exist (synap_create_cell, or a pending one from it). clear: true unbinds the slot. Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = in that space only; 'pod' = everywhere (a kind's system default, or the object's own renderer); 'user' = only you (not for a capability). Never promote a speculative or unproven one-off.",
         inputSchema: {
           type: "object",
           properties: {
             profileSlug: {
               type: "string",
-              description: "Slug of the profile to bind the renderer on.",
+              description:
+                "Slug of the profile (kind) to bind the renderer on. Same as target {kind:'profile', slug}.",
+            },
+            target: {
+              type: "object",
+              description:
+                "What the renderer is for, instead of profileSlug: {kind:'capability'|'playbook'|'view', id} for ONE object's page, or {kind:'profile', slug} for a kind's records.",
+              properties: {
+                kind: { type: "string", enum: [...RENDERER_TARGET_KINDS] },
+                id: {
+                  type: "string",
+                  description: "The capability, playbook or view id.",
+                },
+                slug: {
+                  type: "string",
+                  description: "The profile slug (kind 'profile' only).",
+                },
+              },
+              required: ["kind"],
             },
             slot: {
               type: "string",
@@ -3591,7 +3611,12 @@ export const tools = {
             cellKey: {
               type: "string",
               description:
-                "The cell typeKey to bind (e.g. from synap_create_cell).",
+                "The cell typeKey to bind (e.g. from synap_create_cell). Omit with clear: true.",
+            },
+            clear: {
+              type: "boolean",
+              description:
+                "true = unbind whatever this slot holds at this scope (no cellKey).",
             },
             props: {
               type: "object",
@@ -3601,7 +3626,7 @@ export const tools = {
               type: "string",
               enum: [...RENDERER_SCOPES],
               description:
-                "'workspace' (default) = per-workspace overlay; 'pod' = profile system default. Workspace scope requires workspaceId.",
+                "'workspace' (default) = in that space only (requires workspaceId); 'pod' = everywhere; 'user' = only you.",
             },
             workspaceId: {
               type: "string",
@@ -3618,7 +3643,7 @@ export const tools = {
                 "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
-          required: ["profileSlug", "slot", "cellKey"],
+          required: ["slot"],
         },
       },
       {

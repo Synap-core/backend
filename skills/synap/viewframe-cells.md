@@ -42,7 +42,17 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 1. **Check what exists**: `synap_list_widgets` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
 2. **Write the source** as an **ES module** that default-exports a React component (drawn in the frame, with the host's React and `@synap/kit`), or as an **HTML page** (a source that opens with `<`: drawn as a page, inline script only, no `import`). You do not pick the mechanism: the pod reads it from the source.
 3. **Define it with `synap_create_cell`** `{ name, rendererSource, description?, workspaceId?, contentKind?, viewTypes?, placeOn? }`: the agent door. A client without MCP calls the same door over REST, `POST /api/hub/cells/define` (below); both run one write path.
-4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer({ profileSlug, slot, cellKey })` binds it to a kind (`slot`: `card`, `detail`, `list`, `dashboard`). Until it is placed or bound it shows nowhere.
+4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer` binds it as a renderer. Until it is placed or bound it shows nowhere. One tool binds every target:
+
+   | Target                        | Call                                                                              | Slots                                 |
+   | ----------------------------- | --------------------------------------------------------------------------------- | ------------------------------------- |
+   | a kind's records (every deal) | `{ profileSlug: "deal", slot, cellKey }` (or `target: { kind: "profile", slug }`) | `card`, `detail`, `list`, `dashboard` |
+   | one capability's page         | `{ target: { kind: "capability", id }, slot, cellKey }`                           | `detail`, `dashboard`                 |
+   | one playbook's page           | `{ target: { kind: "playbook", id }, slot: "detail", cellKey }`                   | `detail`                              |
+   | one view's page               | `{ target: { kind: "view", id }, slot: "detail", cellKey }`                       | `detail`                              |
+
+   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind it in the same breath). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
+
 5. An agent's define lands as a proposal: `status: "proposed"` is success; pass on `reviewUrl`, never retry.
 
 ### The same door over REST: `POST /api/hub/cells/define`
