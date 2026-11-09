@@ -74,6 +74,11 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   "agent/updateCapabilities": "setup",
   "app/connect": "setup",
   "tool/create": "setup",
+  // An approved automation or playbook lands ACTIVE unless its author stated
+  // draft (founder, 9 Nov 2026: "add both"): approving it turns work on, the
+  // same class as a tool or skill.
+  "automation/create": "setup",
+  "playbook/create": "setup",
   // A skill created or changed by approval may turn a verb ON (founder, 4 Nov:
   // turning a tool or skill on is sensitive).
   "skill/create": "setup",
