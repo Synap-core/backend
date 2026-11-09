@@ -112,6 +112,7 @@ import {
   registerFederationRoutes,
   registerKeysRoutes,
   registerAiProvidersRoutes,
+  registerAiProvidersAvailableRoute,
   registerFocusSessionsRoutes,
   registerIntentSurfacesRoutes,
   registerGuidelinesRoutes,
@@ -392,6 +393,7 @@ registerPodAdoptRoutes(app); // /pod/adopt
 registerFederationRoutes(app); // /federation/oidc-config — CP→pod OIDC federation push
 registerKeysRoutes(app); // /keys/rotate-cli + key requests (/keys/templates, /keys/requests[/token], /keys/requested[/:keyId])
 registerAiProvidersRoutes(app); // /ai-providers
+registerAiProvidersAvailableRoute(app); // GET /ai-providers/available (the enabled models an app may pick)
 registerFocusSessionsRoutes(app); // /focus-sessions*
 registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/{needs-you,count}
 registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block

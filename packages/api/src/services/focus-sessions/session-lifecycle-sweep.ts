@@ -343,6 +343,10 @@ export function endedRunSessionWhere(): SQL {
   ) as SQL;
 }
 
+/** What an ended run's session says when it is closed for it (move 4 and 4b). */
+export const ENDED_RUN_CLOSE_SUMMARY =
+  "Closed automatically: its run has ended.";
+
 export async function closeEndedRunSessions(): Promise<number> {
   const rows = await db
     .select({ id: focusSessions.id, userId: focusSessions.userId })
@@ -357,7 +361,7 @@ export async function closeEndedRunSessions(): Promise<number> {
         sessionId: row.id,
         userId: row.userId,
         terminalStatus: "closed",
-        summary: "Closed automatically: its run has ended.",
+        summary: ENDED_RUN_CLOSE_SUMMARY,
         actor: { kind: "system", userId: row.userId },
       });
       closed++;
@@ -369,6 +373,71 @@ export async function closeEndedRunSessions(): Promise<number> {
     }
   }
   return closed;
+}
+
+// ── 4b. A one-turn run, closed when its turn completes ─────────────────────
+
+/**
+ * SQL: a run with NO stages — neither the session nor any of its runs' frozen
+ * definitions (`definitionSnapshot.stages`, what the stage gate resolves
+ * against first) declares one. A staged run moves through its stages; its
+ * session is never closed at a turn's end.
+ */
+function stagelessRunSessionWhere(): SQL {
+  return drizzleSql`(coalesce(jsonb_array_length(CASE WHEN jsonb_typeof(${focusSessions.stages}) = 'array' THEN ${focusSessions.stages} END), 0) = 0
+    AND NOT EXISTS (
+      SELECT 1 FROM playbook_runs pr
+      WHERE pr.session_id = ${focusSessions.id}
+        AND jsonb_typeof(pr.definition_snapshot -> 'stages') = 'array'
+        AND jsonb_array_length(pr.definition_snapshot -> 'stages') > 0
+    ))` as SQL;
+}
+
+/** SQL: a proposal filed in this session still waits for a decision. */
+function noPendingProposalWhere(): SQL {
+  return drizzleSql`NOT EXISTS (
+    SELECT 1 FROM proposals p
+    WHERE p.session_id = ${focusSessions.id} AND p.status = 'pending'
+  )` as SQL;
+}
+
+/**
+ * Move 4 for ONE session, at once (founder, 9 Nov 2026): called when a run's
+ * IS turn reports `completed` (`run-turn-end.ts`), so a one-turn run's
+ * session does not read "running" until the next hourly tick (the caption
+ * run `1e0e3210` stayed active 50 minutes after its run completed, and
+ * Content Studio showed "Writing the caption…" all that time).
+ *
+ * The same rule as move 4 (`endedRunSessionWhere`: a run session, every run
+ * of it ended, nothing owed to the person), the same door and words, and
+ * narrower: the run has no stages and no proposal in it waits for the
+ * person. Anything that waits on them keeps the session open where they will
+ * answer it; the sweep stays the backstop. Returns whether it closed.
+ */
+export async function closeStagelessRunSessionAtTurnEnd(
+  sessionId: string
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: focusSessions.id, userId: focusSessions.userId })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.id, sessionId),
+        endedRunSessionWhere(),
+        stagelessRunSessionWhere(),
+        noPendingProposalWhere()
+      )
+    )
+    .limit(1);
+  if (!row) return false;
+  const closed = await completeFocusSession({
+    sessionId: row.id,
+    userId: row.userId,
+    terminalStatus: "closed",
+    summary: ENDED_RUN_CLOSE_SUMMARY,
+    actor: { kind: "system", userId: row.userId },
+  });
+  return closed?.session.status === "closed";
 }
 
 // ── The tick ───────────────────────────────────────────────────────────────

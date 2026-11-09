@@ -13574,7 +13574,12 @@
                   "channelId": { "type": "string", "format": "uuid" },
                   "workspaceId": { "type": "string", "format": "uuid" },
                   "agentType": { "type": "string" },
-                  "requestId": { "type": "string", "format": "uuid" }
+                  "requestId": { "type": "string", "format": "uuid" },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300
+                  }
                 },
                 "required": ["query"]
               }
@@ -17396,6 +17401,221 @@
                                     },
                                     "required": ["param"],
                                     "additionalProperties": false
+                                  },
+                                  "runner": {
+                                    "anyOf": [
+                                      { "type": "string", "enum": ["self"] },
+                                      {
+                                        "type": "string",
+                                        "enum": ["synap_ai"]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "synapAi": {
+                                            "type": "object",
+                                            "properties": {
+                                              "persona": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80,
+                                                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                              }
+                                            },
+                                            "required": ["persona"],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": ["synapAi"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "agentId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "preset": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          }
+                                        },
+                                        "required": ["agentId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "role": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["role"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "engine": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["engine"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "enum": ["self"]
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["synap_ai"]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "synapAi": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "persona": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80,
+                                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                    }
+                                                  },
+                                                  "required": ["persona"],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "required": ["synapAi"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "agentId": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                },
+                                                "preset": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80,
+                                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                }
+                                              },
+                                              "required": ["agentId"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "role": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80,
+                                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                },
+                                                "computer": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["role"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "engine": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80,
+                                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                },
+                                                "computer": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["engine"],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 4
+                                      }
+                                    ]
+                                  },
+                                  "uses": {
+                                    "type": "object",
+                                    "properties": {
+                                      "playbookId": {
+                                        "type": "string",
+                                        "format": "uuid"
+                                      },
+                                      "version": {
+                                        "type": "integer",
+                                        "minimum": 1
+                                      },
+                                      "with": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                        }
+                                      },
+                                      "outputs": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        }
+                                      }
+                                    },
+                                    "required": ["playbookId"],
+                                    "additionalProperties": false
+                                  },
+                                  "requires": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200,
+                                      "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                                    },
+                                    "maxItems": 16
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -17753,6 +17973,183 @@
                             "scope": {
                               "type": "string",
                               "enum": ["session", "project"]
+                            },
+                            "runner": {
+                              "anyOf": [
+                                { "type": "string", "enum": ["synap_ai"] },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "synapAi": {
+                                      "type": "object",
+                                      "properties": {
+                                        "persona": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80,
+                                          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                        }
+                                      },
+                                      "required": ["persona"],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": ["synapAi"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "agentId": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "preset": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    }
+                                  },
+                                  "required": ["agentId"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "role": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    },
+                                    "computer": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["role"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "engine": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    },
+                                    "computer": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["engine"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["synap_ai"]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "synapAi": {
+                                            "type": "object",
+                                            "properties": {
+                                              "persona": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80,
+                                                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                              }
+                                            },
+                                            "required": ["persona"],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": ["synapAi"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "agentId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "preset": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          }
+                                        },
+                                        "required": ["agentId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "role": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["role"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "engine": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["engine"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 4
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "requires": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                              },
+                              "maxItems": 16
                             },
                             "subjectFacet": {
                               "type": "object",
@@ -21231,6 +21628,221 @@
                                     },
                                     "required": ["param"],
                                     "additionalProperties": false
+                                  },
+                                  "runner": {
+                                    "anyOf": [
+                                      { "type": "string", "enum": ["self"] },
+                                      {
+                                        "type": "string",
+                                        "enum": ["synap_ai"]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "synapAi": {
+                                            "type": "object",
+                                            "properties": {
+                                              "persona": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80,
+                                                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                              }
+                                            },
+                                            "required": ["persona"],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": ["synapAi"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "agentId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "preset": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          }
+                                        },
+                                        "required": ["agentId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "role": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["role"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "engine": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["engine"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "enum": ["self"]
+                                            },
+                                            {
+                                              "type": "string",
+                                              "enum": ["synap_ai"]
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "synapAi": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "persona": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80,
+                                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                    }
+                                                  },
+                                                  "required": ["persona"],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "required": ["synapAi"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "agentId": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                },
+                                                "preset": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80,
+                                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                }
+                                              },
+                                              "required": ["agentId"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "role": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80,
+                                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                },
+                                                "computer": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["role"],
+                                              "additionalProperties": false
+                                            },
+                                            {
+                                              "type": "object",
+                                              "properties": {
+                                                "engine": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 80,
+                                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                                },
+                                                "computer": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                }
+                                              },
+                                              "required": ["engine"],
+                                              "additionalProperties": false
+                                            }
+                                          ]
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 4
+                                      }
+                                    ]
+                                  },
+                                  "uses": {
+                                    "type": "object",
+                                    "properties": {
+                                      "playbookId": {
+                                        "type": "string",
+                                        "format": "uuid"
+                                      },
+                                      "version": {
+                                        "type": "integer",
+                                        "minimum": 1
+                                      },
+                                      "with": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                                        }
+                                      },
+                                      "outputs": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        }
+                                      }
+                                    },
+                                    "required": ["playbookId"],
+                                    "additionalProperties": false
+                                  },
+                                  "requires": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200,
+                                      "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                                    },
+                                    "maxItems": 16
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -21595,6 +22207,183 @@
                             "scope": {
                               "type": "string",
                               "enum": ["session", "project"]
+                            },
+                            "runner": {
+                              "anyOf": [
+                                { "type": "string", "enum": ["synap_ai"] },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "synapAi": {
+                                      "type": "object",
+                                      "properties": {
+                                        "persona": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80,
+                                          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                        }
+                                      },
+                                      "required": ["persona"],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": ["synapAi"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "agentId": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "preset": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    }
+                                  },
+                                  "required": ["agentId"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "role": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    },
+                                    "computer": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["role"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "engine": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    },
+                                    "computer": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    }
+                                  },
+                                  "required": ["engine"],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": ["synap_ai"]
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "synapAi": {
+                                            "type": "object",
+                                            "properties": {
+                                              "persona": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 80,
+                                                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                              }
+                                            },
+                                            "required": ["persona"],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": ["synapAi"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "agentId": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "preset": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          }
+                                        },
+                                        "required": ["agentId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "role": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["role"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "engine": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          },
+                                          "computer": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["engine"],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 4
+                                },
+                                { "type": "null" }
+                              ]
+                            },
+                            "requires": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                              },
+                              "maxItems": 16
                             },
                             "ref": { "type": "string", "minLength": 1 },
                             "grants": {
@@ -26931,6 +27720,209 @@
                           },
                           "required": ["param"],
                           "additionalProperties": false
+                        },
+                        "runner": {
+                          "anyOf": [
+                            { "type": "string", "enum": ["self"] },
+                            { "type": "string", "enum": ["synap_ai"] },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "synapAi": {
+                                  "type": "object",
+                                  "properties": {
+                                    "persona": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    }
+                                  },
+                                  "required": ["persona"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["synapAi"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "agentId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "preset": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                }
+                              },
+                              "required": ["agentId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "role": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "computer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["role"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "engine": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "computer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["engine"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  { "type": "string", "enum": ["self"] },
+                                  { "type": "string", "enum": ["synap_ai"] },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "synapAi": {
+                                        "type": "object",
+                                        "properties": {
+                                          "persona": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                          }
+                                        },
+                                        "required": ["persona"],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": ["synapAi"],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "agentId": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "preset": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80,
+                                        "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                      }
+                                    },
+                                    "required": ["agentId"],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "role": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80,
+                                        "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                      },
+                                      "computer": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["role"],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "engine": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80,
+                                        "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                      },
+                                      "computer": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["engine"],
+                                    "additionalProperties": false
+                                  }
+                                ]
+                              },
+                              "minItems": 1,
+                              "maxItems": 4
+                            }
+                          ]
+                        },
+                        "uses": {
+                          "type": "object",
+                          "properties": {
+                            "playbookId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
+                            "version": { "type": "integer", "minimum": 1 },
+                            "with": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string",
+                                "maxLength": 200,
+                                "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+                              }
+                            },
+                            "outputs": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              }
+                            }
+                          },
+                          "required": ["playbookId"],
+                          "additionalProperties": false
+                        },
+                        "requires": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200,
+                            "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                          },
+                          "maxItems": 16
                         }
                       },
                       "required": ["key", "name", "category"],
@@ -27131,6 +28123,180 @@
                     },
                     "maxItems": 12,
                     "description": "Binary acceptance criteria [{ key, statement, required?, check: { kind, ... }, stageKey? }] every instantiated session is graded against."
+                  },
+                  "runner": {
+                    "anyOf": [
+                      { "type": "string", "enum": ["synap_ai"] },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "synapAi": {
+                            "type": "object",
+                            "properties": {
+                              "persona": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80,
+                                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                              }
+                            },
+                            "required": ["persona"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["synapAi"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "agentId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "preset": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                          }
+                        },
+                        "required": ["agentId"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                          },
+                          "computer": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": ["role"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "engine": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                          },
+                          "computer": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": ["engine"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            { "type": "string", "enum": ["synap_ai"] },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "synapAi": {
+                                  "type": "object",
+                                  "properties": {
+                                    "persona": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    }
+                                  },
+                                  "required": ["persona"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["synapAi"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "agentId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "preset": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                }
+                              },
+                              "required": ["agentId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "role": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "computer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["role"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "engine": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "computer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["engine"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        "minItems": 1,
+                        "maxItems": 4
+                      },
+                      { "type": "null" }
+                    ]
+                  },
+                  "requires": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
+                    },
+                    "maxItems": 16
                   },
                   "workspaceId": {
                     "type": "string",
@@ -33619,6 +34785,64 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai-providers/available": {
+      "get": {
+        "tags": ["Chat"],
+        "summary": "The AI models the pod has enabled, selectable for a chat turn",
+        "description": "Enabled providers' models only: the id a chat turn's `model` accepts, a label, the provider, and which model is the default. Never a key, credential, base URL or priority. Requires hub-protocol.read; a scoped key needs `chat.stream`.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Selectable models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "label": { "type": "string" },
+                          "providerId": { "type": "string" },
+                          "providerName": { "type": "string" },
+                          "tier": { "type": ["string", "null"] },
+                          "isDefault": { "type": "boolean" }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "providerId",
+                          "providerName",
+                          "tier",
+                          "isDefault"
+                        ]
+                      }
+                    },
+                    "defaultModelId": { "type": ["string", "null"] }
+                  },
+                  "required": ["models", "defaultModelId"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope or outside the grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "error": { "type": "string" } },
+                  "required": ["error"]
+                }
               }
             }
           }

@@ -80,6 +80,7 @@ vi.mock(
 );
 vi.mock("../../../services/capabilities/intent-registry.js", () => ({
   listIntentSlugs: async () => [],
+  listIntentRows: async () => [],
 }));
 vi.mock(
   "../../../services/focus-sessions/match-session-template.js",

@@ -36,6 +36,11 @@ import {
 import type { TrackStageDeclaration } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "./session-criteria.js";
 import { AskSchema } from "@synap-core/types/ask";
+import {
+  requiresSchema,
+  stageRunnerSchema,
+  stageUsesSchema,
+} from "./playbook-runner.js";
 
 /**
  * The six, as a zod enum. Derived from the contract package's list rather than
@@ -277,6 +282,20 @@ export const playbookStageSchema = z.looseObject({
       message: "when needs `equals` or `exists`",
     })
     .optional(),
+  /**
+   * WHO does this step — see `PlaybookStage.runner` and `playbook-runner.ts`.
+   * Absent ⇒ the run's own agent.
+   */
+  runner: stageRunnerSchema.optional(),
+  /**
+   * The step IS another playbook, pinned at a version — see
+   * `PlaybookStage.uses`. The write door fills in `version` and checks the
+   * playbook exists, the chain has no cycle and is not too deep
+   * (`services/playbooks/stage-uses.ts`).
+   */
+  uses: stageUsesSchema.optional(),
+  /** The tools this step needs, by capability key — see `PlaybookStage.requires`. */
+  requires: requiresSchema.optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -338,6 +357,13 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // A track stage session is started by the tracks service; skipping a stage
   // on a condition is a session RUN's concern, and nothing consumes it yet.
   "when",
+  // Who does a step, the step that IS a playbook, and the tools it needs are
+  // a session RUN's concern (the stage runner hands the step over); a track
+  // stage session is started by the tracks service and the `project` scope is
+  // legacy (spec 7111934d §6).
+  "runner",
+  "uses",
+  "requires",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =

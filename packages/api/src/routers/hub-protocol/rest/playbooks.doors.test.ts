@@ -421,6 +421,38 @@ describe("params + criteria reach the gate from Hub REST", () => {
     });
   });
 
+  it("POST /playbooks carries who runs it and the tools it needs (0416)", async () => {
+    const runner = [
+      { role: "video-render", computer: "mac" },
+      { engine: "claude-code" },
+    ];
+    const { status } = await post(appAs(AGENT), "/playbooks", {
+      workspaceId: WS,
+      name: "Edit a video",
+      goalTemplate: "Edit it",
+      runner,
+      requires: ["media-ffmpeg"],
+    });
+    expect(status).toBe(202);
+    expect(h.gateCalls[0]).toMatchObject({
+      subjectType: "playbook",
+      action: "create",
+      data: { runner, requires: ["media-ffmpeg"] },
+    });
+  });
+
+  it("PATCH /playbooks/:id carries runner and requires", async () => {
+    const res = await appAs(AGENT).request(`/playbooks/${PB}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runner: "synap_ai", requires: ["media-ffmpeg"] }),
+    });
+    expect(res.status).toBe(202);
+    expect(h.gateCalls[0]).toMatchObject({
+      data: { runner: "synap_ai", requires: ["media-ffmpeg"] },
+    });
+  });
+
   it("POST /playbooks refuses a malformed criterion (400) — never strips it", async () => {
     const { status, body } = await post(appAs(AGENT), "/playbooks", {
       workspaceId: WS,

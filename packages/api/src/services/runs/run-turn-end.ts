@@ -10,7 +10,10 @@
  * 45-minute idle flag (`diagnose/stall.ts`) and the 24-hour reaper
  * (`playbook-run-reaper.ts`) never saw it, because both only look at LIVE runs.
  *
- * NOW the IS says how the turn ended (`outcome`). `completed` is unchanged. A
+ * NOW the IS says how the turn ended (`outcome`). `completed` completes the
+ * run; a run with NO stages is then done, and its session is closed at once
+ * through the one close door unless something in it waits on the person
+ * (`closeStagelessRunSessionAtTurnEnd`, founder 9 Nov 2026). A
  * `stopped` turn — its token budget (`turn_budget`) or its step limit
  * (`max_steps`: the agent still had tool calls to make when the SDK's
  * `maxSteps` ended the turn) — leaves the run LIVE and:
@@ -75,6 +78,7 @@ import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import { blockExpectedOutput } from "../focus-sessions/block-output.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
+import { closeStagelessRunSessionAtTurnEnd } from "../focus-sessions/session-lifecycle-sweep.js";
 import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
 import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
@@ -208,6 +212,14 @@ export const completeRunBodySchema = z
          */
         cacheReadInputTokens: count.optional().catch(undefined),
         cacheWriteInputTokens: count.optional().catch(undefined),
+        /**
+         * What the turn's input COUNTED against `ceiling` (founder, 9 Nov
+         * 2026): `spentInputTokens` with each cache read weighed at its real
+         * price relative to an input token (the serving model's declared
+         * rates), so it can be lower than `spentInputTokens`. Absent from an
+         * IS that counts every token in full. Lenient like `model`.
+         */
+        chargedInputTokens: count.optional().catch(undefined),
       })
       .optional(),
     /**
@@ -282,6 +294,8 @@ export interface RunTurnRecord {
   /** Prompt-cache tokens the provider reported over the turn. */
   cacheReadInputTokens?: number;
   cacheWriteInputTokens?: number;
+  /** What counted against the ceiling (cache reads at their real price). */
+  chargedInputTokens?: number;
   /** What the pod decided for a stopped turn. */
   next?: "continue" | "ask";
   /** How many records the turn's checkpoint named (the ids ride in the room). */
@@ -413,6 +427,9 @@ async function recordTurnEnd(
         : {}),
       ...(body.turn?.cacheWriteInputTokens !== undefined
         ? { cacheWriteInputTokens: body.turn.cacheWriteInputTokens }
+        : {}),
+      ...(body.turn?.chargedInputTokens !== undefined
+        ? { chargedInputTokens: body.turn.chargedInputTokens }
         : {}),
       ...(decision ? { next: decision.next } : {}),
       ...(body.checkpoint
@@ -893,6 +910,24 @@ async function withStampedGuidance(
   }
 }
 
+/**
+ * A run with no stages whose turn completed is done: close its session now,
+ * through the ONE close door, unless something in it waits on the person
+ * (`closeStagelessRunSessionAtTurnEnd`, founder 9 Nov 2026). Best effort: the
+ * run is already completed and the hourly sweep closes the session anyway, so
+ * a failed close is logged, never a failed turn report.
+ */
+async function closeOneTurnRun(sessionId: string): Promise<void> {
+  try {
+    await closeStagelessRunSessionAtTurnEnd(sessionId);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "run-turn-end: closing the one-turn run's session failed (the hourly sweep retries)"
+    );
+  }
+}
+
 /** Settle one IS turn's end on the session's live run. */
 export async function settleRunTurnEnd(p: {
   run: RunRow;
@@ -909,7 +944,9 @@ export async function settleRunTurnEnd(p: {
   // `completed` report still settles a run its first attempt failed to.
   if (body.outcome === "completed") {
     const updated = await applyRunCapture({ run, status: "completed" });
-    return updated ? "completed" : "no-running-run";
+    if (!updated) return "no-running-run";
+    await closeOneTurnRun(session.id);
+    return "completed";
   }
 
   // Stopped (budget or step limit): the run stays LIVE whatever happens

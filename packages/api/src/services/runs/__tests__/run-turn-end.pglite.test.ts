@@ -145,6 +145,8 @@ import {
   links,
   tools,
   playbookRuns,
+  proposals,
+  automationRuns,
   db,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
@@ -305,6 +307,10 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       links,
       tools,
       playbookRuns,
+      // Read by the one-turn close after a `completed` turn
+      // (run-turn-end-close.pglite.test.ts covers it).
+      proposals,
+      automationRuns,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

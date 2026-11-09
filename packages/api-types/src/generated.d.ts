@@ -7941,6 +7941,40 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: true;
 			tableName: "playbooks";
 		}, {}, {}>;
+		requires: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: unknown;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "requires";
+			notNull: true;
+			tableName: "playbooks";
+		}, {}, {}>;
+		runner: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: unknown;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "runner";
+			notNull: false;
+			tableName: "playbooks";
+		}, {}, {}>;
 		schedule: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -10724,7 +10758,7 @@ export interface ReconcileReport {
  *   ok        it found items (`recalled` non-empty)
  *   empty     it ran and found nothing
  *   skipped   it deliberately did not run (`recallSkipped`): a session an
- *             automation started (cost), or a shared session with no
+ *             automation started (cost), a playbook run (noise), or a shared session with no
  *             workspace to recall from (privacy)
  *   failed    it errored (`recallError`); what an EARLIER run found is kept
  *
@@ -10744,6 +10778,11 @@ export interface RecalledItem {
 export type RecallSkipReason = 
 /** Started by an automation with no person (cost); a manual recall still runs. */
 "automation"
+/** A playbook run (kind `run`): it already has its subject and its method, so
+ *  a start recall only posts noise in its room; a manual recall still runs. */
+ | "playbook_run"
+/** Opened by an agent, not a person: start recall is for a person's own session. */
+ | "agent_session"
 /** Others can read the session and it has no workspace to recall from. */
  | "shared_without_workspace";
 export type SessionRecallView = {
@@ -17977,6 +18016,12 @@ export interface PlaybookCandidate {
 	scope: PlaybookScope;
 	/** The user noun for that scope ("Goal template" / "Work template"). */
 	templateKind: string;
+	/**
+	 * When to use it, in its author's words, cut at
+	 * `PLAYBOOK_DESCRIPTION_CAP` (`playbookDescriptionPreview`). Absent when the
+	 * playbook has none. What tells two similar names apart.
+	 */
+	description?: string;
 }
 /**
  * The `playbooks` block every start response carries when matching ran — the
@@ -20286,9 +20331,14 @@ export interface FindByIntentResult extends Partial<Record<ObjectCatalog, FindOb
 	/** The EXACT block `start_session` ships. ABSENT when not searched. */
 	playbooks?: SessionPlaybookCandidates;
 	/**
-	 * Capability packages from the pod catalog cache. Present when a returned
+	 * Capability packages from the pod catalog cache that serve the best intent
+	 * (by their declared `provides` first, then by words). When a returned
 	 * intent has no installed verbs, or the best intent match is weak (it
-	 * missed a query term). ABSENT when that lookup did not run.
+	 * missed a query term): any package. Otherwise only packages that run on
+	 * the person's computer (which of their computers can take one, and
+	 * `synap_list_installations` says which already have it). ABSENT when no
+	 * intent matched (the lookup did not run), or when a served intent has no
+	 * such computer tool.
 	 */
 	marketplace?: FindMarketplace;
 	/** Member spaces to route the work to. ABSENT when not searched. */
@@ -40643,6 +40693,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						exists?: boolean | undefined;
 						param: string;
 					} | undefined;
+					runner?: unknown;
+					uses?: unknown;
+					requires?: string[] | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -47480,6 +47533,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposedPlaybookId?: string | undefined;
 				reasoning?: string | undefined;
 				requiredIntents?: string[] | undefined;
+				requires?: string[] | undefined;
+				runner?: unknown;
 				schedule?: unknown;
 				scope?: "project" | "session" | undefined;
 				source?: string | undefined;
@@ -47692,6 +47747,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						exists?: boolean | undefined;
 						param: string;
 					} | undefined;
+					runner?: unknown;
+					uses?: unknown;
+					requires?: string[] | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -47837,6 +47895,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params: unknown;
 				projectsUsingCount: number;
 				requiredIntents: unknown;
+				requires: unknown;
+				runner: unknown;
 				schedule: unknown;
 				scope: "project" | "session" | null;
 				stages: unknown;
@@ -47931,6 +47991,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params: unknown;
 				projectsUsingCount: number;
 				requiredIntents: unknown;
+				requires: unknown;
+				runner: unknown;
 				schedule: unknown;
 				scope: "project" | "session" | null;
 				stages: unknown;
@@ -47968,7 +48030,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
 					runHealth: RunHealth | null;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					servesGoals: ServedGoal[];
@@ -48007,6 +48071,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					stages: unknown;
@@ -48030,6 +48096,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				autoPicked: boolean;
 				playbooks: {
 					activators: PlaybookActivator[];
+					description: string | null;
 					executor: PlaybookExecutorRef;
 					forceProposeWrites: boolean;
 					goalTemplate: string;
@@ -48062,6 +48129,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				activators: PlaybookActivator[];
+				description: string | null;
 				executor: PlaybookExecutorRef;
 				forceProposeWrites: boolean;
 				goalTemplate: string;
@@ -48116,6 +48184,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					stages: unknown;
@@ -48560,6 +48630,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params?: Record<string, unknown>[] | undefined;
 				reasoning?: string | undefined;
 				requiredIntents?: string[] | undefined;
+				requires?: string[] | undefined;
+				runner?: unknown;
 				schedule?: unknown;
 				scope?: "project" | "session" | undefined;
 				source?: string | undefined;
@@ -48772,6 +48844,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						exists?: boolean | undefined;
 						param: string;
 					} | undefined;
+					runner?: unknown;
+					uses?: unknown;
+					requires?: string[] | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -48823,6 +48898,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					stages: unknown;
@@ -59579,6 +59656,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 						params?: Record<string, unknown>[] | undefined;
 						requiredIntents?: string[] | undefined;
+						requires?: string[] | undefined;
+						runner?: unknown;
 						schedule?: unknown;
 						scope?: "project" | "session" | undefined;
 						stages?: {
@@ -59790,6 +59869,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								exists?: boolean | undefined;
 								param: string;
 							} | undefined;
+							runner?: unknown;
+							uses?: unknown;
+							requires?: string[] | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;
 						subjectProfile?: {
@@ -60375,6 +60457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setPrimarySurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				primarySurface: unknown;
+				reasoning?: string | undefined;
 				workspaceId: string;
 			};
 			meta: object;

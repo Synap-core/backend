@@ -104,6 +104,7 @@ export { registerPodAdoptRoutes } from "./pod-adopt.js";
 export { registerFederationRoutes } from "./federation.js";
 export { registerKeysRoutes } from "./keys.js";
 export { registerAiProvidersRoutes } from "./ai-providers.js";
+export { registerAiProvidersAvailableRoute } from "./ai-providers-available.js";
 export { registerFocusSessionsRoutes } from "./focus-sessions.js";
 export { registerIntentSurfacesRoutes } from "./intent-surfaces.js";
 export { registerGuidelinesRoutes } from "./guidelines.js";

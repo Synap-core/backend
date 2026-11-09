@@ -61,7 +61,10 @@ const PLAYBOOK = {
 const ENTITY = { id: "ent-1", title: "Acme Corp", type: "company" };
 
 function makeDb() {
-  return {
+  const fake = {
+    // A promoted playbook's row and its kept version (0416) share one
+    // transaction.
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(fake),
     query: {
       playbooks: { findFirst: async () => PLAYBOOK },
       entities: { findFirst: async () => ENTITY },
@@ -100,6 +103,7 @@ function makeDb() {
       return { set: () => ({ where }) };
     },
   };
+  return fake;
 }
 
 let db = makeDb();

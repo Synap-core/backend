@@ -118,3 +118,31 @@ An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
 writes it into the catalog (`synap-app/packages/workspace-templates`); landing it
 on app-bases main publishes it.
+
+## Who runs it, the tools it needs, a step that is a playbook
+
+A playbook, and each of its stages, can name WHO works it (`runner`) and the
+TOOLS it needs (`requires`); a stage can also BE another playbook (`uses`).
+All three are optional: without them a playbook runs exactly as before.
+
+- `runner`: one choice, or an ordered list where each later choice is a
+  fallback (at most 4):
+  - `"synap_ai"`, or `{ "synapAi": { "persona": "<agents slug>" } }`;
+  - `{ "agentId": "<id from synap_list_agents>", "preset"?: "<preset key>" }`
+    (one agent of this pod: never in a catalog package);
+  - `{ "role": "<agent role or preset key>", "computer"?: "<name or id>" }`;
+  - `{ "engine": "<e.g. claude-code>", "computer"?: "<name or id>" }`;
+  - on a stage only, `"self"`: the run's own agent (the default).
+  Example: render on the Mac, else the devbox:
+  `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
+  `null` clears a playbook's runner. A choice made when running it comes
+  first, then the playbook's runner, then the person's remembered choice.
+- `requires`: capability keys (`["media-ffmpeg"]`), at most 16; a stage needs
+  its own plus the playbook's. They are checked on the runner's computer
+  before a step is handed over.
+- `uses` (a stage): `{ "playbookId": "<id>", "version"?: n, "with"?: { "<its
+  param>": "<this run's param or subject path>" }, "outputs"?: { "<this
+  stage's slot label>": "<its output label>" } }`. Omit `version` to pin
+  the playbook's current one: the pin holds when that playbook changes. The
+  used playbook must be in the same space or pod-wide; a chain of steps that
+  are playbooks has no loop and is at most 3 deep.

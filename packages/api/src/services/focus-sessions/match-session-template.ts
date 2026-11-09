@@ -22,7 +22,8 @@
  * Ranking is the EXISTING lexical ranker (`rankRouteCandidates`, the one
  * `playbooks.matchForEntity` and capture suggestions use) — this module only
  * builds the candidate list (active playbooks through the access layer; the
- * searchable text is name + description + goal template + stage names) and
+ * searchable text is the name + `playbookSearchText`, the same text
+ * `matchPlaybooks` ranks) and
  * keeps the candidates that the session's own words matched. The ranker's rule
  * is unchanged, so capture suggestions are unaffected.
  */
@@ -34,6 +35,10 @@ import {
   templateKindFields,
   type PlaybookScope,
 } from "../playbooks/template-kind.js";
+import {
+  playbookDescriptionPreview,
+  playbookSearchText,
+} from "../playbooks/playbook-search-text.js";
 
 /** How many ranked candidates ride back on a start. */
 const CANDIDATES_MAX = 5;
@@ -51,6 +56,12 @@ export interface PlaybookCandidate {
   scope: PlaybookScope;
   /** The user noun for that scope ("Goal template" / "Work template"). */
   templateKind: string;
+  /**
+   * When to use it, in its author's words, cut at
+   * `PLAYBOOK_DESCRIPTION_CAP` (`playbookDescriptionPreview`). Absent when the
+   * playbook has none. What tells two similar names apart.
+   */
+  description?: string;
 }
 
 /**
@@ -84,13 +95,6 @@ export interface MatchSessionTemplateInput {
   excludeGoalTemplates?: boolean;
 }
 
-function stageNames(stages: unknown): string[] {
-  if (!Array.isArray(stages)) return [];
-  return stages
-    .map((s) => (s as { name?: unknown } | null)?.name)
-    .filter((n): n is string => typeof n === "string");
-}
-
 export async function matchSessionTemplate(
   input: MatchSessionTemplateInput
 ): Promise<SessionPlaybookCandidates> {
@@ -120,7 +124,7 @@ export async function matchSessionTemplate(
         kind: "playbook" as const,
         id: p.id,
         name: p.name,
-        text: [p.description, p.goalTemplate, ...stageNames(p.stages)],
+        text: playbookSearchText(p),
         subjectProfileSlug: null,
         description: p.description ?? undefined,
         scope: p.scope,
@@ -134,6 +138,10 @@ export async function matchSessionTemplate(
       score: r.score,
       reason: r.reason,
       ...templateKindFields(r.candidate.scope),
+      ...(() => {
+        const description = playbookDescriptionPreview(r.candidate.description);
+        return description ? { description } : {};
+      })(),
     })),
     optOut: TEMPLATE_OPT_OUT,
   };

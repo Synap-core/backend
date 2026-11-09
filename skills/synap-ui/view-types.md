@@ -107,7 +107,7 @@ Best for: articles, bookmarks, products, books, photos.
 
 ## `kanban`
 
-Status board for an enum with no declared lifecycle. Requires `groupByField`, an enum/status property key. A kind or role with a declared lifecycle already has its pipeline (computed from the lifecycle): open it, don't build a kanban for it.
+Status board for an enum with no declared lifecycle. Requires `groupByField`, an enum/status property key. A kind or role with a declared lifecycle already has its pipeline (computed from the lifecycle): open it, or save one as a `pipeline` view (`config: { profileSlug }`); don't build a kanban for it.
 
 ```ts
 config: {
@@ -249,7 +249,7 @@ If in doubt: `list` is the safe default for any entity type. Always better than 
 ## Updating vs. creating
 
 - `POST /views` — create new view (auto-approved for agents)
-- `PATCH /views/:viewId` — update config (proposal-gated by default; the user owns their views)
+- `PATCH /views/:viewId` — update config (proposal-gated by default; the user owns their views; MCP: `synap_update_view`)
 - `POST /views/:viewId/arrange` — bento-specific, rearrange blocks (auto-approved)
 
 When the user says "change my kanban to group by priority instead of status," that's a PATCH — expect a proposal. Explain this to the user.

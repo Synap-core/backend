@@ -118,6 +118,22 @@ export async function readForPage(
         })
       );
     }
+    case "flow.of": {
+      // A kind's or role's flow: states in declared order, the stage that
+      // owns each, the things in each (`readFlowOf`, the same read as Hub
+      // `GET /flow`, the desktop host's door). Bounded like the board.
+      const days = int(p.windowDays, 1, 366);
+      return client.flow.of.query(
+        defined({
+          profileSlug: required(op, "a profileSlug", str(p.profileSlug)),
+          trackId: str(p.trackId),
+          window: days ? { days } : undefined,
+          firstN: int(p.firstN, 0, 50),
+          properties: bool(p.properties),
+          workspaceId: ws,
+        })
+      );
+    }
     case "lifecycle.throughput": {
       const bucket = str(p.bucket);
       const count = int(p.count, 1, 366);
@@ -203,5 +219,10 @@ export async function readForPage(
         documentId: required(op, "a documentId", str(p.documentId)),
         format: str(p.format) === "readable" ? "readable" : "raw",
       });
+    default: {
+      // Every op of the one table has a case: a new op fails the build here.
+      const unanswered: never = op;
+      throw new Error(`"${String(unanswered)}" has no read on this page.`);
+    }
   }
 }

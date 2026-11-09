@@ -41,12 +41,23 @@ const INTENT_SLUGS = [
   "connect_account",
 ];
 const listIntentSlugs = vi.fn(async () => [...INTENT_SLUGS]);
+/** Extra words a test gives a row (`capability_intents.synonyms`). */
+const SYNONYMS: Record<string, string[]> = {};
+/** The registry as `listIntentRows` returns it: a seed slug has no words. */
+const listIntentRows = vi.fn(async () =>
+  (await listIntentSlugs()).map((slug) => ({
+    slug,
+    statement: "",
+    synonyms: SYNONYMS[slug] ?? [],
+  }))
+);
 
 vi.mock("./capability-registry.js", () => ({
   listCapabilities: (...a: unknown[]) => listCapabilities(...a),
 }));
 vi.mock("./intent-registry.js", () => ({
   listIntentSlugs: () => listIntentSlugs(),
+  listIntentRows: () => listIntentRows(),
 }));
 vi.mock("../focus-sessions/match-session-template.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -176,6 +187,7 @@ beforeEach(() => {
   matchSessionTemplate.mockReset().mockResolvedValue(NO_PLAYBOOKS);
   queryCatalogCache.mockReset().mockResolvedValue([]);
   listIntentSlugs.mockReset().mockImplementation(async () => [...INTENT_SLUGS]);
+  for (const k of Object.keys(SYNONYMS)) delete SYNONYMS[k];
 });
 
 const lens = { workspaceId: null, userId: "u1" };
@@ -405,11 +417,9 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
     expect(capture).toBeDefined();
     expect(capture.verbs).toEqual([]);
     expect(queryCatalogCache).toHaveBeenCalledTimes(1);
-    expect(queryCatalogCache).toHaveBeenCalledWith({
-      query: "capture into pod capture_into_pod",
-      kind: "capability",
-      limit: 3,
-    });
+    // Every capability row, filtered by what it serves BEFORE the cap (a
+    // word ranking taken first would cut a row that declares the intent).
+    expect(queryCatalogCache).toHaveBeenCalledWith({ kind: "capability" });
     // The VALUE arrives, and only the install fields — version/tier/vendor
     // are catalog noise, and the fourth row is past the cap.
     expect(r.marketplace).toEqual({
@@ -482,11 +492,7 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
 
     const r = await findByIntent({ intent: "publish post", ...lens });
 
-    expect(queryCatalogCache).toHaveBeenCalledWith({
-      query: "publish post publish_post",
-      kind: "capability",
-      limit: 3,
-    });
+    expect(queryCatalogCache).toHaveBeenCalledWith({ kind: "capability" });
     // "post" or "publish" alone is not the intent. Split across fields
     // ("publish" slug + "post" description) is not either. The phrase is.
     expect(r.marketplace).toEqual({
@@ -596,13 +602,126 @@ describe("findByIntent — an unserved intent offers marketplace packages", () =
     expect(r.noConfidentMatch).toBeUndefined();
   });
 
-  it("a fully covered intent that already has verbs does not search the marketplace", async () => {
+  it("a fully covered intent that already has verbs offers no pod package, and no empty block", async () => {
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "message-relay",
+        kind: "capability",
+        name: "Message relay",
+        description: "Send a message from the pod",
+        definition: { capability: { provides: ["send_message"] } },
+      },
+    ]);
     const r = await findByIntent({ intent: "send a message", ...lens });
     expect(r.intents!.matches[0]!.intent).toBe("send_message");
     expect(r.intents!.matches[0]!.verbs.length).toBeGreaterThan(0);
     expect(r.intents!.matches[0]!.termCoverage).toEqual({ hit: 2, of: 2 });
+    // Looked for a tool on the person's computer, found none: nothing said.
+    expect(queryCatalogCache).toHaveBeenCalledTimes(1);
     expect("marketplace" in r).toBe(false);
-    expect(queryCatalogCache).not.toHaveBeenCalled();
+  });
+});
+
+describe("findByIntent — a computer tool is found by what it DECLARES (provides)", () => {
+  /** The ffmpeg package as the catalog cache serves it, runs on a computer. */
+  async function computerTool(slug: string, provides: string[]) {
+    const { readFileSync } = await import("node:fs");
+    const { dirname, resolve } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const definition = JSON.parse(
+      readFileSync(
+        resolve(
+          dirname(fileURLToPath(import.meta.url)),
+          "../installations/__fixtures__/media-ffmpeg.0.35.0.definition.json"
+        ),
+        "utf8"
+      )
+    ) as Record<string, unknown>;
+    return { ...definition, key: slug, provides };
+  }
+
+  it("an unserved intent offers the package that declares it, though no word of it matches, ahead of a word match", async () => {
+    listIntentSlugs.mockImplementation(async () => [
+      ...INTENT_SLUGS,
+      "transcribe_media",
+    ]);
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "cloud-transcriber",
+        kind: "capability",
+        name: "Cloud transcriber",
+        description: "Sends audio out to transcribe media",
+      },
+      {
+        // media-transcribe's own words: "transcript", never "transcribe media".
+        slug: "media-transcribe",
+        kind: "capability",
+        name: "Transcribe on your computer",
+        description: "Speech to a timed transcript, on your computer",
+        definition: await computerTool("media-transcribe", [
+          "transcribe_media",
+        ]),
+      },
+    ]);
+
+    const r = await findByIntent({ intent: "transcribe this video", ...lens });
+
+    expect(r.intents!.matches[0]!.intent).toBe("transcribe_media");
+    if (!r.marketplace || !("matches" in r.marketplace))
+      throw new Error(`no marketplace: ${JSON.stringify(r.marketplace)}`);
+    expect(r.marketplace.matches.map((m) => m.slug)).toEqual([
+      "media-transcribe",
+      "cloud-transcriber",
+    ]);
+    expect(r.marketplace.matches[0]!.runsOn).toEqual(["computer"]);
+  });
+
+  it("a served intent still names the tool that does it on the person's computer, and only that one", async () => {
+    queryCatalogCache.mockResolvedValue([
+      {
+        slug: "pod-mailer",
+        kind: "capability",
+        name: "Pod mailer",
+        description: "Send a message from the pod",
+        definition: { provides: ["send_message"] },
+      },
+      {
+        slug: "desktop-mailer",
+        kind: "capability",
+        name: "Desktop mailer",
+        description: "Mail from your own computer",
+        definition: await computerTool("desktop-mailer", ["send_message"]),
+      },
+    ]);
+
+    const r = await findByIntent({ intent: "send a message", ...lens });
+
+    // Served on the pod (gmail_send) and fully matched...
+    expect(r.intents!.matches[0]!.verbs.length).toBeGreaterThan(0);
+    expect(r.intents!.matches[0]!.termCoverage).toEqual({ hit: 2, of: 2 });
+    // ...and the computer tool is still named; the pod package is not.
+    if (!r.marketplace || !("matches" in r.marketplace))
+      throw new Error(`no marketplace: ${JSON.stringify(r.marketplace)}`);
+    expect(r.marketplace.matches.map((m) => m.slug)).toEqual([
+      "desktop-mailer",
+    ]);
+  });
+
+  it("an intent is ranked on its row's synonyms, not only its slug", async () => {
+    listIntentSlugs.mockImplementation(async () => [
+      ...INTENT_SLUGS,
+      "edit_video",
+    ]);
+    SYNONYMS.edit_video = ["remove background", "reframe to vertical"];
+
+    const r = await findByIntent({
+      intent: "remove my background",
+      catalogs: ["intents"],
+      ...lens,
+    });
+
+    expect(r.intents!.matches[0]!.intent).toBe("edit_video");
+    expect(r.intents!.matches[0]!.match.fields).toContain("synonyms");
   });
 });
 

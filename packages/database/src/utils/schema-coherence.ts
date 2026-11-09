@@ -783,6 +783,24 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "guidance",
     addedBy: "0411_playbook_guidance.sql",
   },
+  // Who runs a playbook, the tools it needs, and its kept versions (0416):
+  // every playbook read selects `runner` / `requires` (absence 500s every
+  // playbook list), and every definition write records a version.
+  {
+    table: "playbooks",
+    column: "runner",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
+  {
+    table: "playbooks",
+    column: "requires",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
+  {
+    table: "playbook_versions",
+    column: "definition",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
 
   // Backup run ledger (0295). The backup container writes it with psql and
   // GET /status/backup reads it; without it every run's record is lost and the

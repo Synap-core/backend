@@ -1164,6 +1164,75 @@ export interface PlaybookStageWhen {
   exists?: boolean;
 }
 
+/** At most this many choices in one ordered `runner` list (the rest are fallbacks). */
+export const PLAYBOOK_RUNNER_MAX_CHOICES = 4;
+
+/** At most this many capability keys in one `requires` set. */
+export const PLAYBOOK_REQUIRES_MAX = 16;
+
+/**
+ * How deep a chain of steps that are playbooks may go: a playbook whose step
+ * `uses` a playbook whose step `uses` another … counts each `uses` hop. The
+ * write door refuses a chain deeper than this, and any cycle.
+ */
+export const PLAYBOOK_USES_MAX_DEPTH = 3;
+
+/**
+ * WHO does a playbook or a step (founder decision, proposal 72fdca0b; spec
+ * document 7111934d §2.1). One choice:
+ *   - `"self"`      a STEP only: the run's own agent does it (the default);
+ *   - `"synap_ai"`  the pod's own AI; `{ synapAi: { persona } }` names its
+ *                   persona (an `agents.slug`, today's run param `agentType`);
+ *   - `{ agentId }` one agent (`users.id`): pod-specific, so never in a
+ *                   catalog package; `preset` names one of its presets;
+ *   - `{ role }`    any of the person's agents whose `agent_role`, or one of
+ *                   whose presets, is this slug; portable;
+ *   - `{ engine }`  any of the person's agents of this engine
+ *                   (`users.agent_type`, e.g. "claude-code"); portable.
+ * `computer` narrows a role or engine to the agents on that computer (by id or
+ * name). DECLARED: the write door validates it; resolving it to an agent is the
+ * runner resolution's job (`agent-dispatch/route.ts` stays the only router).
+ */
+export type PlaybookRunnerRef =
+  | "self"
+  | "synap_ai"
+  | { synapAi: { persona: string } }
+  | { agentId: string; preset?: string }
+  | { role: string; computer?: string }
+  | { engine: string; computer?: string };
+
+/** One choice, or an ordered list where each later choice is a fallback. */
+export type PlaybookRunner = PlaybookRunnerRef | PlaybookRunnerRef[];
+
+/** The choices of a `runner`, in order (a single choice is a list of one). */
+export function runnerChoices(
+  runner: PlaybookRunner | null | undefined
+): PlaybookRunnerRef[] {
+  if (runner === null || runner === undefined) return [];
+  return Array.isArray(runner) ? runner : [runner];
+}
+
+/**
+ * A step that IS another playbook, pinned at a version (founder decision,
+ * proposal 72fdca0b). The run starts a child session following that playbook
+ * at that version; the parent waits for it and takes back its outputs.
+ */
+export interface PlaybookStageUses {
+  /** The playbook this step runs (a playbook on this pod). */
+  playbookId: string;
+  /**
+   * The version it runs at. The write door fills in the playbook's current
+   * version when absent, so a STORED step always carries it; optional here
+   * because a definition on its way in may still omit it. A version the pod
+   * no longer keeps is refused.
+   */
+  version?: number;
+  /** Child param ← a parent param or subject path (identifier path). */
+  with?: Record<string, string>;
+  /** Parent step slot label ← child output label (default: the same label). */
+  outputs?: Record<string, string>;
+}
+
 /**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
@@ -1272,6 +1341,22 @@ export interface PlaybookStage {
    * Advisory: nothing consumes it yet.
    */
   when?: PlaybookStageWhen;
+  /**
+   * WHO does this step — see {@link PlaybookRunner}. Absent ⇒ `"self"`, the
+   * run's own agent, as before.
+   */
+  runner?: PlaybookRunner;
+  /**
+   * The step IS another playbook — see {@link PlaybookStageUses}. Absent ⇒
+   * the step is worked in the run's own session, as before.
+   */
+  uses?: PlaybookStageUses;
+  /**
+   * The tools this step needs, by capability key (`media-ffmpeg`), checked
+   * against the runner's computer before it is handed the step. Added to the
+   * playbook's own `requires`. Absent ⇒ nothing is checked, as before.
+   */
+  requires?: string[];
 }
 
 /**

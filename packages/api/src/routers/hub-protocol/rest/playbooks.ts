@@ -82,6 +82,8 @@ export const CreatePlaybookBodySchema = playbookDefinitionSchema
     scope: true,
     params: true,
     criteria: true,
+    runner: true,
+    requires: true,
   })
   .extend({
     workspaceId: z.string().uuid().describe("The playbook's home workspace."),
@@ -606,6 +608,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           ...(body.scope ? { scope: body.scope } : {}),
           ...(body.params ? { params: body.params } : {}),
           ...(body.criteria ? { criteria: body.criteria } : {}),
+          ...(body.runner !== undefined ? { runner: body.runner } : {}),
+          ...(body.requires ? { requires: body.requires } : {}),
         }
       );
       return renderOutcome(c, outcome);
@@ -618,7 +622,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
    * PATCH /playbooks/:id
    * Body: { agentUserId?, source?, reasoning?, name?, description?, goalTemplate?,
    *         params?, inputStrategy?, channelSpec?, expectedOutputs?, stages?,
-   *         criteria?, subjectProfile?, schedule?, executor?, status?, scope? }
+   *         criteria?, subjectProfile?, schedule?, executor?, status?, scope?,
+   *         runner?, requires? }
    *
    * Governed mirror of `playbooks.update` — the door the
    * analyzer persona uses to submit an evidence-backed definition diff. Never
@@ -678,6 +683,12 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         // for real by `playbooks.update`'s zod enum; this only types the body.
         // It was dropped here, so no Hub caller could make a playbook a method.
         scope: body.scope as "session" | "project" | undefined,
+        // Who runs it and the tools it needs (0416). Validated for real by
+        // `playbooks.update` (`playbookRunnerSchema`, `requiresSchema`).
+        runner: body.runner as Parameters<
+          typeof caller.playbooks.update
+        >[0]["runner"],
+        requires: body.requires as string[] | undefined,
       });
       return jsonGoverned(c, result);
     } catch (err) {
