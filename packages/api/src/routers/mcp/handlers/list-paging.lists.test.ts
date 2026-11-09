@@ -68,6 +68,7 @@ vi.mock("@synap/database", async (importOriginal) => ({
 import { readHandlers } from "./read.js";
 import { buildHandlers } from "./build.js";
 import { capabilityHandlers } from "./capability.js";
+import { builtinRenderableRows } from "../../../services/cells/renderables.js";
 import { REPLY_CAP_CHARS } from "../reply-cap.js";
 import type { McpToolContext } from "./shared.js";
 
@@ -104,7 +105,7 @@ function ctx(toolName: string, args: Record<string, unknown>): McpToolContext {
         return { automations: AUTOMATIONS.slice(o, o + (i.limit ?? 50)) };
       },
     },
-    widgetDefinitions: { listWidgetDefs: async () => [] },
+    widgetDefinitions: { listWidgetDefs: async () => builtinRenderableRows() },
   };
   return {
     toolName,

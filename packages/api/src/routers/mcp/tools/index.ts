@@ -1045,11 +1045,11 @@ export const tools = {
             limit: {
               type: "number",
               default: 20,
-              description: "Page size, default 20, max 200",
+              description: "Page size, default 20",
             },
             offset: {
               type: "number",
-              description: "nextOffset of the prior reply",
+              description: "From nextOffset",
             },
             detail: {
               type: "string",
@@ -1277,12 +1277,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Page size, default 40, max 200. relationTypes come on the first page only.",
+              description: "Page size, default 40",
             },
             offset: {
               type: "number",
-              description: "nextOffset of the prior reply",
+              description: "From nextOffset",
             },
           },
           required: [],
@@ -5774,11 +5773,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size, default 50, max 200",
+              description: "Page size, default 50",
             },
             offset: {
               type: "number",
-              description: "nextOffset of the prior reply",
+              description: "From nextOffset",
             },
           },
         },
@@ -5808,11 +5807,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size, default 15, max 200",
+              description: "Page size, default 15",
             },
             offset: {
               type: "number",
-              description: "nextOffset of the prior reply",
+              description: "From nextOffset",
             },
           },
         },
@@ -6231,7 +6230,7 @@ export const tools = {
             },
             offset: {
               type: "number",
-              description: "nextOffset of the prior reply",
+              description: "From nextOffset",
             },
           },
           // workspaceId is OPTIONAL — "what can this pod do?" is almost always
@@ -6424,7 +6423,7 @@ export const tools = {
             },
             offset: {
               type: "number",
-              description: "nextOffset of the prior reply",
+              description: "From nextOffset",
             },
           },
         },
