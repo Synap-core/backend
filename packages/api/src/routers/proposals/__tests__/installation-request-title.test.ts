@@ -14,6 +14,7 @@
 import { describe, it, expect } from "vitest";
 import { buildInstallationTitle } from "@synap-core/types/vocabulary";
 import { proposalDisplaySummary } from "../display.js";
+import { buildProposalSummary } from "../../../utils/permission-check.js";
 
 const ffmpeg = {
   computerId: "11111111-1111-4111-8111-111111111111",
@@ -55,6 +56,16 @@ describe("installation/request: the card names the capability and the computer",
     );
     expect(summaryOf({ ...onPod, action: "remove" })).toBe(
       'Remove "media-ffmpeg" from Mac'
+    );
+  });
+
+  it('is the summary the ask is STORED with (what activity, session titles and notifications read), never "Request Installation"', () => {
+    expect(buildProposalSummary("installation", "request", ffmpeg)).toBe(
+      summaryOf(ffmpeg)
+    );
+    const { catalog: _c, ...onPod } = ffmpeg;
+    expect(buildProposalSummary("installation", "request", onPod)).toBe(
+      'Install "media-ffmpeg" on Mac'
     );
   });
 

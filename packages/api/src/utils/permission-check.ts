@@ -109,6 +109,7 @@ import { buildTrackStartSummary } from "../services/tracks/track-start-summary.j
 import { buildTrackParticipantSummary } from "../services/tracks/track-participant-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import { packageObjectCount } from "../services/package-contents-summary.js";
+import { installationTitleOf } from "../services/installations/installation-title.js";
 import {
   defaultApprovalSentence,
   isLikelyUUID,
@@ -3348,6 +3349,14 @@ export function buildProposalSummary(
   action: string,
   data: Record<string, unknown>
 ): string {
+  // A capability asked for one of the person's computers: "Add ffmpeg and
+  // install it on Mac", never the door's "Request Installation". Stored, so
+  // activity, session titles and notifications read the same words as the
+  // card (`installation-title.ts`).
+  if (subjectType === "installation" && action === "request") {
+    const title = installationTitleOf(data);
+    if (title) return title;
+  }
   // A slug-idempotent define that CHANGES an existing kind/role's name,
   // description, icon or default values — "Update Role "X": description",
   // never the generic "Create Kind" of the define door it rides.
