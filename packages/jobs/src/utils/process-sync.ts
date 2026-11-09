@@ -98,15 +98,13 @@ import {
 } from "@synap/events";
 import { advanceSessionStageViaSlot } from "./stage-advance.js";
 import { loadSessionProcess } from "./session-process.js";
+import { FOLLOWING_SESSION_STATUSES } from "./following-sessions.js";
 import {
   releaseHeldWorkerRuns,
   workerAutomationOfProposal,
 } from "./worker-backlog-release.js";
 
 const logger = createLogger({ module: "process-sync" });
-
-/** Sessions a subject's status may move: in flight, and not a mere appointment. */
-const FOLLOWING_SESSION_STATUSES = ["active", "paused", "forming"] as const;
 
 export interface ProcessSyncEvent {
   eventType: string;

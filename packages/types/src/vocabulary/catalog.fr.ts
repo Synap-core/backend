@@ -354,6 +354,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.plan_approval.past": "Plan approuvé",
   "action.deploy_approval.imperative": "Approuver le déploiement",
   "action.deploy_approval.past": "Déploiement approuvé",
+  "action.stage_gate.imperative": "Approuver l’étape",
+  "action.stage_gate.past": "Étape approuvée",
   "action.section_update.imperative": "Modifier la section",
   "action.section_update.past": "Section modifiée",
   "action.session_narrative_update.imperative": "Mettre à jour le récit",

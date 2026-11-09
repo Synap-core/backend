@@ -13544,13 +13544,24 @@ export type MoveStatusResult = ApplyStatusMoveResult | {
 	proposalId: string;
 	proposalType: string;
 	reviewUrl?: string;
+	/**
+	 * The move entered a HUMAN-gated stage of a session about this thing:
+	 * the proposal is that stage's gate, and approving it writes the status
+	 * (`subject-move-gate.ts`).
+	 */
+	stageGate?: {
+		sessionId: string;
+		stageKey: string;
+	};
 	status: "proposed";
 } | {
 	reason: string;
 	status: "denied";
 } | {
-	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED" | "NOT_FOUND" | "NOT_THE_LIFECYCLE" | "NO_LIFECYCLE" | "OCCURRED_AT_INVALID" | "ROLE_NOT_ATTACHED" | "UNKNOWN_OPTION";
+	code: "HOLD_INVALID" | "HOLD_NOT_A_PAUSE" | "HOLD_REQUIRED" | "NOT_FOUND" | "NOT_THE_LIFECYCLE" | "NO_LIFECYCLE" | "OCCURRED_AT_INVALID" | "ROLE_NOT_ATTACHED" | "STAGE_GATE" | "UNKNOWN_OPTION";
 	reason: string;
+	/** STAGE_GATE: the session whose stage gate refused or held the move. */
+	sessionId?: string;
 	status: "refused";
 };
 export type UpdateEntitiesVerdict = "deny" | "execute" | "propose" | "skip";
@@ -36668,6 +36679,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposalId: string;
 					proposalType: string;
 					reviewUrl?: string;
+					stageGate?: {
+						sessionId: string;
+						stageKey: string;
+					};
 					status: "proposed";
 				};
 			} | {
@@ -36761,6 +36776,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposalId: string;
 					proposalType: string;
 					reviewUrl?: string;
+					stageGate?: {
+						sessionId: string;
+						stageKey: string;
+					};
 					status: "proposed";
 				};
 			} | {
