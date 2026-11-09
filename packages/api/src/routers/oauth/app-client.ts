@@ -42,6 +42,10 @@ import {
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { isPodAdmin } from "../../utils/workspace-role.js";
 import { isSynapApp, oauthKeyInstanceId, podAppActsAs } from "./config.js";
+import {
+  approvedActsAsPersonHolds,
+  capToActsAsPersonGrant,
+} from "../../services/app-acts-as-person-grant.js";
 import type { AppGrantRequest, StoredClient } from "./store.js";
 
 /**
@@ -99,11 +103,15 @@ export async function loadLiveApp(publicId: string) {
  *  - a live REGISTERED app (`mode = 'specific'`, `loadLiveApp`): "Sign in with
  *    Synap" (A1);
  *  - a live pod app CONNECTION (`mode = 'oauth'`) whose OAuth client is a
- *    SYNAP app (`isSynapApp` on its CIMD client_id, founder 2026-10-22). Any
- *    other connection is an unverified app's: its tokens are its agent's, and
- *    a person token naming one is dead.
- * The verified test is re-read here on every request, so taking an id off
- * `SYNAP_APP_IDS` ends its people's tokens at their next call.
+ *    SYNAP app (`isSynapApp` on its CIMD client_id, founder 2026-10-22);
+ *  - a live pod app CONNECTION its person APPROVED acting as them (W3 3c,
+ *    founder 2026-11-09): its `actsAsPerson` grant holds for this client id,
+ *    the same document bytes, before its expiry (`approvedActsAsPersonHolds`).
+ * Any other connection is an unverified app's: its tokens are its agent's,
+ * and a person token naming one is dead.
+ * Both tests are re-read here on every request, so taking an id off
+ * `SYNAP_APP_IDS`, revoking an approval, its expiry or a changed document
+ * ends the person's tokens at their next call.
  */
 export async function loadPersonTokenApp(publicId: string) {
   const [app] = await db
@@ -122,7 +130,7 @@ export async function loadPersonTokenApp(publicId: string) {
   if (
     app.mode === "oauth" &&
     app.oauthClientId &&
-    isSynapApp(app.oauthClientId)
+    (isSynapApp(app.oauthClientId) || (await approvedActsAsPersonHolds(app)))
   )
     return app;
   return null;
@@ -199,6 +207,9 @@ export function intersectAppGrant(
  *  2. WHAT: the app's current approval ∩ what its owner could STILL give
  *     (an approval outlives a role — `ownerGrantableNow`) ∩ the spaces the
  *     person can reach. Their own role still decides each write.
+ *  3. An APPROVED connection (not a Synap app, W3 3c): also ∩ the pairs the
+ *     person approved acting as them, never a pair that decides proposals
+ *     (`capToActsAsPersonGrant`) — a wider re-consent never widens it.
  *
  * `"not_for_you"` = rule 1 refused; `[]` = nothing left.
  */
@@ -206,6 +217,9 @@ export async function appSignInReach(
   app: {
     ownerUserId: string;
     approvedRequests: readonly AppGrantRequest[] | null;
+    mode?: string;
+    oauthClientId?: string | null;
+    metadata?: Record<string, unknown> | null;
   },
   personUserId: string
 ): Promise<AppGrantRequest[] | "not_for_you"> {
@@ -222,7 +236,7 @@ export async function appSignInReach(
   const { ownerGrantableNow } = await import("../../services/app-connect.js");
   const grantable = await ownerGrantableNow(app.ownerUserId, approved);
   const reach = new Set(await getUserWorkspaceIds(personUserId));
-  return intersectAppGrant(
+  const within = intersectAppGrant(
     approved,
     grantable.filter((r) => {
       const place = parseRequestPlace(r, "app");
@@ -240,6 +254,7 @@ export async function appSignInReach(
       }
     })
   );
+  return capToActsAsPersonGrant(app, within);
 }
 
 /** Why rule 1 refused — shown to the person on the pod's consent page. */

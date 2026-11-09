@@ -72,6 +72,7 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   // Setup as the person: a client, an agent, an app, a tool, a key, a secret.
   "agent/connect": "setup",
   "agent/updateCapabilities": "setup",
+  "app/actAsPerson": "setup",
   "app/connect": "setup",
   "tool/create": "setup",
   // An approved automation or playbook lands ACTIVE unless its author stated

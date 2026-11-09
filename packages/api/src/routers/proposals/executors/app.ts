@@ -35,8 +35,10 @@ import { auditLog } from "../../../utils/audit-log.js";
 import {
   appApprovalWithinAsked,
   applyApprovedReach,
+  assertOwnerCredential,
   assertOwnerMayGrant,
 } from "../../../services/app-connect.js";
+import { grantFromActAsPersonProposal } from "../../../services/app-acts-as-person.js";
 
 export function registerAppExecutors(): void {
   registerProposalExecutor({
@@ -165,6 +167,116 @@ export function registerAppExecutors(): void {
         success: true,
         primaryId: appId,
         effect: { applied: "verified", rows: 1, ids: [appId], subject: "apps" },
+      };
+    },
+  });
+
+  /**
+   * `app/actAsPerson` (W3 3c, founder decision 2026-11-09): the person
+   * approves that ONE of their pod app connections acts AS them. The app's
+   * own agent filed it (`requestActAsPerson`); this records the grant on the
+   * connection (`apps.metadata.actsAsPerson`) and mints nothing: the app's
+   * next token mint or refresh is the person's (`podAppConnectionActsAs`).
+   *
+   * Who may approve: the connection's OWN person, signed in as themselves —
+   * never an agent and never a scoped key, so neither the app's agent token
+   * nor a person token it already holds approves its own grant (A2). Proof of
+   * presence (`SENSITIVE_APPROVALS`) and a fresh session (`widensCredential`)
+   * are asked by the approve door before this runs.
+   *
+   * What is recorded is re-derived NOW (`grantFromActAsPersonProposal`): the
+   * document must be the bytes the app asked under (A4/A6), the pairs are
+   * those still approved for it, never one that decides proposals (A9).
+   */
+  registerProposalExecutor({
+    key: "app/actAsPerson",
+    // Approving makes a token act as the person: never from a device session.
+    widensCredential: true,
+    async execute({ proposal, userId, input, deps, ctx }) {
+      assertOwnerCredential("approve an app acting as you", {
+        agentUserId: ctx?.agentUserId,
+        keyType: ctx?.keyType,
+      });
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? raw) as Record<string, unknown>;
+      const appId = proposal.targetId ?? (inner.appId as string | undefined);
+      if (!appId || (inner.appId && inner.appId !== appId)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This request names no app, or another app — the app must ask again.",
+        });
+      }
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const repo = new AppRepository(db);
+      const app = await repo.get(appId);
+      if (!app) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "App not found" });
+      }
+      if (app.ownerUserId !== userId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person who connected this app can let it act as them",
+        });
+      }
+      const grant = await grantFromActAsPersonProposal({
+        app,
+        data: inner,
+        proposalId: input.proposalId,
+        approverUserId: userId,
+      });
+      await repo.setActsAsPerson(app.id, grant);
+
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+      await auditLog({
+        subjectType: "app",
+        action: APP_EVENT_ACTIONS.approved,
+        phase: "completed",
+        subjectId: app.id,
+        userId,
+        workspaceId: null,
+        appId: app.publicId,
+        data: {
+          name: app.name,
+          publicId: app.publicId,
+          grant: "actsAsPerson",
+          proposalId: input.proposalId,
+          requests: grant.requests,
+          documentSha256: grant.documentSha256,
+          expiresAt: grant.expiresAt,
+        },
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return {
+        success: true,
+        primaryId: app.id,
+        effect: {
+          applied: "verified",
+          rows: 1,
+          ids: [app.id],
+          subject: "apps",
+        },
       };
     },
   });

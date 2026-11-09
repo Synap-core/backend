@@ -16,6 +16,10 @@
  *                                space, connected / last used, write mode)
  *   POST   /apps/:id/narrow      { approved } = the pairs it KEEPS → { app }
  *   PUT    /apps/:id/write-mode  { applyAutomatically } → the write mode
+ *   POST   /apps/:id/act-as-person  the APP asks (its own token): ONE
+ *                                `app/actAsPerson` proposal → { proposalId,
+ *                                reviewUrl, requests } (W3 3c)
+ *   DELETE /apps/:id/act-as-person  the person takes it back → { revoked }
  *   (revoke = DELETE /apps/:id: keys, refresh families, codes, webhooks)
  * Narrow and write mode are the owner's own acts: an agent's credential or a
  * scoped key is refused (`assertOwnerCredential`).
@@ -55,10 +59,12 @@ import {
   registerApp,
   requestAccess,
   revokeApp,
+  revokeAppActsAsPerson,
   serializeApp,
   setAppRedirectUris,
   setAppWriteMode,
 } from "../../../services/app-connect.js";
+import { requestActAsPerson } from "../../../services/app-acts-as-person.js";
 
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
 
@@ -209,6 +215,54 @@ export function registerAppsRoutes(app: HubHono): void {
       return c.json(result, 201);
     } catch (err) {
       return fail(c, err, "POST /apps/:id/connect");
+    }
+  });
+
+  // ── POST /apps/:id/act-as-person — the APP asks to act as its person ─────
+  // Called with the app's own OAuth token (its ask-first agent). Files ONE
+  // proposal the person approves on its page; nothing changes until then.
+  app.post("/apps/:id/act-as-person", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
+    try {
+      const result = await requestActAsPerson({
+        publicId: appId,
+        ownerUserId: userId,
+        actorAgentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+      });
+      return c.json(result, 201);
+    } catch (err) {
+      return fail(c, err, "POST /apps/:id/act-as-person");
+    }
+  });
+
+  // ── DELETE /apps/:id/act-as-person — the person takes it back ────────────
+  app.delete("/apps/:id/act-as-person", async (c) => {
+    const stale = refuseStaleDeviceSession(c);
+    if (stale) return stale;
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
+    try {
+      return c.json(
+        await revokeAppActsAsPerson({
+          publicId: appId,
+          ownerUserId: userId,
+          actorAgentUserId: c.get("agentUserId") as string | undefined,
+          actorKeyType: c.get("keyType") as string | undefined,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "DELETE /apps/:id/act-as-person");
     }
   });
 

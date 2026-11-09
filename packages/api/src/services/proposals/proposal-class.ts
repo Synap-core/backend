@@ -132,6 +132,9 @@ export const ACCESS_DOORS: ReadonlySet<string> = new Set([
   // An Application asking for reach (POST /apps/:id/connect): approving it
   // records what the app may touch, and its key is minted from exactly that.
   "app/connect",
+  // An app asking to act AS the person (W3 3c): approving it makes the
+  // app's next token the person's own, within the frozen pairs.
+  "app/actAsPerson",
   // An AI's pending key asking to connect (`services/agent-connect.ts`).
   "agent/connect",
   // What an agent principal is permitted to do.

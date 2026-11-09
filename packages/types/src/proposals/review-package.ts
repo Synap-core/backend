@@ -262,6 +262,7 @@ const BY_PAIR: Readonly<Record<string, ReviewPackage>> = {
   "agent/connect": "access",
   "agent/updateCapabilities": "access",
   "app/connect": "access",
+  "app/actAsPerson": "access",
   "vault/grant": "access",
   // A playbook run hands work to an agent; a capability or command run is an
   // action on the person's data, decided like any other change.

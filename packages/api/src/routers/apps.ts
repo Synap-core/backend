@@ -43,6 +43,7 @@ import {
   issueKey,
   loadOwnedApp,
   narrowApp,
+  revokeAppActsAsPerson,
   podAppViews,
   registerApp,
   removeApp,
@@ -321,6 +322,23 @@ export const appsRouter = router({
           actorKeyType: ctx.keyType,
         })
       )
+    ),
+
+  /**
+   * Stop a pod app acting as you (W3 3c): the grant you approved is cleared,
+   * its live token ends now, a waiting request is withdrawn; its next token
+   * is its own ask-first agent's. The person's own act; an agent or a scoped
+   * key (the app's own tokens included) is refused.
+   */
+  revokeActsAsPerson: credentialProcedure
+    .input(z.object({ publicId: PublicId }))
+    .mutation(({ ctx, input }) =>
+      revokeAppActsAsPerson({
+        publicId: input.publicId,
+        ownerUserId: ctx.userId,
+        actorAgentUserId: ctx.agentUserId,
+        actorKeyType: ctx.keyType,
+      })
     ),
 
   /**

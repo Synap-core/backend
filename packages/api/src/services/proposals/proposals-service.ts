@@ -297,6 +297,12 @@ export const PROTECTED_FIELDS_BY_TYPE: Readonly<
     "platform",
     "threadId",
   ],
+  // `app/actAsPerson` (W3 3c): the app's own agent files it and, as its
+  // author, may revise it. The pairs that will act as the person and the
+  // document version they were asked for are what the person approves: a
+  // revise that changed them would have the person approve one grant and
+  // record another.
+  actAsPerson: ["requests", "documentSha256", "oauthClientId"],
 };
 
 /**

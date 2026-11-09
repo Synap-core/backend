@@ -100,6 +100,12 @@
  *     /revoke ends the slot's person key too (refresh.ts
  *     `revokeConnectionAccessKey`). → "refresh keeps the person", "revoking
  *     the connection ends it".
+ *  T14 An APPROVED app (W3 3c, not a Synap app): the person path opens for
+ *     ONE connection whose person approved `app/actAsPerson` — same client
+ *     id, same document bytes, before expiry (`approvedActsAsPersonHolds`),
+ *     re-judged at mint, refresh and on every request; its reach is capped at
+ *     the frozen pairs and never decides proposals. → approved-app-acts-as-
+ *     person.pglite.test.ts (A1 to A11).
  *  T13 Approving through a pod app. Only a Synap app's document may ask for
  *     the review verbs (`proposal.approve` / `proposal.reject`,
  *     client-metadata.ts), the person ticks them per space, and every
@@ -130,6 +136,7 @@ import { grantsForApprovedRequests } from "./app-connect.js";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
 import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
 import { isSynapApp, oauthKeyInstanceId } from "../routers/oauth/config.js";
+import { approvedActsAsPersonHolds } from "./app-acts-as-person-grant.js";
 import {
   APP_PERSON_SCOPES,
   APP_PERSON_TOKEN_TTL_DAYS,
@@ -304,7 +311,17 @@ export async function mintPodAppPersonToken(args: {
   expiresAt: Date;
   plainKey?: string;
 }): Promise<MintPodAppPersonTokenResult> {
-  if (!isSynapApp(args.oauthClientId)) {
+  // A Synap app, or a connection whose person approved it acting as them
+  // (W3 3c) — re-judged here, never taken from the caller's routing.
+  const [conn] = await db
+    .select()
+    .from(apps)
+    .where(eq(apps.id, args.appId))
+    .limit(1);
+  if (
+    !isSynapApp(args.oauthClientId) &&
+    !(conn && (await approvedActsAsPersonHolds(conn)))
+  ) {
     return { ok: false, reason: "not_verified" };
   }
   const person = await db.query.users.findFirst({
@@ -314,12 +331,7 @@ export async function mintPodAppPersonToken(args: {
   if (!person || person.userType !== "human") {
     return { ok: false, reason: "not_a_person" };
   }
-  const [row] = await db
-    .select({ publicId: apps.publicId })
-    .from(apps)
-    .where(eq(apps.id, args.appId))
-    .limit(1);
-  const app = row ? await loadPersonTokenApp(row.publicId) : null;
+  const app = conn ? await loadPersonTokenApp(conn.publicId) : null;
   if (
     !app ||
     app.mode !== "oauth" ||

@@ -2346,6 +2346,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "apiKey/create": "disruptive", // scope (ADMIN)
   "apiKey/delete": "disruptive", // destroy / ADMIN
   "apiKey/update": "disruptive", // scope: a credential
+  "app/actAsPerson": "disruptive", // scope: an approved app's token becomes the person's
   "app/connect": "disruptive", // scope: grants an app reach into the pod
   "artifact/create": "reversible",
   "artifact/setState": "reversible",
@@ -2617,6 +2618,12 @@ export const GATE_WRITE_DOORS = {
   // bearer key is minted on demand by POST /apps/:id/key, so this door always
   // proposes (filed via `createPendingProposal` — the gate ladder can grant an
   // agent, and a granted connect would auto-authorize reach with no review).
+  // Founder decision 2026-11-09 (W3 3c): an app the person APPROVES acts as
+  // them. The app's own agent asks (`POST /apps/:id/act-as-person`); the
+  // executor records the grant on the person's own connection
+  // (`apps.metadata.actsAsPerson`). Always proposes, like `app/connect`:
+  // filed via `createPendingProposal`, so no ladder rung can grant it.
+  "app/actAsPerson": "gate",
   "app/connect": "gate",
   "artifact/create": "gate",
   "artifact/setState": "gate",

@@ -93,11 +93,11 @@ import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
 import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
 import { revokeConnectionRefreshTokens } from "../routers/oauth/refresh.js";
+import { isSynapApp, type PodAppActsAs } from "../routers/oauth/config.js";
 import {
-  isSynapApp,
-  podAppActsAs,
-  type PodAppActsAs,
-} from "../routers/oauth/config.js";
+  clearActsAsPerson,
+  podAppConnectionActsAs,
+} from "./app-acts-as-person.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { assertPresencePass, type PresencePass } from "./presence/pass.js";
@@ -1799,15 +1799,17 @@ async function mintPersonOAuthAccessKey(
  * re-derives (`successorAccessToken`, refresh.ts), so the reuse grace can hand
  * this same key back (`reuseAppOAuthAccessKey`). Random otherwise.
  *
- * A SYNAP app (`podAppActsAs` = "person") is never minted its agent's key:
- * its token is the PERSON's (`mintPersonOAuthAccessKey`), same slot, same
- * 1 h, same refresh family.
+ * A SYNAP app, or a connection whose person approved it acting as them
+ * (`podAppConnectionActsAs` = "person", W3 3c), is never minted its agent's
+ * key: its token is the PERSON's (`mintPersonOAuthAccessKey`), same slot,
+ * same 1 h, same refresh family.
  */
 export async function mintAppOAuthAccessKey(
   args: AppOAuthKeyArgs & { plainKey?: string }
 ): Promise<AppOAuthAccessKey> {
   const conn = await loadAppOAuthConnection(args);
-  if (podAppActsAs(args.oauthClientId) === "person") {
+  // A Synap app, or a connection its person approved (W3 3c): the person's.
+  if ((await podAppConnectionActsAs(conn.app)) === "person") {
     return mintPersonOAuthAccessKey(conn, args);
   }
   const { app, approved, found } = conn;
@@ -1877,7 +1879,7 @@ export async function reuseAppOAuthAccessKey(
   args: AppOAuthKeyArgs & { accessToken: string }
 ): Promise<AppOAuthAccessKey | null> {
   const conn = await loadAppOAuthConnection(args);
-  if (podAppActsAs(args.oauthClientId) === "person") {
+  if ((await podAppConnectionActsAs(conn.app)) === "person") {
     return reusePersonOAuthAccessKey(conn, args);
   }
   const agentUserId = conn.app.agentUserId;
@@ -2102,6 +2104,16 @@ export async function revokeApp(args: {
     args.ownerUserId,
     "The app was revoked."
   );
+  // A revoked app no longer acts as anyone: its acts-as-person grant goes, so
+  // a reconnect starts where every connection starts, as its agent (A10).
+  if (found.app.mode === "oauth") {
+    const cleared = await clearActsAsPerson({
+      app: found.app,
+      byUserId: args.ownerUserId,
+      reason: "The app was revoked.",
+    });
+    withdrawn.push(...cleared.withdrawn);
+  }
   if (withdrawn.length > 0) {
     const { emitProposalReviewed } =
       await import("../routers/proposals/apply-approval.js");
@@ -2250,6 +2262,54 @@ export async function setAppSignInPolicy(args: {
     args.personMayDecideOwnAgentProposals
   );
   return loadOwnedApp(args.publicId, args.ownerUserId);
+}
+
+/**
+ * The person takes back "acts as you" from one of their pod app connections
+ * (W3 3c): the grant is cleared, the live person token ends now, a request
+ * still waiting is withdrawn; the app's next token is its own ask-first
+ * agent's again. Applies at once (it only reduces access). The person's own
+ * act, signed in as themselves: an agent's credential or a scoped key — the
+ * app's own tokens included — is refused (`assertOwnerCredential`).
+ */
+export async function revokeAppActsAsPerson(args: {
+  publicId: string;
+  ownerUserId: string;
+  actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
+}): Promise<{ publicId: string; revoked: boolean }> {
+  assertOwnerCredential("stop an app acting as you", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  if (found.app.mode !== "oauth") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Only an app connected through sign-in can act as you.",
+    });
+  }
+  const cleared = await clearActsAsPerson({
+    app: found.app,
+    byUserId: args.ownerUserId,
+    reason: `${found.app.name} no longer acts as you`,
+  });
+  if (cleared.withdrawn.length > 0) {
+    const { emitProposalReviewed } =
+      await import("../routers/proposals/apply-approval.js");
+    for (const id of cleared.withdrawn) {
+      emitProposalReviewed(id, null, "withdrawn", args.ownerUserId);
+    }
+  }
+  // An owner act that only REDUCES access, recorded like `narrowApp`'s.
+  await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.approved, {
+    via: "acts-as-person-revoked",
+    hadGrant: cleared.hadGrant,
+    revokedKeys: cleared.revokedKeys,
+    withdrawnRequests: cleared.withdrawn.length,
+  });
+  return { publicId: found.app.publicId, revoked: cleared.hadGrant };
 }
 
 /** Rename an app (names are unique per owner — a taken name is a CONFLICT). */

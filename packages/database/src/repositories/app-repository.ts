@@ -91,6 +91,32 @@ export const APP_EVENT_ACTIONS = {
 /** The `app/connect` proposal coordinates (`POST /apps/:id/connect`). */
 export const APP_CONNECT_TARGET_TYPE = "app";
 export const APP_CONNECT_PROPOSAL_TYPE = "connect";
+/**
+ * An app asking to act AS the person who connected it (W3 3c, founder
+ * decision 2026-11-09): `app/actAsPerson`, filed by the app's own agent,
+ * approved by that person (api services/app-acts-as-person.ts).
+ */
+export const APP_ACT_AS_PERSON_PROPOSAL_TYPE = "actAsPerson";
+
+/**
+ * The approved grant that lets a pod app connection's token act AS its
+ * person (`apps.metadata.actsAsPerson`). Written ONLY by the `app/actAsPerson`
+ * executor; cleared by the person's revoke and by revoking the app. Every
+ * reader re-judges it (client id, document hash, expiry) — a stored grant is
+ * a claim, never a verdict.
+ */
+export interface AppActsAsPersonGrant {
+  proposalId: string;
+  approvedBy: string;
+  approvedAt: string;
+  expiresAt: string;
+  /** The connection's OAuth client id (its document URL) when approved. */
+  oauthClientId: string;
+  /** `oauth_clients.metadata_sha256` of the document the person approved. */
+  documentSha256: string;
+  /** The (permission, space) pairs that act as the person, frozen. */
+  requests: AppApprovedRequest[];
+}
 
 /**
  * Read `[{ permission, workspaceId, scope }]` off an `app/connect` proposal
@@ -701,7 +727,9 @@ export class AppRepository {
   async withdrawPendingRequests(
     appId: string,
     by: string,
-    reason: string
+    reason: string,
+    /** Which request: `connect` (default) or `actAsPerson`. */
+    proposalType: string = APP_CONNECT_PROPOSAL_TYPE
   ): Promise<string[]> {
     const now = new Date();
     const rows = await transitionProposal(this.db, {
@@ -714,7 +742,7 @@ export class AppRepository {
       },
       where: and(
         eq(proposals.targetType, APP_CONNECT_TARGET_TYPE),
-        eq(proposals.proposalType, APP_CONNECT_PROPOSAL_TYPE),
+        eq(proposals.proposalType, proposalType),
         eq(proposals.targetId, appId),
         eq(proposals.status, ProposalStatus.PENDING)
       ),
@@ -751,6 +779,28 @@ export class AppRepository {
       .update(apps)
       .set({
         metadata: sql`COALESCE(${apps.metadata}, '{}'::jsonb) || jsonb_build_object('personMayDecideOwnAgentProposals', ${allowed}::boolean)`,
+      })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
+   * Record (or, with null, clear) the grant that lets this pod app
+   * connection act AS its person (`metadata.actsAsPerson`, W3 3c). Written by
+   * the `app/actAsPerson` executor only; cleared by the person's revoke and by
+   * revoking the app. The service checks who may.
+   */
+  async setActsAsPerson(
+    appId: string,
+    grant: AppActsAsPersonGrant | null
+  ): Promise<AppRecord | null> {
+    const [row] = await this.db
+      .update(apps)
+      .set({
+        metadata: grant
+          ? sql`COALESCE(${apps.metadata}, '{}'::jsonb) || jsonb_build_object('actsAsPerson', ${JSON.stringify(grant)}::jsonb)`
+          : sql`COALESCE(${apps.metadata}, '{}'::jsonb) - 'actsAsPerson'`,
       })
       .where(eq(apps.id, appId))
       .returning();
