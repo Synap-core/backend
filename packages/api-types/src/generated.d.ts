@@ -40646,6 +40646,162 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runner?: unknown;
 					uses?: unknown;
 					requires?: string[] | undefined;
+					endAsk?: {
+						ask: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "confirm";
+							no?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
+							prompt?: string | undefined;
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+							yes?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
+						} | {
+							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "choose";
+							options: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
+								icon?: string | undefined;
+								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[];
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							form: {
+								fields: {
+									constraints?: {
+										enum?: string[] | undefined;
+										max?: number | undefined;
+										min?: number | undefined;
+										pattern?: string | undefined;
+									} | undefined;
+									help?: string | undefined;
+									key: string;
+									label: string;
+									required?: boolean | undefined;
+									type: string;
+								}[];
+								note?: string | undefined;
+								title?: string | undefined;
+							};
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "form";
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "act";
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
+							url?: string | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "provide";
+							provide: {
+								kind: "connection";
+								service: string;
+							} | {
+								accept?: string[] | undefined;
+								kind: "file";
+							} | {
+								kind: "secret";
+								name: string;
+							};
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						};
+						label: string;
+						optionsFrom?: {
+							relation: string;
+						} | undefined;
+						unblocks?: string | undefined;
+						why?: string | undefined;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -47700,6 +47856,162 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runner?: unknown;
 					uses?: unknown;
 					requires?: string[] | undefined;
+					endAsk?: {
+						ask: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "confirm";
+							no?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
+							prompt?: string | undefined;
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+							yes?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
+						} | {
+							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "choose";
+							options: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
+								icon?: string | undefined;
+								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[];
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							form: {
+								fields: {
+									constraints?: {
+										enum?: string[] | undefined;
+										max?: number | undefined;
+										min?: number | undefined;
+										pattern?: string | undefined;
+									} | undefined;
+									help?: string | undefined;
+									key: string;
+									label: string;
+									required?: boolean | undefined;
+									type: string;
+								}[];
+								note?: string | undefined;
+								title?: string | undefined;
+							};
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "form";
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "act";
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
+							url?: string | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "provide";
+							provide: {
+								kind: "connection";
+								service: string;
+							} | {
+								accept?: string[] | undefined;
+								kind: "file";
+							} | {
+								kind: "secret";
+								name: string;
+							};
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						};
+						label: string;
+						optionsFrom?: {
+							relation: string;
+						} | undefined;
+						unblocks?: string | undefined;
+						why?: string | undefined;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -48797,6 +49109,162 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runner?: unknown;
 					uses?: unknown;
 					requires?: string[] | undefined;
+					endAsk?: {
+						ask: {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "confirm";
+							no?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
+							prompt?: string | undefined;
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+							yes?: {
+								description?: string | undefined;
+								label?: string | undefined;
+								recommended?: boolean | undefined;
+							} | undefined;
+						} | {
+							allowOther?: boolean | undefined;
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "choose";
+							options: {
+								caution?: string | undefined;
+								description?: string | undefined;
+								followUp?: {
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										icon?: string | undefined;
+										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									prompt: string;
+								} | undefined;
+								icon?: string | undefined;
+								label: string;
+								media?: {
+									alt?: string | undefined;
+									kind: "audio" | "image" | "video";
+									ref: {
+										url: string;
+									} | {
+										assetId: string;
+									} | {
+										entityId: string;
+									};
+								} | undefined;
+								recommended?: boolean | undefined;
+								value?: string | undefined;
+							}[];
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							form: {
+								fields: {
+									constraints?: {
+										enum?: string[] | undefined;
+										max?: number | undefined;
+										min?: number | undefined;
+										pattern?: string | undefined;
+									} | undefined;
+									help?: string | undefined;
+									key: string;
+									label: string;
+									required?: boolean | undefined;
+									type: string;
+								}[];
+								note?: string | undefined;
+								title?: string | undefined;
+							};
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "form";
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "act";
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							steps?: string[] | undefined;
+							urgency?: "today" | "whenever" | undefined;
+							url?: string | undefined;
+						} | {
+							answerBy?: string | undefined;
+							consequence?: string | undefined;
+							dedupeKey?: string | undefined;
+							lookedAt?: {
+								id: string;
+								kind: "automation" | "document" | "entity" | "playbook" | "view";
+							}[] | undefined;
+							mode: "provide";
+							provide: {
+								kind: "connection";
+								service: string;
+							} | {
+								accept?: string[] | undefined;
+								kind: "file";
+							} | {
+								kind: "secret";
+								name: string;
+							};
+							reversible?: boolean | undefined;
+							risk?: "high" | "low" | "medium" | undefined;
+							stakes?: "commitment" | "routine" | undefined;
+							urgency?: "today" | "whenever" | undefined;
+						};
+						label: string;
+						optionsFrom?: {
+							relation: string;
+						} | undefined;
+						unblocks?: string | undefined;
+						why?: string | undefined;
+					} | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -59822,6 +60290,162 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							runner?: unknown;
 							uses?: unknown;
 							requires?: string[] | undefined;
+							endAsk?: {
+								ask: {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
+									lookedAt?: {
+										id: string;
+										kind: "automation" | "document" | "entity" | "playbook" | "view";
+									}[] | undefined;
+									mode: "confirm";
+									no?: {
+										description?: string | undefined;
+										label?: string | undefined;
+										recommended?: boolean | undefined;
+									} | undefined;
+									prompt?: string | undefined;
+									reversible?: boolean | undefined;
+									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
+									yes?: {
+										description?: string | undefined;
+										label?: string | undefined;
+										recommended?: boolean | undefined;
+									} | undefined;
+								} | {
+									allowOther?: boolean | undefined;
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
+									lookedAt?: {
+										id: string;
+										kind: "automation" | "document" | "entity" | "playbook" | "view";
+									}[] | undefined;
+									mode: "choose";
+									options: {
+										caution?: string | undefined;
+										description?: string | undefined;
+										followUp?: {
+											options: {
+												caution?: string | undefined;
+												description?: string | undefined;
+												icon?: string | undefined;
+												label: string;
+												media?: {
+													alt?: string | undefined;
+													kind: "audio" | "image" | "video";
+													ref: {
+														url: string;
+													} | {
+														assetId: string;
+													} | {
+														entityId: string;
+													};
+												} | undefined;
+												recommended?: boolean | undefined;
+												value?: string | undefined;
+											}[];
+											prompt: string;
+										} | undefined;
+										icon?: string | undefined;
+										label: string;
+										media?: {
+											alt?: string | undefined;
+											kind: "audio" | "image" | "video";
+											ref: {
+												url: string;
+											} | {
+												assetId: string;
+											} | {
+												entityId: string;
+											};
+										} | undefined;
+										recommended?: boolean | undefined;
+										value?: string | undefined;
+									}[];
+									reversible?: boolean | undefined;
+									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
+								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
+									form: {
+										fields: {
+											constraints?: {
+												enum?: string[] | undefined;
+												max?: number | undefined;
+												min?: number | undefined;
+												pattern?: string | undefined;
+											} | undefined;
+											help?: string | undefined;
+											key: string;
+											label: string;
+											required?: boolean | undefined;
+											type: string;
+										}[];
+										note?: string | undefined;
+										title?: string | undefined;
+									};
+									lookedAt?: {
+										id: string;
+										kind: "automation" | "document" | "entity" | "playbook" | "view";
+									}[] | undefined;
+									mode: "form";
+									reversible?: boolean | undefined;
+									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
+								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
+									lookedAt?: {
+										id: string;
+										kind: "automation" | "document" | "entity" | "playbook" | "view";
+									}[] | undefined;
+									mode: "act";
+									reversible?: boolean | undefined;
+									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
+									steps?: string[] | undefined;
+									urgency?: "today" | "whenever" | undefined;
+									url?: string | undefined;
+								} | {
+									answerBy?: string | undefined;
+									consequence?: string | undefined;
+									dedupeKey?: string | undefined;
+									lookedAt?: {
+										id: string;
+										kind: "automation" | "document" | "entity" | "playbook" | "view";
+									}[] | undefined;
+									mode: "provide";
+									provide: {
+										kind: "connection";
+										service: string;
+									} | {
+										accept?: string[] | undefined;
+										kind: "file";
+									} | {
+										kind: "secret";
+										name: string;
+									};
+									reversible?: boolean | undefined;
+									risk?: "high" | "low" | "medium" | undefined;
+									stakes?: "commitment" | "routine" | undefined;
+									urgency?: "today" | "whenever" | undefined;
+								};
+								label: string;
+								optionsFrom?: {
+									relation: string;
+								} | undefined;
+								unblocks?: string | undefined;
+								why?: string | undefined;
+							} | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;
 						subjectProfile?: {
