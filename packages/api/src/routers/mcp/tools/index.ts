@@ -96,7 +96,6 @@ import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
-  playbookOnEndSchema,
   playbookSubjectProfileSchema,
 } from "../../../schemas/playbook-process.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -419,10 +418,6 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
     "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
-  ),
-  onEnd: deriveJsonSchema(
-    playbookOnEndSchema,
-    "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
@@ -2604,7 +2599,7 @@ export const tools = {
               items: { type: "string", format: "uuid" },
               maxItems: 100,
               description:
-                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already).",
+                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already).",
             },
             blockedBySessionIds: {
               type: "array",
@@ -3783,7 +3778,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             scope: {
               type: "string",
@@ -3843,7 +3837,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             status: {
               type: "string",

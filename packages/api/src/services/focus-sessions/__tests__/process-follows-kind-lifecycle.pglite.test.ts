@@ -2,27 +2,23 @@
  * A PROCESS THAT NAMES NO statusProperty FOLLOWS THE LIFECYCLE ITS KIND
  * DECLARES (finding bfae3b84) — what `synap_create_playbook` tells agents to
  * do. Live, such a process moved nothing: the stage write skipped
- * `no_status_property`, the close's end moves returned nothing, and the
- * update reply said nothing (session 808d1419 entered a stage with
+ * `no_status_property` and the update reply said nothing (session 808d1419 entered a stage with
  * subjectStatus "fixing"; its finding stayed "open").
  *
  * Through the REAL update door (`updateFocusSession` → `advanceSessionStage`
- * → `writeStageSubjectStatus`), the REAL close door (`completeFocusSession`),
- * the REAL process loader (`loadSessionProcess`, where the property is
+ * → `writeStageSubjectStatus`), the REAL process loader (`loadSessionProcess`, where the property is
  * resolved once for every reader) and the REAL status door (`moveStatus`), on
  * one PGlite. Each row rules something out:
  *  - no statusProperty, a kind that declares its lifecycle: the stage advance
- *    moves the subject and the reply says so; the session end moves it too;
- *  - a ROLE process with no statusProperty moves the role's facet at the end;
+ *    moves the subject and the reply says so;
  *  - a NAMED statusProperty still wins over the declared lifecycle (a resolver
  *    that always took the lifecycle would write "status" here, not refuse);
- *  - a kind that declares NO lifecycle: nothing moves, and both replies carry
+ *  - a kind that declares NO lifecycle: nothing moves, and the reply carries
  *    the skip with its reason (`no_status_property`), never a silent nothing;
  *  - a stage that asks for no move adds nothing to the reply.
  *
- * Harness and stubs: as session-end-moves.pglite.test.ts (the close door's
- * own `focus_session` gate stubbed, post-commit delivery stubbed, PGlite is
- * one connection).
+ * Harness and stubs: the `focus_session` gate stubbed, post-commit delivery
+ * stubbed, PGlite is one connection.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -107,7 +103,7 @@ vi.mock("@synap/events", async (importOriginal) => ({
   dispatchLifecycleTransition: vi.fn(async () => undefined),
   getBoss: () => ({ send: async () => null }),
 }));
-// The close door's own gate is not under test; every other subject (the end
+// The session's own gate is not under test; every other subject (the stage
 // moves' `entity.transition`) reaches the REAL gate.
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<{
@@ -147,7 +143,6 @@ vi.mock("../../../utils/split-brain-service.js", async (importOriginal) => ({
 }));
 
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
-import { completeFocusSession } from "../complete-session.js";
 import { updateFocusSession } from "../update-session.js";
 
 const migration = (f: string) =>
@@ -164,10 +159,7 @@ const q = <T>(sql: string, params?: unknown[]) =>
 const USER = randomUUID();
 const FINDING = randomUUID();
 const MEMO = randomUUID();
-const PERSON = randomUUID();
-const LEAD = randomUUID();
 const STATUS_DEF = randomUUID();
-const STAGE_DEF = randomUUID();
 const PHASE_DEF = randomUUID();
 
 /** The process's stages: "fix" asks for "fixing", "notes" asks for nothing. */
@@ -252,16 +244,13 @@ beforeAll(async () => {
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints, created_at, updated_at)
      values ($1, 'finding', 'Finding', 'kind', 'system', 'pod', null, true, '{}'::jsonb, now(), now()),
-            ($2, 'memo', 'Memo', 'kind', 'system', 'pod', null, true, '{}'::jsonb, now(), now()),
-            ($3, 'person', 'Person', 'kind', 'system', 'pod', null, true, '{}'::jsonb, now(), now()),
-            ($4, 'lead', 'Lead', 'role', 'system', 'pod', null, true, '{}'::jsonb, now(), now())`,
-    [FINDING, MEMO, PERSON, LEAD]
+            ($2, 'memo', 'Memo', 'kind', 'system', 'pod', null, true, '{}'::jsonb, now(), now())`,
+    [FINDING, MEMO]
   );
   await q(
     `insert into property_defs (id, slug, value_type, constraints, created_at, updated_at)
      values ($1, 'status', 'enum', $2::jsonb, now(), now()),
-            ($3, 'stage', 'enum', $4::jsonb, now(), now()),
-            ($5, 'phase', 'enum', $6::jsonb, now(), now())`,
+            ($3, 'phase', 'enum', $4::jsonb, now(), now())`,
     [
       STATUS_DEF,
       JSON.stringify({
@@ -269,13 +258,6 @@ beforeAll(async () => {
           { key: "open", label: "Open", category: "open" },
           { key: "fixing", label: "Fixing", category: "active" },
           { key: "fixed", label: "Fixed", category: "done" },
-        ],
-      }),
-      STAGE_DEF,
-      JSON.stringify({
-        enumOptions: [
-          { key: "new", label: "New", category: "open" },
-          { key: "qualified", label: "Qualified", category: "active" },
         ],
       }),
       PHASE_DEF,
@@ -287,12 +269,12 @@ beforeAll(async () => {
       }),
     ]
   );
-  // finding declares `status` as its lifecycle; lead declares `stage`; memo
-  // and the finding's `phase` declare none.
+  // finding declares `status` as its lifecycle; memo and the finding's
+  // `phase` declare none.
   await q(
     `insert into profile_properties (profile_id, property_def_id, is_lifecycle)
-     values ($1, $2, true), ($3, $4, true), ($1, $5, false)`,
-    [FINDING, STATUS_DEF, LEAD, STAGE_DEF, PHASE_DEF]
+     values ($1, $2, true), ($1, $3, false)`,
+    [FINDING, STATUS_DEF, PHASE_DEF]
   );
 }, 120_000);
 
@@ -315,58 +297,6 @@ describe("no statusProperty: the process follows the kind's declared lifecycle",
       value: "fixing",
       via: "status_door",
     });
-  });
-
-  it("the session end moves the subject", async () => {
-    const finding = await seedThing(FINDING, "finding", "fixing");
-    const sessionId = await sessionOn(finding, {
-      profileSlug: "finding",
-      onEnd: { closed: "fixed" },
-    });
-    const res = await completeFocusSession({ sessionId, userId: USER });
-    expect(res?.session.status).toBe("closed");
-    expect(await statusOf(finding)).toBe("fixed");
-    expect(res?.endMoves?.moves).toEqual([
-      expect.objectContaining({
-        entityId: finding,
-        as: "subject",
-        outcome: expect.objectContaining({
-          status: "written",
-          property: "status",
-        }),
-      }),
-    ]);
-  });
-
-  it("a ROLE process moves the role's facet at the end", async () => {
-    const person = randomUUID();
-    await q(
-      `insert into entities (id, user_id, type, profile_id, title, workspace_id, properties, created_at, updated_at)
-       values ($1, $2, 'person', $3, 'Ada', null, '{}'::jsonb, now(), now())`,
-      [person, USER, PERSON]
-    );
-    const facet = randomUUID();
-    await q(
-      `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, status_category, properties, metadata, created_at, updated_at)
-       values ($1, $2, $3, $4, null, 'new', 'open', '{"stage":"new"}'::jsonb, '{}'::jsonb, now(), now())`,
-      [facet, person, LEAD, USER]
-    );
-    const sessionId = await sessionOn(person, {
-      profileSlug: "lead",
-      onEnd: { closed: "qualified" },
-    });
-    const res = await completeFocusSession({ sessionId, userId: USER });
-    expect(res?.endMoves?.moves[0]?.outcome).toMatchObject({
-      status: "written",
-      property: "stage",
-    });
-    const [row] = (
-      await q<{ status: string }>(
-        `select status from entity_facets where id = $1`,
-        [facet]
-      )
-    ).rows;
-    expect(row?.status).toBe("qualified");
   });
 
   it("a stage that asks for no move adds nothing to the reply", async () => {
@@ -405,31 +335,6 @@ describe("a kind that declares NO lifecycle: nothing moves, and the reply says w
       status: "skipped",
       reason: "no_status_property",
     });
-    expect(await statusOf(memo)).toBe("open");
-  });
-
-  it("the close reports each thing skipped: no_status_property, with a warning", async () => {
-    const memo = await seedThing(MEMO, "memo", "open");
-    const sessionId = await sessionOn(memo, {
-      profileSlug: "memo",
-      onEnd: { closed: "fixed" },
-    });
-    const res = await completeFocusSession({ sessionId, userId: USER });
-    expect(res?.session.status).toBe("closed");
-    expect(res?.endMoves).toEqual({
-      status: "closed",
-      value: "fixed",
-      moves: [
-        {
-          entityId: memo,
-          as: "subject",
-          outcome: { status: "skipped", reason: "no_status_property" },
-        },
-      ],
-    });
-    expect(res?.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("declares no lifecycle")])
-    );
     expect(await statusOf(memo)).toBe("open");
   });
 });

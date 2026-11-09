@@ -6,7 +6,6 @@
  *                          "schedule" | "manual", status?, cron?, min?,
  *                          size?, mode, maxPendingApprovals? }]
  *   humanOnlyStatuses?: string[]
- *   subjectProfile.onEnd?: { closed?, cancelled?, failed? }  (a status each)
  *
  * ── WHERE IT IS STORED, AND WHY ONE FOLD ────────────────────────────────────
  * `activators` and `humanOnlyStatuses` are TOP-LEVEL on the wire (the process
@@ -23,12 +22,7 @@
  */
 
 import { z } from "zod";
-import {
-  readSubjectLifecycle,
-  type PlaybookActivator,
-  type PlaybookOnEnd,
-  type PlaybookOnEndStatus,
-} from "@synap/playbooks";
+import { readSubjectLifecycle, type PlaybookActivator } from "@synap/playbooks";
 import { isSentenceCron } from "@synap-core/types/automations";
 import {
   WORKER_COUNT_MIN_FLOOR,
@@ -174,29 +168,13 @@ export const playbookActivatorsSchema = z
 export const humanOnlyStatusesSchema = z.array(statusValueSchema).max(50);
 
 /**
- * `subjectProfile.onEnd` — the status a session END moves what the process
- * worked on to, per terminal status (`PlaybookOnEnd`, @synap/playbooks). It
- * lives ONLY inside `subjectProfile` (no top-level spelling: it has no
- * second door to fold from), so it is frozen in every run's snapshot with the
- * rest of the process. Each value must be an option of the subject's declared
- * lifecycle — the definition check refuses one that is not
- * (`assertOnEndOptionsDeclared`, routers/playbooks.ts).
+ * `subjectProfile.onEnd` is RETIRED (founder, 6 Nov 2026, decision 5e377b06;
+ * 9 Nov, plan 73fa04b5 D1): a session end moves nothing. A write that still
+ * sends it is refused with the catalog's own words (synap-app
+ * `workspace-templates` rule `playbook-field-retired`), never stored.
  */
-export const playbookOnEndSchema = z.strictObject({
-  closed: statusValueSchema.optional(),
-  cancelled: statusValueSchema.optional(),
-  failed: statusValueSchema.optional(),
-});
-
-// The wire keys ARE the terminal statuses the reader reads
-// (`PlaybookOnEndStatus`): a status added on one side only stops the build.
-type _OnEndWireKey = keyof z.infer<typeof playbookOnEndSchema>;
-const _onEndKeysAgree: [_OnEndWireKey] extends [PlaybookOnEndStatus]
-  ? [PlaybookOnEndStatus] extends [_OnEndWireKey]
-    ? true
-    : never
-  : never = true;
-void _onEndKeysAgree;
+export const ON_END_RETIRED_MESSAGE =
+  "subjectProfile.onEnd — retired: the process follows the kind's declared lifecycle, and a session end moves nothing. Remove onEnd.";
 
 /**
  * `subjectProfile` — loose (unknown keys survive a round-trip), with the keys
@@ -209,7 +187,8 @@ export const playbookSubjectProfileSchema = z.looseObject({
   statusProperty: z.string().trim().min(1).max(120).optional(),
   activators: playbookActivatorsSchema.optional(),
   humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
-  onEnd: playbookOnEndSchema.optional(),
+  /** Retired: refused when sent ({@link ON_END_RETIRED_MESSAGE}). */
+  onEnd: z.never({ error: ON_END_RETIRED_MESSAGE }).optional(),
 });
 
 /**
@@ -263,7 +242,6 @@ export const SUBJECT_PROFILE_PROCESS_KEYS = [
   "statusProperty",
   "activators",
   "humanOnlyStatuses",
-  "onEnd",
 ] as const;
 
 /**
@@ -307,8 +285,6 @@ export interface PlaybookProcess {
   statusProperty: string | null;
   activators: PlaybookActivator[];
   humanOnlyStatuses: string[];
-  /** `subjectProfile.onEnd`, read tolerantly (junk dropped). */
-  onEnd: PlaybookOnEnd;
   /**
    * True when a STORED `activators` value failed to parse. Distinct from "no
    * activators": the compiler must not read a corrupt declaration as an empty
