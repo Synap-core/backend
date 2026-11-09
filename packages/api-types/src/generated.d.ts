@@ -30216,6 +30216,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
+				offset?: number | undefined;
 				status?: "active" | "draft" | "error" | "paused" | undefined;
 				triggerType?: "cron" | "event" | "manual" | "webhook" | undefined;
 				workspaceId?: string | null | undefined;
