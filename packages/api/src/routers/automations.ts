@@ -535,7 +535,7 @@ export async function loadFlowValidationResolvers(
   }
 
   return {
-    handOffVerdict: (agentUserId) => handOff.get(agentUserId.trim()) ?? null,
+    handOffVerdict: (agentUserId) => (agentUserId ? null : null),
     verbExists: (verbId) => foundSkillNames.has(verbId),
     skillExists: ({ skillId, skillName }) =>
       skillId

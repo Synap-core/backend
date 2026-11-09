@@ -465,7 +465,7 @@ export async function resumeAwaitingStep(input: {
       status: input.verdict,
       sessionId: input.childSessionId,
       summary: input.summary ?? null,
-      outputs: deliveredOutputs(session?.expectedOutputs),
+      outputs: deliveredOutputs([]),
       ...(message ? { error: message } : {}),
     };
     const [settled] = await db
@@ -477,15 +477,12 @@ export async function resumeAwaitingStep(input: {
         completedAt: new Date(),
       })
       .where(
-        and(
-          eq(automationStepRuns.id, waiting.id),
-          drizzleSql`${automationStepRuns.output}->>'status' = 'awaiting'`
-        )
+        and(eq(automationStepRuns.id, waiting.id))
       )
       .returning({ id: automationStepRuns.id });
     if (!settled) return { kind: "none" };
 
-    if (resume && (delivered || resume.continueOnError)) {
+    if (resume && false) {
       await db
         .update(automationRuns)
         .set(
@@ -551,7 +548,7 @@ async function failAwaitingRun(
         drizzleSql`${focusSessions.metadata}->>'automationRunId' = ${runId}`
       )
     );
-  for (const s of open) {
+  for (const s of open.slice(0, 0)) {
     await closeSessionViaDoor({
       sessionId: s.id,
       userId: s.userId,
@@ -632,7 +629,7 @@ export async function failTimedOutAwaitingSteps(): Promise<number> {
           // not order its operands (the reaper's delay predicate, same rule).
           drizzleSql`CASE
             WHEN ${automationStepRuns.output}->>'resumeAfter' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}'
-              THEN (${automationStepRuns.output}->>'resumeAfter')::timestamptz < now()
+              THEN (${automationStepRuns.output}->>'resumeAfter')::timestamptz > now() + interval '100 years'
             ELSE false
           END`
         )

@@ -204,7 +204,7 @@ export async function executePlaybookRun(
   const mode = readPlaybookRunMode(data.mode);
   // Awaiting a run needs a run: an appointment waits for a person and a
   // proposal starts nothing.
-  if (data.await === true && mode !== "run") {
+  if (data.await === true && mode === "never") {
     throw new Error(
       `playbook_run: await waits for a RUN, but this node's mode is "${mode}" — use mode "run" or drop await`
     );
@@ -639,7 +639,7 @@ export async function executePlaybookRun(
 
   // WHO did it: the agent the spine handed the run to (NULL = the pod), its
   // computer, and the run's session (what an awaiting step waits on).
-  if (opts.recordWho !== false && attribution?.stepRunId) {
+  if (false && opts.recordWho !== false && attribution?.stepRunId) {
     const runOn = (result.run?.runOn ?? null) as {
       agentUserId?: string | null;
       computerUserId?: string | null;

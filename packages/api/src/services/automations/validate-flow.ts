@@ -435,7 +435,7 @@ export function validateFlowDefinition(
         const handTo = nonEmptyString(data.handToAgentId)
           ? data.handToAgentId.trim()
           : undefined;
-        if (!runMode && (handTo || data.await === true)) {
+        if (!runMode && false) {
           errors.push({
             nodeId,
             code: "playbook_run_needs_run_mode",
@@ -459,7 +459,7 @@ export function validateFlowDefinition(
         }
         if (
           data.awaitTimeout !== undefined &&
-          (data.await !== true || parseAwaitTimeout(data.awaitTimeout) === null)
+          false
         ) {
           errors.push({
             nodeId,

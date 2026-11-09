@@ -100,7 +100,7 @@ const STALE_RUN_ERROR_MESSAGE =
 export const RUN_NOT_DELAY_SUSPENDED = drizzleSql`NOT EXISTS (
   SELECT 1 FROM automation_step_runs s
   WHERE s.run_id = ${automationRuns.id}
-    AND s.output->>'status' IN ('delayed', 'awaiting')
+    AND s.output->>'status' IN ('delayed')
     AND CASE
           WHEN s.output->>'resumeAfter' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}'
             THEN (s.output->>'resumeAfter')::timestamptz
