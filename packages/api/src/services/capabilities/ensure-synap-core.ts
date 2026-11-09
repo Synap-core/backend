@@ -1206,6 +1206,33 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "snippet.render",
+      kind: "builtin",
+      scope: "pod",
+      metadata: { readOnly: true },
+      description:
+        'Render a stored snippet (a text with variables, kind `snippet`) once and return the text: { text, misses }. `values` fills its variables by name; a variable declared `from: "subject.<field>"` fills from `subjectEntityId` (title, preview or a property) when you give no value, read only if the person may read that entity. A required variable with no value (and no default) refuses the render and names it. An optional one with none renders empty and is listed in `misses`, as is any unknown {name} left as written. Built-ins {today}, {now}, {me}, {clipboard}, {selection} are filled when not declared. A retired snippet is refused. A value containing braces is kept literally. READ, auto-runs, writes nothing: to send the text use messaging.send.',
+      parameters: {
+        type: "object",
+        properties: {
+          snippetId: { type: "string", format: "uuid" },
+          values: {
+            type: "object",
+            description: "Variable values by name.",
+            additionalProperties: true,
+          },
+          subjectEntityId: {
+            type: "string",
+            format: "uuid",
+            description:
+              "The entity that `from: subject.<field>` variables read from.",
+          },
+          workspaceId: { type: "string", format: "uuid" },
+        },
+        required: ["snippetId"],
+      },
+    },
+    {
       name: "governance.recommend_tighten",
       kind: "builtin",
       scope: "pod",

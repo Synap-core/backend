@@ -334,6 +334,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Reads a person's conversations already stored in the pod (messages and proposed messages). No external record is fetched and no kind's records are listed, so neither fetch_record nor list_records describes it.",
   "messaging.accounts":
     "Lists the person's connected messaging accounts: the account source of messaging.send's input map (send_message). Pod bookkeeping, not a record of any kind and nothing fetched from outside.",
+  "snippet.render":
+    "Renders a snippet already in the pod into text and returns it. Pod-local, writes nothing, nothing fetched from outside; sending the text is send_message's messaging.send.",
   // ── graph + facet bookkeeping: pod-internal structure ──────────────────
   "graph.relations": "Reads relation edges already in the pod graph.",
   "graph.link":

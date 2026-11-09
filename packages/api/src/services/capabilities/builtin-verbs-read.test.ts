@@ -217,6 +217,9 @@ describe("W6 read/resolve verbs — registry", () => {
       // accounts (labels and ids), the account source of send_message's input
       // map. Reads only; the send itself (messaging.send) stays gated.
       "messaging.accounts",
+      // snippet.render reads a snippet (and a subject's fields) through the
+      // caller's floor and returns text; it writes nothing.
+      "snippet.render",
       // web.read reads a public page (or a read-only reader verb through its
       // own gate); it mutates nothing in the pod.
       "web.read",

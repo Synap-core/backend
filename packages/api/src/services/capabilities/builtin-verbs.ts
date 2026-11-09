@@ -21,6 +21,15 @@
 
 import { z } from "zod";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
+import {
+  renderText,
+  type TextTemplateMiss,
+} from "@synap-core/types/text-template";
+import {
+  describeParamTypeError,
+  readPlaybookParams,
+  validatePlaybookParams,
+} from "@synap/playbooks";
 import { playbookParamsInputSchema } from "../../schemas/playbook-definition.js";
 import { TRPCError } from "@trpc/server";
 // Static, NOT part of the dynamic `submit-capture-graph` import below: it is a
@@ -56,6 +65,7 @@ import {
   getActingAgentUserId,
   messagingAccounts,
   profiles,
+  users,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
@@ -4422,6 +4432,207 @@ const webSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * snippet.render: render a stored snippet (text with variables) once and
+ * return `{ text, misses }`. READ-ONLY: it mutates nothing, so it is in
+ * READ_ONLY_BUILTIN_VERBS; sending the text stays governed (`messaging.send`).
+ *
+ * The snippet is an entity of kind `snippet` read through the caller's access
+ * floor (`scoped.findFirst`), so a snippet the caller cannot read does not
+ * exist for them. Properties: `body` (the text) and `variables` (PlaybookParam
+ * shape, plus an optional `from: "subject.<field>"`). A snippet whose
+ * lifecycle status is `retired` is refused. Whether only `current` snippets
+ * reach a playbook run is the guidance's rule (`kind:snippet`), not this
+ * verb's: a direct call renders a draft too.
+ *
+ * Values: explicit `values` win; else a variable's `from: "subject.<field>"`
+ * fills from `subjectEntityId` (`title`, `preview` or a property), read
+ * through the SAME access floor, never around it: a subject the caller cannot
+ * read fills nothing and is recorded as a miss; else the declared default.
+ * A required variable with no value blocks the render and is named.
+ *
+ * The grammar and the miss policy are `renderText`
+ * (`@synap-core/types/text-template`), the one implementation.
+ */
+const snippetRenderParams = z.object({
+  snippetId: z.string().uuid(),
+  /** Variable values by name. */
+  values: z.record(z.string(), z.unknown()).optional(),
+  /** The entity the `from: "subject.<field>"` variables read from. */
+  subjectEntityId: z.string().uuid().optional(),
+  /** Optional workspace lens; omit for the caller's full floor. */
+  workspaceId: z.string().uuid().optional(),
+});
+
+const SNIPPET_KIND = "snippet";
+const SNIPPET_RETIRED = "retired";
+
+/** `variables` is a json property: an array, or a JSON string of one. */
+function readSnippetVariables(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+/** The `from: "subject.<field>"` of each declared variable, by name. */
+function readSubjectFields(raw: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!Array.isArray(raw)) return out;
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (
+      typeof e.name === "string" &&
+      typeof e.from === "string" &&
+      e.from.startsWith("subject.") &&
+      e.from.length > "subject.".length
+    ) {
+      out.set(e.name.trim(), e.from.slice("subject.".length));
+    }
+  }
+  return out;
+}
+
+const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = snippetRenderParams.parse(params);
+  const scoped = await getReadScope(
+    ctx.userId,
+    input.workspaceId ?? ctx.workspaceId
+  );
+
+  const snippet = await scoped.findFirst<{
+    id: string;
+    status: string | null;
+    properties: Record<string, unknown> | null;
+  }>(entities, {
+    where: and(
+      eq(entities.id, input.snippetId),
+      eq(entities.type, SNIPPET_KIND)
+    ),
+    columns: { id: true, status: true, properties: true },
+  });
+  if (!snippet) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Snippet not found." });
+  }
+  if (snippet.status === SNIPPET_RETIRED) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This snippet is retired and can no longer be used.",
+    });
+  }
+  const props = snippet.properties ?? {};
+  const body = props.body;
+  if (typeof body !== "string" || body === "") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This snippet has no body to render.",
+    });
+  }
+
+  const rawVariables = readSnippetVariables(props.variables);
+  const declared = readPlaybookParams(rawVariables);
+  const subjectFields = readSubjectFields(rawVariables);
+  const explicit = input.values ?? {};
+  const isBlank = (v: unknown): boolean =>
+    v === undefined || v === null || (typeof v === "string" && v.trim() === "");
+  const ownExplicit = (name: string): unknown =>
+    Object.prototype.hasOwnProperty.call(explicit, name)
+      ? explicit[name]
+      : undefined;
+
+  // Subject fill: only for variables the caller left blank, through the floor.
+  const subjectMisses: TextTemplateMiss[] = [];
+  const supplied: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(explicit)) supplied[name] = value;
+  const wanted = declared.filter(
+    (p) => subjectFields.has(p.name) && isBlank(ownExplicit(p.name))
+  );
+  if (wanted.length > 0) {
+    const subject = input.subjectEntityId
+      ? await scoped.findFirst<{
+          title: string | null;
+          preview: string | null;
+          properties: Record<string, unknown> | null;
+        }>(entities, {
+          where: eq(entities.id, input.subjectEntityId),
+          columns: { title: true, preview: true, properties: true },
+        })
+      : undefined;
+    for (const p of wanted) {
+      const field = subjectFields.get(p.name)!;
+      const raw =
+        field === "title"
+          ? subject?.title
+          : field === "preview"
+            ? subject?.preview
+            : (subject?.properties ?? {})[field];
+      const filled =
+        typeof raw === "string"
+          ? raw
+          : typeof raw === "number" || typeof raw === "boolean"
+            ? String(raw)
+            : "";
+      if (filled.trim() === "") {
+        // Unreadable subject, no subject, or an empty field: fills nothing.
+        subjectMisses.push({
+          name: `subject.${field}`,
+          kind: "unresolved-context",
+          count: 1,
+        });
+      } else {
+        supplied[p.name] = filled;
+      }
+    }
+  }
+
+  // Defaults, coercion and type errors: the ONE param validator.
+  const resolution = validatePlaybookParams(declared, supplied);
+  if (resolution.typeErrors.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: resolution.typeErrors.map(describeParamTypeError).join(" "),
+    });
+  }
+  const values: Record<string, string> = {};
+  for (const p of declared) {
+    if (Object.prototype.hasOwnProperty.call(resolution.values, p.name)) {
+      values[p.name] = String(resolution.values[p.name]);
+    }
+  }
+
+  const [me] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, ctx.userId))
+    .limit(1);
+  const now = new Date();
+  const rendered = renderText(body, {
+    variables: declared.map((p) => ({
+      name: p.name,
+      ...(p.required ? { required: true } : {}),
+    })),
+    values,
+    builtins: {
+      today: now.toISOString().slice(0, 10),
+      now: now.toISOString(),
+      ...(me?.name ? { me: me.name } : {}),
+    },
+  });
+  if (!rendered.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Missing required variable${rendered.missing.length > 1 ? "s" : ""}: ${rendered.missing.join(", ")}.`,
+    });
+  }
+  return {
+    text: rendered.text,
+    misses: [...rendered.misses, ...subjectMisses],
+  };
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -4527,6 +4738,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "web.read": webReadHandler,
   // Search the web through a named installed provider (its own gate + meter).
   "web.search": webSearchHandler,
+  // Render a stored snippet (text with variables) once: { text, misses }.
+  "snippet.render": snippetRenderHandler,
 };
 
 /**
@@ -4600,6 +4813,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "property_def.propose_retire": propertyDefProposeRetireParams,
   "web.read": webReadParams,
   "web.search": webSearchParams,
+  "snippet.render": snippetRenderParams,
 };
 
 /**
@@ -4701,4 +4915,8 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // channel.history — a person's channels' messages and proposed messages,
   // read through the channel floor and the proposal floor. Writes nothing.
   "channel.history",
+  // snippet.render — reads a snippet (and a subject's fields) through the
+  // caller's floor and RETURNS text; it writes nothing. Sending is governed
+  // separately (messaging.send).
+  "snippet.render",
 ]);
