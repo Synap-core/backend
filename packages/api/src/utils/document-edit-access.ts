@@ -22,7 +22,14 @@
  *        document follows its entity — founder decision 2026-09-25) → also a
  *        pod member with a writing pod role. Evaluated with the SAME predicate
  *        the read floor uses (`podSharedDocumentWhere`). A standalone pod-wide
- *        document stays owner-only.
+ *        document stays owner-only;
+ *      - a pod-wide document that is the body of a live entity STORED in a
+ *        space (a part follows its whole, founder decision 22226da5,
+ *        2026-11-09) → also an editor+ member of that space: the entity's own
+ *        write floor, as the read floor admits its readers
+ *        (`spaceEntityBodyDocumentWhere`). Bodies are filed in their entity's
+ *        space now; this covers the ones left pod-wide (an entity moved into a
+ *        space after its body was written).
  *
  * Before this, update/versions/restore/propose were owner-only while reads were
  * member-level: a workspace member could open a shared document, type, and have
@@ -53,6 +60,7 @@ import {
   eq,
   inArray,
   isNull,
+  isNotNull,
   documents,
   entities,
   relations,
@@ -235,13 +243,59 @@ async function assertDocumentEditable(
     if (await isProjectMemberOf(userId, doc.id, PROJECT_WRITE_ROLES)) return;
     const view = await owningView(doc.id);
     if (await isViewWriterOf(userId, view)) return;
+    // A part follows its whole: a pod-wide body of an entity stored in a
+    // space is saved by that space's writers, as the entity is.
+    const bodySpaces =
+      doc.workspaceId === null ? await bodyEntitySpaces(doc.id) : [];
+    if (await isWriterOfAnySpace(userId, bodySpaces)) return;
     const podShared =
       doc.workspaceId === null && (await isPodSharedDocument(userId, doc.id));
     if (podShared && (await hasPodWriteRole(userId))) return;
     throw new DocumentEditDenied(
-      await denialReason(userId, doc, podShared, view)
+      await denialReason(userId, doc, podShared, view, bodySpaces)
     );
   }
+}
+
+/**
+ * The spaces of the live entities this document is the body of
+ * (`entities.document_id`) that are stored in a space. Unscoped: the caller
+ * already passed the read floor, and only the write floor is decided here.
+ */
+async function bodyEntitySpaces(documentId: string): Promise<string[]> {
+  const rows = await db
+    .select({ workspaceId: entities.workspaceId })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.documentId, documentId),
+        isNull(entities.deletedAt),
+        isNotNull(entities.workspaceId)
+      )
+    );
+  return [
+    ...new Set(
+      rows.flatMap((r: { workspaceId: string | null }) =>
+        r.workspaceId ? [r.workspaceId] : []
+      )
+    ),
+  ];
+}
+
+/** Is `userId` a writer (`assertWorkspaceWrite`) of one of `spaces`? */
+async function isWriterOfAnySpace(
+  userId: string,
+  spaces: readonly string[]
+): Promise<boolean> {
+  for (const workspaceId of spaces) {
+    try {
+      await assertWorkspaceWrite(db, userId, { workspaceId });
+      return true;
+    } catch (err) {
+      if (!(err instanceof TRPCError && err.code === "FORBIDDEN")) throw err;
+    }
+  }
+  return false;
 }
 
 /** Which reading path the caller holds, for a denied edit (see the codes). */
@@ -249,11 +303,14 @@ async function denialReason(
   userId: string,
   doc: DocumentRow,
   podShared: boolean,
-  view: ViewRow | undefined
+  view: ViewRow | undefined,
+  bodySpaces: readonly string[] = []
 ): Promise<DocumentEditReason> {
   if (podShared) return "pod_shared_read";
-  // A view-owned document answers for its view's workspace when it has none.
-  const workspaceId = doc.workspaceId ?? view?.workspaceId ?? null;
+  // A view-owned document answers for its view's workspace when it has none,
+  // a pod-wide body for its entity's space.
+  const workspaceId =
+    doc.workspaceId ?? view?.workspaceId ?? bodySpaces[0] ?? null;
   if (workspaceId && (await getWorkspaceMembership(db, workspaceId, userId))) {
     return "view_only";
   }

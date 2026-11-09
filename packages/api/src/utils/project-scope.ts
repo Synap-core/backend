@@ -445,6 +445,91 @@ export function podSharedDocumentInSpacesWhere(
   );
 }
 
+/**
+ * FLOOR BRANCH — A PART FOLLOWS ITS WHOLE (founder decision 22226da5,
+ * 2026-11-09): a pod-wide document that is the body of a live entity STORED
+ * in a space the caller reads is readable by them, exactly as the entity is
+ * (the workspace branch of the entity floor: `userVisibleWhere` on the
+ * ENTITY's `workspace_id`). Agent-written bodies landed pod-wide while their
+ * entity sat in a space, so a member, or a key limited to that space, read
+ * the record and got not_found on its body.
+ *
+ * NARROW BY CONSTRUCTION (the `podSharedDocumentWhere` rules): pod-wide
+ * documents only (a document stored in a space is that space's business); a
+ * standalone document, the body of a pod-wide entity, or the body of a trashed
+ * one matches nothing and stays owner-only under `podPersonal`; it binds the
+ * caller's id only; a guest holds no member or owned space and is no pod
+ * reader, so it matches nothing for them. A body is never a FILED document
+ * (`filedDocumentWhere`), so no list starts showing bodies.
+ */
+export function spaceEntityBodyDocumentWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return podWideBodyOfWhere(
+    documentWorkspaceIdColumn,
+    documentIdColumn,
+    storedInVisibleSpaceWhere(entities.workspaceId, userId)
+  );
+}
+
+/**
+ * The LENS form of `spaceEntityBodyDocumentWhere`: browsing space(s) `lens`
+ * also surfaces the pod-wide body of an entity stored there. Self-gating on
+ * the caller's read of the entity's space; still a narrow, ANDed with the
+ * floor.
+ */
+export function spaceEntityBodyInLensWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  userId: string,
+  lens: string | string[]
+): SQL {
+  const ids = Array.isArray(lens) ? lens : [lens];
+  return podWideBodyOfWhere(
+    documentWorkspaceIdColumn,
+    documentIdColumn,
+    and(
+      inArray(entities.workspaceId, ids),
+      storedInVisibleSpaceWhere(entities.workspaceId, userId)
+    )!
+  );
+}
+
+/**
+ * A row STORED in a space the caller reads: the workspace branch of the
+ * entity floor (`accessScopeWhere`). The `isNotNull` guard is the point:
+ * `userVisibleWhere` alone admits every NULL-workspace row owner-blind.
+ */
+function storedInVisibleSpaceWhere(
+  workspaceIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return and(
+    isNotNull(workspaceIdColumn),
+    userVisibleWhere(workspaceIdColumn, userId)
+  )!;
+}
+
+/**
+ * SPACE-KEYED twin of `spaceEntityBodyDocumentWhere`, for a key grant limited
+ * to `spaces` (access/grant-read.ts): the pod-wide body of a live entity
+ * stored in one of them. Those are the rows the same key reads once the body
+ * is stored in the space, so the grant reads a body wherever it was left.
+ */
+export function spaceEntityBodyInSpacesWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  spaces: readonly string[]
+): SQL {
+  return podWideBodyOfWhere(
+    documentWorkspaceIdColumn,
+    documentIdColumn,
+    inArray(entities.workspaceId, [...spaces])
+  );
+}
+
 /** A pod-wide document that is the body of a live entity matching `entityWhere`. */
 function podWideBodyOfWhere(
   documentWorkspaceIdColumn: AnyPgColumn,
@@ -948,6 +1033,14 @@ export function accessScopeWhere(args: {
       ? homeSpaceDocumentWhere(workspaceIdColumn, entityIdColumn, userId)
       : undefined;
   if (homeShared) floorBranches.push(homeShared);
+  // A PART FOLLOWS ITS WHOLE (decision 22226da5): the pod-wide body of an
+  // entity stored in a space the caller reads. `documents` only. A read
+  // branch: who may SAVE such a body is `document-edit-access.ts`.
+  if (documentFollowsEntity) {
+    floorBranches.push(
+      spaceEntityBodyDocumentWhere(workspaceIdColumn, entityIdColumn, userId)
+    );
+  }
   const floor = or(...floorBranches)!;
 
   // ── Workspace lens (optional narrow) ──────────────────────────────────────
@@ -1000,6 +1093,14 @@ export function accessScopeWhere(args: {
         ? or(
             lensNarrow,
             homeSpaceDocumentWhere(
+              workspaceIdColumn,
+              entityIdColumn,
+              userId,
+              workspaceLens
+            ),
+            // The space's view also holds the pod-wide body of an entity
+            // stored there (a part follows its whole, 22226da5).
+            spaceEntityBodyInLensWhere(
               workspaceIdColumn,
               entityIdColumn,
               userId,

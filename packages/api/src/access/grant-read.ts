@@ -109,6 +109,7 @@ import {
   homeSpaceInSpacesMemberWhere,
   podSharedDocumentInSpacesWhere,
   projectLensWhere,
+  spaceEntityBodyInSpacesWhere,
   roleInSpacesWhere,
 } from "../utils/project-scope.js";
 
@@ -165,7 +166,8 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     spec("document", documents, {
       // A document follows its entity, as for a member: the pod-wide body of
       // a pod-shared entity of the spaces (decision B only, rv-security B-4),
-      // or of an entity homed in one (decision e1b59d38 "A").
+      // of an entity homed in one (decision e1b59d38 "A"), or of an entity
+      // STORED in one (a part follows its whole, decision 22226da5).
       spaceReach: (spaces) =>
         or(
           podSharedDocumentInSpacesWhere(
@@ -174,6 +176,11 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
             spaces
           ),
           homeSpaceDocumentInSpacesWhere(
+            documents.workspaceId,
+            documents.id,
+            spaces
+          ),
+          spaceEntityBodyInSpacesWhere(
             documents.workspaceId,
             documents.id,
             spaces

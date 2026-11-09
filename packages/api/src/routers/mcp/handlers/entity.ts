@@ -12,6 +12,10 @@ import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { attachCreatedDocument } from "../../hub-protocol/attach-created-document.js";
 import { preflightAttachToEntity } from "../../../services/entity-body/body-replace-guard.js";
+import {
+  bodyPlacementFor,
+  withPlacementWarning,
+} from "../../../services/entity-body/body-placement.js";
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { isAllowedMimeType, MAX_FILE_SIZE } from "../../file-upload.js";
 import {
@@ -559,20 +563,26 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
     const replaceBody = args.replaceBody === true;
-    // Refuse an attach that would replace a body BEFORE the document exists.
-    if (attachEntityId) {
-      await preflightAttachToEntity({
-        entityId: attachEntityId,
-        userId,
-        replaceBody,
-      });
-    }
+    // Refuse an attach that would replace a body BEFORE the document exists,
+    // and file the body where its entity lives (a part follows its whole).
+    const placement = attachEntityId
+      ? bodyPlacementFor(
+          await preflightAttachToEntity({
+            entityId: attachEntityId,
+            userId,
+            replaceBody,
+          }),
+          requestedWorkspaceId,
+          { keyType: ctx.keyType, keyWorkspaceId: ctx.keyWorkspaceId }
+        )
+      : undefined;
     const result = await caller.documents.createDocument({
       userId,
       // Idempotency: a retry with the same key/content returns the prior doc.
       idempotencyKey: args.idempotencyKey as string | undefined,
-      // Confined workspace (service-key clamp) — not the raw model-supplied id.
-      workspaceId: requestedWorkspaceId as string,
+      // Confined workspace (service-key clamp) — not the raw model-supplied id;
+      // a body takes its entity's space instead (`bodyPlacementFor`).
+      workspaceId: placement ? placement.workspaceId : requestedWorkspaceId,
       title: args.title as string,
       content: (args.content as string) || "",
       // The same door diagnoses an html page and puts what will not run in
@@ -605,19 +615,22 @@ export const entityHandlers: McpHandlerMap = {
     // this call goes through), so MCP and the IS REST door share one producer.
     if (!attachEntityId) return ok(result);
     return ok(
-      await attachCreatedDocument({
-        created: result,
-        entityId: attachEntityId,
-        replaceBody,
-        userId,
-        scopes: apiKeyScopes,
-        // Membership-gated lens, never the raw model-supplied id — this ctx
-        // drives a GOVERNED entity update (see the SECURITY note on lensCaller).
-        workspaceId: lensWorkspaceId,
-        sessionId,
-        ...(agentUserId ? { agentUserId } : {}),
-        reasoning: `Attach document created via MCP tool: ${toolName}`,
-      })
+      withPlacementWarning(
+        await attachCreatedDocument({
+          created: result,
+          entityId: attachEntityId,
+          replaceBody,
+          userId,
+          scopes: apiKeyScopes,
+          // Membership-gated lens, never the raw model-supplied id — this ctx
+          // drives a GOVERNED entity update (see the SECURITY note on lensCaller).
+          workspaceId: lensWorkspaceId,
+          sessionId,
+          ...(agentUserId ? { agentUserId } : {}),
+          reasoning: `Attach document created via MCP tool: ${toolName}`,
+        }),
+        placement
+      )
     );
   },
   /**

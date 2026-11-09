@@ -93,7 +93,8 @@
     "rebuild-property-index": "tsx src/scripts/rebuild-property-index.ts",
     "recompute-last-interaction": "tsx src/scripts/recompute-last-interaction.ts",
     "backfill:default-sources-edges": "tsx src/scripts/backfill-default-sources-edges.ts",
-    "backfill:comment-threads": "tsx src/scripts/backfill-comment-threads.ts"
+    "backfill:comment-threads": "tsx src/scripts/backfill-comment-threads.ts",
+    "backfill:entity-body-spaces": "tsx src/scripts/backfill-entity-body-spaces.ts"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
