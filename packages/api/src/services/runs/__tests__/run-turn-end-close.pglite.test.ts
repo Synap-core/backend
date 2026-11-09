@@ -275,6 +275,8 @@ describe("a one-turn run ends itself when its turn completes", () => {
       schema.notifications,
       schema.notificationPreferences,
       schema.lifecycleTransitionOutbox,
+      // Who works each step (0422): a completed turn reads it first.
+      schema.sessionStageRuns,
     ]) {
       await h.client!.exec(pgliteTableDdl(t as unknown as PgTable));
     }

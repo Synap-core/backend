@@ -227,6 +227,7 @@ export * from "./capabilities.js";
 export * from "./links.js";
 // Playbook run ledger (RUNTIME) — one row per playbook execution (executor spine, P3).
 export * from "./playbook-runs.js";
+export * from "./session-stage-runs.js";
 // Playbook → automations composition (CONFIG) — first-class editable join that
 // promotes the read-only `automation --member_of--> playbook` link edges (0179).
 export * from "./playbook-automations.js";
