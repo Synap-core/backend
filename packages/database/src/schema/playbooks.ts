@@ -23,6 +23,7 @@ import {
   timestamp,
   integer,
   index,
+  primaryKey,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -85,6 +86,19 @@ export const playbooks = pgTable(
      * follows" (`services/playbooks/playbook-guidance.ts`).
      */
     guidance: jsonb("guidance").notNull().default([]),
+    /**
+     * WHO runs this playbook by default (0416) — a `PlaybookRunner`
+     * (`@synap/playbooks`): one choice or an ordered list of fallbacks (an
+     * agent, a role, an engine, Synap AI). NULL = nobody named. A choice made
+     * at Run beats it; it beats the person's remembered choice.
+     */
+    runner: jsonb("runner"),
+    /**
+     * The tools every step needs, by capability key (0416), checked against
+     * the runner's computer before a step is handed over. Each stage adds its
+     * own (`PlaybookStage.requires`).
+     */
+    requires: jsonb("requires").notNull().default([]),
     /**
      * Monotonic definition version (D3c). Bumped on a governed update that
      * changes a definition-affecting field (goalTemplate/stages/params/
@@ -172,3 +186,35 @@ export type Playbook = typeof playbooks.$inferSelect;
 export type NewPlaybook = typeof playbooks.$inferInsert;
 export const insertPlaybookSchema = createInsertSchema(playbooks);
 export const selectPlaybookSchema = createSelectSchema(playbooks);
+
+/**
+ * EVERY KEPT VERSION of a playbook's definition (0416) — what a step that IS a
+ * playbook (`PlaybookStage.uses`) runs when it is pinned at a version that is
+ * no longer the live one. Before it, a playbook kept only its current
+ * definition and an integer `version`; a pin could not be honoured.
+ *
+ * One row per (playbook, version), written in the same transaction as the
+ * write that sets `playbooks.version` (`recordPlaybookVersion`,
+ * @synap/api `services/playbooks/playbook-versions.ts`); a tripwire scans every
+ * writer of `playbooks`. Append-only: a version, once kept, never changes.
+ * `definition` holds the definition fields (`PLAYBOOK_VERSION_FIELDS`).
+ * Pods that booted before 0416 keep each playbook's version of that day.
+ */
+export const playbookVersions = pgTable(
+  "playbook_versions",
+  {
+    playbookId: uuid("playbook_id").notNull(),
+    version: integer("version").notNull(),
+    definition: jsonb("definition").$type<Record<string, unknown>>().notNull(),
+    /** Who wrote this version (the playbook's writer at the time). */
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.playbookId, table.version] }),
+  })
+);
+
+export type PlaybookVersionRow = typeof playbookVersions.$inferSelect;

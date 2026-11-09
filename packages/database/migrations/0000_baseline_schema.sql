@@ -5005,6 +5005,19 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL 
 -- what a later install is checked against — so it is reported, never rejected.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "guidance" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0411 (the rules a playbook follows, by kind or skill ref)
+-- 0416: who runs a playbook by default (a PlaybookRunner; NULL = nobody
+-- named), the tools every step needs (capability keys), and every kept
+-- version of a playbook's definition — what a step pinned with `uses` runs.
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "runner" jsonb;
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "requires" jsonb NOT NULL DEFAULT '[]'::jsonb;
+CREATE TABLE IF NOT EXISTS "playbook_versions" (
+  "playbook_id" uuid        NOT NULL,
+  "version"     integer     NOT NULL,
+  "definition"  jsonb       NOT NULL,
+  "created_by"  text,
+  "created_at"  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("playbook_id", "version")
+);
 -- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
 -- both seeded from the playbook and authorable afterwards; `stages` was the
 -- missing third, and without it a session running no playbook could not have

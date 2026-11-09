@@ -367,7 +367,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_set_start_page: {
     "pod-mcp": "synap_set_start_page",
-    "cp-connector": null,
+    "cp-connector": "pod__set_start_page",
   },
   synap_set_track_params: {
     "pod-mcp": "synap_set_track_params",
@@ -453,7 +453,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_update_track",
     "cp-connector": "pod__update_track",
   },
-  synap_update_view: { "pod-mcp": "synap_update_view", "cp-connector": null },
+  synap_update_view: {
+    "pod-mcp": "synap_update_view",
+    "cp-connector": "pod__update_view",
+  },
   synap_update_view_content: {
     "pod-mcp": "synap_update_view_content",
     "cp-connector": "pod__update_view_content",

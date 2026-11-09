@@ -210,7 +210,7 @@ Read them to answer "what is going on" before you list sessions one by one.
 
 ### A kind's dashboard
 
-A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`. An app outside the frame draws the same kind from `flow.of` (above); the cell bridge reads `lifecycle.board`, the board lens `flow.of` is built on.
+A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`. A board drawn from a playbook reads `flow.of` (above), in a frame through the bridge (`flow.of` op) or outside it through its own doors.
 
 ### Rules of thumb
 
@@ -1968,6 +1968,8 @@ GET /api/hub/memory?userId={userId}&query={keywords}
 
 No SQL joins. The graph is the join.
 
+**Narrow a list: `filters` and `includeFacets`.** `synap_get_entities`, Hub `GET /entities` and `GET /users/{id}/entities` share one grammar. `filters` is an array (on REST, its JSON in the query string) of `{field, operator, value}`, ANDed, at most 10. `field` is `title`, `preview`, `type`, `createdAt`, `updatedAt` or `properties.<slug>`; `operator` is `equals`, `not_equals`, `contains`, `not_contains`, `in`, `not_in`, `greater_than`, `greater_than_or_equal`, `less_than`, `less_than_or_equal`, `is_empty` or `is_not_empty`. A `properties.<slug>` clause needs `profileSlug` naming a kind that declares the property. An unknown or secret property, a malformed filter or too many clauses is an error, never an ignored filter. A filter only narrows what you already read. `includeFacets: true` adds each row's role facets (`facetSlugs`, and `facets` with overlay properties and status). Example: `synap_get_entities {profileSlug: "deal", filters: [{field: "properties.stage", operator: "equals", value: "won"}]}`.
+
 ---
 
 ## Multi-entity capture from free-form text
@@ -2962,13 +2964,14 @@ All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, p
 
 The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one goal.
 
-| Operation              | Params                                                                                                | Returns                                                                                                                                                                                                                              |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy` | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }` |
-| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                            |
-| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                     | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                      |
-| `attention.count`      | `profileSlug`, `trackId`                                                                              | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                   |
-| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`      | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                |
+| Operation              | Params                                                                                                                    | Returns                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy`                     | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }`                                                                                                                         |
+| `flow.of`              | `profileSlug` (a kind or a role, required), `trackId`, `windowDays`, `firstN` (cards per state, at most 50), `properties` | `{ profileSlug, profileKind, states: [{ key, label, category, owners: [{ playbookId, playbookName, stageKey, stageName }], count, stuck, cards: [{ id, name, since, stuck, workedBy, next }] }], unclassified, flows, totals, window, withheld }`: the states in declared order with the playbook stage that owns each. Draw a board from a playbook from it |
+| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                                    | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                                                                                                                                                    |
+| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                                         | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                                                                                                                                              |
+| `attention.count`      | `profileSlug`, `trackId`                                                                                                  | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                                                                                                                                           |
+| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`                          | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                                                                                                                                        |
 
 ```js
 const board = await SynapWidget.query("lifecycle.board", {
@@ -2981,6 +2984,41 @@ const month = await SynapWidget.query("lifecycle.throughput", {
   bucket: "month",
   count: 1,
 });
+```
+
+A board drawn from a playbook, in an HTML page (`window.synap.query`, the same ops): one column per state, in declared order, headed by the stage that owns it.
+
+```html
+<div id="board"></div>
+<script>
+  window.synap.query("flow.of", { profileSlug: "deal", firstN: 5 }).then(
+    (flow) => {
+      document.getElementById("board").replaceChildren(
+        ...flow.states.map((state) => {
+          const col = document.createElement("section");
+          const owner = state.owners[0];
+          col.append(
+            Object.assign(document.createElement("h3"), {
+              textContent: `${state.label} · ${state.count}`,
+            }),
+            Object.assign(document.createElement("p"), {
+              textContent: owner ? owner.stageName : "",
+            }),
+            ...state.cards.map((card) =>
+              Object.assign(document.createElement("div"), {
+                textContent: card.name ?? "",
+              })
+            )
+          );
+          return col;
+        })
+      );
+    },
+    (err) => {
+      document.getElementById("board").textContent = err.message; // a failure, never an empty board
+    }
+  );
+</script>
 ```
 
 A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.

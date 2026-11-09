@@ -99,6 +99,12 @@ import {
   playbookRequiredIntentsSchema,
   playbookGuidanceSchema,
 } from "../schemas/playbook-definition.js";
+import {
+  playbookRunnerSchema,
+  requiresSchema,
+} from "../schemas/playbook-runner.js";
+import { recordPlaybookVersion } from "../services/playbooks/playbook-versions.js";
+import { resolveStageUses } from "../services/playbooks/stage-uses.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
@@ -114,6 +120,7 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { definitionVersionChanged } from "../services/playbooks/definition-version.js";
+import { playbookSearchText } from "../services/playbooks/playbook-search-text.js";
 import {
   PINNED_ENTITY_IDS_KEY,
   explainPinnedIdRejection,
@@ -428,6 +435,10 @@ export const updateInputSchema = z.object({
   status: playbookStatusSchema.optional(),
   /** See `createInputSchema.scope`. */
   scope: playbookScopeSchema.optional(),
+  /** See `playbookDefinitionSchema.runner` — REPLACES it; `null` clears. */
+  runner: playbookRunnerSchema.nullable().optional(),
+  /** See `playbookDefinitionSchema.requires` — REPLACES the set. */
+  requires: requiresSchema.optional(),
   /**
    * A PATCH shallow-merged onto the row's `metadata` bag (keys not named are
    * kept) — the same contract views/skills/automations `.update` honour. It is
@@ -1469,7 +1480,8 @@ export async function matchPlaybooks(
       kind: "playbook" as const,
       id: p.id,
       name: p.name,
-      text: [p.goalTemplate],
+      // The SAME words synap_find's playbook arm ranks (one definition).
+      text: playbookSearchText(p),
       subjectProfileSlug:
         (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
         null,
@@ -1494,6 +1506,9 @@ export async function matchPlaybooks(
       name: candidate.row.name,
       scope,
       templateKind,
+      // When to use it, in full: the agent door cuts it
+      // (`compactPlaybookMatches`), a UI strip may show it whole.
+      description: candidate.row.description ?? null,
       goalTemplate: candidate.row.goalTemplate,
       subjectProfileSlug: candidate.subjectProfileSlug,
       // The workers it declares ("How often?" offers these; [] when none or
@@ -1913,6 +1928,15 @@ export const playbooksRouter = router({
         params: input.params,
         subjectProfile: input.subjectProfile,
       });
+      // A step that IS a playbook is checked and PINNED here, before the gate,
+      // so the proposal, its approval replay and the row carry the version.
+      input.stages = await resolveStageUses({
+        stages: input.stages,
+        selfId: input.proposedPlaybookId ?? null,
+        workspaceId: ctx.workspaceId ?? null,
+        visibility: () =>
+          scopedDb(AccessContext.from(ctx)).predicate(playbooks),
+      });
       // The id this playbook lands under, minted BEFORE the gate and handed to
       // it as `data.id`, so a proposal's `targetId` IS the playbook's id once it
       // is approved (the gate reads `data.id` as the target). See
@@ -1977,6 +2001,8 @@ export const playbooksRouter = router({
           executor: input.executor,
           status: input.status,
           scope: input.scope,
+          runner: input.runner,
+          requires: input.requires,
           contextSkill: input.contextSkill,
         },
       };
@@ -2076,35 +2102,45 @@ export const playbooksRouter = router({
       let created: Playbook;
       let reused = false;
       try {
-        const [row] = await database
-          .insert(playbooks)
-          .values({
-            id: playbookId,
-            workspaceId: ctx.workspaceId,
-            createdBy: input.agentUserId ?? ctx.userId,
-            name: input.name,
-            description: input.description ?? null,
-            goalTemplate: input.goalTemplate,
-            params: input.params ?? [],
-            inputStrategy: input.inputStrategy ?? { kind: "none" },
-            channelSpec: input.channelSpec ?? {},
-            expectedOutputs: input.expectedOutputs ?? [],
-            stages: input.stages ?? [],
-            criteria: input.criteria ?? [],
-            requiredIntents: input.requiredIntents ?? [],
-            guidance: input.guidance ?? [],
-            subjectProfile: input.subjectProfile ?? null,
-            schedule: input.schedule ?? null,
-            metadata: input.metadata ?? {},
-            executor: input.executor,
-            status: input.status ?? "draft",
-            // NULL, not a defaulted 'session': the column's documented reading
-            // is "NULL means session", and writing the default eagerly would
-            // make an unstated scope indistinguishable from a chosen one.
-            scope: input.scope ?? null,
-          })
-          .returning();
-        created = row as Playbook;
+        created = await database.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(playbooks)
+            .values({
+              id: playbookId,
+              workspaceId: ctx.workspaceId,
+              createdBy: input.agentUserId ?? ctx.userId,
+              name: input.name,
+              description: input.description ?? null,
+              goalTemplate: input.goalTemplate,
+              params: input.params ?? [],
+              inputStrategy: input.inputStrategy ?? { kind: "none" },
+              channelSpec: input.channelSpec ?? {},
+              expectedOutputs: input.expectedOutputs ?? [],
+              stages: input.stages ?? [],
+              criteria: input.criteria ?? [],
+              requiredIntents: input.requiredIntents ?? [],
+              guidance: input.guidance ?? [],
+              subjectProfile: input.subjectProfile ?? null,
+              schedule: input.schedule ?? null,
+              metadata: input.metadata ?? {},
+              executor: input.executor,
+              status: input.status ?? "draft",
+              // NULL, not a defaulted 'session': the column's documented reading
+              // is "NULL means session", and writing the default eagerly would
+              // make an unstated scope indistinguishable from a chosen one.
+              scope: input.scope ?? null,
+              runner: input.runner ?? null,
+              requires: input.requires ?? [],
+            })
+            .returning();
+          // Version 1 is kept with the row (0416): a step may pin it.
+          await recordPlaybookVersion(
+            tx,
+            row as Playbook,
+            input.agentUserId ?? ctx.userId
+          );
+          return row as Playbook;
+        });
       } catch (err) {
         if (!isUniqueViolation(err)) throw err;
         const winner = await findNonArchivedPlaybookByName(
@@ -2274,6 +2310,15 @@ export const playbooksRouter = router({
         },
         existing
       );
+      // 2c'. A step that IS a playbook: checked and PINNED before the gate
+      // (same reason as the create door).
+      input.stages = await resolveStageUses({
+        stages: input.stages,
+        selfId: existing.id,
+        workspaceId: existing.workspaceId,
+        visibility: () =>
+          scopedDb(AccessContext.from(ctx)).predicate(playbooks),
+      });
 
       // 2d. A pin list is an ordered whitelist on metadata. The request's
       // strategy wins over the stored one: writing ids onto a playbook that
@@ -2368,6 +2413,8 @@ export const playbooksRouter = router({
           ...(input.executor !== undefined ? { executor: input.executor } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.scope !== undefined ? { scope: input.scope } : {}),
+          ...(input.runner !== undefined ? { runner: input.runner } : {}),
+          ...(input.requires !== undefined ? { requires: input.requires } : {}),
           ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
         },
       });
@@ -2412,6 +2459,8 @@ export const playbooksRouter = router({
       if (input.executor !== undefined) set.executor = input.executor;
       if (input.status !== undefined) set.status = input.status;
       if (input.scope !== undefined) set.scope = input.scope;
+      if (input.runner !== undefined) set.runner = input.runner;
+      if (input.requires !== undefined) set.requires = input.requires;
       if (input.metadata !== undefined)
         set.metadata = {
           ...((existing.metadata as Record<string, unknown> | null) ?? {}),
@@ -2434,12 +2483,23 @@ export const playbooksRouter = router({
 
       let updated: Playbook;
       try {
-        const [row] = await database
-          .update(playbooks)
-          .set(set)
-          .where(eq(playbooks.id, input.id))
-          .returning();
-        updated = row as Playbook;
+        updated = await database.transaction(async (tx) => {
+          const [row] = await tx
+            .update(playbooks)
+            .set(set)
+            .where(eq(playbooks.id, input.id))
+            .returning();
+          // A new version is kept in the same transaction (0416): a step
+          // pinned at it can run it after the next edit.
+          if (set.version !== undefined) {
+            await recordPlaybookVersion(
+              tx,
+              row as Playbook,
+              input.agentUserId ?? ctx.userId
+            );
+          }
+          return row as Playbook;
+        });
       } catch (err) {
         // Name/status transition collided with another non-archived playbook
         // under playbooks_workspace_name_active_uq — surface as CONFLICT, not 500.

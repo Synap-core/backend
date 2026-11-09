@@ -203,9 +203,14 @@ export function grantHoldsAction(
   });
 }
 
+/** Is ONE scope pinned to some spaces, projects or objects? */
+function scopeIsPinned(scope: GrantScope): boolean {
+  return Boolean(scope.workspaceIds || scope.projectIds || scope.entityIds);
+}
+
 /** Does ONE scope read `subject` everywhere (every kind, no narrowing)? */
 function scopeReadsUnbounded(scope: GrantScope, subject: string): boolean {
-  if (scope.workspaceIds || scope.projectIds || scope.entityIds) return false;
+  if (scopeIsPinned(scope)) return false;
   if ((QUALIFIED_GRANT_SUBJECTS as readonly string[]).includes(subject))
     return allowedQualifiers(scope, subject, "read") === "all";
   return scope.permissions.some((p) =>
@@ -1160,6 +1165,48 @@ export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
 
 export const GRANT_DOOR_UNSUPPORTED =
   "This door does not support scoped keys yet: its reads are not bounded by a grant. Use a door listed in the API keys guide, or a key with the full-access '*' grant.";
+
+/**
+ * What a READ door asks of a grant that does not hold it, in the grant
+ * grammar (`installation.read`), or `null` when no permission would open it:
+ * the door is unclassified or refused, or it reads pod-wide (`READS`) and
+ * every scope of this key is pinned to some spaces, projects or objects.
+ */
+function readDoorMissing(
+  door: FencedReadDoor | undefined,
+  grant: KeyGrant
+): string[] | null {
+  if (!door || door.bound === "refused" || door.bound === "seamed") return null;
+  if (door.bound === "person") return [`${door.subject}.read`];
+  if (door.bound === "narrowed") return [`${door.subject}.${door.action}`];
+  const unpinned = grant.scopes.find((scope) => !scopeIsPinned(scope));
+  if (!unpinned || door.subjects.length === 0) return null;
+  return door.subjects
+    .filter((subject) => !scopeReadsUnbounded(unpinned, subject))
+    .map((subject) => `${subject}.read`);
+}
+
+/**
+ * Why `mcpToolAllowed` refused a scoped key this tool, in words the agent can
+ * act on. A door that DOES support scoped keys, refused because this key's
+ * grant lacks a permission, says which one: "does not support scoped keys
+ * yet" sent agents (and the person) looking for a missing feature when the
+ * fix was one permission on the key (`synap_list_installations` and
+ * `installation.read`, finding 92708a1e). Any other refusal keeps
+ * {@link GRANT_DOOR_UNSUPPORTED}.
+ */
+export function mcpToolRefusal(
+  toolName: string,
+  readOnly: boolean | undefined,
+  grant: KeyGrant
+): string {
+  const missing =
+    readOnly === true
+      ? readDoorMissing(MCP_READ_TOOL_DOORS[toolName], grant)
+      : null;
+  if (!missing || missing.length === 0) return GRANT_DOOR_UNSUPPORTED;
+  return `This key's grant does not let it call ${toolName}: it needs ${missing.map((p) => `'${p}'`).join(" and ")}. The person can add ${missing.length > 1 ? "them" : "it"} to this key's permissions, or give it a key that has ${missing.length > 1 ? "them" : "it"}. Nothing was read.`;
+}
 
 /**
  * Hub REST doors (every method, relative to /api/hub) whose EFFECT spans the

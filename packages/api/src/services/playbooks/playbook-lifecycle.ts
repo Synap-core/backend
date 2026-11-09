@@ -82,6 +82,7 @@ import {
   PARAM_SLOT_CIRCUMSTANCE,
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
+import { recordPlaybookVersion } from "./playbook-versions.js";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
 import {
   withBirthStageSlots,
@@ -758,8 +759,10 @@ export async function instantiateSessionRow(
 
   await createLinks(edges);
 
-  // Recall for the run that just started (the ONE funnel behind every run
-  // door). Background, never fails the run; the sweep is the floor.
+  // The ONE funnel behind every run door. The runner skips a playbook run
+  // (`skipped: playbook_run`, founder 9 Nov 2026: runs recall on demand), so
+  // this only stamps the skip: no retrieval, no room post. Background, never
+  // fails the run; the sweep is the floor.
   void enqueueSessionRecall(session.id, "start");
 
   return session as FocusSession;
@@ -886,30 +889,34 @@ export async function promoteSessionToPlaybook(
   let playbook: Playbook;
   let reused = false;
   try {
-    const [row] = await db
-      .insert(playbooks)
-      .values({
-        workspaceId: session.workspaceId,
-        createdBy: input.userId,
-        name,
-        description: input.description ?? null,
-        goalTemplate,
-        expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
-        // The session's criteria become the playbook's own — STRUCTURE only
-        // (key/statement/required/check). Evaluations are this run's verdicts,
-        // not the template's; `stageKey` is dropped because promote copies no
-        // stages, so a stage-bound criterion would point at nothing.
-        criteria: readCriteria(session.criteria).map(
-          ({ stageKey: _stageKey, ...structure }) => structure
-        ),
-        executor: "is-agent",
-        status: "draft",
-        subjectProfile,
-        // Lineage lives in the `session → promoted_to → playbook` edge below — the
-        // single source of truth — not duplicated here.
-      })
-      .returning();
-    playbook = row as Playbook;
+    playbook = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(playbooks)
+        .values({
+          workspaceId: session.workspaceId,
+          createdBy: input.userId,
+          name,
+          description: input.description ?? null,
+          goalTemplate,
+          expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
+          // The session's criteria become the playbook's own — STRUCTURE only
+          // (key/statement/required/check). Evaluations are this run's verdicts,
+          // not the template's; `stageKey` is dropped because promote copies no
+          // stages, so a stage-bound criterion would point at nothing.
+          criteria: readCriteria(session.criteria).map(
+            ({ stageKey: _stageKey, ...structure }) => structure
+          ),
+          executor: "is-agent",
+          status: "draft",
+          subjectProfile,
+          // Lineage lives in the `session → promoted_to → playbook` edge below — the
+          // single source of truth — not duplicated here.
+        })
+        .returning();
+      // Version 1 is kept with the row (0416): a step may pin it.
+      await recordPlaybookVersion(tx, row as Playbook, input.userId);
+      return row as Playbook;
+    });
   } catch (err) {
     // 0227: concurrent promote / same-name race — return the surviving non-archived
     // playbook instead of failing the promote door.

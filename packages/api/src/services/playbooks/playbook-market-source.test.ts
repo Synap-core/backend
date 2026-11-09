@@ -341,3 +341,141 @@ describe("planPlaybookReconcile", () => {
     expect(p.patch.inputStrategy).toBeUndefined();
   });
 });
+
+/**
+ * WHO RUNS IT is the pod's (founder via the lead, 9 Nov 2026): a template
+ * installs its runners once; a later template change to a playbook's or a
+ * step's `runner` is HELD (a keep-or-drop line), never written over the pod's
+ * choice. `requires` and `uses` stay the template's (what the step IS).
+ * Discriminating rows: a pod-set runner + a template that changes the runner
+ * AND other stage fields (rules out "runner held by freezing all of stages");
+ * an untouched pod (live = old template) still held (rules out "only an edited
+ * runner is protected"); a step the template ADDS takes its runner (rules out
+ * "every stage runner is the pod's, even a new one").
+ */
+describe("planPlaybookReconcile — runners are the pod's", () => {
+  const V1 = {
+    name: "Edit a video",
+    goalTemplate: "Edit the take.",
+    runner: { engine: "claude-code" },
+    requires: ["media-ffmpeg"],
+    stages: [
+      {
+        key: "render",
+        name: "Render",
+        category: "started",
+        runner: { role: "video-render" },
+        requires: ["media-ffmpeg"],
+      },
+    ],
+  };
+  const V2 = {
+    ...V1,
+    runner: { engine: "hermes" },
+    requires: ["media-ffmpeg", "media-transcribe"],
+    stages: [
+      {
+        key: "render",
+        name: "Render the cut",
+        category: "started",
+        runner: { role: "colorist" },
+        requires: ["media-ffmpeg", "media-color"],
+      },
+      {
+        key: "sound",
+        name: "Sound",
+        category: "started",
+        runner: { role: "sound-mix" },
+      },
+    ],
+  };
+  const stampedAt = (
+    tpl: unknown,
+    over: Record<string, unknown>
+  ): Record<string, unknown> => {
+    const base = baselineOf(tpl) as Record<string, unknown>;
+    return row({
+      ...base,
+      metadata: {
+        marketSource: {
+          packageSlug: "grants",
+          packageVersion: "h-1",
+          installedAt: "x",
+          baseline: base,
+        },
+      },
+      ...over,
+    });
+  };
+  const POD_MAC = { role: "video-render", computer: "mac" };
+
+  it("a runner the pod set survives a catalog update; the change is a held line", () => {
+    const p = plan(
+      stampedAt(V1, {
+        runner: { agentId: "agent-mac" },
+        stages: [{ ...V1.stages[0], runner: POD_MAC }],
+      }),
+      V2
+    );
+    expect(p.patch).not.toHaveProperty("runner");
+    expect(p.held.sort()).toEqual(["runner", "stages.render.runner"]);
+    // The template's other changes still reach the pod…
+    expect(p.patch.requires).toEqual(["media-ffmpeg", "media-transcribe"]);
+    const stages = p.patch.stages as Array<Record<string, unknown>>;
+    expect(stages.map((s) => s.key)).toEqual(["render", "sound"]);
+    expect(stages[0]).toMatchObject({
+      name: "Render the cut",
+      requires: ["media-ffmpeg", "media-color"],
+      // …and the pod's runner stays on its step.
+      runner: POD_MAC,
+    });
+    // A step the template added takes the template's runner.
+    expect(stages[1]!.runner).toEqual({ role: "sound-mix" });
+    // The baseline keeps the template's OLD runners, so the line stays offered.
+    const ms = p.metadata!.marketSource as {
+      baseline: Record<string, unknown>;
+    };
+    expect(ms.baseline.runner).toEqual({ engine: "claude-code" });
+    expect(
+      (ms.baseline.stages as Array<Record<string, unknown>>)[0]!.runner
+    ).toEqual({ role: "video-render" });
+  });
+
+  it("a pod that kept the template's runner is not overwritten either: held, not applied", () => {
+    const p = plan(stampedAt(V1, {}), V2);
+    expect(p.patch).not.toHaveProperty("runner");
+    expect(p.held.sort()).toEqual(["runner", "stages.render.runner"]);
+    const stages = p.patch.stages as Array<Record<string, unknown>>;
+    expect(stages[0]!.runner).toEqual({ role: "video-render" });
+  });
+
+  it("the next pass offers the same lines again until a person applies them", () => {
+    const first = plan(stampedAt(V1, {}), V2);
+    const after = row({
+      ...(stampedAt(V1, {}) as Record<string, unknown>),
+      ...first.patch,
+      metadata: first.metadata,
+    });
+    const again = plan(after, V2);
+    expect(again.held.sort()).toEqual(["runner", "stages.render.runner"]);
+    expect(again.patch).toEqual({});
+  });
+
+  it("a runner the template did not change is no line", () => {
+    const p = plan(stampedAt(V1, { runner: { agentId: "agent-mac" } }), {
+      ...V1,
+      goalTemplate: "Edit the take, then export.",
+    });
+    expect(p.held).toEqual([]);
+    expect(p.patch).toEqual({ goalTemplate: "Edit the take, then export." });
+  });
+
+  it("adoption fills an empty runner from the template, and holds one the pod set", () => {
+    expect(plan(row({ stages: V1.stages }), V1).patch.runner).toEqual({
+      engine: "claude-code",
+    });
+    const held = plan(row({ runner: "synap_ai", stages: V1.stages }), V1);
+    expect(held.patch).not.toHaveProperty("runner");
+    expect(held.held).toEqual(["runner"]);
+  });
+});

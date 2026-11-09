@@ -69,6 +69,8 @@ import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../../../services/profiles/renderer-slots.js";
+// What a renderer can be bound to — the ONE target vocabulary.
+import { RENDERER_TARGET_KINDS } from "../../../services/renderers/renderer-targets.js";
 // The catalog names `synap_find` accepts — SPREAD from the service that owns
 // them, never re-typed, so a fourth catalog cannot be advertised without
 // existing (and vice versa). Same idiom as ABSTRACT_VERBS above.
@@ -407,12 +409,22 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     ),
     forEach: deriveJsonSchema(
       playbookStageSchema.shape.forEach.unwrap(),
-      "DECLARED, advisory until the executor lands: run this stage once per item of a collection, {over: '<param or dotted path>', as?: '<item name>', max?: n (1-200)}. Today a run executes the stage ONCE and ignores it; do not rely on a fan-out."
+      "Advisory, not run yet: once per item, {over: '<param or dotted path>', as?, max? (1-200)}. Today the stage runs once; do not rely on a fan-out."
     ),
     when: deriveJsonSchema(
       playbookStageSchema.shape.when.unwrap(),
-      "DECLARED, advisory until the executor lands: run this stage only when {param: '<param or dotted path>', equals?: string|number|boolean|null, exists?: boolean} holds. Today a run executes the stage unconditionally and ignores it; do not rely on a skip."
+      "Advisory, not run yet: only when {param: '<param or dotted path>', equals? | exists?} holds. Today the stage always runs; do not rely on a skip."
     ),
+  },
+  // Kept minimal (token budget): the shapes are taught on demand in
+  // `system/synap/processes` ("Who runs it"); `playbooks.create` / `.update`
+  // validate them for real (`playbookRunnerSchema`, `requiresSchema`).
+  runner: {
+    description: "Who runs it (shapes: load_skill system/synap/processes).",
+  },
+  requires: {
+    type: "array",
+    items: { type: "string" },
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
@@ -441,7 +453,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -3598,24 +3610,38 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | card | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
+          "Escalation L4: bind a cell that already proved itself as a renderer. For a kind's records (profileSlug; slots list|detail|card|dashboard) or ONE capability, playbook or view (target {kind,id}; slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
         inputSchema: {
           type: "object",
           properties: {
             profileSlug: {
               type: "string",
-              description: "Slug of the profile to bind the renderer on.",
+              description: "A kind's records (profile slug).",
+            },
+            target: {
+              type: "object",
+              description:
+                "One capability, playbook or view: {kind, id} (or {kind:'profile', slug}).",
+              properties: {
+                kind: { type: "string", enum: [...RENDERER_TARGET_KINDS] },
+                id: { type: "string" },
+                slug: { type: "string" },
+              },
+              required: ["kind"],
             },
             slot: {
               type: "string",
               enum: [...RENDERER_SLOTS],
               description:
-                "Which renderer slot to set. 'card' = the entity's small embeddable block (this is the ONLY door that reaches it besides Renderer Studio in Builder mode — most personalization requests from a user are this slot, not 'detail').",
+                "'card' = the entity's small embeddable block (most personalization asks are this slot).",
             },
             cellKey: {
               type: "string",
-              description:
-                "The cell typeKey to bind (e.g. from synap_create_cell).",
+              description: "Cell typeKey (synap_create_cell).",
+            },
+            clear: {
+              type: "boolean",
+              description: "Unbind the slot (no cellKey).",
             },
             props: {
               type: "object",
@@ -3625,11 +3651,11 @@ export const tools = {
               type: "string",
               enum: [...RENDERER_SCOPES],
               description:
-                "'workspace' (default) = per-workspace overlay; 'pod' = profile system default. Workspace scope requires workspaceId.",
+                "'workspace' (default, needs workspaceId); 'pod' = everywhere; 'user' = only you.",
             },
             workspaceId: {
               type: "string",
-              description: "Workspace UUID (required for scope 'workspace').",
+              description: "Workspace UUID.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -3642,7 +3668,7 @@ export const tools = {
                 "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
-          required: ["profileSlug", "slot", "cellKey"],
+          required: ["slot"],
         },
       },
       {
@@ -3730,7 +3756,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal template') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal template') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3763,7 +3789,7 @@ export const tools = {
               type: "number",
               default: 5,
               description:
-                "Candidates to return, 1–20 (default 5). Rows carried only by a word many playbooks share are dropped; `goalTemplate` is cut at 200 chars (`synap_list_playbooks` has the whole).",
+                "Candidates to return, 1–20 (default 5). Rows carried only by a word many playbooks share are dropped; `description` and `goalTemplate` are cut (`synap_list_playbooks` has the whole).",
             },
           },
           required: [],
@@ -3821,6 +3847,8 @@ export const tools = {
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
+            runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
+            requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             sessionId: {
               type: "string",
               description:
@@ -3862,6 +3890,8 @@ export const tools = {
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
+            runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
+            requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             subjectProfileSlug: {
               type: "string",
               description:

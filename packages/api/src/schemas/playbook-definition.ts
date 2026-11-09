@@ -46,6 +46,11 @@ import {
   playbookSubjectProfileSchema,
 } from "./playbook-process.js";
 import { sessionCriteriaSchema } from "./session-criteria.js";
+import {
+  playbookRunnerSchema,
+  requiresSchema,
+  runnerNamesAgentId,
+} from "./playbook-runner.js";
 import { playbookScheduleInputSchema } from "./playbook-schedule.js";
 
 export const playbookExecutorSchema = z.enum([
@@ -263,6 +268,15 @@ export const playbookDefinitionSchema = z.object({
   executor: playbookExecutorSchema.optional(),
   status: playbookStatusSchema.optional(),
   scope: playbookScopeSchema.optional(),
+  /**
+   * WHO runs this playbook by default — see `PlaybookRunner`
+   * (`schemas/playbook-runner.ts`). A choice made at Run beats it; it beats
+   * the person's remembered choice (founder via lead, 9 Nov 2026). `null`
+   * clears it. Absent ⇒ nobody named, as before.
+   */
+  runner: playbookRunnerSchema.nullable().optional(),
+  /** The tools every step of it needs, by capability key — see `PlaybookStage.requires`. */
+  requires: requiresSchema.optional(),
 });
 
 /** A parsed playbook definition (output side — defaults applied by the door). */
@@ -278,11 +292,44 @@ export type PlaybookDefinition = z.infer<typeof playbookDefinitionSchema>;
  * Also what the boot reconcile parses a template element through, so the
  * reconcile's `desired` is normalized exactly as the install's baseline was.
  */
-export const packagePlaybookDefinitionSchema = playbookDefinitionSchema.extend({
-  grants: z.array(z.string()).optional(),
-  status: playbookStatusSchema.default("active"),
-  executor: playbookExecutorSchema.default("is-agent"),
-});
+const PACKAGE_AGENT_ID_MESSAGE =
+  "A package cannot name one agent by id (it names an agent on one pod): use { role } or { engine } instead.";
+
+export const packagePlaybookDefinitionSchema = playbookDefinitionSchema
+  .extend({
+    grants: z.array(z.string()).optional(),
+    status: playbookStatusSchema.default("active"),
+    executor: playbookExecutorSchema.default("is-agent"),
+  })
+  .superRefine((def, ctx) => {
+    // A package travels to other pods: an agent id or a playbook id names
+    // something on THIS pod only. A role or an engine is portable; a step
+    // that is a playbook is not carried by a package yet.
+    if (runnerNamesAgentId(def.runner)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["runner"],
+        message: PACKAGE_AGENT_ID_MESSAGE,
+      });
+    }
+    (def.stages ?? []).forEach((stage, index) => {
+      if (runnerNamesAgentId(stage.runner)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["stages", index, "runner"],
+          message: PACKAGE_AGENT_ID_MESSAGE,
+        });
+      }
+      if (stage.uses !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["stages", index, "uses"],
+          message:
+            "A package cannot carry a step that is a playbook yet: `uses` names a playbook on this pod. Create the playbook on the pod instead.",
+        });
+      }
+    });
+  });
 
 export type PackagePlaybookDefinition = z.infer<
   typeof packagePlaybookDefinitionSchema

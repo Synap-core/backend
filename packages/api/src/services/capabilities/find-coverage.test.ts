@@ -79,6 +79,7 @@ vi.mock("./capability-registry.js", () => ({
 }));
 vi.mock("./intent-registry.js", () => ({
   listIntentSlugs: async () => [],
+  listIntentRows: async () => [],
 }));
 const matchSessionTemplate = vi.fn();
 vi.mock("../focus-sessions/match-session-template.js", async (orig) => ({

@@ -22,6 +22,10 @@ export const DEFINITION_VERSION_FIELDS = [
   // (A new VERSION of a referenced rule does not bump this; the run records
   // that through `guidance.used`, its content hashes.)
   "guidance",
+  // Who runs it and the tools it needs (0416): a changed runner changes who a
+  // run is handed to, a changed requires what is checked before it is.
+  "runner",
+  "requires",
 ] as const;
 
 export function definitionVersionChanged(
