@@ -76,6 +76,22 @@ export const relationTypeSlugSchema = z
       'relationToSubject must be a relation type slug (lowercase, e.g. "made_for")',
   });
 
+/** See `PlaybookStageEndAsk`: label, facts, what moves, the ask, its options source. */
+export const stageEndAskSchema = z
+  .strictObject({
+    label: z.string().trim().min(1).max(200),
+    why: z.string().trim().min(1).max(500).optional(),
+    unblocks: z.string().trim().min(1).max(200).optional(),
+    ask: AskSchema,
+    optionsFrom: z
+      .strictObject({ relation: relationTypeSlugSchema })
+      .optional(),
+  })
+  .refine((e) => !e.optionsFrom || e.ask.mode === "choose", {
+    message: "endAsk.optionsFrom fills only a choose ask",
+    path: ["optionsFrom"],
+  });
+
 const IDENTIFIER_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** A path segment that reaches the prototype chain when resolved against an object. */
@@ -296,6 +312,14 @@ export const playbookStageSchema = z.looseObject({
   uses: stageUsesSchema.optional(),
   /** The tools this step needs, by capability key — see `PlaybookStage.requires`. */
   requires: requiresSchema.optional(),
+  /**
+   * The question the POD asks the person when a run's turn ends this stage —
+   * see `PlaybookStageEndAsk` (`services/runs/stage-end-ask.ts` raises it).
+   * STRICT like `gate`: it is a control, so a misspelled key must not survive
+   * as a stage that looks like it asks and never does. The ask is parsed by
+   * the ONE ask schema; `optionsFrom` fills only a `choose`.
+   */
+  endAsk: stageEndAskSchema.optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -364,6 +388,9 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   "runner",
   "uses",
   "requires",
+  // Raised by the pod when a session RUN's turn ends the stage
+  // (`services/runs/stage-end-ask.ts`); a track stage session has no run turn.
+  "endAsk",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =
