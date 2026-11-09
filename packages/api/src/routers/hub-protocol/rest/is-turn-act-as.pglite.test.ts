@@ -28,7 +28,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -220,14 +228,21 @@ beforeAll(async () => {
      values ($1,$2,$3,'hub_inbound',true),($4,$5,$6,'hub_inbound',true)`,
     [LAUNCHER_KEY, LAUNCHER, PERSON, randomUUID(), OTHER_AGENT, OTHER_PERSON]
   );
+  // The launcher's key carries the explicit full access a connected agent's
+  // key gets (deny by default otherwise).
+  await q(
+    `insert into grants (id, api_key_id, principal_user_id, on_behalf_of, permissions, created_by)
+     values ($1,$2,$3,$4,'{*}'::text[],$4)`,
+    [randomUUID(), LAUNCHER_KEY, LAUNCHER, PERSON]
+  );
   await q(
     `insert into pod_members (id, user_id, pod_role) values ($1,$2,'owner')`,
     [randomUUID(), PERSON]
   );
-  await q(`insert into workspaces (id, name, owner_id) values ($1,'Brand',$2)`, [
-    BRAND,
-    PERSON,
-  ]);
+  await q(
+    `insert into workspaces (id, name, owner_id) values ($1,'Brand',$2)`,
+    [BRAND, PERSON]
+  );
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role)
      values ($1,$2,$3,'owner'),($4,$2,$5,'editor')`,
@@ -304,7 +319,14 @@ async function send(
     },
     body: json,
   });
-  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  const text = await res.text();
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+  } catch {
+    parsed = { raw: text };
+  }
+  return { status: res.status, body: parsed };
 }
 
 /** The two writes the brand-asset run made, as the IS sends them. */
