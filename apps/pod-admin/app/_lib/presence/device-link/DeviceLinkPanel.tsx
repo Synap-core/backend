@@ -41,7 +41,8 @@ export function DeviceLinkPanel({
   onCancel: () => void;
 }) {
   const t = useT(CATALOGS);
-  const { state, now, ask, readAgain, create, cancel } = useDeviceLink();
+  const { state, now, ask, readAgain, create, cancel, preparing } =
+    useDeviceLink();
   const leave = () => {
     cancel();
     onCancel();
@@ -66,6 +67,7 @@ export function DeviceLinkPanel({
         onAsk={() => void ask()}
         onReadAgain={readAgain}
         onCreate={(placement) => void create(placement)}
+        preparing={preparing}
         onDone={onDone}
       />
       {state.kind !== "done" ? (
@@ -85,6 +87,7 @@ function PanelBody({
   onAsk,
   onReadAgain,
   onCreate,
+  preparing,
   onDone,
 }: {
   state: LinkState;
@@ -92,6 +95,8 @@ function PanelBody({
   onAsk: () => void;
   onReadAgain: () => void;
   onCreate: Parameters<typeof PasskeyPlacementMenu>[0]["onChoose"];
+  /** The settings flow is still being read: the press could not open the prompt yet. */
+  preparing: boolean;
   onDone: () => void;
 }) {
   const t = useT(CATALOGS);
@@ -182,9 +187,25 @@ function PanelBody({
                 state.detail
               )
             : null}
+          {state.kind === "approved" && state.closed ? (
+            <div className="flex flex-col items-start gap-1">
+              <p role="status" className="text-[12.5px] text-foreground/70">
+                {t("panel.create.closed")}
+              </p>
+              {state.closed.detail ? (
+                <CopyButton
+                  text={state.closed.detail}
+                  label={t("panel.copyDetails")}
+                  variant="light"
+                  ariaLabel={t("panel.copyDetails.aria")}
+                />
+              ) : null}
+            </div>
+          ) : null}
           <PasskeyPlacementMenu
             button={{ size: "sm", radius: "md", color: "primary" }}
-            isLoading={state.kind === "creating"}
+            isLoading={state.kind === "creating" || preparing}
+            isDisabled={preparing}
             onChoose={onCreate}
           >
             {t("panel.create")}
