@@ -313,6 +313,10 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "security.presence_sensitivity_changed": "work-broke",
   // "I lost my passkey": every device hears it, so it is cancelled in time.
   "security.presence_recovery": "work-broke",
+  // "Add this device" (founder, 9 Nov 2026): a new device waits on an
+  // approval that lapses in 5 minutes, or it is someone else's and must be
+  // declined: it breaks through Focus like the other security notices.
+  "security.device_link_requested": "work-broke",
   // Not a 10-second decision: in-app / Home only.
   "connector.sync.failed": null,
   "inbox.mention": null,

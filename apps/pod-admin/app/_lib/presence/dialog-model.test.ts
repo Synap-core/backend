@@ -260,3 +260,109 @@ describe("a prompt that did not sign, past a password-manager extension", () => 
     setAmbientCatalogLocale("en");
   });
 });
+
+describe("presenceDialogView: Set up this device (Add this device, 9 Nov 2026)", () => {
+  const failedPrompt = {
+    ...ready(),
+    note: "Nothing was confirmed.",
+    promptFailed: true,
+  } as const;
+
+  it("offered once the passkey prompt did not sign here", () => {
+    const view = presenceDialogView({
+      phase: failedPrompt,
+      passkeySupported: true,
+      setUpAllowed: true,
+    });
+    expect(view.setUp).toBe(true);
+    // Confirm stays: the person may try the prompt again.
+    expect(view.primary).toBe("confirm");
+    expect(view.panel).toBe(false);
+  });
+
+  it("offered when no passkey of this pod reaches this browser, beside Add a passkey and beside the code", () => {
+    expect(
+      presenceDialogView({
+        phase: ready({ passkey: false, label: ["iPhone"] }),
+        passkeySupported: true,
+        setUpAllowed: true,
+      }).setUp
+    ).toBe(true);
+    const code = presenceDialogView({
+      phase: ready({ passkey: false }),
+      passkeySupported: true,
+      typed: true,
+      setUpAllowed: true,
+    });
+    expect(code.codeField).toBe(true);
+    expect(code.setUp).toBe(true);
+  });
+
+  it("not offered before the prompt ran, while it runs, nor on a failed read", () => {
+    expect(
+      presenceDialogView({
+        phase: ready(),
+        passkeySupported: true,
+        setUpAllowed: true,
+      }).setUp
+    ).toBe(false);
+    expect(
+      presenceDialogView({
+        phase: { ...ready(), kind: "signing" },
+        passkeySupported: true,
+        setUpAllowed: true,
+      }).setUp
+    ).toBe(false);
+    expect(
+      presenceDialogView({
+        phase: { kind: "read-failed", detail: null },
+        passkeySupported: true,
+        setUpAllowed: true,
+      }).setUp
+    ).toBe(false);
+  });
+
+  it("GUARDRAIL: never offered while approving a device link itself, or where no passkey can be created", () => {
+    expect(
+      presenceDialogView({
+        phase: failedPrompt,
+        passkeySupported: true,
+        setUpAllowed: false,
+      }).setUp
+    ).toBe(false);
+    expect(
+      presenceDialogView({
+        phase: ready({ passkey: false }),
+        passkeySupported: true,
+      }).setUp
+    ).toBe(false);
+  });
+
+  it("open: the panel is the body, with no status, notice, primary or Relay line", () => {
+    const view = presenceDialogView({
+      phase: { ...ready({ passkey: false, label: ["iPhone"] }) },
+      passkeySupported: true,
+      setUpAllowed: true,
+      setUpOpen: true,
+    });
+    expect(view.panel).toBe(true);
+    expect(view.primary).toBeNull();
+    expect(view.secondary).toBeNull();
+    expect(view.notice).toBeNull();
+    expect(view.status).toBeNull();
+    expect(view.relayDevice).toBeNull();
+    expect(view.codeField).toBe(false);
+    expect(view.setUp).toBe(false);
+  });
+
+  it("closed again (the passkey was created): every existing state is back", () => {
+    const view = presenceDialogView({
+      phase: ready(),
+      passkeySupported: true,
+      setUpAllowed: true,
+      setUpOpen: false,
+    });
+    expect(view.panel).toBe(false);
+    expect(view.primary).toBe("confirm");
+  });
+});

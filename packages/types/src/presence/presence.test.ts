@@ -27,6 +27,10 @@ import {
   SENSITIVE_ACTION_TOKENS,
   sensitiveActionTitle,
   type SensitiveActionPath,
+  DEVICE_LINK_REFUSAL_CODES,
+  DEVICE_LINK_STATUSES,
+  DEVICE_LINK_TTL_SECONDS,
+  presenceSessionKey,
 } from "./index.js";
 import { catalogProblems } from "../i18n/index.js";
 import { ACTION_VERBS } from "../vocabulary/index.js";
@@ -364,5 +368,33 @@ describe("the one wording of proof of presence", () => {
       expect(where).toContain(place);
     }
     expect(PRESENCE_WORDS.en["presence.off"]).toBe("Off");
+  });
+});
+
+describe("Add this device (founder, 9 Nov 2026)", () => {
+  it("approving a new device is a setup decision, named by its request id", () => {
+    expect(PRESENCE_REQUEST_KINDS.device_link).toBe("setup");
+    expect(presenceRequestSubject("device_link", "r1")).toBe("device_link:r1");
+    expect(DEVICE_LINK_TTL_SECONDS).toBe(300);
+    // `expired` is derived when read, never stored.
+    expect(DEVICE_LINK_STATUSES).not.toContain("expired");
+  });
+
+  it("its refusals are not presence refusals: no proof would change them", () => {
+    expect(DEVICE_LINK_REFUSAL_CODES).toHaveLength(5);
+    for (const code of DEVICE_LINK_REFUSAL_CODES) {
+      expect(isPresenceCode(code)).toBe(false);
+    }
+  });
+
+  it("a grant is bound to one session: a browser's and a device's keys never collide, and no id is no key", () => {
+    expect(presenceSessionKey("kratos", "s1")).toBe("kratos:s1");
+    expect(presenceSessionKey("device", "s1")).toBe("device:s1");
+    expect(presenceSessionKey("kratos", "s1")).not.toBe(
+      presenceSessionKey("device", "s1")
+    );
+    for (const missing of [null, undefined, "", "   "]) {
+      expect(presenceSessionKey("kratos", missing)).toBeNull();
+    }
   });
 });

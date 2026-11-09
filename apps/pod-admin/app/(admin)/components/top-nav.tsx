@@ -29,6 +29,7 @@ import {
 import {
   ArrowUpRight,
   ExternalLink,
+  KeyRound,
   LogOut,
   Menu,
   Search,
@@ -38,6 +39,7 @@ import {
 import { publicPodUrl } from "../../../lib/public-pod-url";
 import { openIn, type AccountPage } from "../../../lib/open-in";
 import { useSecurityNudge } from "./recovery-codes-nudge";
+import { nudgeMarks } from "../../_lib/presence/ways-in/ways-in-model";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { en, fr } from "./copy";
 import { useConsoleRole } from "./side-nav-role";
@@ -84,8 +86,10 @@ export function TopNav({
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
   // A persistent ⚠ until the security nudge's ask is met: a first or second
   // way to confirm it's you under `enforce`, else recovery codes (Home's
-  // card is skippable; this mark is not).
+  // card is skippable; this mark is not). The offer to set up a passkey on
+  // this device is said in the menu, quietly, and never lights the mark.
   const nudge = useSecurityNudge();
+  const marked = nudgeMarks(nudge);
 
   const handleSignOut = async () => {
     try {
@@ -190,7 +194,7 @@ export function TopNav({
               aria-label={nudge ? t(`user.menu.${nudge}`) : t("user.menu")}
               className="relative ml-1 p-0"
             >
-              {nudge ? (
+              {marked ? (
                 <span
                   aria-hidden
                   className="absolute right-0 top-0 z-10 h-2 w-2 rounded-full bg-warning ring-2 ring-background"
@@ -226,11 +230,20 @@ export function TopNav({
                   them. "Handed off" only counts if a door exists. These live on
                   the landing site because a pod cannot host its own billing. */}
               <a
-                href="/settings/security"
+                href={
+                  nudge === "this-device"
+                    ? "/settings/security#passkeys"
+                    : "/settings/security"
+                }
                 className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 {t("user.security")}
-                {nudge ? (
+                {nudge === "this-device" ? (
+                  <span className="flex items-center gap-1 text-[11px] text-foreground/60">
+                    <KeyRound className="h-3.5 w-3.5" />
+                    {t("user.mark.this-device")}
+                  </span>
+                ) : nudge ? (
                   <span className="flex items-center gap-1 text-[11px] text-warning">
                     <ShieldAlert className="h-3.5 w-3.5" />
                     {t(`user.mark.${nudge}`)}
