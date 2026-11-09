@@ -68,6 +68,11 @@ vi.mock("@synap/database", async (importOriginal) => {
     messages: mk("messages"),
     getWorkspaceMembership: vi.fn(),
     insertChannelMessage: vi.fn(),
+    // The kind scope (door) is stubbed to a marker; the floor is the mock's.
+    profileSlugScopeConditionFromRows: vi.fn(() => ({
+      op: "eq",
+      val: "profile-scope",
+    })),
   };
 });
 
@@ -84,7 +89,9 @@ vi.mock("../../utils/workspace-membership.js", async (importOriginal) => ({
   resolveFacetVisibilityScope: vi.fn().mockResolvedValue({ userId: "u1" }),
 }));
 vi.mock("../../utils/assert-known-profile-slug.js", () => ({
-  assertKnownProfileSlug: vi.fn(),
+  assertKnownProfileSlug: vi
+    .fn()
+    .mockResolvedValue([{ id: "profile-snippet", profileKind: "kind" }]),
 }));
 vi.mock("../../utils/resolve-or-create-channel.js", () => ({
   resolveOrCreateChannel: vi.fn(),

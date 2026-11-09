@@ -61,6 +61,7 @@ const B = randomUUID();
 const A_SNIPPET = randomUUID();
 const B_SNIPPET = randomUUID();
 const A_SUBJECT = randomUUID();
+const A_ROLE_SNIPPET = randomUUID();
 
 async function insertEntity(opts: {
   id: string;
@@ -117,6 +118,25 @@ beforeAll(async () => {
     status: "current",
     properties: BODY,
   });
+  // A snippet WORN AS A ROLE by another kind: primary type "note", facet
+  // `snippet` (a role twin of the kind row above).
+  const roleProfile = randomUUID();
+  await q(
+    `insert into profiles (id, slug, display_name, profile_kind) values ($1, 'snippet', 'snippet', 'role')`,
+    [roleProfile]
+  );
+  await insertEntity({
+    id: A_ROLE_SNIPPET,
+    user: A,
+    type: "note",
+    title: "A's role-worn snippet",
+    status: "current",
+    properties: { body: "Role {x}", variables: [{ name: "x" }] },
+  });
+  await q(
+    `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id) values ($1, $2, $3, $4, null)`,
+    [randomUUID(), A_ROLE_SNIPPET, roleProfile, A]
+  );
   await insertEntity({
     id: A_SUBJECT,
     user: A,
@@ -141,6 +161,14 @@ describe("snippet.render through the real access floor", () => {
       subjectEntityId: A_SUBJECT,
     });
     expect(out.text).toBe("Hi Grace!");
+  });
+
+  it("finds a snippet worn as a role by another kind (not a kind-blind read)", async () => {
+    const out = await render(A, {
+      snippetId: A_ROLE_SNIPPET,
+      values: { x: "ok" },
+    });
+    expect(out.text).toBe("Role ok");
   });
 
   it("another user cannot render a private snippet by id (NOT_FOUND)", async () => {

@@ -4486,9 +4486,19 @@ function subjectFieldOf(p: { from?: string }): string | null {
 
 const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = snippetRenderParams.parse(params);
-  const scoped = await getReadScope(
-    ctx.userId,
-    input.workspaceId ?? ctx.workspaceId
+  const lens = input.workspaceId ?? ctx.workspaceId ?? undefined;
+  const scoped = await getReadScope(ctx.userId, lens);
+
+  // The kind is read through the polymorphic door (kind branch OR role-facet
+  // EXISTS), never a bare match on the entity's primary type: a snippet worn
+  // as a role by another kind is a snippet too. An unknown `snippet` kind
+  // fails closed.
+  const snippetRows = await assertKnownProfileSlug(db, SNIPPET_KIND);
+  const snippetScope = profileSlugScopeConditionFromRows(
+    db,
+    SNIPPET_KIND,
+    snippetRows,
+    await resolveFacetVisibilityScope(ctx.userId, lens)
   );
 
   const snippet = await scoped.findFirst<{
@@ -4496,10 +4506,7 @@ const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
     status: string | null;
     properties: Record<string, unknown> | null;
   }>(entities, {
-    where: and(
-      eq(entities.id, input.snippetId),
-      eq(entities.type, SNIPPET_KIND)
-    ),
+    where: and(eq(entities.id, input.snippetId), snippetScope),
     columns: { id: true, status: true, properties: true },
   });
   if (!snippet) {
