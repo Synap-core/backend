@@ -96,6 +96,10 @@ const DOORS: Record<string, RegExp> = {
     /\bpresence\s*\.\s*totp\s*\.\s*confirm\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC presence.devices.enroll":
     /\bdevices\s*\.\s*enroll\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  // "Add this device" (founder, 9 Nov 2026): a device the person already
+  // uses approves a new one with a proof from an existing factor.
+  "tRPC presence.deviceLink.approve":
+    /\bdeviceLink\s*\.\s*approve\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
 };
 
 const SENSITIVE_PATHS = Object.keys(SENSITIVE_ACTIONS);
@@ -177,15 +181,17 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
   // Slice 3: presence.setMode (back to report), presence.authorizePasskeyChange
   // and presence.devices.enroll (a second factor) take a proof themselves.
   // The recovery ladder (6 Nov): presence.totp.confirm (a 2FA app added by a
-  // person who already holds a factor) takes one too.
+  // person who already holds a factor) takes one too. "Add this device"
+  // (9 Nov 2026): presence.deviceLink.approve takes one for the new device.
   "presence.ts": {
-    inputs: 5,
+    inputs: 6,
     doors: [
       "tRPC presence.setMode",
       "tRPC presence.setSensitivity",
       "tRPC presence.authorizePasskeyChange",
       "tRPC presence.devices.enroll",
       "tRPC presence.totp.confirm",
+      "tRPC presence.deviceLink.approve",
     ],
   },
   "tools.ts": { inputs: 1, doors: ["tRPC tools.setApproved"] },
@@ -268,6 +274,9 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "tRPC presence.setSensitivity",
         // The recovery ladder (6 Nov): a 2FA app added with a factor's proof.
         "tRPC presence.totp.confirm",
+        // "Add this device" (9 Nov 2026): a device the person already uses
+        // approves a new one (app/_lib/presence/device-link/).
+        "tRPC presence.deviceLink.approve",
         // W3 slice 3: the sensitive actions pod admin calls (derived doors).
         "action agentUsers.setPosture",
         "action apiKeys.adminCreateServiceKey",
@@ -356,7 +365,7 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
     );
     expect(
       bypass,
-      "These call an approve door or a sensitive action directly. Go through app/_lib/presence (useApproveProposal, useBatchApproveProposals, approvePendingKey(s), use-request-doors, use-sensitive-actions, use-factor-doors), so the call carries its passkey proof."
+      "These call an approve door or a sensitive action directly. Go through app/_lib/presence (useApproveProposal, useBatchApproveProposals, approvePendingKey(s), use-request-doors, use-sensitive-actions, use-factor-doors, device-link/use-device-link-requests), so the call carries its passkey proof."
     ).toEqual([]);
   });
 
