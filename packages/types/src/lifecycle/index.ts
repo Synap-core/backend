@@ -25,6 +25,11 @@ export {
   type LifecycleCategory,
   type LifecycleOption,
   type LifecycleOptionWaits,
+  LIFECYCLE_REQUIREMENT_DIRECTIONS,
+  LIFECYCLE_REQUIREMENT_OWNERS,
+  type LifecycleOptionRequirement,
+  type LifecycleRequirementDirection,
+  type LifecycleRequirementOwner,
   transitionWaitOf,
   type TransitionWait,
 } from "./option.js";
