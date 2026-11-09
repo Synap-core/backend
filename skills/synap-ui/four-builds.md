@@ -1,24 +1,13 @@
 ## Four things you can build
 
+Tailored UI is pod-native first (founder, 9 Nov 2026): one of the four below, or an HTML page bound as a kind's renderer, shown on the desktop. A standalone site or app only when the person asks for one (`system/synap-app/overview`).
+
 1. **Views** — named queries + rendering config over entities of a given profile. Kanban of tasks, gallery of articles, calendar of events.
 2. **Bento dashboards** — 12-col grid compositions of cells (view-cards, entity-cards, widgets). The Home dashboard is a bento. Workspace landing pages are bentos.
 3. **Workspaces** — full lenses with profiles, views, a bento, and seed entities. The biggest building block.
-4. **New cell types** (Capability B) — AI can define entirely new rendering cells when no existing widget covers the need. Cells run in a sandboxed iframe. Pod-global cells (no `workspaceId`) are available immediately in all workspaces without a proposal step.
+4. **New cell types** (Capability B) — AI can define entirely new rendering cells when no existing widget covers the need. Cells run in a sandboxed frame. One recipe, in `system/synap/viewframe-cells` ("Define a cell: the one recipe"): check `synap_list_widgets`, write an ES module or an HTML page (the pod picks how it is drawn), define it with `synap_create_cell`, then place it on a bento (`placeOn`) or bind it to a kind (`synap_promote_cell_to_renderer`). An agent's define is a proposal: `proposed` is success.
 
-   ```json
-   POST /api/hub/cells/define
-   {
-     "name":           "Burndown Chart",
-     "rendererSource": "<!DOCTYPE html>…</html>",
-     "typeKey":        "burndown-chart",
-     "description":    "Sprint burndown over task completions",
-     "defaultSize":    { "w": 8, "h": 6 }
-   }
-   ```
-
-   - Leave `deps` out. The frame loads no code from the network (no CDN, no esm.sh): React and `@synap/kit` come from the host, and a cell that declares runtime `deps` is refused on web and desktop. Bundle any library into the source (`synap cell build --bundle-deps`); the `synap` skill's ViewFrame Cells section lists what the frame provides.
-   - Always `GET /api/hub/widget-definitions` first — if a cell already covers the need, use it. New cell definitions are permanent; only create when genuinely novel.
-   - For the full in-frame query/mutate/shell-actions API see the `synap` skill's **ViewFrame Cells** section (or load `synap-ui:SKILL` via `GET /api/hub/skills/system?sections=synap-ui:SKILL`).
+   - Leave `deps` out. The frame loads no code from the network (no CDN, no esm.sh): React and `@synap/kit` come from the host, and a cell that declares runtime `deps` is refused on web and desktop. Bundle any library into the source (`synap cell build --bundle-deps`); the same chapter lists what the frame provides and the in-frame query/mutate/shell-actions API.
    - **"Make this my Posts dashboard"** = a cell bound to the kind's `dashboard` slot, not a new workspace:
      1. `create_cell` a frame that reads what the kind's own page reads, through the bridge's intent reads: `lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list` (params and shapes: `synap` skill, ViewFrame Cells → "Intent reads"). Never pre-fetch rows into the source.
      2. `promote_cell_to_renderer({ profileSlug: "post", slot: "dashboard", cellKey })`. `dashboard` is the `entity-profile` content kind. It is governed, so `proposed` is success.

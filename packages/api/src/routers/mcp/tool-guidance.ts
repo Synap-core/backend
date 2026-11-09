@@ -59,6 +59,22 @@ export function doorToolName(podName: string, door: SkillDoor): string {
   return DOOR_TOOL_NAMES[podName]?.[door] ?? podName;
 }
 
+/**
+ * Where building starts: the skill to load before building UI in the pod
+ * (views, bento, cells, pages bound as renderers), and before an app on it.
+ * Each one also unlocks the `build` tools (`SKILL_PACKAGE_GROUPS`). Said in
+ * orient's `yourTools.build`, a tool RESULT every key reads (pinned by
+ * `tool-guidance.door.test.ts`; `tool-profiles.test.ts` pins that both refs are
+ * real skills that unlock `build`). Not in the MCP `instructions`: the entry
+ * text may be no longer than the full reflexes (the grounding is fitted to the
+ * full budget), and the full reflexes have about 9 bytes left above their
+ * grounding floor, so a clause naming two refs does not fit either.
+ */
+export const BUILD_SKILLS = {
+  ui: "system/synap-ui/skill",
+  app: "system/synap-app/overview",
+} as const;
+
 /** What `ask` is for, after its name. */
 export const ASK_PURPOSE =
   "asks the pod in plain words (people, work, decisions, notes, how-tos, the user's preferences) and answers with sources: call it before you create anything and whenever you do not know where something is";
@@ -75,12 +91,14 @@ export function yourToolsBlock(
   const toolName = (podName: string) => doorToolName(podName, door);
   const ask = `${toolName("synap_ask")} ${ASK_PURPOSE}.`;
   const loadSkill = toolName("synap_load_skill");
+  const build = `Before building UI in the pod (views, bento, cells): ${loadSkill}({ref: "${BUILD_SKILLS.ui}"}); before an app on it: ${loadSkill}({ref: "${BUILD_SKILLS.app}"}).`;
   if (access?.profile !== "entry") {
     return {
       profile: access?.profile ?? "all",
       listed: "This key lists every Synap tool.",
       ask,
       skills: `${loadSkill}({ref: "catalog"}) lists the teaching skills.`,
+      build,
     };
   }
   const unlocked = TOOL_GROUP_NAMES.filter((g) => access.groups.includes(g));
@@ -94,6 +112,7 @@ export function yourToolsBlock(
         ? "; more come in groups you unlock."
         : "; every group is unlocked."),
     ask,
+    build,
     ...(locked.length
       ? {
           unlock: `${loadSkillCall(loadSkill, locked.includes(EXAMPLE_GROUP) ? EXAMPLE_GROUP : locked[0])}: one group below, or "${BUILDER_REF}" for every tool. ${callToolNote(toolName(CALL_TOOL_NAME))}`,

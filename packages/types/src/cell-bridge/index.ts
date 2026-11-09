@@ -1,7 +1,7 @@
 /**
  * cell-bridge — the ONE contract between a stored HTML page running in an
  * isolated frame and the surface that hosts it (the pod console first; the
- * desktop's ViewFrame speaks the same messages). Pure and dependency-free: no
+ * desktop's ViewFrame speaks the same messages for reads). Pure and dependency-free: no
  * React, no DOM, no fetch — a host imports the rules and does the I/O.
  *
  * SECURITY MODEL
@@ -24,7 +24,12 @@
  *      viewer's OWN session — the pod floors every read to what this viewer
  *      may see. The host stamps the lens (the page's space); the page never
  *      chooses it.
- *   4. Read-only. Every `synap:mutate` is refused (`CELL_BRIDGE_WRITE_REFUSED`).
+ *   4. Read-only HERE. A host on this contract (the pod console's HTML pages)
+ *      refuses every `synap:mutate` (`CELL_BRIDGE_WRITE_REFUSED`). The desktop
+ *      and phone hosts of MODULE cells are not read-only: they answer
+ *      `SynapWidget.mutate` (create / update / delete an entity, create a
+ *      relation) through the viewer's own session, each write governed by the
+ *      pod (browser `createViewFrameHandlers.ts`, relay `useCellFrameHandlers.ts`).
  *   5. Nothing secret crosses: no token, no pod URL, no key is sent into the
  *      frame — only the answer to what the page asked.
  *
@@ -35,8 +40,8 @@
  *     leaving (a second `load`) and tear it down — after the request left.
  *     DNS prefetch and WebRTC are outside CSP in some browsers too.
  *   - What the page SHOWS is the author's: a page can present data falsely.
- *   - Writes: none yet. They come later through the proposal door, never
- *     directly.
+ *   - Writes from a page on this contract: none. The module-cell hosts
+ *     above write through the pod's governed doors, never around them.
  */
 
 export {

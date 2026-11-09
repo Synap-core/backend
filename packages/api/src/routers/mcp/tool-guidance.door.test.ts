@@ -42,7 +42,7 @@ import {
   TOOL_GROUP_PURPOSES,
   toolGroupRef,
 } from "./tool-profiles.js";
-import { loadSkillCall } from "./tool-guidance.js";
+import { BUILD_SKILLS, loadSkillCall } from "./tool-guidance.js";
 import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
 
 type Result = { isError?: boolean; content: Array<{ text?: string }> };
@@ -107,6 +107,20 @@ describe("synap_orient carries `yourTools`", () => {
     );
     expect(access.loadKeyToolAccess).toHaveBeenCalledWith("key-1");
   });
+
+  it.each([
+    ["an entry key", { profile: "entry", groups: [] }],
+    ["a legacy key", { profile: null, groups: [] }],
+  ])(
+    "%s reads where building starts, as a load_skill call",
+    async (_label, stored) => {
+      access.loadKeyToolAccess.mockResolvedValue(stored);
+      const yt = (await orient("key-1")).yourTools as Record<string, unknown>;
+      for (const ref of Object.values(BUILD_SKILLS)) {
+        expect(yt.build).toContain(`synap_load_skill({ref: "${ref}"})`);
+      }
+    }
+  );
 
   it("names the groups already unlocked and offers only the others", async () => {
     access.loadKeyToolAccess.mockResolvedValue({

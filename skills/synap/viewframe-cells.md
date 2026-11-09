@@ -35,11 +35,17 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 - Advice on colour (raw hex instead of `var(--synap-*)` tokens) and accessibility (an image with no `alt`, a clickable `div`) comes back as `advice` with the reply. It never blocks the cell; fix what it names.
 - No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
 - An **HTML page** (a source that opens with `<`) is drawn as a page, not a module: it gets **no host modules**, so it can run inline script only and cannot `import` anything, not even `react`. To use React or `@synap/kit`, write the cell as an ES module that default-exports a component.
-- Phone frames (Relay, Telegram) are not the target: they show the snapshot of a cell and a link to open it on the web or desktop, so write the cell for the web and desktop frame.
+- Write the cell for the web and desktop frame. The phone (Relay) runs an ES-module cell bound as a kind's `detail` renderer, on that thing's page, with the same `SynapWidget` bridge (queries and the four governed writes); an HTML page, or a cell in another slot, shows the generic page there. The phone frame allows no approved outside host: a cell that needs one renders blank there.
 
-### Register a Cell via the Hub Protocol (canonical path)
+### Define a cell: the one recipe
 
-**Use `POST /api/hub/cells/define` — this is the canonical Hub Protocol path for AI-generated cells.**
+1. **Check what exists**: `synap_list_widgets` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
+2. **Write the source** as an **ES module** that default-exports a React component (drawn in the frame, with the host's React and `@synap/kit`), or as an **HTML page** (a source that opens with `<`: drawn as a page, inline script only, no `import`). You do not pick the mechanism: the pod reads it from the source.
+3. **Define it with `synap_create_cell`** `{ name, rendererSource, description?, workspaceId?, contentKind?, viewTypes?, placeOn? }`: the agent door. A client without MCP calls the same door over REST, `POST /api/hub/cells/define` (below); both run one write path.
+4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer({ profileSlug, slot, cellKey })` binds it to a kind (`slot`: `card`, `detail`, `list`, `dashboard`). Until it is placed or bound it shows nowhere.
+5. An agent's define lands as a proposal: `status: "proposed"` is success; pass on `reviewUrl`, never retry.
+
+### The same door over REST: `POST /api/hub/cells/define`
 
 It is idempotent (upserts on typeKey) and pod-global by default (no workspaceId needed). **It IS governed for agent callers** — `POST /cells/define` runs `checkPermissionOrPropose({ resource: "cell", action: "define", trustLevel: "generated" })`; a `status: "proposed"` response is the normal outcome for AI-generated renderer source, not an error — surface `reviewUrl` and keep going. Only an operator-initiated define auto-applies.
 
@@ -90,10 +96,10 @@ synap://open/cell/{typeKey}
 
 The browser receives this deep link, looks the typeKey up in the cell registry (which polls `widget_definitions` every 10s), and opens it as a side panel tab with the cell's registered `meta.name` as the tab title.
 
-**Full AI artifact workflow:**
+**Full AI artifact workflow over REST** (an MCP agent does step 1 with `synap_create_cell`):
 
 ```
-// 1. Generate the HTML/React cell
+// 1. Define the cell (an ES module or an HTML page)
 POST /api/hub/cells/define
 { "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
 // → { "success": true, "typeKey": "generated:q2-revenue-report" }

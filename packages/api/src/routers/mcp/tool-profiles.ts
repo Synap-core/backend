@@ -265,10 +265,40 @@ const SKILL_STEM_GROUPS: Readonly<Record<string, readonly ToolGroup[]>> = {
   "document-embeds": ["build", "data"],
 };
 
+/**
+ * Seeded skill PACKAGES whose every chapter teaches building: a ref INSIDE one
+ * (`system/synap-ui/views`, `synap-app/overview`) unlocks its groups whatever
+ * the chapter's stem. Keyed by the package directory (`skills/<package>/`), not
+ * by stem, because a package's stems are ambiguous across packages: `skill`,
+ * `overview`, `views`, `workspaces`, `governance`, `more` also name chapters of
+ * `synap`, `synap-design`, `synap-market`… A stem key would unlock `build` for
+ * `system/synap-design/skill` too. A BARE stem (`views`) carries no package, so
+ * only the stem map above applies to it.
+ *
+ * synap-ui teaches views, bento, cells (`build`) over profiles and the flow it
+ * reads first (`synap_list_profiles`, `synap_get_flow`: `read`); synap-app
+ * teaches the same pod-native build before a separate app, and `flow.of`.
+ */
+const SKILL_PACKAGE_GROUPS: Readonly<Record<string, readonly ToolGroup[]>> = {
+  "synap-ui": ["build", "read"],
+  "synap-app": ["build", "read"],
+};
+
+function refSegments(ref: string): string[] {
+  return ref.trim().replace(/\.md$/i, "").toLowerCase().split("/");
+}
+
 function stemOf(ref: string): string {
-  const trimmed = ref.trim().replace(/\.md$/i, "").toLowerCase();
-  const parts = trimmed.split("/");
-  return parts[parts.length - 1] ?? trimmed;
+  const parts = refSegments(ref);
+  return parts[parts.length - 1] ?? "";
+}
+
+/** The package a ref names (`system/<pkg>/<stem>` or `<pkg>/<stem>`), else null. */
+function packageOf(ref: string): string | null {
+  const parts = refSegments(ref);
+  if (parts.length === 3 && parts[0] === "system") return parts[1] ?? null;
+  if (parts.length === 2) return parts[0] ?? null;
+  return null;
 }
 
 /** Is `ref` in the tool-group namespace (`tools:…`), valid or not? */
@@ -297,11 +327,24 @@ export function parseToolGroupRef(ref: string): ToolGroup[] | null {
 /** The groups a `load_skill(ref)` unlocks. `[]` = none. */
 export function groupsForLoadSkillRef(ref: string): ToolGroup[] {
   if (isToolGroupRef(ref)) return parseToolGroupRef(ref) ?? [];
-  return [...(SKILL_STEM_GROUPS[stemOf(ref)] ?? [])];
+  // Own keys only: a ref is agent input, and `constructor` is on every object.
+  const own = (
+    map: Readonly<Record<string, readonly ToolGroup[]>>,
+    key: string | null
+  ) => (key !== null && Object.hasOwn(map, key) ? map[key]! : []);
+  return [
+    ...new Set([
+      ...own(SKILL_STEM_GROUPS, stemOf(ref)),
+      ...own(SKILL_PACKAGE_GROUPS, packageOf(ref)),
+    ]),
+  ];
 }
 
 /** The skill stems that unlock a group (test seam: every key is a real skill). */
 export const SKILL_STEMS_THAT_UNLOCK = Object.keys(SKILL_STEM_GROUPS);
+
+/** The skill packages whose every chapter unlocks a group (test seam: every key is a real package). */
+export const SKILL_PACKAGES_THAT_UNLOCK = Object.keys(SKILL_PACKAGE_GROUPS);
 
 export interface KeyToolAccess {
   profile: ApiKeyToolProfile | null;

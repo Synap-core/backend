@@ -41,7 +41,8 @@ manifest.
 | ---------------------- | -------------------------------------------------------------------------------------------------------- |
 | shared `@synap-core/*` | headless logic plus `--synap-*` tokens; no UI-library imports                                            |
 | desktop workbench      | plain CSS plus spatial-ui primitives; a third-party widget only when wrapped and themed with `--synap-*` |
-| standalone apps        | HeroUI plus the Synap HeroUI preset                                                                      |
+| apps we generate       | shadcn plus Tailwind v4 (Website Factory sites and any new app; the HeroUI base app is retired)          |
+| pod admin              | HeroUI plus the Synap HeroUI preset                                                                      |
 | mobile (relay)         | its own native kit on the native design tokens                                                           |
 
 Tamagui (`@synap-core/ui-system`) was removed. Never reintroduce it.
