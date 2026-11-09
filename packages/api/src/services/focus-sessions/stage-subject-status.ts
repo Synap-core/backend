@@ -59,14 +59,9 @@ import {
   entities,
   eq,
   getWorkspaceMembership,
-  resolveStatusMoveTarget,
   type StatusMoveActor,
 } from "@synap/database";
-import {
-  findLifecycleOption,
-  isTerminalLifecycleCategory,
-  type Hold,
-} from "@synap-core/types/lifecycle";
+import type { Hold } from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
@@ -98,7 +93,6 @@ export type StageSubjectStatusOutcome =
         | "no_status_property"
         | "stage_has_no_subject_status"
         | "already_set"
-        | "already_settled"
         | "subject_not_found"
         | "no_process"
         | "stage_not_found";
@@ -246,15 +240,11 @@ export async function writeBirthStageSubjectStatus(
 }
 
 /**
- * THE ONE WRITER of a process's status value onto ONE thing it works on — the
- * stage path above (the subject, on entering a stage) and the END path
- * (`session-end-moves.ts`: the subject and every target still open, on the
- * session's close) both write through here, so the two can never disagree on
- * the rules:
+ * THE ONE WRITER of a process's status value onto ONE thing it works on (the
+ * stage path above: the subject, on entering a stage, or at the session's
+ * birth). A session's END moves nothing (decision 5e377b06). The rules:
  *  - a ROLE process moves the role's FACET through the status door, or nothing;
  *  - a thing already at the value is left alone (`already_set`);
- *  - an END move never takes a thing OUT of a done or lost status
- *    (`already_settled`): see {@link endMoveCurrent};
  *  - a BIRTH move out of a done or lost status proposes (`atSessionBirth`);
  *  - a kind that DECLARES a lifecycle moves through `moveStatus` (its
  *    governance floor: an agent's move into done/lost proposes; a humanOnly
@@ -264,7 +254,7 @@ export async function writeBirthStageSubjectStatus(
  * Every move names the session (`sessionId`), so its transition does too.
  * Never throws: a write that could not happen is `failed`, with why.
  */
-export async function writeSubjectStatusValue(input: {
+async function writeSubjectStatusValue(input: {
   session: { id: string; workspaceId: string | null };
   /** The thing to move: the session's subject, or one of its targets. */
   entityId: string;
@@ -280,12 +270,6 @@ export async function writeSubjectStatusValue(input: {
   actor: StatusMoveActor;
   /** The hold to record when the move pauses the thing (a stage's own). */
   pauseHold?: Hold;
-  /**
-   * A session END move (session-end-moves.ts): governed like any write of the
-   * closer, without the done/lost default floor (`moveStatus.atSessionEnd`).
-   * A stage move never sets it.
-   */
-  atSessionEnd?: boolean;
   /**
    * A session BIRTH move (the session started into this stage): a move out
    * of done/lost proposes (`moveStatus.atSessionBirth`). Set ONLY by
@@ -316,16 +300,6 @@ export async function writeSubjectStatusValue(input: {
     const roleWorkspaceId = session.workspaceId ?? subject.workspaceId ?? null;
     const wsId = subject.workspaceId ?? session.workspaceId ?? null;
 
-    const atEnd = input.atSessionEnd
-      ? await endMoveCurrent(
-          isRole
-            ? { entityId, role: proc.profileSlug, workspaceId: roleWorkspaceId }
-            : { entityId, workspaceId: wsId }
-        )
-      : null;
-    if (atEnd?.settled && atEnd.current !== value)
-      return { status: "skipped", reason: "already_settled" };
-
     const humanOnly = proc.humanOnlyStatuses.includes(value);
     const moveInput = {
       entityId,
@@ -338,11 +312,7 @@ export async function writeSubjectStatusValue(input: {
       reason,
       forcePropose: humanOnly || undefined,
       ...(input.pauseHold ? { pauseHold: input.pauseHold } : {}),
-      ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
       ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
-      // An end move defends the status it found not settled: a thing settled
-      // meanwhile makes an agent's move a conflict, not a reopening.
-      ...(atEnd ? { expectedFrom: atEnd.current } : {}),
     };
 
     if (isRole) {
@@ -421,39 +391,6 @@ export async function writeSubjectStatusValue(input: {
     );
     return { status: "failed", reason: why };
   }
-}
-
-/**
- * What an END move finds the thing at, read through THE status door's own
- * target resolver (`resolveStatusMoveTarget`: kind → entity row, role → facet
- * row, and its declared lifecycle), the category from the lifecycle's own
- * option (`findLifecycleOption` + `isTerminalLifecycleCategory`): no second
- * derivation of what "done" means.
- *
- * An end move is cleanup of work that STOPPED: it never takes a thing out of
- * a done or lost status. Another session (or a person) may have settled the
- * session's subject or a target meanwhile — a stale session cancelled later
- * must not move a verified finding back to "open" (finding 8f1c774f). The end
- * move also skips the done/lost governance floor (`atSessionEnd`), so without
- * this nothing would stop it. Subject and targets alike.
- *
- * `null` when there is no declared lifecycle to read (the door refuses, or
- * the legacy plain-property path takes it): nothing is called settled there.
- */
-async function endMoveCurrent(target: {
-  entityId: string;
-  role?: string | null;
-  workspaceId: string | null;
-}): Promise<{ current: string | null; settled: boolean } | null> {
-  const resolved = await resolveStatusMoveTarget(db, target);
-  if (!resolved.ok) return null;
-  const { lifecycle, current } = resolved.target;
-  return {
-    current,
-    settled: isTerminalLifecycleCategory(
-      findLifecycleOption(lifecycle, current)?.category
-    ),
-  };
 }
 
 /** The status door's answer → this write's outcome. */

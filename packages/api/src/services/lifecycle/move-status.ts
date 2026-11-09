@@ -111,14 +111,6 @@ export interface MoveStatusInput {
   /** A replay: the app its proposal was filed by (`proposals.app_id`). */
   appId?: string | null;
   /**
-   * A session END move (`subjectProfile.onEnd`): governed like any write of
-   * the closer, without the done/lost default floor — the session's end is
-   * the guardrail (governance-policy `lifecycleMove.atSessionEnd`). Set ONLY
-   * by the close door's writer (session-end-moves.ts); no request input
-   * reaches it.
-   */
-  atSessionEnd?: boolean;
-  /**
    * A session BIRTH move (a session started into a playbook's first stage,
    * `writeBirthStageSubjectStatus`): one that would take the thing OUT of a
    * done or lost option always proposes (governance-policy
@@ -365,15 +357,10 @@ export async function moveStatus(
   // gated stage (the advance's own refusal), and routed as the stage advance
   // when it enters a human- or check-gated stage, BEFORE anything is written.
   // A person's move is the person deciding (the gate floor and the follow
-  // treat it so); server code, a replay, a session's end and birth moves
-  // already run the session's own lifecycle.
+  // treat it so); server code, a replay and a session's birth move already
+  // run the session's own lifecycle.
   let gateEntries: GatedStageEntry[] | null = null;
-  if (
-    agent &&
-    !input.approvedProposalId &&
-    !input.atSessionEnd &&
-    !input.atSessionBirth
-  ) {
+  if (agent && !input.approvedProposalId && !input.atSessionBirth) {
     // Dynamic: the advance door reaches this door back (its subject write).
     const { planSubjectMoveGates } =
       await import("../focus-sessions/subject-move-gate.js");
@@ -466,12 +453,10 @@ export async function moveStatus(
       lifecycleMove: {
         ...lifecycleMove,
         // A reopen: from a done/lost option to an open one, read from the
-        // lifecycle's own categories (the same derivation the end move's
-        // `already_settled` reads).
+        // lifecycle's own categories.
         outOfTerminal:
           isTerminalLifecycleCategory(fromCategory) &&
           !isTerminalLifecycleCategory(toCategory),
-        ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
         ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
       },
       forcePropose: input.forcePropose,

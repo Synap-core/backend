@@ -1466,6 +1466,25 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "informational",
   },
   {
+    // "Add this device" (founder decision of 9 Nov 2026, session 84c74a23): a
+    // NEW device asks to be approved. Every device of the person hears it, so
+    // the person approves it on one they already use, or declines a request
+    // that is not theirs. Tokens from `requestDeviceLink`: `label` (what the
+    // new device calls itself), `id` (the request).
+    type: "security.device_link_requested",
+    category: "system",
+    label: "A new device asks to be approved",
+    icon: "shield-alert",
+    priority: "high",
+    messageSyntax: "icu",
+    titleTemplate: "A device asks to confirm it’s you",
+    bodyTemplate:
+      "{label} wants to approve requests for you. If it’s you, open this on a device you already use and pick the number it shows. If not, decline it.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    needsYou: "informational",
+  },
+  {
     // The recovery ladder (founder, 6 Nov 2026): "I lost my passkey". Every
     // device of the person hears each step, so a recovery an AI or a thief
     // started is seen and cancelled within its 24 h.

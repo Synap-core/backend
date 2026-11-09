@@ -76,6 +76,7 @@ import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.j
 import { blockExpectedOutput } from "../focus-sessions/block-output.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
 import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
+import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
   TURN_CONTEXT_MAX_ARRAY_ITEMS,
   TURN_CONTEXT_MAX_STRING_LENGTH,
@@ -98,6 +99,11 @@ export const TURN_HISTORY_MAX = 10;
 export const RUN_CONTINUE_SLOT_LABEL = "Keep the run going";
 
 const count = z.number().int().nonnegative();
+
+/** Bounds of the first call's inventory (`firstCall.sections|tools|guidance`). */
+export const FIRST_CALL_SECTIONS_MAX = 24;
+export const FIRST_CALL_TOOLS_MAX = 200;
+export const FIRST_CALL_GUIDANCE_MAX = 12;
 
 /** Bounds of a run checkpoint, the IS's own (`run-profile.ts`). */
 export const CHECKPOINT_MAX_RECORDS = 60;
@@ -160,6 +166,32 @@ export const completeRunBodySchema = z
               history: count,
               message: count,
             }),
+            /**
+             * The inventory of what the agent was given (optional, added after
+             * the counts): the system prompt's sections by name and size, the
+             * tool names, and the guidance refs. Each one lenient: a bad value
+             * reads as absent, never a 400 that would drop the turn's outcome.
+             */
+            sections: z
+              .array(
+                z.object({
+                  name: z.string().trim().min(1).max(64),
+                  chars: count,
+                })
+              )
+              .max(FIRST_CALL_SECTIONS_MAX)
+              .optional()
+              .catch(undefined),
+            tools: z
+              .array(z.string().trim().min(1).max(128))
+              .max(FIRST_CALL_TOOLS_MAX)
+              .optional()
+              .catch(undefined),
+            guidance: z
+              .array(z.string().trim().min(1).max(160))
+              .max(FIRST_CALL_GUIDANCE_MAX)
+              .optional()
+              .catch(undefined),
           })
           .optional(),
         /**
@@ -822,6 +854,45 @@ async function askToKeepGoing(p: {
   }
 }
 
+/**
+ * The turn's `firstCall.guidance`, filled by the POD from what the run
+ * stamped on its definition snapshot (`recordRunGuidance`): the refs of the
+ * rules it used. The IS never has to report them, and the pod's stamp wins
+ * over anything it sent. Best effort: an unreadable or absent stamp leaves
+ * the body as it came, never failing the turn's report.
+ */
+async function withStampedGuidance(
+  runId: string,
+  body: CompleteRunBody
+): Promise<CompleteRunBody> {
+  const firstCall = body.turn?.firstCall;
+  if (!body.turn || !firstCall) return body;
+  try {
+    const [row] = await db
+      .select({ snapshot: playbookRuns.definitionSnapshot })
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, runId))
+      .limit(1);
+    const stamp = stampedGuidanceOf(row?.snapshot);
+    if (stamp?.status !== "ok" || stamp.used.length === 0) return body;
+    const refs = stamp.used
+      .map((u) => (typeof u.ref === "string" ? u.ref.slice(0, 160) : ""))
+      .filter(Boolean)
+      .slice(0, FIRST_CALL_GUIDANCE_MAX);
+    if (refs.length === 0) return body;
+    return {
+      ...body,
+      turn: { ...body.turn, firstCall: { ...firstCall, guidance: refs } },
+    };
+  } catch (err) {
+    logger.warn(
+      { err, runId },
+      "run-turn-end: reading the run's guidance stamp failed (non-fatal)"
+    );
+    return body;
+  }
+}
+
 /** Settle one IS turn's end on the session's live run. */
 export async function settleRunTurnEnd(p: {
   run: RunRow;
@@ -830,7 +901,8 @@ export async function settleRunTurnEnd(p: {
   /** The agent from the request's VERIFIED auth context, if any. */
   askingAgentUserId: string | null;
 }): Promise<CompleteRunStatus> {
-  const { run, session, body } = p;
+  const { run, session } = p;
+  const body = await withStampedGuidance(run.id, p.body);
   const recorded = await recordTurnEnd(session.id, run.id, body);
 
   // Completing is idempotent (only a LIVE run completes), so a retried

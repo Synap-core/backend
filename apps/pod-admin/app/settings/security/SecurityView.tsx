@@ -24,6 +24,10 @@
  *     8. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
  *        sign-in is not wired on this pod).
  *
+ * At the top: the new devices asking to confirm it's you ("Add this
+ * device", founder decision of 9 Nov 2026), each with its numbers to pick;
+ * a failed read of them is said here, with Try again.
+ *
  * Every refusal is shown as what it is: a sign-in that is too old
  * (`reauth_required` → "Sign in again"), a Cloud-only session that may not
  * change credentials (founder decision R1), or a failed read (LoadFailed).
@@ -81,6 +85,7 @@ import { useGenerateRecoveryCodes } from "../../_lib/presence/use-factor-doors";
 import { TwoFactorCard } from "./two-factor-card";
 import { WaysInHeader } from "../../_lib/presence/ways-in/ways-in-header";
 import { DeviceKeysCard } from "../../_lib/presence/ways-in/device-keys-card";
+import { DeviceLinkRequests } from "../../_lib/presence/device-link/DeviceLinkRequests";
 
 const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/security")}`;
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
@@ -142,6 +147,8 @@ export function SecurityView({
           get back in.
         </p>
       </header>
+
+      <DeviceLinkRequests placement="page" />
 
       {recovered ? (
         <div

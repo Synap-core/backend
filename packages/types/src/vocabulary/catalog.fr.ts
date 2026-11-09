@@ -635,6 +635,11 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
     "Les membres {objG, select, f {{objV, select, yes {de l’{obj}} other {de la {obj}}}} m {{objV, select, yes {de l’{obj}} other {du {obj}}}} other {de l’élément {Obj}}} décident",
   "vocabulary.membersDecide.unnamed": "Ses membres décident",
   "vocabulary.handedTo": "Confié à {name}",
+  "vocabulary.refusal.doNotContact":
+    "Rien n’a été envoyé\u00a0: {name} ne doit pas être contacté.",
+  "vocabulary.refusal.doNotContact.reason":
+    "Rien n’a été envoyé\u00a0: {name} ne doit pas être contacté ({reason}).",
+  "vocabulary.refusal.doNotContact.unnamed": "cette personne",
   "vocabulary.runner.needs_permission.named": "Attend l’autorisation de {name}",
   "vocabulary.runner.needs_permission.unnamed": "Attend une autorisation",
   "vocabulary.runner.needs_answer.named": "Attend la réponse de {name}",

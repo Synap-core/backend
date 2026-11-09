@@ -35,6 +35,8 @@ export const en = {
   "user.menu.codes": "Account menu: recovery codes not saved",
   "user.menu.first-way": "Account menu: no way to confirm it’s you yet",
   "user.menu.second-way": "Account menu: only one way to confirm it’s you",
+  "user.menu.this-device":
+    "Account menu: you can set up a passkey on this device",
   "user.signedIn": "Signed in",
   "role.admin": "Administrator",
   "role.member": "Member",
@@ -42,6 +44,7 @@ export const en = {
   "user.mark.codes": "Save recovery codes",
   "user.mark.first-way": "Add a way in",
   "user.mark.second-way": "Add a second way in",
+  "user.mark.this-device": "Set up this device",
   "user.connections": "My connections",
   "user.computers": "My computers",
   "user.notifications": "My notifications",
@@ -87,6 +90,8 @@ export const fr: Catalog<typeof en> = {
     "Menu du compte : aucun moyen de confirmer que c’est vous",
   "user.menu.second-way":
     "Menu du compte : un seul moyen de confirmer que c’est vous",
+  "user.menu.this-device":
+    "Menu du compte : vous pouvez configurer une clé d’accès sur cet appareil",
   "user.signedIn": "Compte connecté",
   "role.admin": "Administrateur",
   "role.member": "Membre",
@@ -94,6 +99,7 @@ export const fr: Catalog<typeof en> = {
   "user.mark.codes": "Enregistrez vos codes de secours",
   "user.mark.first-way": "Ajoutez un moyen",
   "user.mark.second-way": "Ajoutez un deuxième moyen",
+  "user.mark.this-device": "Configurer cet appareil",
   "user.connections": "Mes connexions",
   "user.computers": "Mes ordinateurs",
   "user.notifications": "Mes notifications",

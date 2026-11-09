@@ -2669,8 +2669,6 @@ export const focusSessionsRouter = router({
           ...(result.session as FocusSession),
           warnings: result.warnings,
           ...(result.verdict ? { verdict: result.verdict } : {}),
-          // What the end moved (`subjectProfile.onEnd`), each with why.
-          ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         };
       } catch (err) {
         const e = err as { code?: string; message?: string };

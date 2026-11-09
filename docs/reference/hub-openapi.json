@@ -4755,6 +4755,81 @@
         },
         "required": ["text"]
       },
+      "ChannelDraftSaveResponse": {
+        "type": "object",
+        "properties": {
+          "draftId": { "type": "string" },
+          "revision": {
+            "type": "integer",
+            "description": "The draft's revision after the save (`revisionHistory.length`): pass it as `expectedRevision` on the send."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "false = the words were already these: nothing was recorded."
+          },
+          "status": {
+            "type": "string",
+            "description": "The draft's status after the save: `pending` (a failed send the person reworded is reopened as pending)."
+          }
+        },
+        "required": ["draftId", "revision", "changed", "status"]
+      },
+      "ChannelDraftSaveRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000,
+            "description": "The draft's words, as the person left them."
+          },
+          "subject": { "type": "string", "maxLength": 500 },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The draft's revision you read (`revisionHistory.length`): a draft revised since is refused (409)."
+          }
+        },
+        "required": ["text"]
+      },
+      "ChannelDraftVersionsResponse": {
+        "type": "object",
+        "properties": {
+          "draftId": { "type": "string" },
+          "revision": {
+            "type": "integer",
+            "description": "The draft's revision now (`revisionHistory.length`)."
+          },
+          "versions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ChannelDraftVersion" },
+            "description": "Oldest first; the last is the draft's words now."
+          }
+        },
+        "required": ["draftId", "revision", "versions"]
+      },
+      "ChannelDraftVersion": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "description": "1 = the first words, then each change in order."
+          },
+          "author": {
+            "type": "string",
+            "enum": ["ai", "person"],
+            "description": "ai = written by an agent; person = written by the person."
+          },
+          "authorId": { "type": ["string", "null"] },
+          "at": {
+            "type": "string",
+            "description": "When these words were written (ISO 8601)."
+          },
+          "text": { "type": "string" },
+          "subject": { "type": "string" }
+        },
+        "required": ["version", "author", "authorId", "at", "text"]
+      },
       "Channel": {
         "type": "object",
         "properties": {
@@ -5694,6 +5769,7 @@
                         "conflict",
                         "kind_missing",
                         "not_connected",
+                        "do_not_contact",
                         "unknown"
                       ]
                     },
@@ -9259,6 +9335,27 @@
             "description": "With projection=lean: comma-separated property keys or columns returned whole on every row (e.g. the keys a row listed in `omitted`).",
             "name": "fields",
             "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "JSON array of view filters, ANDed, exactly as on `GET /entities` (`[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`). A `properties.<slug>` clause needs `profileSlug`. Malformed JSON, too many clauses, an unknown or secret property is a 400. Only narrows what the caller reads."
+            },
+            "required": false,
+            "description": "JSON array of view filters, ANDed, exactly as on `GET /entities` (`[{\"field\":\"properties.stage\",\"operator\":\"equals\",\"value\":\"won\"}]`). A `properties.<slug>` clause needs `profileSlug`. Malformed JSON, too many clauses, an unknown or secret property is a 400. Only narrows what the caller reads.",
+            "name": "filters",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["true", "false"],
+              "description": "`true` = each row also carries `facetSlugs` and `facets`, as on `GET /entities`. Default `false`."
+            },
+            "required": false,
+            "description": "`true` = each row also carries `facetSlugs` and `facets`, as on `GET /entities`. Default `false`.",
+            "name": "includeFacets",
+            "in": "query"
           }
         ],
         "responses": {
@@ -9281,7 +9378,7 @@
             }
           },
           "400": {
-            "description": "Bad request — the wrapped door refused the input",
+            "description": "Malformed `filters` (unparseable JSON, too many clauses, a property filter without profileSlug, an unknown or secret property).",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -17513,27 +17610,6 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
-                                },
-                                "onEnd": {
-                                  "type": "object",
-                                  "properties": {
-                                    "closed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "cancelled": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "failed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    }
-                                  },
-                                  "additionalProperties": false
                                 }
                               },
                               "additionalProperties": {}
@@ -21369,27 +21445,6 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
-                                },
-                                "onEnd": {
-                                  "type": "object",
-                                  "properties": {
-                                    "closed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "cancelled": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    },
-                                    "failed": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 200
-                                    }
-                                  },
-                                  "additionalProperties": false
                                 }
                               },
                               "additionalProperties": {}
@@ -26991,27 +27046,6 @@
                           "maxLength": 200
                         },
                         "maxItems": 50
-                      },
-                      "onEnd": {
-                        "type": "object",
-                        "properties": {
-                          "closed": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200
-                          },
-                          "cancelled": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200
-                          },
-                          "failed": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200
-                          }
-                        },
-                        "additionalProperties": false
                       }
                     },
                     "additionalProperties": {},
@@ -29365,6 +29399,171 @@
           },
           "409": {
             "description": "The draft changed since it was read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{channelId}/drafts/{draftId}": {
+      "put": {
+        "tags": ["Channels"],
+        "summary": "Save the words of a draft on the person's own channel",
+        "description": "The person keeps their edit of an open draft (pending, held, or a failed send): `text` (and `subject`) become the draft's words, recorded as one revision by the person. Nothing is sent and nothing is approved; who it goes to stays pinned. A failed send whose words are saved is reopened as pending. The same words record nothing (`changed: false`). Does not need the right to send, only to revise (a key limited to spaces may change a message's body and subject only); an agent or integration key never saves the person's draft.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "channelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "draftId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelDraftSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The draft's words, saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDraftSaveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No conversation or open draft the caller can read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft changed since it was read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{channelId}/drafts/{draftId}/versions": {
+      "get": {
+        "tags": ["Channels"],
+        "summary": "Read the versions of a draft",
+        "description": "The words of a draft over time, oldest first: the words it was filed with (`ai` when an agent drafted it), then each change of its words, by whom and when. The last version is the draft's words now. Read from the draft itself, in any status (a sent draft keeps its history).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "channelId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "draftId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The draft's versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelDraftVersionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid channelId or draftId",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No conversation or draft the caller can read",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

@@ -59,7 +59,11 @@ export interface ThingBlockerWhy {
   waitKind: WaitKind;
   /** An owed slot's class of blocker ("what to build"), else null. */
   blockedReason: string | null;
-  /** An owed slot's domain name (`not_connected`), else null. */
+  /**
+   * The lead wait's stable name: an owed slot's declared domain name
+   * (`not_connected`), a pending proposal's type (`messaging.external.send`)
+   * or a held send's reason (`not_connected`); else null.
+   */
   blockerKey: string | null;
 }
 
@@ -170,7 +174,10 @@ export function deriveThingBlocker(
       waitKind,
       blockedReason:
         lead.kind === "owed_slot" ? (lead.blockedReason ?? null) : null,
-      blockerKey: lead.kind === "owed_slot" ? (lead.blockerKey ?? null) : null,
+      blockerKey:
+        lead.kind === "owed_slot" || lead.kind === "pending_proposal"
+          ? (lead.blockerKey ?? null)
+          : null,
     },
     ball: WAIT_KIND_BALL[waitKind],
     unlocks: thingBlockerUnlocks(

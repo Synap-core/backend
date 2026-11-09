@@ -273,3 +273,98 @@ describe("projectLeanEntityList — 25 ideas", () => {
     ).rejects.toThrow("db down");
   });
 });
+
+describe("projectLeanEntityList — listed under a ROLE (lead on companies)", () => {
+  const COMPANY_PROFILE = "44444444-4444-4444-8444-444444444444";
+  const LEAD_PROFILE = "55555555-5555-4555-8555-555555555555";
+  const company = (
+    i: number,
+    facets: unknown[] | undefined,
+    status: string | null = null
+  ): Record<string, unknown> => ({
+    id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    profileId: COMPANY_PROFILE,
+    profileSlug: "company",
+    type: "company",
+    title: `Company ${i}`,
+    status,
+    statusCategory: status ? "active" : null,
+    properties: {},
+    ...(facets ? { facets } : {}),
+  });
+  const source: LeanShapeSource = {
+    async getEffectiveProperties() {
+      return [];
+    },
+    async getEffectiveLifecycles() {
+      return new Map([
+        [
+          LEAD_PROFILE,
+          {
+            options: [
+              { key: "new", label: "New lead", category: "open" },
+              { key: "qualified", label: "Qualified", category: "active" },
+            ],
+          },
+        ],
+      ]);
+    },
+    async profileRowsForSlug(slug) {
+      return slug === "lead" ? [{ id: LEAD_PROFILE, profileKind: "role" }] : [];
+    },
+  };
+  const leadFacet = (status: string | null) => ({
+    facetId: "f",
+    slug: "lead",
+    properties: { leadStage: status },
+    status,
+  });
+
+  it("status, category and words come from the lead facet, never the company", async () => {
+    const [newLead, trap] = await projectLeanEntityList(
+      [
+        company(1, [leadFacet("new")]),
+        // The company's own column says qualified; its lead facet says new.
+        company(
+          2,
+          [
+            { facetId: "c", slug: "client", properties: {}, status: "won" },
+            leadFacet("new"),
+          ],
+          "qualified"
+        ),
+      ],
+      { source, listedUnder: "lead" }
+    );
+    for (const row of [newLead, trap]) {
+      expect(row?.status).toBe("new");
+      expect(row?.statusCategory).toBe("open");
+      expect(row?.statusLabel).toBe("New lead");
+      expect(row?.kind).toBe("company");
+    }
+  });
+
+  it("no lead facet on the row (or a facet with no stage) = no status, never the entity's", async () => {
+    const rows = await projectLeanEntityList(
+      [
+        company(3, undefined, "qualified"),
+        company(4, [leadFacet(null)], "qualified"),
+      ],
+      { source, listedUnder: "lead" }
+    );
+    for (const row of rows) {
+      expect(row).not.toHaveProperty("status");
+      expect(row).not.toHaveProperty("statusCategory");
+      expect(row).not.toHaveProperty("statusLabel");
+    }
+  });
+
+  it("control: listed under the KIND, the row keeps its own status", async () => {
+    const [row] = await projectLeanEntityList(
+      [company(5, [leadFacet("new")], "qualified")],
+      { source, listedUnder: "company" }
+    );
+    expect(row?.status).toBe("qualified");
+    expect(row?.statusCategory).toBe("active");
+  });
+});

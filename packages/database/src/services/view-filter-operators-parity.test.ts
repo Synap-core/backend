@@ -15,10 +15,14 @@
  */
 import { describe, it, expect } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { drizzle } from "drizzle-orm/postgres-js";
+import { eq } from "drizzle-orm";
 import * as authored from "@synap-core/types/views";
+import { entities } from "../schema/index.js";
 import {
   ViewFilterCompiler,
   type EntityFilter,
+  type StatusFilterSubject,
 } from "./view-filter-compiler.js";
 
 const dialect = new PgDialect();
@@ -73,5 +77,56 @@ describe("view filter operators — every authored operator compiles", () => {
       }
       expect(failures).toEqual([]);
     });
+  }
+
+  // The status primitive is compiled PER SUBJECT: every operator on the
+  // entity column (a kind), inside the role's facet EXISTS (a role), and as
+  // facet-OR-kind for a scope naming both. A role subject that still read the
+  // entity column is what made `status:"qualified"` list "new" leads.
+  const roleCompiler = new ViewFilterCompiler(drizzle.mock() as never);
+  const role: StatusFilterSubject = {
+    roleProfileIds: ["r1"],
+    facetScope: { userId: "u1", workspaceId: "ws-1" },
+  };
+  const subjects: Array<[string, StatusFilterSubject | undefined, RegExp]> = [
+    ["kind", undefined, /^(?![\s\S]*entity_facets)[\s\S]*"entities"\."status/],
+    [
+      "role",
+      role,
+      /^(?![\s\S]*"entities"\."status)[\s\S]*exists[\s\S]*"entity_facets"\."status/,
+    ],
+    [
+      "role + kind",
+      { ...role, kindScope: eq(entities.type, "lead") },
+      /exists[\s\S]*"entity_facets"\."status[\s\S]* or [\s\S]*"entities"\."type"[\s\S]*"entities"\."status/,
+    ],
+  ];
+  for (const field of authored.VIEW_FILTER_STATUS_FIELDS) {
+    for (const [name, subject, shape] of subjects) {
+      it(`every authored operator compiles on ${field} for a ${name}`, async () => {
+        const failures: string[] = [];
+        for (const op of authored.VIEW_FILTER_OPERATORS) {
+          const filter = {
+            field,
+            operator: op,
+            value: sampleValue(op),
+          } as EntityFilter;
+          try {
+            const compiled = await roleCompiler.compileFilter(
+              filter,
+              undefined,
+              undefined,
+              undefined,
+              subject
+            );
+            const sql = compiled ? dialect.sqlToQuery(compiled.sql).sql : "";
+            if (!shape.test(sql)) failures.push(`${op}: ${sql}`);
+          } catch (error) {
+            failures.push(`${op}: threw ${(error as Error).message}`);
+          }
+        }
+        expect(failures).toEqual([]);
+      });
+    }
   }
 });

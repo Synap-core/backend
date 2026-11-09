@@ -1,7 +1,9 @@
 /**
  * The reads the person's own send door needs (Hub `POST /channels/:id/send`,
  * routers/hub-protocol/rest/channel-conversations.ts): the draft it sends,
- * and what the send ended as.
+ * and what the send ended as; and the draft its save door
+ * (`PUT /channels/:id/drafts/:draftId`) and versions read
+ * (`GET …/versions`) answer from.
  */
 
 import { db, and, eq, inArray } from "@synap/database";
@@ -44,29 +46,95 @@ export async function findOpenDraftOnChannel(args: {
 }
 
 /**
+ * A send the caller can read, filed on THIS channel, in ANY status (a sent,
+ * rejected or withdrawn draft keeps its history readable), or null. The read
+ * behind a draft's save answer and its versions; the save itself goes through
+ * `findOpenDraftOnChannel` (only an open draft is reworded).
+ */
+export async function findDraftOnChannel(args: {
+  userId: string;
+  draftId: string;
+  channelId: string;
+}): Promise<{
+  id: string;
+  status: string;
+  data: unknown;
+  revisionHistory: unknown;
+  agentUserId: string | null;
+  proposedByUserId: string | null;
+  createdBy: string | null;
+  createdAt: Date;
+} | null> {
+  const [draft] = await db
+    .select({
+      id: proposals.id,
+      status: proposals.status,
+      data: proposals.data,
+      revisionHistory: proposals.revisionHistory,
+      agentUserId: proposals.agentUserId,
+      proposedByUserId: proposals.proposedByUserId,
+      createdBy: proposals.createdBy,
+      createdAt: proposals.createdAt,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.id, args.draftId),
+        eq(proposals.proposalType, PROPOSED_MESSAGE_TYPE),
+        eq(proposals.targetId, args.channelId),
+        proposalUserFloor(args.userId)
+      )
+    )
+    .limit(1);
+  return draft ?? null;
+}
+
+/**
  * What a send ended as, read from its proposal after the approval: sent
  * (approved), held (pending with `held`: not reachable yet), failed (its
  * approval failed, with the reason), or null (still pending for another
  * reason, or gone).
+ *
+ * `mark` names the row's last recorded attempt (status, when it was last
+ * written or reviewed, its reason, its hold). Read before the approval and
+ * compared after it, it tells an outcome THIS attempt wrote from one an
+ * earlier attempt left: a refusal before anything ran leaves the mark as it
+ * was, and must be answered as that refusal, never as the old failure.
  */
 export async function readSendOutcome(proposalId: string): Promise<{
   status: "sent" | "held" | "failed" | null;
   reason?: string;
+  mark: string | null;
 }> {
   const [row] = await db
     .select({
       status: proposals.status,
       data: proposals.data,
       rejectionReason: proposals.rejectionReason,
+      updatedAt: proposals.updatedAt,
+      reviewedAt: proposals.reviewedAt,
     })
     .from(proposals)
     .where(eq(proposals.id, proposalId))
     .limit(1);
-  if (!row) return { status: null };
-  if (row.status === "approved") return { status: "sent" };
-  if (row.status === "approval_failed") {
-    return { status: "failed", reason: row.rejectionReason ?? undefined };
-  }
+  if (!row) return { status: null, mark: null };
   const held = row.status === "pending" ? readHeld(row.data) : null;
-  return held ? { status: "held", reason: held.reason } : { status: null };
+  const mark = JSON.stringify([
+    row.status,
+    row.updatedAt ? new Date(row.updatedAt).toISOString() : null,
+    row.reviewedAt ? new Date(row.reviewedAt).toISOString() : null,
+    row.rejectionReason ?? null,
+    held?.at ?? null,
+  ]);
+  if (row.status === "approved") return { status: "sent", mark };
+  if (row.status === "approval_failed") {
+    return {
+      status: "failed",
+      reason: row.rejectionReason ?? undefined,
+      mark,
+    };
+  }
+  return held
+    ? { status: "held", reason: held.reason, mark }
+    : { status: null, mark };
 }

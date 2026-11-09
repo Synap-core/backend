@@ -12,6 +12,7 @@ import { playbookStageSchema } from "./playbook-stage.js";
 import {
   carryProcessOver,
   foldProcessIntoSubjectProfile,
+  ON_END_RETIRED_MESSAGE,
   ProcessDeclarationError,
   readPlaybookProcess,
 } from "./playbook-process.js";
@@ -145,7 +146,6 @@ describe("the ONE fold: activators/humanOnlyStatuses → subjectProfile", () => 
         { on: "enters_status", status: "published", mode: "propose" },
       ],
       humanOnlyStatuses: ["published"],
-      onEnd: {},
       activatorsInvalid: false,
     });
   });
@@ -166,46 +166,44 @@ describe("the ONE fold: activators/humanOnlyStatuses → subjectProfile", () => 
   });
 });
 
-describe("subjectProfile.onEnd — what a session end moves the subject to", () => {
-  it("rides inside subjectProfile through the ONE write schema and reads back", () => {
-    const r = playbookDefinitionSchema.parse({
-      ...BASE,
-      subjectProfile: {
-        profileSlug: "finding",
-        onEnd: { cancelled: "open", failed: "open" },
-      },
-    });
-    expect(readPlaybookProcess(r.subjectProfile).onEnd).toEqual({
-      cancelled: "open",
-      failed: "open",
-    });
+describe("subjectProfile.onEnd is retired: a session end moves nothing", () => {
+  it("NON-VACUITY: the same subject without onEnd parses", () => {
+    expect(
+      playbookDefinitionSchema.safeParse({
+        ...BASE,
+        subjectProfile: { profileSlug: "finding" },
+      }).success
+    ).toBe(true);
   });
 
-  it("refuses a key that is not a terminal status, and a blank value", () => {
-    for (const onEnd of [{ stale: "open" }, { closed: "" }, ["open"]]) {
-      expect(
-        playbookDefinitionSchema.safeParse({
+  it("every definition schema refuses onEnd, empty or not, in the catalog's words", () => {
+    for (const schema of [
+      playbookDefinitionSchema,
+      packagePlaybookDefinitionSchema,
+    ]) {
+      for (const onEnd of [{ cancelled: "open" }, {}]) {
+        const r = schema.safeParse({
           ...BASE,
           subjectProfile: { profileSlug: "finding", onEnd },
-        }).success,
-        JSON.stringify(onEnd)
-      ).toBe(false);
+        });
+        expect(r.success, JSON.stringify(onEnd)).toBe(false);
+        expect(r.error?.issues[0]).toMatchObject({
+          path: ["subjectProfile", "onEnd"],
+          message: ON_END_RETIRED_MESSAGE,
+        });
+      }
     }
   });
 
-  it("a subjectProfile patch that does not name onEnd keeps the stored one", () => {
+  it("a subjectProfile patch no longer carries a stored onEnd over", () => {
     const stored = {
       profileSlug: "finding",
       statusProperty: "status",
       onEnd: { cancelled: "open" },
     };
-    expect(
-      carryProcessOver({ profileSlug: "finding", filter: {} }, stored)
-    ).toMatchObject({ onEnd: { cancelled: "open" } });
-    // A patch binding ANOTHER kind carries nothing: its lifecycle differs.
-    expect(
-      carryProcessOver({ profileSlug: "lead" }, stored)
-    ).not.toHaveProperty("onEnd");
+    const carried = carryProcessOver({ profileSlug: "finding" }, stored);
+    expect(carried).toMatchObject({ statusProperty: "status" });
+    expect(carried).not.toHaveProperty("onEnd");
   });
 });
 

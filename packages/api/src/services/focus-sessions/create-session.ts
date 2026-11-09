@@ -1296,7 +1296,7 @@ export async function createFocusSession(
     // definition snapshot), minus the executor dispatch — starting a session is
     // "I'm working on this playbook", not a full executor run. The snapshot is
     // THE shared one (`buildDefinitionSnapshot`): a hand-written copy here
-    // froze no `subjectProfile` (so no lifecycle, no end moves), criteria or
+    // froze no `subjectProfile` (so no lifecycle), criteria or
     // requiredIntents, and a later edit of the playbook then decided this run.
     if (playbook) {
       await tx.insert(playbookRuns).values({

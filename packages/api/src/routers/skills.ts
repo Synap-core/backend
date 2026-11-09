@@ -2069,6 +2069,23 @@ export const skillsRouter = router({
         });
       }
 
+      // DO NOT CONTACT (founder, 2026-11-09): a skill whose intent reaches a
+      // person sends nothing to a flagged one, even on its owner's own run,
+      // and nothing is filed (`send-recipient-consent.ts`).
+      const { refuseFlaggedCapabilityRecipient } =
+        await import("../services/capabilities/send-recipient-consent.js");
+      const doNotContact = await refuseFlaggedCapabilityRecipient(
+        skill,
+        input.input,
+        { userId }
+      );
+      if (doNotContact) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: doNotContact.message,
+        });
+      }
+
       // Capability-execution gate (Wave 3b chokepoint) — supersedes the bare
       // `approved` boolean. Owner-bypass: the skill's owner runs their own skill.
       // A non-owner with an UNAPPROVED skill routes to `propose` (don't run); an

@@ -14,6 +14,7 @@ import {
   db,
   drizzleSql,
   entities,
+  entityFacets,
   eq,
   events,
   focusSessions,
@@ -71,6 +72,7 @@ import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import type { EventReader } from "../../access/event-visibility.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
+import type { HeldSend } from "../channels/held-sends.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { isUuid } from "@synap-core/types/property-render";
 
@@ -250,18 +252,33 @@ export interface WaitingOnQuestion {
     | { sessionIds: string[] }
     | { scope: ResolvedScope }
     | { blocking: string[] };
-  /** Pending proposals filed by these sessions or targeting these things. */
-  proposals?: { sessionIds?: string[]; targetIds?: string[] };
+  /**
+   * Pending proposals filed by these sessions, targeting these ids (any
+   * target type: a goal's), or ON these things (`onThings`, entity ids:
+   * THE "proposal on things" rule, `proposalOnThingsIn` — it targets the
+   * thing, names it as its subject, or was filed in a session on it).
+   */
+  proposals?: {
+    sessionIds?: string[];
+    targetIds?: string[];
+    onThings?: string[];
+  };
   /** Nodes whose open `blocked_by` blockers count. */
   blockedNodes?: Array<{ kind: "session" | "entity" | "track"; id: string }>;
   /** Things whose CURRENT hold counts (a pause, read off the transition log). */
   holds?: HoldSubjectRef[];
   /**
    * Things whose CURRENT step declares a wait (`waits` on its lifecycle
-   * option: "sent" waits on the client's reply). A thing whose current hold
-   * this question counts waits on that hold instead: the pause names it.
+   * option: "sent" waits on the client's reply). With `facetId`, the step of
+   * that ROLE: the facet's status on the role's lifecycle (a lead in
+   * outreach waits on their reply). A thing whose current hold this question
+   * counts waits on that hold instead: the pause names it.
    */
-  steps?: Array<{ subjectType: "entity"; subjectId: string }>;
+  steps?: Array<{
+    subjectType: "entity";
+    subjectId: string;
+    facetId?: string | null;
+  }>;
   /** Sessions whose open pull request outcomes count, by their recorded state. */
   workUnitsOf?: string[];
   /** Sessions whose OPEN sub-sessions (`spawned_from`) count. */
@@ -394,6 +411,9 @@ export async function readWaitingOnSourcesFor<K>(
   const owedContainerIds = union(owedIdsOf, true);
   const proposalSessionIds = union((q) => q.proposals?.sessionIds);
   const proposalTargetIds = union((q) => q.proposals?.targetIds);
+  const proposalThingIds = union((q) => q.proposals?.onThings).filter((id) =>
+    isUuid(id)
+  );
   const nodes = [
     ...new Map(
       asked
@@ -409,7 +429,13 @@ export async function readWaitingOnSourcesFor<K>(
   const unitSessionIds = union((q) => q.workUnitsOf, false);
   const unitContainerIds = union((q) => q.workUnitsOf, true);
   const parentIds = union((q) => q.childrenOf);
-  const stepIds = union((q) => q.steps?.map((st) => st.subjectId));
+  const stepAsks = [
+    ...new Map(
+      asked
+        .flatMap(([, q]) => q.steps ?? [])
+        .map((st) => [stepKey(st), st] as const)
+    ).values(),
+  ];
 
   // Loaded late: these reach the router layer, the event floor or the packet.
   const [
@@ -417,12 +443,23 @@ export async function readWaitingOnSourcesFor<K>(
     { proposalUserFloor },
     { listNeedsYouOwed },
     { listBlockingSlots },
+    { proposalOnThingsIn },
+    { readHeld },
   ] = await Promise.all([
     import("../links/dependency-links.js"),
     import("../../routers/proposals/scope-conditions.js"),
     import("../signals/needs-you-owed.js"),
     import("../focus-sessions/owed-outputs.js"),
+    import("../focus-sessions/session-subject-where.js"),
+    import("../channels/held-sends.js"),
   ]);
+  // The asked things, as SQL: which of them each proposal is on.
+  const thingIdList = proposalThingIds.length
+    ? drizzleSql.join(
+        proposalThingIds.map((id) => drizzleSql`${id}`),
+        drizzleSql`, `
+      )
+    : null;
   const unscoped: ResolvedScope = {
     workspaceLens: undefined,
     projectLens: undefined,
@@ -473,7 +510,10 @@ export async function readWaitingOnSourcesFor<K>(
     ),
     // Every `blocking` question in ONE read (plan e7f753db §9).
     listBlockingSlots({ userId, thingIds: blockingThingIds }),
-    proposalSessionIds.length + proposalTargetIds.length > 0
+    proposalSessionIds.length +
+      proposalTargetIds.length +
+      proposalThingIds.length >
+    0
       ? db
           .select({
             id: proposals.id,
@@ -482,6 +522,12 @@ export async function readWaitingOnSourcesFor<K>(
             targetType: proposals.targetType,
             proposalType: proposals.proposalType,
             data: proposals.data,
+            // The asked things this proposal is ON (THE rule, per thing).
+            onThings: thingIdList
+              ? drizzleSql<string[]>`ARRAY(
+                  SELECT x FROM unnest(ARRAY[${thingIdList}]::text[]) AS x
+                  WHERE ${proposalOnThingsIn(drizzleSql`x`)})`
+              : drizzleSql<string[]>`ARRAY[]::text[]`,
           })
           .from(proposals)
           .where(
@@ -494,7 +540,8 @@ export async function readWaitingOnSourcesFor<K>(
                   : undefined,
                 proposalTargetIds.length
                   ? inArray(proposals.targetId, proposalTargetIds)
-                  : undefined
+                  : undefined,
+                thingIdList ? proposalOnThingsIn(thingIdList) : undefined
               )
             )
           )
@@ -505,7 +552,7 @@ export async function readWaitingOnSourcesFor<K>(
       : Promise.resolve([]),
     readOpenWorkUnits(reader, unitSessionIds, unitContainerIds),
     readOpenChildren(reader, parentIds),
-    readStepWaits(userId, stepIds),
+    readStepWaits(userId, stepAsks),
   ]);
 
   // Which of the sessions behind a source the reader may READ: only those
@@ -567,13 +614,17 @@ export async function readWaitingOnSourcesFor<K>(
     }
     const bySession = new Set(q.proposals?.sessionIds ?? []);
     const byTarget = new Set(q.proposals?.targetIds ?? []);
+    const onThings = new Set(q.proposals?.onThings ?? []);
     for (const p of pending) {
       const about =
         (p.sessionId != null && bySession.has(p.sessionId)) ||
-        (p.targetId != null && byTarget.has(p.targetId));
+        (p.targetId != null && byTarget.has(p.targetId)) ||
+        (Array.isArray(p.onThings) &&
+          p.onThings.some((id) => onThings.has(id)));
       if (!about) continue;
       sources.push({
         kind: "pending_proposal",
+        ...pendingProposalBlocker(p.proposalType, readHeld(p.data)),
         ref: {
           kind: "proposal",
           id: p.id,
@@ -595,7 +646,7 @@ export async function readWaitingOnSourcesFor<K>(
     for (const h of q.holds ?? []) {
       const held = holdOf.get(holdKey(h));
       if (!held) continue;
-      if (h.facetId == null) heldHere.add(`${h.subjectType}:${h.subjectId}`);
+      heldHere.add(holdKey(h));
       const moves =
         held.hold.until && "moves" in held.hold.until
           ? held.hold.until.moves
@@ -613,8 +664,9 @@ export async function readWaitingOnSourcesFor<K>(
       );
     }
     for (const st of q.steps ?? []) {
-      if (heldHere.has(`${st.subjectType}:${st.subjectId}`)) continue;
-      const wait = stepWaits.get(st.subjectId);
+      // A paused thing (or role) waits on its hold: the pause names it.
+      if (heldHere.has(stepKey(st))) continue;
+      const wait = stepWaits.get(stepKey(st));
       if (wait) sources.push(wait);
     }
     for (const sid of q.workUnitsOf ?? []) {
@@ -654,6 +706,29 @@ export const WAITING_READ_CAP = 100;
 
 const holdKey = (h: HoldSubjectRef) =>
   `${h.subjectType}:${h.subjectId}:${h.facetId ?? ""}`;
+
+/** A step question's key: the same shape as its hold's, so a pause wins. */
+const stepKey = (st: NonNullable<WaitingOnQuestion["steps"]>[number]) =>
+  holdKey({
+    subjectType: st.subjectType,
+    subjectId: st.subjectId,
+    ...(st.facetId ? { facetId: st.facetId } : {}),
+  });
+
+/**
+ * What a pending proposal holds a thing on: its type, as a stable blocker key
+ * (approve the draft); a send HELD until they act (`data.held`,
+ * `held-sends.ts`) waits on THEM, keyed by why it cannot go yet
+ * (`not_connected`). Pure.
+ */
+export function pendingProposalBlocker(
+  proposalType: string,
+  held: Pick<HeldSend, "errorClass"> | null
+): { blockerKey: string; held?: true } {
+  return held
+    ? { blockerKey: held.errorClass, held: true }
+    : { blockerKey: proposalType };
+}
 
 /** `person:<uuid>`-style refs a mover writes: the id, never shown as words. */
 const TYPED_ID =
@@ -854,42 +929,109 @@ export async function readOpenWorkUnits(
 
 /**
  * The wait each thing's CURRENT step declares (`LifecycleOption.waits`), as a
- * `step` source: only for a thing the reader may read, standing in a declared
- * option that waits. Its ref names the thing its `refFrom` property holds (an
- * entity id on the row) when the reader may read that thing: its title, as a
- * `person` door for a person, else a `thing`. Otherwise the wait is counted
- * under its reason's words, never an id ({@link unnamed}). One read of the
- * things, one lifecycle read per kind, one read of the named things. THROWS.
+ * `step` source, keyed like its question ({@link stepKey}): only for a thing
+ * the reader may read, standing in a declared option that waits. A thing's
+ * own step is its status on its kind's lifecycle; a ROLE's (`facetId`) is the
+ * facet's status on the role's lifecycle, read under THE facet floor
+ * (`roleVisibilityConditions`, as `readThingRoles`), and its `refFrom` read
+ * off the facet's properties. Its ref names the thing its `refFrom` property
+ * holds (an entity id on the row) when the reader may read that thing: its
+ * title, as a `person` door for a person, else a `thing`. Otherwise the wait
+ * is counted under its reason's words, never an id ({@link unnamed}). One
+ * read of the things, one of the roles, one lifecycle read per kind or role,
+ * one read of the named things. THROWS.
  */
 async function readStepWaits(
   userId: string,
-  entityIds: readonly string[]
+  asks: ReadonlyArray<NonNullable<WaitingOnQuestion["steps"]>[number]>
 ): Promise<Map<string, WaitingOnSource>> {
   const out = new Map<string, WaitingOnSource>();
-  const ids = [...new Set(entityIds)].filter((id) => isUuid(id));
-  if (ids.length === 0) return out;
-  const rows = await db
-    .select({
-      id: entities.id,
-      status: entities.status,
-      profileId: entities.profileId,
-      workspaceId: entities.workspaceId,
-      properties: entities.properties,
-    })
-    .from(entities)
-    .where(
-      and(
-        inArray(entities.id, ids),
-        isNull(entities.deletedAt),
-        entityReadVisibleWhere(userId)
-      )
-    );
+  const valid = asks.filter(
+    (a) => isUuid(a.subjectId) && (a.facetId == null || isUuid(a.facetId))
+  );
+  const ids = [
+    ...new Set(valid.filter((a) => a.facetId == null).map((a) => a.subjectId)),
+  ];
+  const facetAsks = valid.filter((a) => a.facetId != null);
+  if (ids.length + facetAsks.length === 0) return out;
+  /** One row standing in a step: a thing's own, or one of its roles. */
+  type StepRow = {
+    key: string;
+    id: string;
+    status: string | null;
+    profileId: string | null;
+    workspaceId: string | null;
+    properties: unknown;
+  };
+  const [own, roles] = await Promise.all([
+    ids.length
+      ? db
+          .select({
+            id: entities.id,
+            status: entities.status,
+            profileId: entities.profileId,
+            workspaceId: entities.workspaceId,
+            properties: entities.properties,
+          })
+          .from(entities)
+          .where(
+            and(
+              inArray(entities.id, ids),
+              isNull(entities.deletedAt),
+              entityReadVisibleWhere(userId)
+            )
+          )
+      : Promise.resolve([]),
+    facetAsks.length
+      ? (async () => {
+          const { roleVisibilityConditions } =
+            await import("../lifecycle/status-groups.js");
+          const visible = await roleVisibilityConditions({
+            userId,
+            lensWorkspaceId: undefined,
+            listing: false,
+          });
+          return db
+            .select({
+              facetId: entityFacets.id,
+              id: entityFacets.entityId,
+              status: entityFacets.status,
+              profileId: entityFacets.profileId,
+              workspaceId: entityFacets.workspaceId,
+              properties: entityFacets.properties,
+            })
+            .from(entityFacets)
+            .innerJoin(entities, eq(entities.id, entityFacets.entityId))
+            .where(
+              and(
+                inArray(entityFacets.id, [
+                  ...new Set(facetAsks.map((a) => a.facetId!)),
+                ]),
+                isNull(entityFacets.deletedAt),
+                isNull(entities.deletedAt),
+                ...visible
+              )
+            );
+        })()
+      : Promise.resolve([]),
+  ]);
+  const rows: StepRow[] = [
+    ...own.map((r) => ({
+      ...r,
+      key: stepKey({ subjectType: "entity", subjectId: r.id }),
+    })),
+    ...roles.map(({ facetId, ...r }) => ({
+      ...r,
+      key: stepKey({ subjectType: "entity", subjectId: r.id, facetId }),
+    })),
+  ];
   const resolver = new ProfileResolutionService(db);
   const lifecycles = new Map<
     string,
     ReturnType<typeof resolver.getEffectiveLifecycle>
   >();
   const waiting: Array<{
+    key: string;
     id: string;
     source: WaitingOnSource;
     reason: WaitingOnReason;
@@ -915,6 +1057,7 @@ async function readStepWaits(
     const props = (r.properties ?? {}) as Record<string, unknown>;
     const value = waits.refFrom ? props[waits.refFrom] : undefined;
     waiting.push({
+      key: r.key,
       id: r.id,
       source,
       reason,
@@ -953,10 +1096,10 @@ async function readStepWaits(
   for (const w of waiting) {
     const ref = w.refId ? named.get(w.refId) : undefined;
     if (!ref) {
-      out.set(w.id, unnamed(w.source));
+      out.set(w.key, unnamed(w.source));
       continue;
     }
-    out.set(w.id, {
+    out.set(w.key, {
       ...w.source,
       ref: {
         kind: ref.profileSlug === "person" ? "person" : "thing",

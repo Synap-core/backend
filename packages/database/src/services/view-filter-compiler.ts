@@ -5,14 +5,23 @@
  * Uses entity_property_index when available, falls back to JSONB queries.
  */
 
-import { sql, eq, and, type SQL } from "drizzle-orm";
-import { entities, entityPropertyIndex } from "../schema/index.js";
+import { sql, eq, and, or, type SQL } from "drizzle-orm";
+import {
+  entities,
+  entityFacets,
+  entityPropertyIndex,
+} from "../schema/index.js";
 import { PropertyMergingService } from "./property-merging-service.js";
+import {
+  facetRoleExists,
+  type FacetVisibilityScope,
+} from "./facet-resolution-service.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 import {
   VIEW_FILTER_OPERATORS,
   VIEW_FILTER_CORE_FIELDS,
+  isViewFilterStatusField,
   type EntityFilter,
   type FilterOperator as ViewFilterOperator,
 } from "@synap-core/types/views";
@@ -35,6 +44,27 @@ export {
   type EntityFilter,
   type ViewFilterOperator,
 };
+
+/**
+ * WHOSE status a `status` / `statusCategory` filter reads (the status
+ * primitive of the grammar). No subject, or no role in it = a KIND: the
+ * entity's own `entities.status` / `status_category`. A list or view scoped
+ * to a ROLE reads that role's facet instead (`entity_facets.status` /
+ * `status_category`), through the ONE facet-EXISTS (`facetRoleExists`) under
+ * the same lens the scope used — the rule `flow.of` already follows.
+ */
+export interface StatusFilterSubject {
+  /** Role-profile ids the list/view is scoped to (their facet holds the status). */
+  roleProfileIds: readonly string[];
+  /** The lens the scope's facet EXISTS uses (same visibility, same rows). */
+  facetScope: FacetVisibilityScope;
+  /**
+   * When the scope ALSO names kinds (a slug carried by a kind row and a role
+   * twin; a view scoped to a kind and a role): the predicate selecting the
+   * kind rows, whose status is the entity column. Absent = role rows only.
+   */
+  kindScope?: SQL;
+}
 
 export interface CompiledFilter {
   sql: SQL;
@@ -72,7 +102,8 @@ export class ViewFilterCompiler {
     filter: EntityFilter,
     scopeProfileIds?: string[],
     propertyMetaMap?: Map<string, PropertyFilterMeta>,
-    workspaceId?: string | null
+    workspaceId?: string | null,
+    statusSubject?: StatusFilterSubject
   ): Promise<CompiledFilter | null> {
     // When `propertyMetaMap` is provided (the normal path from
     // compileFilters → buildPropertyMetaMap), it carries both the resolved
@@ -84,6 +115,10 @@ export class ViewFilterCompiler {
 
     // Check if this is a property field (starts with "properties.")
     const isPropertyField = field.startsWith("properties.");
+
+    if (isViewFilterStatusField(field)) {
+      return this.compileStatusFilter(filter, statusSubject);
+    }
 
     if (!isPropertyField) {
       // Standard entity column - use direct column access
@@ -172,7 +207,8 @@ export class ViewFilterCompiler {
     filters: EntityFilter[],
     scopeProfileIds?: string[],
     propertyMetaMap?: Map<string, PropertyFilterMeta>,
-    workspaceId?: string | null
+    workspaceId?: string | null,
+    statusSubject?: StatusFilterSubject
   ): Promise<SQL | null> {
     if (filters.length === 0) {
       return null;
@@ -197,7 +233,8 @@ export class ViewFilterCompiler {
         filter,
         scopeProfileIds,
         resolvedMetaMap,
-        workspaceId
+        workspaceId,
+        statusSubject
       );
       if (compiled !== null) {
         compiledFilters.push(compiled.sql);
@@ -292,73 +329,52 @@ export class ViewFilterCompiler {
       if (day) return { sql: day, usesIndex: false };
     }
 
-    switch (operator) {
-      case "equals":
-        return { sql: eq(column, value as string), usesIndex: false };
-      case "not_equals":
-        return {
-          sql: sql`(${column} IS DISTINCT FROM ${value})`,
-          usesIndex: false,
-        };
-      case "contains":
-        return {
-          sql: sql`${column} ILIKE ${`%${value}%`}`,
-          usesIndex: false,
-        };
-      // Text columns read "" as empty, like a property (jsonbEmpty); the
-      // timestamp columns can only be NULL.
-      case "is_empty":
-        return {
-          sql: isTextColumn
-            ? sql`(${column} IS NULL OR ${column} = '')`
-            : sql`${column} IS NULL`,
-          usesIndex: false,
-        };
-      case "is_not_empty":
-        return {
-          sql: isTextColumn
-            ? sql`(${column} IS NOT NULL AND ${column} <> '')`
-            : sql`${column} IS NOT NULL`,
-          usesIndex: false,
-        };
-      case "in":
-        if (Array.isArray(value)) {
-          // Drizzle expands a JS array into `($1, $2)`: valid for IN, not ANY().
-          return {
-            sql: value.length === 0 ? sql`FALSE` : sql`${column} IN ${value}`,
-            usesIndex: false,
-          };
-        }
-        throw requiresArray(operator, field);
-      case "greater_than":
-        return { sql: sql`${column} > ${value}`, usesIndex: false };
-      case "greater_than_or_equal":
-        return { sql: sql`${column} >= ${value}`, usesIndex: false };
-      case "less_than":
-        return { sql: sql`${column} < ${value}`, usesIndex: false };
-      case "less_than_or_equal":
-        return { sql: sql`${column} <= ${value}`, usesIndex: false };
-      case "not_contains":
-        return {
-          sql: negateIncludingMissing(sql`${column} ILIKE ${`%${value}%`}`),
-          usesIndex: false,
-        };
-      case "not_in":
-        if (Array.isArray(value)) {
-          return {
-            sql:
-              value.length === 0
-                ? sql`TRUE`
-                : negateIncludingMissing(sql`${column} IN ${value}`),
-            usesIndex: false,
-          };
-        }
-        throw requiresArray(operator, field);
-      default:
-        throw new Error(
-          `Unsupported filter operator "${operator}" on field "${field}"`
-        );
+    return {
+      sql: compileColumnCondition(column, field, operator, value, isTextColumn),
+      usesIndex: false,
+    };
+  }
+
+  /**
+   * The status primitive, compiled per subject (see
+   * {@link StatusFilterSubject}): the same column operators on the entity's
+   * `status` / `status_category`, or inside the role's facet EXISTS. A
+   * negation ("is not X") keeps a row whose status is unset, on both paths.
+   */
+  private compileStatusFilter(
+    filter: EntityFilter,
+    subject: StatusFilterSubject | undefined
+  ): CompiledFilter {
+    const { field, operator, value } = filter;
+    const onCategory = field === "statusCategory";
+    const onEntity = compileColumnCondition(
+      onCategory ? entities.statusCategory : entities.status,
+      field,
+      operator,
+      value,
+      true
+    );
+    if (!subject || subject.roleProfileIds.length === 0) {
+      return { sql: onEntity, usesIndex: false };
     }
+    const onFacet = facetRoleExists(
+      this.db,
+      [...subject.roleProfileIds],
+      subject.facetScope,
+      compileColumnCondition(
+        onCategory ? entityFacets.statusCategory : entityFacets.status,
+        field,
+        operator,
+        value,
+        true
+      )
+    );
+    return {
+      sql: subject.kindScope
+        ? (or(onFacet, and(subject.kindScope, onEntity)) as SQL)
+        : onFacet,
+      usesIndex: false,
+    };
   }
 
   /**
@@ -727,6 +743,63 @@ export class ViewFilterCompiler {
           `Unsupported filter operator "${operator}" on property "${propertyKey}"`
         );
     }
+  }
+}
+
+/**
+ * One operator on one column (an entity column, or a facet's status column).
+ * Text columns read "" as empty, like a property (`jsonbEmpty`); a timestamp
+ * column can only be NULL. A negation includes the rows with no value.
+ */
+function compileColumnCondition(
+  column: any,
+  field: string,
+  operator: string,
+  value: unknown,
+  isTextColumn: boolean
+): SQL {
+  switch (operator) {
+    case "equals":
+      return eq(column, value as string);
+    case "not_equals":
+      return sql`(${column} IS DISTINCT FROM ${value})`;
+    case "contains":
+      return sql`${column} ILIKE ${`%${value}%`}`;
+    case "is_empty":
+      return isTextColumn
+        ? sql`(${column} IS NULL OR ${column} = '')`
+        : sql`${column} IS NULL`;
+    case "is_not_empty":
+      return isTextColumn
+        ? sql`(${column} IS NOT NULL AND ${column} <> '')`
+        : sql`${column} IS NOT NULL`;
+    case "in":
+      if (Array.isArray(value)) {
+        // Drizzle expands a JS array into `($1, $2)`: valid for IN, not ANY().
+        return value.length === 0 ? sql`FALSE` : sql`${column} IN ${value}`;
+      }
+      throw requiresArray(operator, field);
+    case "greater_than":
+      return sql`${column} > ${value}`;
+    case "greater_than_or_equal":
+      return sql`${column} >= ${value}`;
+    case "less_than":
+      return sql`${column} < ${value}`;
+    case "less_than_or_equal":
+      return sql`${column} <= ${value}`;
+    case "not_contains":
+      return negateIncludingMissing(sql`${column} ILIKE ${`%${value}%`}`);
+    case "not_in":
+      if (Array.isArray(value)) {
+        return value.length === 0
+          ? sql`TRUE`
+          : negateIncludingMissing(sql`${column} IN ${value}`);
+      }
+      throw requiresArray(operator, field);
+    default:
+      throw new Error(
+        `Unsupported filter operator "${operator}" on field "${field}"`
+      );
   }
 }
 

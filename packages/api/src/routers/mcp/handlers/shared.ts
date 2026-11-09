@@ -921,6 +921,20 @@ export function pageSlice<T>(
 export const LIST_PAGE_DEFAULT = 50;
 export const LIST_PAGE_MAX = 200;
 
+/**
+ * Default pages of the heavier list doors, sized so one default page fits the
+ * 16,000-char reply cap at the row size measured on the founder's pod
+ * (digest rows: profile ~270 chars, view ~230, automation ~480, playbook
+ * ~480, widget ~1,100, capability ~600): a caller that sends no `limit` gets a
+ * page that arrives whole, with `nextOffset` (or `nextCursor`) to continue.
+ */
+export const PROFILES_PAGE_DEFAULT = 40;
+export const VIEWS_PAGE_DEFAULT = 50;
+export const AUTOMATIONS_PAGE_DEFAULT = 25;
+export const PLAYBOOKS_PAGE_DEFAULT = 25;
+export const WIDGETS_PAGE_DEFAULT = 15;
+export const CAPABILITIES_PAGE_DEFAULT = 20;
+
 export const REASONING_MAX_CHARS = 2000;
 
 export function readReasoning(

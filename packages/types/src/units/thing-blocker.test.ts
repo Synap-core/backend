@@ -142,6 +142,47 @@ describe("deriveThingBlocker", () => {
     expect(b.clearedBy).toBeNull();
   });
 
+  it("a proposal carries its blocker key; a held send waits on THEM, not your review", () => {
+    const draft = deriveThingBlocker(
+      [{ kind: "pending_proposal", blockerKey: "messaging.external.send" }],
+      LEAD,
+      "researching"
+    );
+    expect(draft).toMatchObject({
+      ball: "me",
+      why: {
+        reason: "approval",
+        waitKind: "approval",
+        blockerKey: "messaging.external.send",
+      },
+    });
+    const held = deriveThingBlocker(
+      [{ kind: "pending_proposal", blockerKey: "not_connected", held: true }],
+      LEAD,
+      "researching"
+    );
+    expect(held).toMatchObject({
+      ball: "them",
+      why: {
+        reason: "external",
+        waitKind: "their_reply",
+        blockerKey: "not_connected",
+      },
+      clearedBy: null,
+    });
+    // Beside a ready draft, the ready one leads: your ball comes first.
+    const both = deriveThingBlocker(
+      [
+        { kind: "pending_proposal", blockerKey: "not_connected", held: true },
+        { kind: "pending_proposal", blockerKey: "messaging.external.send" },
+      ],
+      LEAD,
+      "researching"
+    );
+    expect(both.ball).toBe("me");
+    expect(both.count).toBe(2);
+  });
+
   it("no lifecycle, an off-path status or no step left: blocked, nothing to unlock", () => {
     const owed: WaitingOnSource[] = [{ kind: "owed_slot" }];
     expect(deriveThingBlocker(owed, null, "researching").unlocks).toBeNull();
