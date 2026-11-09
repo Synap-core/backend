@@ -14,6 +14,7 @@ import type { Context, Env } from "hono";
 import { z } from "zod";
 import {
   db,
+  agentOverridesForTurn,
   isDelegationHeaders,
   mintIsDelegationToken,
   IS_DELEGATION_HEADER,
@@ -36,6 +37,7 @@ import {
 import { resolveChatTarget } from "../../utils/resolve-chat-target.js";
 import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
 import { synapAiGate } from "../synap-ai-ceiling.js";
+import { listEnabledModels } from "./enabled-models.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -46,6 +48,11 @@ export const streamBodySchema = z.object({
   agentType: z.string().optional(),
   /** Client idempotency key (UUID). Also accepted via X-Request-Id header. */
   requestId: z.string().uuid().optional(),
+  /**
+   * One of the pod's enabled models (`<providerId>/<model id>`, as
+   * `GET /ai-providers/available` lists them). Pins the model for this turn only.
+   */
+  model: z.string().min(1).max(300).optional(),
 });
 
 export interface ChatStreamTarget {
@@ -144,6 +151,41 @@ export async function handleChatStream<E extends Env>(
   if (appGrant) {
     const gate = await synapAiGate(userId, new URL(c.req.url).origin);
     if (!gate.open) return c.json(gate.body, gate.status);
+  }
+
+  // A chosen model is checked against the models the pod has enabled and the person's own agent overrides are read
+  // BEFORE a turn is reserved, so a refusal leaves no turn row. The request's `agentOverrides` REPLACES what the IS would
+  // read itself, so the person's other overrides ride along and only `modelOverride` is set; a failed read is never sent
+  // as "no overrides" (`agentOverridesForTurn` → undefined): the turn is refused rather than run on a wrong config.
+  let turnOverrides: Awaited<ReturnType<typeof agentOverridesForTurn>>;
+  if (input.model) {
+    let enabled: Awaited<ReturnType<typeof listEnabledModels>>;
+    try {
+      enabled = await listEnabledModels();
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to read the enabled models"
+      );
+      return c.json({ error: "Could not check the requested model" }, 503);
+    }
+    if (!enabled.some((m) => m.id === input.model)) {
+      return c.json(
+        {
+          error:
+            "model is not enabled on this pod; choose one from GET /api/hub/ai-providers/available",
+        },
+        400
+      );
+    }
+    turnOverrides = await agentOverridesForTurn({
+      userId,
+      workspaceId: resolvedWorkspaceId,
+      agentType: input.agentType ?? "meta",
+    });
+    if (turnOverrides === undefined) {
+      return c.json({ error: "Could not read this agent's settings" }, 503);
+    }
   }
 
   // ── Step 3: Reserve durable chat_turn ────────────────────────────────────
@@ -316,6 +358,19 @@ export async function handleChatStream<E extends Env>(
     agentType: input.agentType ?? "meta",
     ...getPodCallback(),
     stream: true,
+    ...(input.model
+      ? {
+          agentOverrides: {
+            // `null` = the person has no row: the IS defaults for the rest.
+            promptAppend: null,
+            extraToolIds: [],
+            disabledToolIds: [],
+            maxStepsOverride: null,
+            ...turnOverrides,
+            modelOverride: input.model,
+          },
+        }
+      : {}),
   };
 
   // The turn's delegation headers. An app's token throws when it cannot be

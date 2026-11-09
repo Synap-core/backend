@@ -554,6 +554,12 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // never a credential — messaging.accounts-read.pglite.test.ts pins the key
   // set). `messaging` is the subject `messaging_accounts` already reads under
   // (grant-read.ts); the send through one is `messaging.send`.
+  // The AI models the pod has enabled, selectable for a chat turn (id, label,
+  // provider name, default mark; never a key, base URL or priority, the
+  // columns are not even read). No row a grant bounds: a pod-level list, so
+  // the gate is the verb that lets an app use it, `chat.stream` (an app that
+  // may not run a turn has no use for the list), as POST /chat/stream.
+  [/^\/ai-providers\/available\/?$/, NARROWED("chat", [], "stream")],
   [/^\/messaging\/accounts\/?$/, PERSON("messaging")],
   // Which agents the person has (id, name, agent type, presence; never a
   // key): an app that hands a run to one of them (`handToAgentId` on
