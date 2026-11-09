@@ -450,8 +450,8 @@ describe("NOISE — a playbook run is not recalled on its own (founder, 9 Nov 20
 describe("COST — an automation's session is not recalled on its own", () => {
   beforeEach(async () => {
     await q(
-      `update focus_sessions set workspace_id = $2, metadata = '{"automationId":"auto-1","automationRunId":"run-1"}'::jsonb where id = $1`,
-      [SESSION, WS]
+      `update focus_sessions set workspace_id = $2, origin = 'automation', playbook_id = $3, metadata = '{"automationId":"auto-1","automationRunId":"run-1"}'::jsonb where id = $1`,
+      [SESSION, WS, PLAYBOOK]
     );
     await q(`update playbooks set metadata = '{}'::jsonb where id = $1`, [
       PLAYBOOK,
