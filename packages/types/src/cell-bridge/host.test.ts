@@ -143,6 +143,7 @@ describe("the page bridge host — what it refuses", () => {
       { type: "synap:ready" },
       { type: "synap:query" },
       { type: "not-ours", id: "x" },
+      { type: "synap:query", id: "", operation: "entities.list" },
     ]) {
       await send(data);
     }
@@ -176,10 +177,12 @@ describe("the page bridge host — what it answers", () => {
         limit: 5,
         workspaceId: "another-space",
         projectId: "a-project",
+        junk: { a: 1 },
       })
     );
     expect(read).toHaveBeenCalledTimes(1);
-    // The page never chooses its lens: workspaceId and projectId are no op's params.
+    // The page never chooses its lens: workspaceId and projectId are no op's
+    // params; a param the op does not declare is dropped too.
     expect(read).toHaveBeenCalledWith("entities.list", {
       profileSlug: "task",
       limit: 5,
@@ -216,6 +219,30 @@ describe("the page bridge host — what it answers", () => {
       error: "FORBIDDEN: not yours",
     });
     expect(posted[0]!.message).not.toHaveProperty("data");
+  });
+
+  it("a failure that is not an Error, or has no words, still reaches the page as one", async () => {
+    const { posted, send } = setup(async (op) => {
+      if (op === "views.list") throw "not an Error";
+      throw new Error("   ");
+    });
+    await send(query("views.list"));
+    await send(query("entities.list", {}, "q2"));
+    expect(posted.map((p) => p.message)).toEqual([
+      { type: "synap:query:result", id: "q1", error: "The read failed." },
+      { type: "synap:query:result", id: "q2", error: "The read failed." },
+    ]);
+  });
+
+  it("an over-long failure is cut to 300 characters, and says it was cut", async () => {
+    const { posted, send } = setup(async () => {
+      throw new Error(`refused: ${"x".repeat(400)}`);
+    });
+    await send(query("profiles.list"));
+    const error = String(posted[0]!.message.error);
+    expect(error).toHaveLength(300);
+    expect(error.startsWith("refused: xxx")).toBe(true);
+    expect(error.endsWith("…")).toBe(true);
   });
 
   it("an answer too large to hand over is an error, never a cut list", async () => {
@@ -296,5 +323,25 @@ describe("cellBridgeAnswer — what crosses into the page", () => {
     expect(big).toMatchObject({ type: "synap:query:result", id: "b" });
     expect((big as { error?: string }).error).toMatch(/too large/);
     expect(big).not.toHaveProperty("data");
+  });
+
+  it("no answer crosses as null; the cap counts the JSON text, quotes included", () => {
+    expect(cellBridgeAnswer("u", undefined)).toEqual({
+      type: "synap:query:result",
+      id: "u",
+      data: null,
+    });
+    // A string of exactly the cap is two characters over it once quoted.
+    const atCap = cellBridgeAnswer(
+      "z",
+      "w".repeat(CELL_BRIDGE_MAX_ANSWER_CHARS)
+    );
+    expect(atCap).not.toHaveProperty("data");
+    expect((atCap as { error?: string }).error).toMatch(/too large/);
+    const under = cellBridgeAnswer(
+      "v",
+      "w".repeat(CELL_BRIDGE_MAX_ANSWER_CHARS - 2)
+    );
+    expect(under).toHaveProperty("data");
   });
 });
