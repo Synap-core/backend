@@ -793,11 +793,13 @@ describe("synap_requests[].scope: a pod-wide READ of one kind, nothing else (dec
     ["a delete", "entity.decision.delete"],
     ["a gate verb", "entity.deal.transition"],
     ["a whole kind (every verb)", "entity.decision"],
-    ["every kind", "entity.read"],
     ["every kind, spelled *", "entity.*.read"],
     ["full access", "*"],
-    ["another subject's read", "document.read"],
-    ["a relation read", "relation.read"],
+    ["a run (a gate verb, per space)", "playbook.run"],
+    ["a whole subject (every verb)", "playbook"],
+    ["a chat turn (an act, per space)", "chat.stream"],
+    ["a write on a pod-wide-readable subject", "view.create"],
+    ["a subject outside the closed list", "agent.read"],
     ["a proposal decision", "proposal.approve"],
   ])("refuses %s asked pod-wide (%s)", (_label, permission) => {
     expect(() => asked({ permission, scope: "pod" })).toThrow(
@@ -806,6 +808,23 @@ describe("synap_requests[].scope: a pod-wide READ of one kind, nothing else (dec
     expect(() => asked({ permission, scope: "pod" })).toThrow(
       /cannot be asked pod-wide|Invalid permission/
     );
+  });
+
+  it.each([
+    "entity.read",
+    "playbook.read",
+    "session.read",
+    "view.read",
+    "document.read",
+    "relation.read",
+    "project.read",
+    "automation.read",
+    "proposal.read",
+    "channel.read",
+  ])("accepts the read %s asked pod-wide (a person's own assistant app)", (permission) => {
+    expect(asked({ permission, scope: "pod" }).requestedPodWide).toEqual([
+      permission,
+    ]);
   });
 
   it("refuses an unknown scope value, and one permission declared both pod-wide and per space", () => {

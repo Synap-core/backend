@@ -191,10 +191,11 @@ function assertAppPermission(permission: string): void {
 /**
  * One `synap_requests[].scope`: absent or `"space"` (given per space, the
  * default) or `"pod"` (given everywhere in the pod, one tick). `"pod"` is
- * accepted ONLY on a read of one named kind (`isPodWideReadPermission`,
- * decision e1b59d38 "B"): writes, gate verbs, a whole kind, every kind and
- * every other subject stay per space, and a document asking otherwise is
- * refused, as an invalid permission is.
+ * accepted ONLY on a read (`isPodWideReadPermission`: one kind, every kind, or
+ * a subject on the pod-wide list; decision e1b59d38 "B", widened 2026-11-09):
+ * writes, gate verbs, an act (`chat.stream`), a whole kind or subject and
+ * every subject outside the list stay per space, and a document asking
+ * otherwise is refused, as an invalid permission is.
  */
 function requestScope(permission: string, scope: unknown): "space" | "pod" {
   if (scope === undefined || scope === "space") return "space";
@@ -205,7 +206,7 @@ function requestScope(permission: string, scope: unknown): "space" | "pod" {
   }
   if (!isPodWideReadPermission(permission)) {
     throw new ClientMetadataError(
-      `synap_requests: "${permission}" cannot be asked pod-wide: only a read of one kind can (entity.<kind>.read); every other permission is given in a space`
+      `synap_requests: "${permission}" cannot be asked pod-wide: only a read can (entity.<kind>.read, entity.read, or the read of a subject on the pod-wide list); every other permission is given in a space`
     );
   }
   return "pod";

@@ -13,17 +13,54 @@
  */
 
 /**
- * What an app may hold pod-wide: a READ of ONE named kind,
- * `entity.<kind>.read`. Never a write or a gate verb, never a whole kind
- * (`entity.decision` = every verb), never every kind (`entity.read`,
- * `entity.*.read`), never `*`, never another subject. Checked where an app
- * declares it (the client metadata document), where the person ticks it
- * (consent, the `app/connect` executor), where it is stored and read back
- * (`readAppConnectRequests`) and where it becomes a grant
- * (`grantsForApprovedRequests`).
+ * The subjects (not kinds) whose plain READ an app may hold pod-wide
+ * (`<subject>.read`): what a person's own assistant app needs to see across the
+ * whole pod, never to change it. Widened from entity kinds alone on
+ * 2026-11-09 at the founder's request (the Synap AI Chat app asks for its
+ * playbooks, runs, views, documents, relations, projects, automations,
+ * proposals and conversations with no space): a space-restricted grant matches
+ * `workspace_id IN (spaces)`, which a pod-wide row (workspace NULL) never
+ * satisfies, so an app limited to spaces could not see the pod's own
+ * playbooks at all.
+ *
+ * It is a closed list on purpose. A subject joins it only as a READ, for what
+ * the person already reads (grant ∩ floor), and never adds a write: every
+ * write, gate verb and act (`playbook.run`, `chat.stream`) stays per space.
+ */
+export const POD_WIDE_READ_SUBJECTS = [
+  "playbook",
+  "session",
+  "view",
+  "document",
+  "relation",
+  "project",
+  "automation",
+  "proposal",
+  "channel",
+] as const;
+
+const KIND_READ = /^entity\.[a-z0-9][a-z0-9_-]*\.read$/;
+const SUBJECT_READ = /^([a-z][a-z0-9_]*)\.read$/;
+
+/**
+ * What an app may hold pod-wide: a READ, and nothing else. Exactly one of
+ *  - `entity.<kind>.read`, one named kind (decision e1b59d38 "B");
+ *  - `entity.read`, every kind (the AI answering from the person's data);
+ *  - `<subject>.read` for a subject in `POD_WIDE_READ_SUBJECTS`.
+ * Never a write or a gate verb, never a whole kind or subject (`entity.decision`
+ * and `playbook` mean every verb), never `entity.*.read`, never `*`, never a
+ * subject outside the list. Checked where an app declares it (the client
+ * metadata document), where the person ticks it (consent, the `app/connect`
+ * executor), where it is stored and read back (`readAppConnectRequests`) and
+ * where it becomes a grant (`grantsForApprovedRequests`).
  */
 export function isPodWideReadPermission(permission: string): boolean {
-  return /^entity\.[a-z0-9][a-z0-9_-]*\.read$/.test(permission);
+  if (permission === "entity.read" || KIND_READ.test(permission)) return true;
+  const subject = SUBJECT_READ.exec(permission)?.[1];
+  return (
+    subject !== undefined &&
+    (POD_WIDE_READ_SUBJECTS as readonly string[]).includes(subject)
+  );
 }
 
 /**
