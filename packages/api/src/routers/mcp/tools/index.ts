@@ -40,13 +40,16 @@ import {
   SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
 } from "@synap-core/types/focus-sessions";
-// View types an agent may CREATE — the renderables catalog's creation door
-// (the same list the browser's "New view" chooser offers), never a local enum.
+// View types an agent may CREATE — the renderables catalog's agent creation
+// list (the person's "New view" catalogue plus the lifecycle pipeline), never
+// a local enum.
 import {
   CONTENT_KINDS,
-  CREATABLE_VIEW_DEFINITIONS,
+  AGENT_CREATABLE_VIEW_DEFINITIONS,
 } from "@synap-core/types/renderables";
-const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
+const CREATABLE_VIEW_TYPE_KEYS = AGENT_CREATABLE_VIEW_DEFINITIONS.map(
+  (d) => d.key
+);
 import {
   PROJECT_TRACK_STATUSES,
   PROJECT_TRACK_UNCERTAINTY_LEVELS,
@@ -5364,6 +5367,48 @@ export const tools = {
         },
       },
       {
+        name: "synap_set_start_page",
+        annotations: {
+          title: "Set space start page",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Set what a Space opens on: a cell (cellKey, from synap_list_widgets for that workspace: e.g. an app cell made with synap_create_cell), a website (url; with podAppClientId when it is a pod app signing in with Synap), or clear:true for the space's own home. Exactly one. A cell that cannot open in that space is refused before anything is filed. Governed: an agent always proposes — `proposed` is success.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: { type: "string", description: "Workspace UUID" },
+            cellKey: {
+              type: "string",
+              description:
+                "The cell to open on, e.g. 'cell:crm:pipeline' or 'generated:lead-desk'.",
+            },
+            url: {
+              type: "string",
+              description: "An http(s) website to open on.",
+            },
+            podAppClientId: {
+              type: "string",
+              description:
+                "With url: the pod app's Client ID Metadata Document URL, so the site opens signed in to this pod.",
+            },
+            clear: {
+              type: "boolean",
+              description: "true = open on the space's own home again.",
+            },
+            title: { type: "string", description: "Label for the start page." },
+            reasoning: {
+              type: "string",
+              description:
+                "Why, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
         name: "synap_update_space_brief",
         annotations: {
           title: "Edit space brief",
@@ -5619,7 +5664,7 @@ export const tools = {
           destructiveHint: false,
           openWorldHint: false,
         },
-        description: `Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of ${CREATABLE_VIEW_TYPE_KEYS.join(", ")} (sheet is the table door). profileId scopes to one entity type. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes \`link\` (\`\${PUBLIC_URL}/open/<id>\`) — surface that URL to the user.`,
+        description: `Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of ${CREATABLE_VIEW_TYPE_KEYS.join(", ")} (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. To edit a view after create (a bento's blocks, its name): synap_update_view. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes \`link\` (\`\${PUBLIC_URL}/open/<id>\`) — surface that URL to the user.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -5679,7 +5724,7 @@ export const tools = {
           destructiveHint: false,
           openWorldHint: false,
         },
-        description: `Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance.`,
+        description: `Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance. Whiteboards only: to rename a view or change its config (a bento's blocks, a kanban's grouping) use synap_update_view.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -5716,6 +5761,35 @@ export const tools = {
             },
           },
           required: ["viewId", "store", "version"],
+        },
+      },
+      {
+        name: "synap_update_view",
+        annotations: {
+          title: "Edit view",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Edit an existing view you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every widget you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the widget catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_update_view_content.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            viewId: { type: "string", description: "View UUID to edit" },
+            name: { type: "string", description: "New name (1-100 chars)." },
+            config: {
+              type: "object",
+              description:
+                "The view's WHOLE new config (it replaces the stored one), e.g. a bento's { blocks: [...] }.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["viewId"],
         },
       },
       {

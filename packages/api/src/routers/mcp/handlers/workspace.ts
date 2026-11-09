@@ -49,6 +49,7 @@ import {
   grantProfileAccessDoor,
   moveEntitiesDoor,
   renameWorkspaceDoor,
+  setStartPageDoor,
   type WorkspaceOpsActor,
 } from "../../../services/workspace-ops-doors.js";
 import {
@@ -955,6 +956,58 @@ export const workspaceHandlers: McpHandlerMap = {
         workspaceId,
         name,
         description,
+      })
+    );
+  },
+  /**
+   * Set what a space opens on: a stored cell (`cellKey`), a website (`url`,
+   * optionally a pod app's `podAppClientId`), or `clear` for the space's own
+   * home. One door: `workspacesRouter.setPrimarySurface` (the browser's tRPC
+   * route), which checks the surface opens in the space before its gate.
+   */
+  synap_set_start_page: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const workspaceId = args.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      return ok({ error: "workspaceId is required" });
+    }
+    const str = (v: unknown) =>
+      typeof v === "string" && v.trim() ? v.trim() : undefined;
+    const cellKey = str(args.cellKey);
+    const url = str(args.url);
+    const clear = args.clear === true;
+    const chosen = [cellKey, url, clear || undefined].filter(Boolean).length;
+    if (chosen !== 1) {
+      return ok({
+        error:
+          "Name exactly one start page: cellKey (a cell from synap_list_widgets), url (a website, with podAppClientId when it is a pod app), or clear: true (the space's own home).",
+      });
+    }
+    const title = str(args.title);
+    const podAppClientId = str(args.podAppClientId);
+    if (podAppClientId && !url) {
+      return ok({
+        error: "podAppClientId goes with url: the site it signs in to.",
+      });
+    }
+    const primarySurface = clear
+      ? null
+      : cellKey
+        ? { kind: "cell" as const, cellKey, ...(title ? { title } : {}) }
+        : {
+            kind: "url" as const,
+            url: url!,
+            ...(title ? { title } : {}),
+            ...(podAppClientId ? { podApp: { clientId: podAppClientId } } : {}),
+          };
+    return ok(
+      await setStartPageDoor(opsActor(ctx), {
+        workspaceId,
+        primarySurface,
+        reasoning: readReasoning(args),
       })
     );
   },

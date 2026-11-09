@@ -60020,6 +60020,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		setPrimarySurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				primarySurface: unknown;
+				reasoning?: string | undefined;
 				workspaceId: string;
 			};
 			meta: object;

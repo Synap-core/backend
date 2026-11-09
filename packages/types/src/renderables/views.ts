@@ -180,9 +180,9 @@ const kanbanView: ViewCapabilityDef = {
  * lost windowed, values outside the declaration in one "unclassified" column,
  * moves compare-and-set through the one mover. Not a query lens: its data is
  * the lifecycle read, so it stays out of the lens switcher. Kept out of the
- * creatable catalogue for now (its doors create it — a profile's implicit
- * pipeline, a project's pipeline door — and the MCP `create_view` enum and the
- * CP pod-tools mirror are regenerated before agents are offered it).
+ * person's creatable catalogue (its doors create it — a profile's implicit
+ * pipeline, a project's pipeline door); agents create one through
+ * `AGENT_CREATABLE_VIEW_DEFINITIONS` (MCP `synap_create_view`).
  */
 const pipelineView: ViewCapabilityDef = {
   key: "pipeline",
@@ -578,7 +578,7 @@ export const IMPLEMENTED_VIEW_TYPES = VIEW_DEFINITIONS.filter(
  * retired as a new view once the project map shipped (founder-approved
  * 2026-10-04: the zoom map now lives on the project page). Existing saved
  * instances of all three remain fully renderable. The pipeline is created by
- * its own doors for now (see `pipelineView`).
+ * its own doors, and by agents (`AGENT_CREATABLE_VIEW_DEFINITIONS`).
  */
 export const CREATABLE_VIEW_DEFINITIONS = VIEW_DEFINITIONS.filter(
   (definition) =>
@@ -588,6 +588,19 @@ export const CREATABLE_VIEW_DEFINITIONS = VIEW_DEFINITIONS.filter(
     definition.key !== "zoom_map" &&
     definition.key !== "pipeline"
 );
+
+/**
+ * What an AGENT may create (MCP `synap_create_view`, the Hub manifest's
+ * `creatable`): the person's catalogue above, plus the pipeline. The person's
+ * "New view" choosers stay on `CREATABLE_VIEW_DEFINITIONS` (they cannot yet
+ * ask which kind); an agent names the kind in `config.profileSlug`, and
+ * `views.create` refuses a kind that declares no lifecycle, so its columns
+ * always come from that declaration (rule apps-are-views-of-pod-state).
+ */
+export const AGENT_CREATABLE_VIEW_DEFINITIONS: readonly ViewCapabilityDef[] = [
+  ...CREATABLE_VIEW_DEFINITIONS,
+  pipelineView,
+];
 
 /** Structured view types (use entity query + render config). */
 export const STRUCTURED_VIEW_TYPES = VIEW_DEFINITIONS.filter(

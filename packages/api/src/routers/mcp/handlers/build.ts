@@ -754,6 +754,64 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  /**
+   * Edit an existing view's name and/or config through the Hub's governed
+   * `updateView` (the same door as `PATCH /api/hub/views/:id`): it checks the
+   * config against the view's type and, for a bento, the widget catalog,
+   * BEFORE the gate, then files `view.update` (a proposal for an agent).
+   */
+  synap_update_view: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      caller,
+      confinedWorkspaceId,
+    } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const viewId =
+      typeof args.viewId === "string" && args.viewId.trim()
+        ? args.viewId.trim()
+        : undefined;
+    if (!viewId) {
+      return ok({
+        error: "viewId is required — the UUID of the view to edit.",
+      });
+    }
+    const name =
+      typeof args.name === "string" && args.name.trim()
+        ? args.name.trim()
+        : undefined;
+    const config =
+      args.config &&
+      typeof args.config === "object" &&
+      !Array.isArray(args.config)
+        ? (args.config as Record<string, unknown>)
+        : undefined;
+    if (args.config !== undefined && !config) {
+      return ok({
+        error:
+          "config must be an object: the view's whole new config, e.g. { blocks: [...] } for a bento.",
+      });
+    }
+    if (!name && !config) {
+      return ok({ error: "Provide name and/or config to change." });
+    }
+    const result = await caller.views.updateView({
+      userId,
+      viewId,
+      // A service key confined to one space edits only that space's views:
+      // the door refuses a view of another space (FORBIDDEN).
+      ...(confinedWorkspaceId ? { workspaceId: confinedWorkspaceId } : {}),
+      ...(name ? { name } : {}),
+      ...(config ? { config } : {}),
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+    });
+    return ok(result);
+  },
   synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);

@@ -1103,6 +1103,10 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_declare_lifecycle: WRITE,
     synap_create_view: WRITE,
     synap_update_view_content: WRITE,
+    // Hub `views.updateView`: the view.update gate on the loaded view's space.
+    synap_update_view: WRITE,
+    // `workspaces.setPrimarySurface`: the workspace/update gate (ADMIN floor).
+    synap_set_start_page: WRITE,
     // Get-OR-create: it RETURNS a channel row, the person's personal channel
     // (tRPC `channels.ensurePersonal`, owner-wide) or one bound to an object
     // (`channels.resolveOrCreateChannel`). The door of what it reads.

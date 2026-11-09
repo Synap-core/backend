@@ -6520,6 +6520,54 @@
       }
     },
     {
+      "name": "synap_set_start_page",
+      "annotations": {
+        "title": "Set space start page",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Set what a Space opens on: a cell (cellKey, from synap_list_widgets for that workspace: e.g. an app cell made with synap_create_cell), a website (url; with podAppClientId when it is a pod app signing in with Synap), or clear:true for the space's own home. Exactly one. A cell that cannot open in that space is refused before anything is filed. Governed: an agent always proposes — `proposed` is success.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "description": "Workspace UUID"
+          },
+          "cellKey": {
+            "type": "string",
+            "description": "The cell to open on, e.g. 'cell:crm:pipeline' or 'generated:lead-desk'."
+          },
+          "url": {
+            "type": "string",
+            "description": "An http(s) website to open on."
+          },
+          "podAppClientId": {
+            "type": "string",
+            "description": "With url: the pod app's Client ID Metadata Document URL, so the site opens signed in to this pod."
+          },
+          "clear": {
+            "type": "boolean",
+            "description": "true = open on the space's own home again."
+          },
+          "title": {
+            "type": "string",
+            "description": "Label for the start page."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why, in the person's words — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["workspaceId"]
+      }
+    },
+    {
       "name": "synap_update_space_brief",
       "annotations": {
         "title": "Edit space brief",
@@ -6796,7 +6844,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of sheet, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard (sheet is the table door). profileId scopes to one entity type. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
+      "description": "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of sheet, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard, pipeline (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. To edit a view after create (a bento's blocks, its name): synap_update_view. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6820,7 +6868,8 @@
               "flow",
               "map",
               "bento",
-              "whiteboard"
+              "whiteboard",
+              "pipeline"
             ]
           },
           "workspaceId": {
@@ -6867,7 +6916,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance.",
+      "description": "Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance. Whiteboards only: to rename a view or change its config (a bento's blocks, a kanban's grouping) use synap_update_view.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6904,6 +6953,42 @@
           }
         },
         "required": ["viewId", "store", "version"]
+      }
+    },
+    {
+      "name": "synap_update_view",
+      "annotations": {
+        "title": "Edit view",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Edit an existing view you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every widget you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the widget catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_update_view_content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "viewId": {
+            "type": "string",
+            "description": "View UUID to edit"
+          },
+          "name": {
+            "type": "string",
+            "description": "New name (1-100 chars)."
+          },
+          "config": {
+            "type": "object",
+            "description": "The view's WHOLE new config (it replaces the stored one), e.g. a bento's { blocks: [...] }."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["viewId"]
       }
     },
     {
