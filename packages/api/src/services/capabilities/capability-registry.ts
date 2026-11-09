@@ -1556,6 +1556,8 @@ export interface SectionCapabilitiesOptions {
    * Omit for the historic behaviour: every distinct row, unbounded.
    */
   limit?: number;
+  /** Skip this many ranked distinct rows first (paging with `limit`). */
+  offset?: number;
   /**
    * Fold per SPACE: a row's dedupe identity becomes (its `workspaceId`, name)
    * instead of name alone, and every integration / skill / command row carries
@@ -1788,7 +1790,7 @@ export function sectionCapabilities(
   };
 
   if (typeof opts?.limit !== "number") return full;
-  return capSectionsByRank(full, caps, opts.limit, bySpace);
+  return capSectionsByRank(full, caps, opts.limit, bySpace, opts.offset ?? 0);
 }
 
 /**
@@ -1864,7 +1866,8 @@ function capSectionsByRank(
   full: SectionedCapabilities,
   caps: RegistryCapability[],
   limit: number,
-  bySpace: boolean
+  bySpace: boolean,
+  offset = 0
 ): SectionedCapabilities {
   const firstIndex = new Map<string, number>();
   caps.forEach((c, i) => {
@@ -1884,7 +1887,7 @@ function capSectionsByRank(
       rank: firstIndex.get(key) ?? Number.MAX_SAFE_INTEGER,
     }))
     .sort((a, b) => a.rank - b.rank);
-  const kept = new Set(ranked.slice(0, limit).map((r) => r.key));
+  const kept = new Set(ranked.slice(offset, offset + limit).map((r) => r.key));
 
   return {
     integrations: full.integrations.filter((it) =>

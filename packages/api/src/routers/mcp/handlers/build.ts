@@ -55,6 +55,11 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
+  pageSlice,
+  LIST_PAGE_MAX,
+  VIEWS_PAGE_DEFAULT,
+  WIDGETS_PAGE_DEFAULT,
+  PLAYBOOKS_PAGE_DEFAULT,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
@@ -349,7 +354,8 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: confinedWorkspaceId ?? null,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
-      limit: typeof args.limit === "number" ? args.limit : undefined,
+      limit:
+        typeof args.limit === "number" ? args.limit : PLAYBOOKS_PAGE_DEFAULT,
       cursor: typeof args.cursor === "string" ? args.cursor : undefined,
     });
     // How each of these has actually gone for this person — two queries for
@@ -699,9 +705,17 @@ export const buildHandlers: McpHandlerMap = {
       profileId:
         typeof args.profileId === "string" ? args.profileId : undefined,
     });
-    if (args.detail === "full" || !Array.isArray(result)) return ok(result);
+    if (!Array.isArray(result)) return ok(result);
+    const { page, paging } = pageSlice(
+      result as Array<Record<string, unknown>>,
+      args,
+      VIEWS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
+    if (args.detail === "full") return ok({ views: page, ...paging });
     return ok({
-      views: (result as Array<Record<string, unknown>>).map(toViewDigest),
+      views: page.map(toViewDigest),
+      ...paging,
       note: VIEWS_DIGEST_NOTE,
     });
   },
@@ -766,9 +780,16 @@ export const buildHandlers: McpHandlerMap = {
     // The hub door returns the ONE catalog: built-ins (in-process) ∪ this
     // pod's installed / AI-defined cells (services/cells/renderables.ts).
     const rows = await caller.widgetDefinitions.listWidgetDefs({ workspaceId });
+    const { page: widgetPage, paging: widgetPaging } = pageSlice(
+      discoverRenderables(rows, surface),
+      args,
+      WIDGETS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     return ok({
       surface,
-      widgets: discoverRenderables(rows, surface),
+      widgets: widgetPage,
+      ...widgetPaging,
       // Content languages (```mermaid, ```math, code) are fences, not
       // directives — the catalog's fence rows, a document-only answer.
       ...(surface === "document" ? { fences: discoverFences() } : {}),

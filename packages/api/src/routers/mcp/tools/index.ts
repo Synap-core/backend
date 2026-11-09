@@ -1042,7 +1042,15 @@ export const tools = {
               ],
               default: "pending",
             },
-            limit: { type: "number", default: 20 },
+            limit: {
+              type: "number",
+              default: 20,
+              description: "Page size, default 20, max 200",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
+            },
             detail: {
               type: "string",
               enum: ["summary", "full"],
@@ -1266,6 +1274,15 @@ export const tools = {
               enum: ["full"],
               description:
                 "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
+            },
+            limit: {
+              type: "number",
+              description:
+                "Page size, default 40, max 200. relationTypes come on the first page only.",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -3677,7 +3694,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size (1–100, default 50).",
+              description: "Page size (1–100, default 25).",
+            },
+            cursor: {
+              type: "string",
+              description: "nextCursor of the prior reply",
             },
             playbookId: {
               type: "string",
@@ -5751,6 +5772,14 @@ export const tools = {
               description:
                 "Optional profile UUID to filter views scoped to that entity type.",
             },
+            limit: {
+              type: "number",
+              description: "Page size, default 50, max 200",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
+            },
           },
         },
       },
@@ -5776,6 +5805,14 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace UUID. Include it so workspace-scoped generated cells appear.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 15, max 200",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
             },
           },
         },
@@ -6190,8 +6227,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Max entries to return (default 20 when `query` is set; unset otherwise).",
+              description: "Page size, default 20 (browse or query).",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
             },
           },
           // workspaceId is OPTIONAL — "what can this pod do?" is almost always
@@ -6380,7 +6420,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Max entries to return (default 50).",
+              description: "Page size, default 25, max 99.",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
             },
           },
         },
