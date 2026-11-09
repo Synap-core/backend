@@ -17,6 +17,12 @@
  * before: this rule refuses a flagged person, it does not widen the door's
  * policy to refuse an unknown one.
  *
+ * The SAME flag is read at the capability door for a verb whose intent
+ * reaches a person (`PERSON_CONTACT_INTENTS`: `gmail_send`, a LinkedIn
+ * invite), whose recipient is named in its parameters rather than by a
+ * channel (`services/capabilities/send-recipient-consent.ts`). Both read it
+ * through `readPersonDoNotContact`: one rule, two ways to name the person.
+ *
  * A failed READ is not "not flagged": it throws, and the send fails without
  * reaching the provider.
  */
@@ -24,6 +30,7 @@
 import { and, db, eq, isNull } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { resolveDoNotContactRefusal } from "@synap-core/types/vocabulary";
+import type { ABSTRACT_INTENTS } from "@synap-core/types/capability-intents";
 
 export const DO_NOT_CONTACT_PROPERTY = "doNotContact";
 export const DO_NOT_CONTACT_REASON_PROPERTY = "doNotContactReason";
@@ -71,6 +78,17 @@ export async function readRecipientDoNotContact(
       ? (channel.contextObjectId ?? null)
       : null;
   if (!personId) return null;
+  return readPersonDoNotContact(personId);
+}
+
+/**
+ * The flag of one person, by id, or null when the person is gone or the flag
+ * is not set. The ONE read of the flag: the channel's recipient above and a
+ * capability's recipient (`send-recipient-consent.ts`) both go through it.
+ */
+export async function readPersonDoNotContact(
+  personId: string
+): Promise<DoNotContactFlag | null> {
   const person = await db.query.entities.findFirst({
     where: and(eq(entities.id, personId), isNull(entities.deletedAt)),
     columns: { title: true, properties: true },
@@ -83,6 +101,26 @@ export async function readRecipientDoNotContact(
     reason: text(props[DO_NOT_CONTACT_REASON_PROPERTY]),
     since: text(props[DO_NOT_CONTACT_SINCE_PROPERTY]),
   };
+}
+
+/**
+ * The intents whose run delivers something TO A PERSON outside the pod: a
+ * message, a connection request. A capability verb declaring one of them is
+ * refused for a flagged recipient at the capability door. The verbs are never
+ * listed: a verb joins by declaring its intent (`skills.intent`).
+ */
+export const PERSON_CONTACT_INTENTS = [
+  "send_message",
+  "request_connection",
+] as const satisfies ReadonlyArray<(typeof ABSTRACT_INTENTS)[number]>;
+
+const PERSON_CONTACT_INTENT_SET: ReadonlySet<string> = new Set(
+  PERSON_CONTACT_INTENTS
+);
+
+/** Does a verb declaring this intent reach a person? */
+export function isPersonContactIntent(intent: unknown): boolean {
+  return typeof intent === "string" && PERSON_CONTACT_INTENT_SET.has(intent);
 }
 
 /** The send door's refusal sentence for a flagged person. */
