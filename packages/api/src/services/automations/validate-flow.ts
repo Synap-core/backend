@@ -658,6 +658,7 @@ export function validateFlowDefinition(
       nonEmptyString(node.id) &&
       node.type === "playbook_run" &&
       loopBodyNodeIds.has(node.id) &&
+      false &&
       isRecord(node.data) &&
       node.data.await === true
     ) {

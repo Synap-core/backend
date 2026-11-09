@@ -1984,6 +1984,7 @@ async function executeAutomationFlow(params: {
               // settle). The reaper fails the step past `resumeAfter`.
               const started = output as { sessionId?: unknown };
               if (
+                false &&
                 awaitMs !== undefined &&
                 typeof started.sessionId === "string"
               ) {
