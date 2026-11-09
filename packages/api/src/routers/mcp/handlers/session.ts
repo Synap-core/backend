@@ -913,10 +913,6 @@ export const sessionHandlers: McpHandlerMap = {
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
       ...(result.cancel ? { cancel: result.cancel } : {}),
-      // What the end moved (`subjectProfile.onEnd`): each thing moved,
-      // proposed, skipped or failed with why — absent when the process names
-      // nothing for this end.
-      ...(result.endMoves ? { endMoves: result.endMoves } : {}),
       ...(nudges ? { nudges } : {}),
       ...(leftOwed ? { leftOwed } : {}),
       note:

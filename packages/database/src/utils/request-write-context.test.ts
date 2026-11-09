@@ -377,3 +377,33 @@ describe("reported model (0389)", () => {
     expect(reportedModelColumns({})).toEqual({ model: null, provider: null });
   });
 });
+
+describe("no grant for a verdict about the person (runWithoutGrant)", () => {
+  it("lifts the key grant inside, keeps the acting agent, and the grant is back after", async () => {
+    const {
+      runWithGrant,
+      runWithoutGrant,
+      getRequestGrant,
+      grantOfScope,
+      runWithActingAgent,
+      getActingAgentUserId,
+    } = await import("./request-write-context.js");
+    const grant = grantOfScope({
+      permissions: ["session.read"],
+      workspaceIds: ["ws-1"],
+    });
+    await runWithActingAgent("agent-1", () =>
+      runWithGrant(grant, async () => {
+        expect(getRequestGrant()).toBe(grant);
+        const inside = await runWithoutGrant(async () => {
+          await Promise.resolve();
+          return { grant: getRequestGrant(), agent: getActingAgentUserId() };
+        });
+        expect(inside).toEqual({ grant: undefined, agent: "agent-1" });
+        expect(getRequestGrant()).toBe(grant);
+      })
+    );
+    // No grant in force: a plain call.
+    expect(runWithoutGrant(() => getRequestGrant())).toBeUndefined();
+  });
+});

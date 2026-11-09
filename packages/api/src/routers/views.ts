@@ -43,6 +43,7 @@ import {
   profileScopeConditions,
   loadFacetSlugsBatch,
   ViewFilterCompiler,
+  type StatusFilterSubject,
   PropertyMergingService,
   ViewDefaultColumnsService,
   getDb,
@@ -1447,6 +1448,10 @@ export const viewsRouter = router({
       // per-id kind lookup + polymorphic helper rather than a blanket
       // inArray(entities.profileId, …). The facet branch is lensed by the
       // view's own owner (ctx.userId) + workspace (lensWorkspaceId).
+      // Whose status a `status` / `statusCategory` filter reads: a role in
+      // the scope reads its facet (under the scope's own lens), a kind the
+      // entity column (`StatusFilterSubject`).
+      let statusSubject: StatusFilterSubject | undefined;
       if (view.scopeProfileIds && view.scopeProfileIds.length > 0) {
         const scopeProfiles = await db.query.profiles.findMany({
           where: inArray(profiles.id, view.scopeProfileIds),
@@ -1460,6 +1465,21 @@ export const viewsRouter = router({
         // All scope ids resolved to nothing (deleted profiles) → match no rows
         // rather than leaving the scope unfiltered.
         conditions.push(scopeCondition ?? pgSql`false`);
+        const roleIds = scopeProfiles
+          .filter((p) => p.profileKind === "role")
+          .map((p) => p.id);
+        const kindIds = scopeProfiles
+          .filter((p) => p.profileKind !== "role")
+          .map((p) => p.id);
+        if (roleIds.length > 0) {
+          statusSubject = {
+            roleProfileIds: roleIds,
+            facetScope: facetVisibilityScope,
+            ...(kindIds.length > 0
+              ? { kindScope: inArray(entities.profileId, kindIds) }
+              : {}),
+          };
+        }
       }
 
       // Pre-resolve property definitions (avoid N+1), scoped to the
@@ -1495,7 +1515,8 @@ export const viewsRouter = router({
             filters,
             view.scopeProfileIds,
             propertyMetaMap,
-            ctx.workspaceId
+            ctx.workspaceId,
+            statusSubject
           );
 
           if (compiledFilters) {

@@ -5839,6 +5839,38 @@ CREATE TABLE IF NOT EXISTS "presence_disowned_passkeys" (
   PRIMARY KEY ("user_id", "credential_id")
 );
 
+-- 0412: proof of presence, "Add this device" (device-link requests; the
+-- session a passkey-change grant is bound to) — mirrors 0412_presence_device_links.sql.
+CREATE TABLE IF NOT EXISTS "presence_device_links" (
+  "id"                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"           text        NOT NULL,
+  "kind"              text        NOT NULL,
+  "label"             text        NOT NULL,
+  "requester_session" text        NOT NULL,
+  "key_fingerprint"   text,
+  "match_number"      text        NOT NULL,
+  "choices"           text[]      NOT NULL,
+  "status"            text        NOT NULL DEFAULT 'pending',
+  "created_at"        timestamptz NOT NULL DEFAULT now(),
+  "expires_at"        timestamptz NOT NULL,
+  "decided_at"        timestamptz,
+  "approved_method"   text,
+  "redeemed_at"       timestamptz,
+  CONSTRAINT "presence_device_links_kind_check"
+    CHECK ("kind" IN ('passkey', 'device_key')),
+  CONSTRAINT "presence_device_links_status_check"
+    CHECK ("status" IN ('pending', 'approved', 'declined', 'redeemed', 'replaced'))
+);
+
+CREATE INDEX IF NOT EXISTS "presence_device_links_user_idx"
+  ON "presence_device_links" ("user_id", "created_at");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "presence_device_links_one_pending"
+  ON "presence_device_links" ("user_id") WHERE "status" = 'pending';
+
+ALTER TABLE "presence_challenges"
+  ADD COLUMN IF NOT EXISTS "grant_session" text;
+
 -- 0409: installations — capabilities installed on the person's own computers,
 -- of kind service or tool (installations, installation_bindings, host_jobs,
 -- intent_defaults). Read floor = the owner. Mirrors 0409_installations.sql.

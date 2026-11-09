@@ -360,6 +360,12 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       // written by the server only (machine-written, read-only).
       { slug: "linkedinConnection", required: false, displayOrder: 20 },
       { slug: "linkedinInvitedAt", required: false, displayOrder: 21 },
+      // Do not contact (founder, 2026-11-09): a flag ON THE PERSON, every
+      // role and space. The send door refuses any message to them, for every
+      // app and agent (`api/src/services/channels/do-not-contact.ts`).
+      { slug: "doNotContact", required: false, displayOrder: 22 },
+      { slug: "doNotContactReason", required: false, displayOrder: 23 },
+      { slug: "doNotContactSince", required: false, displayOrder: 24 },
     ],
   },
   {
@@ -1281,6 +1287,32 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         valueType: PropertyValueType.DATE,
         constraints: {},
         uiHints: { label: "LinkedIn request sent" },
+      },
+      // Do not contact (founder, 2026-11-09): set by the person (or an agent
+      // through the person's review); read by the send door, which refuses
+      // every message to a flagged person
+      // (`api/src/services/channels/do-not-contact.ts`).
+      {
+        slug: "doNotContact",
+        valueType: PropertyValueType.BOOLEAN,
+        constraints: {},
+        uiHints: {
+          label: "Do not contact",
+          inputType: "checkbox",
+          helpText: "No app or agent may send them a message",
+        },
+      },
+      {
+        slug: "doNotContactReason",
+        valueType: PropertyValueType.STRING,
+        constraints: { maxLength: 500 },
+        uiHints: { label: "Why not contact them", inputType: "text" },
+      },
+      {
+        slug: "doNotContactSince",
+        valueType: PropertyValueType.DATE,
+        constraints: {},
+        uiHints: { label: "Do not contact since" },
       },
       // Signal item properties
       {

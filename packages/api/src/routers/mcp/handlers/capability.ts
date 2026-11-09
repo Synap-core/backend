@@ -33,6 +33,10 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
+  pageLimit,
+  pageOffset,
+  AUTOMATIONS_PAGE_DEFAULT,
+  CAPABILITIES_PAGE_DEFAULT,
 } from "./shared.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 
@@ -308,6 +312,7 @@ export const capabilityHandlers: McpHandlerMap = {
         : undefined;
     const kind = typeof args.kind === "string" ? args.kind : undefined;
     const limit = typeof args.limit === "number" ? args.limit : undefined;
+    const offset = pageOffset(args.offset);
     const containerId =
       typeof args.containerId === "string" && args.containerId.trim()
         ? args.containerId.trim()
@@ -479,9 +484,45 @@ export const capabilityHandlers: McpHandlerMap = {
     const cappedInput = askedForBuiltins
       ? capabilities
       : capabilities.filter((c) => c.kind !== "builtin-tool");
+    // PAGE: a browse (no query) is one default page, so it arrives whole under
+    // the reply cap (measured 45,095 chars unpaged on the founder's pod); the
+    // zero-hit rescue stays unbounded unless the caller set a `limit`.
+    const pageLimitEff =
+      limit ??
+      (query
+        ? zeroHitNote
+          ? undefined
+          : DEFAULT_QUERY_LIMIT
+        : CAPABILITIES_PAGE_DEFAULT);
     const sections = sectionCapabilities(cappedInput, {
-      limit: limit ?? (query && !zeroHitNote ? DEFAULT_QUERY_LIMIT : undefined),
+      limit: pageLimitEff,
+      offset,
     });
+    const countRows = (x: {
+      integrations: unknown[];
+      skills: unknown[];
+      commands: unknown[];
+      builtins: unknown[];
+    }) =>
+      x.integrations.length +
+      x.skills.length +
+      x.commands.length +
+      x.builtins.length;
+    const rowsTotal =
+      pageLimitEff === undefined
+        ? 0
+        : countRows(sectionCapabilities(cappedInput));
+    const rowsShown = countRows(sections);
+    const paging =
+      pageLimitEff === undefined
+        ? {}
+        : {
+            total: rowsTotal,
+            offset,
+            ...(offset + rowsShown < rowsTotal
+              ? { nextOffset: offset + rowsShown }
+              : {}),
+          };
     const fullSections = sectionCapabilities(capabilities);
 
     // Teaching docs never land in ANY section (`sectionCapabilities` folds
@@ -499,7 +540,7 @@ export const capabilityHandlers: McpHandlerMap = {
         ]
       : [];
     const teachingDocs = allTeachingDocs
-      .slice(0, limit ?? allTeachingDocs.length)
+      .slice(offset, offset + (limit ?? allTeachingDocs.length))
       .map((c) => ({
         id: c.id,
         // What `synap_load_skill` takes. `null` only for a legacy row with no
@@ -515,6 +556,7 @@ export const capabilityHandlers: McpHandlerMap = {
       skills: sections.skills,
       commands: sections.commands,
       ...(askedForBuiltins ? { builtins: sections.builtins } : {}),
+      ...paging,
       ...(askedForTeachingDocs ? { teachingDocs } : {}),
       ...(builtInPack ? { builtInPack } : {}),
       // Honest, not hidden: these were folded out of the actionable view.
@@ -755,20 +797,34 @@ export const capabilityHandlers: McpHandlerMap = {
     // Same door the IS/UI use (hubAutomationsRouter.listAutomations →
     // automationsRouter.list): access-layer visibility floor + pod-wide globals,
     // narrowed by the workspace lens when present. No lens → all accessible.
+    const autoLimit = pageLimit(args.limit, AUTOMATIONS_PAGE_DEFAULT, 99);
+    const autoOffset = pageOffset(args.offset);
     const result = await caller.automations.listAutomations({
       userId,
       workspaceId: requestedWorkspaceId ?? null,
       status: args.status as
         "draft" | "active" | "paused" | "error" | undefined,
-      limit: typeof args.limit === "number" ? args.limit : undefined,
+      // One row past the page tells whether another page exists.
+      limit: autoLimit + 1,
+      offset: autoOffset,
     });
-    if (args.detail === "full") return ok(result);
-    const rows = (result as { automations?: Array<Record<string, unknown>> })
+    const rows0 = (result as { automations?: Array<Record<string, unknown>> })
       .automations;
-    if (!Array.isArray(rows)) return ok(result);
+    if (!Array.isArray(rows0)) return ok(result);
+    const paging = {
+      offset: autoOffset,
+      ...(rows0.length > autoLimit
+        ? { nextOffset: autoOffset + autoLimit }
+        : {}),
+    };
+    const rows = rows0.slice(0, autoLimit);
+    if (args.detail === "full") {
+      return ok({ ...result, automations: rows, ...paging });
+    }
     return ok({
       ...result,
       automations: rows.map(toAutomationDigest),
+      ...paging,
       note: AUTOMATIONS_DIGEST_NOTE,
     });
   },

@@ -23,6 +23,7 @@ import {
 import {
   ENTITIES_LEAN_NOTE,
   projectLeanEntityList,
+  leanListedUnderRole,
 } from "../../../services/entity-lean-list.js";
 import {
   ASK_DETAILS,
@@ -46,6 +47,7 @@ import {
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
 import { toolError } from "../tool-errors.js";
+import { parseEntityListFiltersInput } from "../../../utils/entity-list-filters-input.js";
 import {
   listEffectiveRelationTypes,
   type EffectiveRelationType,
@@ -76,6 +78,7 @@ import {
   pageLimit,
   pageOffset,
   pageSlice,
+  PROFILES_PAGE_DEFAULT,
   ENTITIES_PAGE_MAX,
 } from "./shared.js";
 
@@ -306,6 +309,24 @@ export const readHandlers: McpHandlerMap = {
     if ("error" in interactionWindow) {
       return ok({ error: interactionWindow.error });
     }
+    // FILTERS: the Hub `GET /entities` grammar (view filters, ANDed, capped),
+    // as an array or its JSON. Malformed, too many, or a property filter with
+    // no kind is an error the agent can read, never a list that silently
+    // ignores the filter. An unknown or secret property is the core's own
+    // BAD_REQUEST (`entityListFiltersWhere`).
+    const parsedFilters = parseEntityListFiltersInput(
+      args.filters,
+      profileSlug || undefined
+    );
+    if (!parsedFilters.ok) return ok({ error: parsedFilters.error });
+    const filters = parsedFilters.filters;
+    const includeFacets = args.includeFacets === true;
+    // Listed under a ROLE, a lean row's status is that role's facet status:
+    // the list loads the facet rows for it (`projectLeanEntityList`).
+    const listedUnder =
+      (args.detail as string | undefined) === "full"
+        ? undefined
+        : await leanListedUnderRole(profileSlug || undefined);
     const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
@@ -321,6 +342,8 @@ export const readHandlers: McpHandlerMap = {
       ...(lastInteractionAfter ? { lastInteractionAfter } : {}),
       ...(lastInteractionBefore ? { lastInteractionBefore } : {}),
       ...(args.includeNever === true ? { includeNever: true } : {}),
+      ...(filters ? { filters } : {}),
+      ...(includeFacets || listedUnder ? { includeFacets: true } : {}),
       limit: limit + 1,
       offset,
     });
@@ -341,6 +364,7 @@ export const readHandlers: McpHandlerMap = {
       args.workspaceId ? `workspaceId=${String(args.workspaceId)}` : null,
       args.projectId ? `projectId=${String(args.projectId)}` : null,
       args.facetSlug ? `facetSlug=${String(args.facetSlug)}` : null,
+      filters ? `filters=${JSON.stringify(filters)}` : null,
     ].filter(Boolean);
     const note =
       result.length === 0 && lens.length > 0
@@ -358,15 +382,25 @@ export const readHandlers: McpHandlerMap = {
     }
     // `fields`: extra property keys or columns the caller names, returned
     // whole — a lean row never makes a value unreachable.
-    const fields = Array.isArray(args.fields)
+    const named = Array.isArray(args.fields)
       ? (args.fields as unknown[]).filter(
           (f): f is string => typeof f === "string" && f.length > 0
         )
-      : undefined;
+      : [];
+    // A lean row drops `facets` (it only names it in `omitted`); a caller that
+    // asked for them with includeFacets must get them, whole.
+    const fields = includeFacets
+      ? [...new Set([...named, "facets", "facetSlugs"])]
+      : named.length > 0
+        ? named
+        : undefined;
     return ok({
       entities: await projectLeanEntityList(
         result as unknown as Array<Record<string, unknown>>,
-        fields ? { fields } : {}
+        {
+          ...(fields ? { fields } : {}),
+          ...(listedUnder ? { listedUnder } : {}),
+        }
       ),
       count: result.length,
       ...paging,
@@ -612,9 +646,19 @@ export const readHandlers: McpHandlerMap = {
           ? args.sessionId
           : undefined,
       status: args.status as string | undefined,
-      limit: (args.limit as number) || undefined,
+      // One row past the page tells whether another page exists.
+      limit: pageLimit(args.limit, 20, LIST_PAGE_MAX) + 1,
+      offset: pageOffset(args.offset),
       package: isReviewPackage(args.package) ? args.package : undefined,
     });
+    const propLimit = pageLimit(args.limit, 20, LIST_PAGE_MAX);
+    const propOffset = pageOffset(args.offset);
+    const hasMoreProposals = result.length > propLimit;
+    const propPaging = {
+      offset: propOffset,
+      ...(hasMoreProposals ? { nextOffset: propOffset + propLimit } : {}),
+    };
+    const pageResult = result.slice(0, propLimit);
     // A LIST must be readable. Unprojected, this returned every row's full
     // `data` payload: 33 pending proposals measured at 283,737 characters
     // (~6k chars/row, largest single row 36k) — past the tool-result ceiling,
@@ -625,7 +669,9 @@ export const readHandlers: McpHandlerMap = {
     // agent's principal OWNS the target session (decision D1, agent door).
     const { redactUnreadableSessionTargets } =
       await import("../../../services/proposals/session-content-redaction.js");
-    const rawRows = await redactUnreadableSessionTargets(result, { userId });
+    const rawRows = await redactUnreadableSessionTargets(pageResult, {
+      userId,
+    });
     // SETUP — this door calls `listCreatedProposals` DIRECTLY (not
     // `hub.proposals.listProposals`), so the stamping the Hub procedure does
     // never happened here: `setup` was declared on the wire, forwarded by
@@ -660,11 +706,13 @@ export const readHandlers: McpHandlerMap = {
       // stripped (`data.failure.detail` is the redacted raw executor error and
       // its ONE reader is the server-side prompt path, `render-for-prompt.ts`,
       // never a tool result — `failure-projection.ts`).
+      // Unchanged shape for `full`: a bare array (paging: `limit`/`offset`).
       return ok(rows.map(withProposalClass));
     }
     const summarized = (rows as Record<string, unknown>[]).map(toProposalBasic);
     return ok({
       proposals: summarized,
+      ...propPaging,
       detail: "summary",
       note: "Compact rows. Call again with detail:'full' (and a small limit) to inspect a proposal's full payload.",
     });
@@ -819,8 +867,12 @@ export const readHandlers: McpHandlerMap = {
     return ok({
       entity: row.entity,
       profile: row.profile,
-      effectiveProperties: row.effectiveProperties,
+      // FACETS BEFORE the schema: a person's roles and their status are the
+      // answer an agent reads this for, and the reply cap cuts from the END.
+      // `effectiveProperties` is the long half (live: eddaa74b, b3372cca,
+      // 77b977c2 lost their facets behind it).
       facets: row.facets,
+      effectiveProperties: row.effectiveProperties,
       externalLinks: row.externalLinks,
       graph: row.graph,
       // The SIGNPOST. This is what makes the omission honest rather than
@@ -913,15 +965,24 @@ export const readHandlers: McpHandlerMap = {
       // group claimed all 24 globals as its own — live on Brand Library,
       // 2026-09-28, against this tool's own note that null = valid everywhere.
       const relationTypes = await relationTypesFor([null, wsId]);
-      if (wantFull) return ok({ ...result, ...relationTypes });
-      const profiles = Array.isArray(result)
-        ? result
-        : ((result as unknown as { profiles: unknown[] }).profiles ?? []);
+      const profiles = (
+        Array.isArray(result)
+          ? result
+          : ((result as unknown as { profiles?: unknown[] }).profiles ?? [])
+      ) as Array<Record<string, unknown>>;
+      const { page, paging } = pageSlice(
+        profiles,
+        args,
+        PROFILES_PAGE_DEFAULT,
+        LIST_PAGE_MAX
+      );
+      // The vocabulary rides the first page only: it does not change per page.
+      const rel = paging.offset === 0 ? relationTypes : {};
+      if (wantFull) return ok({ ...result, profiles: page, ...paging, ...rel });
       return ok({
-        profiles: (profiles as Array<Record<string, unknown>>).map((p) =>
-          toDigest(p)
-        ),
-        ...toDigestRelations(relationTypes),
+        profiles: page.map((p) => toDigest(p)),
+        ...paging,
+        ...(paging.offset === 0 ? toDigestRelations(relationTypes) : {}),
         detail: "digest",
         note: PROFILES_DIGEST_NOTE,
       });
@@ -987,13 +1048,22 @@ export const readHandlers: McpHandlerMap = {
       }
     }
     const relations = await relationTypesFor([null, ...wsIds]);
+    const { page, paging } = pageSlice(
+      merged,
+      args,
+      PROFILES_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     return ok({
-      profiles: merged,
+      profiles: page,
+      ...paging,
       ...(workspacesFailed.length ? { workspacesFailed } : {}),
       ...(wantFull
-        ? relations
+        ? paging.offset === 0
+          ? relations
+          : {}
         : {
-            ...toDigestRelations(relations),
+            ...(paging.offset === 0 ? toDigestRelations(relations) : {}),
             detail: "digest",
             note: PROFILES_DIGEST_NOTE,
           }),

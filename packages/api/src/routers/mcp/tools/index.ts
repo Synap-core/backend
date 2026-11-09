@@ -99,7 +99,6 @@ import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
-  playbookOnEndSchema,
   playbookSubjectProfileSchema,
 } from "../../../schemas/playbook-process.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -422,10 +421,6 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
     "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
-  ),
-  onEnd: deriveJsonSchema(
-    playbookOnEndSchema,
-    "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
@@ -881,7 +876,7 @@ export const tools = {
               type: "string",
               enum: ["lean", "full"],
               description:
-                "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows.",
+                "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, `truncated` names it with its full length); `omitted` lists the keys left out. full = unprojected rows.",
             },
             fields: {
               type: "array",
@@ -905,7 +900,7 @@ export const tools = {
             projectId: {
               type: "string",
               description:
-                "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL.",
+                "Optional: narrow to a project (entity id). Orthogonal to workspaceId; usually pre-set by the connection URL.",
             },
             facetSlug: {
               type: "string",
@@ -927,7 +922,7 @@ export const tools = {
             lastInteractionBefore: {
               type: "string",
               description:
-                "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Who haven't I spoken to in a month' = facetSlug 'lead' or 'client', lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting that happened, sent outreach, a dated conversation.",
+                "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Not spoken to in a month' = lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting, outreach sent, a dated conversation.",
             },
             lastInteractionAfter: {
               type: "string",
@@ -938,6 +933,16 @@ export const tools = {
               type: "boolean",
               description:
                 "With a lastInteraction window: also return the people never contacted (no interaction recorded). Default false.",
+            },
+            filters: {
+              type: "array",
+              items: { type: "object" },
+              description:
+                "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading.",
+            },
+            includeFacets: {
+              type: "boolean",
+              description: "Rows also carry their role facets.",
             },
             limit: {
               type: "number",
@@ -1045,7 +1050,15 @@ export const tools = {
               ],
               default: "pending",
             },
-            limit: { type: "number", default: 20 },
+            limit: {
+              type: "number",
+              default: 20,
+              description: "Page size, default 20",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
+            },
             detail: {
               type: "string",
               enum: ["summary", "full"],
@@ -1269,6 +1282,14 @@ export const tools = {
               enum: ["full"],
               description:
                 "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 40",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
           required: [],
@@ -2607,7 +2628,7 @@ export const tools = {
               items: { type: "string", format: "uuid" },
               maxItems: 100,
               description:
-                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already).",
+                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already).",
             },
             blockedBySessionIds: {
               type: "array",
@@ -3680,7 +3701,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size (1–100, default 50).",
+              description: "Page size (1–100, default 25).",
+            },
+            cursor: {
+              type: "string",
+              description: "nextCursor of the prior reply",
             },
             playbookId: {
               type: "string",
@@ -3786,7 +3811,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             scope: {
               type: "string",
@@ -3846,7 +3870,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             status: {
               type: "string",
@@ -5825,6 +5848,14 @@ export const tools = {
               description:
                 "Optional profile UUID to filter views scoped to that entity type.",
             },
+            limit: {
+              type: "number",
+              description: "Page size, default 50",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
+            },
           },
         },
       },
@@ -5850,6 +5881,14 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace UUID. Include it so workspace-scoped generated cells appear.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 15",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
         },
@@ -6264,8 +6303,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Max entries to return (default 20 when `query` is set; unset otherwise).",
+              description: "Page size, default 20 (browse or query).",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
           // workspaceId is OPTIONAL — "what can this pod do?" is almost always
@@ -6454,7 +6496,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Max entries to return (default 50).",
+              description: "Page size, default 25, max 99.",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
         },

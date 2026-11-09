@@ -1560,3 +1560,155 @@ describe("LinkedIn reach: HELD when filed, released on connected, and recorded o
     expect(result.peopleIgnored).toBeGreaterThanOrEqual(1);
   });
 });
+
+/**
+ * Do not contact (founder, 2026-11-09): a flag on the person, and the ONE send
+ * door refuses any message to them, whoever asks, before anything is filed,
+ * and again when an approved send replays. Rows rule out: an app's or an
+ * agent's draft being FILED for a flagged person; the person's own send
+ * reaching the provider; an approval sending to someone flagged after the
+ * draft was filed; a thread send (no channel id) skipping the check; an
+ * unflagged person being refused.
+ */
+describe("do not contact: the send door refuses any message to a flagged person", () => {
+  const FLAGGED = randomUUID();
+
+  async function flag(personId: string, on: boolean) {
+    await q(
+      `update entities set properties = properties || $2::jsonb where id = $1`,
+      [
+        personId,
+        JSON.stringify(
+          on
+            ? {
+                doNotContact: true,
+                doNotContactReason: "asked us to stop",
+                doNotContactSince: "2026-11-01",
+              }
+            : { doNotContact: false }
+        ),
+      ]
+    );
+  }
+
+  beforeAll(async () => {
+    await q(
+      `insert into entities (id, user_id, type, title, properties, created_at, updated_at) values ($1,$2,'person','Paul Martin',$3,now(),now())`,
+      [
+        FLAGGED,
+        OWNER,
+        JSON.stringify({
+          linkedinUrl: "https://www.linkedin.com/in/paul-martin",
+        }),
+      ]
+    );
+  });
+
+  beforeEach(async () => {
+    h.readable = new Set([PERSON, FLAGGED]);
+    await flag(FLAGGED, true);
+  });
+
+  async function personChannel(personId: string, externalId: string | null) {
+    const id = randomUUID();
+    await q(
+      `insert into channels (id, user_id, channel_type, scope, status, title, external_source, external_id, external_channel_id, context_object_type, context_object_id, metadata, created_at, updated_at)
+       values ($1,$2,'external','pod','active','Paul Martin','linkedin',$3,$3,'entity',$4,$5,now(),now())`,
+      [id, OWNER, externalId, personId, JSON.stringify({ accountId: ACCOUNT })]
+    );
+    return id;
+  }
+
+  it("an app's draft is refused with do_not_contact and nothing is filed or sent", async () => {
+    const out = await appSendsTo(FLAGGED);
+    expect(out).toMatchObject({
+      success: false,
+      errorClass: "do_not_contact",
+      error:
+        "Nothing was sent: Paul Martin is marked do not contact (asked us to stop).",
+    });
+    expect(out.proposed).toBeUndefined();
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect(send).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("an agent's send is refused, even when the gate would let it run", async () => {
+    h.gateSaysRun = true;
+    const channelId = await personChannel(FLAGGED, "chat-paul-agent");
+    const out = await sendExternalMessage({
+      channelId,
+      accountId: ACCOUNT,
+      body: "Hi from the agent",
+      userId: OWNER,
+      agentUserId: AGENT,
+      workspaceId: CRM,
+    });
+    expect(out).toMatchObject({ success: false, errorClass: "do_not_contact" });
+    expect((await q(`select 1 from proposals`)).rows).toHaveLength(0);
+    expect(send).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("the person's own send on the channel is refused before the provider", async () => {
+    const channelId = await personChannel(FLAGGED, "chat-paul-owner");
+    const out = await sendExternalMessage({
+      channelId,
+      accountId: ACCOUNT,
+      body: "hi",
+      userId: OWNER,
+    });
+    expect(out).toMatchObject({ success: false, errorClass: "do_not_contact" });
+    expect(send).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("a thread send (no channel id) to a flagged person's conversation is refused", async () => {
+    await personChannel(FLAGGED, "chat-paul-thread");
+    const out = await sendExternalMessage({
+      threadId: "chat-paul-thread",
+      accountId: ACCOUNT,
+      body: "hi",
+      userId: OWNER,
+    });
+    expect(out).toMatchObject({ success: false, errorClass: "do_not_contact" });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("flagged after the draft was filed: the approval sends nothing and fails do_not_contact", async () => {
+    await flag(FLAGGED, false);
+    const out = await appSendsTo(FLAGGED);
+    expect(out).toMatchObject({ proposed: true });
+    await flag(FLAGGED, true);
+    let caught: unknown;
+    try {
+      await approve(out.proposalId as string);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeTruthy();
+    expect(readAttachedFailureMeta(caught)?.errorClass).toBe("do_not_contact");
+    expect(send).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+    const [p] = (
+      await q<{ status: string }>(`select status from proposals where id=$1`, [
+        out.proposalId,
+      ])
+    ).rows;
+    expect(p!.status).not.toBe("approved");
+  });
+
+  it("an unflagged person (doNotContact false) is sent to", async () => {
+    await flag(FLAGGED, false);
+    send.mockResolvedValue({ messageId: "msg-paul" });
+    const channelId = await personChannel(FLAGGED, "chat-paul-ok");
+    const out = await sendExternalMessage({
+      channelId,
+      accountId: ACCOUNT,
+      body: "hi",
+      userId: OWNER,
+    });
+    expect(out.success).toBe(true);
+    expect(send).toHaveBeenCalledWith(ACCOUNT, "chat-paul-ok", "hi");
+  });
+});

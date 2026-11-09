@@ -178,6 +178,7 @@ import {
   resolvePodFilesAtRun,
   verbToolLabel,
 } from "./file-parameters.js";
+import { refuseFlaggedCapabilityRecipient } from "./send-recipient-consent.js";
 
 const logger = createLogger({ module: "execute-capability" });
 
@@ -608,8 +609,10 @@ export async function executeCapability(input: {
       parameters: skills.parameters,
       // Sync or async: how long a pod file's URL lives (`file-parameters.ts`).
       executionMode: skills.executionMode,
-      // The intent the verb serves: the gate's app outward floor reads it.
+      // The intent the verb serves: the gate's app outward floor reads it,
+      // and a send intent's recipient is read through its input map (below).
       intent: skills.intent,
+      inputMap: skills.inputMap,
     })
     .from(skills)
     .where(
@@ -696,6 +699,21 @@ export async function executeCapability(input: {
       repair: podFiles.repair,
     };
   }
+
+  // DO NOT CONTACT (founder, 2026-11-09): a verb whose intent reaches a
+  // person is refused when that person is flagged, whoever asks, BEFORE the
+  // gate, so nothing is filed for review. The post-gate runner checks again
+  // (an approved run whose person was flagged after it was filed).
+  const doNotContact = await refuseFlaggedCapabilityRecipient(
+    skillRow,
+    parameters,
+    {
+      userId,
+      agentUserId: input.agentUserId ?? null,
+      recipientId: input.intentRequest?.recipient?.id ?? null,
+    }
+  );
+  if (doNotContact) return doNotContact;
 
   const decision = await gateCapabilityExecution({
     capabilityKind: "skill",
@@ -1694,6 +1712,14 @@ export interface ResolvedSkillRow {
   parameters: unknown;
   /** Sync or async: the lifetime of a pod file's signed URL. */
   executionMode: string | null;
+  /**
+   * REQUIRED, both, for the same reason: a verb whose intent reaches a person
+   * is refused for a flagged recipient, read through its input map
+   * (`send-recipient-consent.ts`); a loader that forgot either column would
+   * let the send through unchecked.
+   */
+  intent: string | null;
+  inputMap: unknown;
 }
 
 /**
@@ -1867,6 +1893,20 @@ async function runResolvedSkillInner(
       enable?: CapabilityNextAction;
     }
 > {
+  // DO NOT CONTACT (founder, 2026-11-09): every run reaches this runner (a
+  // direct run, an approved proposal, a self-gated builtin), so a verb whose
+  // intent reaches a person sends nothing to a flagged one, first, before
+  // any file is minted or any tier runs. A definite not-delivered.
+  const doNotContact = await refuseFlaggedCapabilityRecipient(
+    skill,
+    parameters,
+    {
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
+    }
+  );
+  if (doNotContact) return doNotContact;
+
   // A run-time connection pick can't reach a code skill's sandbox (`runSkill`
   // takes no selector). Rather than SILENTLY running against the capability's
   // default credential — the wrong account, with no signal — refuse explicitly.

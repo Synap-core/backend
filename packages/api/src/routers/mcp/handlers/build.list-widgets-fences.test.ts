@@ -41,7 +41,9 @@ async function answer(args: Record<string, unknown>) {
 
 describe("synap_list_widgets — fences from the catalog", () => {
   it("document: every inline fence row arrives with its aiHint", async () => {
-    const out = await answer({ surface: "document" });
+    // `limit` covers the whole catalog: the default page is pinned in
+    // `list-paging.lists.test.ts`.
+    const out = await answer({ surface: "document", limit: 200 });
     expect(out.widgets.length).toBeGreaterThan(20);
     const inline = FENCE_RENDERABLES.filter((f) =>
       f.placements.includes("inline")
