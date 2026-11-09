@@ -46,6 +46,7 @@ import {
 } from "@synap/database";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import { effectiveSlotAsk } from "@synap-core/types/ask";
+import type { NeedsYouBlocks } from "@synap-core/types/needs-you";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import {
   isDecidedByAnswer,
@@ -116,10 +117,22 @@ export interface SessionOutput {
   source: Array<"artifact" | "produced_edge" | "expected">;
 }
 
+/** A declared, undelivered slot; `blockedThing` on the outcomes read only. */
+export type PendingExpected = ExpectedOutput & {
+  /**
+   * The thing this slot holds up (its `blocks.entityId`, else the session's
+   * subject), named under the READER's entity floor, with its status now and
+   * after: the need-you card's `blockedThing` (`withBlockedThings`). Stamped
+   * by {@link listSessionOutputsWithOutcomes} only; absent when the slot
+   * names no thing the reader may read.
+   */
+  blockedThing?: NeedsYouBlocks;
+};
+
 export interface SessionOutputsResult {
   outputs: SessionOutput[];
   /** Declared deliverables with no produced object behind them. */
-  pendingExpected: ExpectedOutput[];
+  pendingExpected: PendingExpected[];
 }
 
 /**
@@ -531,11 +544,27 @@ export async function listSessionOutputsWithOutcomes(
       .from(sessionEvaluations)
       .where(eq(sessionEvaluations.sessionId, session.id)),
   ]);
-  return attachSessionOutcomes(joined.result, joined.slots, {
-    criteria: session.criteria,
-    status: session.status,
-    evaluations,
-  });
+  // The thing each undelivered slot holds up, named once for all of them
+  // (one entity read), under the reader's floor.
+  const { withBlockedThings } = await import("./blocked-things.js");
+  const pendingExpected = (
+    await withBlockedThings(
+      params.userId,
+      joined.result.pendingExpected.map((e) => ({
+        ...e,
+        subjectEntityId: session.subjectEntityId,
+      }))
+    )
+  ).map(({ subjectEntityId: _subject, ...e }) => e as PendingExpected);
+  return attachSessionOutcomes(
+    { ...joined.result, pendingExpected },
+    joined.slots,
+    {
+      criteria: session.criteria,
+      status: session.status,
+      evaluations,
+    }
+  );
 }
 
 interface ReadableSession {
@@ -543,6 +572,7 @@ interface ReadableSession {
   expectedOutputs: unknown;
   criteria: unknown;
   status: string | null;
+  subjectEntityId: string | null;
 }
 
 async function loadReadableSession(
@@ -555,6 +585,7 @@ async function loadReadableSession(
       expectedOutputs: focusSessions.expectedOutputs,
       criteria: focusSessions.criteria,
       status: focusSessions.status,
+      subjectEntityId: focusSessions.subjectEntityId,
     })
     .from(focusSessions)
     .where(
