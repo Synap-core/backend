@@ -114,6 +114,7 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { definitionVersionChanged } from "../services/playbooks/definition-version.js";
+import { playbookSearchText } from "../services/playbooks/playbook-search-text.js";
 import {
   PINNED_ENTITY_IDS_KEY,
   explainPinnedIdRejection,
@@ -1469,7 +1470,8 @@ export async function matchPlaybooks(
       kind: "playbook" as const,
       id: p.id,
       name: p.name,
-      text: [p.goalTemplate],
+      // The SAME words synap_find's playbook arm ranks (one definition).
+      text: playbookSearchText(p),
       subjectProfileSlug:
         (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
         null,
@@ -1494,6 +1496,9 @@ export async function matchPlaybooks(
       name: candidate.row.name,
       scope,
       templateKind,
+      // When to use it, in full: the agent door cuts it
+      // (`compactPlaybookMatches`), a UI strip may show it whole.
+      description: candidate.row.description ?? null,
       goalTemplate: candidate.row.goalTemplate,
       subjectProfileSlug: candidate.subjectProfileSlug,
       // The workers it declares ("How often?" offers these; [] when none or

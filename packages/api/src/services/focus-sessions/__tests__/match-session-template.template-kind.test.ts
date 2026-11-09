@@ -72,6 +72,18 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
     });
   });
 
+  it("carries each candidate's description, and none for a playbook without one (finding 9463e6b3)", async () => {
+    const out = await matchSessionTemplate({
+      userId: "u1",
+      goal: "business model interrogation",
+    });
+    const byId = Object.fromEntries(out.candidates.map((c) => [c.id, c]));
+    expect(byId["pb-track"]!.description).toBe(
+      "Run the business model interrogation as a track"
+    );
+    expect("description" in byId["pb-twin"]!).toBe(false);
+  });
+
   it("honours the caller's limit, and keeps the default cap of 5 without one (ticket a9d88abf)", async () => {
     useMany = true;
     try {
