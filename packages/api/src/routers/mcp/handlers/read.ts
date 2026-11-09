@@ -45,7 +45,12 @@ import {
   parseEntityListSort,
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
+import type { ViewFilter } from "@synap-core/types";
 import { toolError } from "../tool-errors.js";
+import {
+  EntityListFiltersSchema,
+  filteredPropertySlugs,
+} from "../../../utils/entity-list-filters.js";
 import {
   listEffectiveRelationTypes,
   type EffectiveRelationType,
@@ -306,6 +311,18 @@ export const readHandlers: McpHandlerMap = {
     if ("error" in interactionWindow) {
       return ok({ error: interactionWindow.error });
     }
+    // FILTERS: the Hub `GET /entities` grammar (view filters, ANDed, capped),
+    // as an array or its JSON. Malformed, too many, or a property filter with
+    // no kind is an error the agent can read, never a list that silently
+    // ignores the filter. An unknown or secret property is the core's own
+    // BAD_REQUEST (`entityListFiltersWhere`).
+    const parsedFilters = parseEntityListFiltersInput(
+      args.filters,
+      profileSlug || undefined
+    );
+    if (!parsedFilters.ok) return ok({ error: parsedFilters.error });
+    const filters = parsedFilters.filters;
+    const includeFacets = args.includeFacets === true;
     const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
@@ -321,6 +338,8 @@ export const readHandlers: McpHandlerMap = {
       ...(lastInteractionAfter ? { lastInteractionAfter } : {}),
       ...(lastInteractionBefore ? { lastInteractionBefore } : {}),
       ...(args.includeNever === true ? { includeNever: true } : {}),
+      ...(filters ? { filters } : {}),
+      ...(includeFacets ? { includeFacets: true } : {}),
       limit: limit + 1,
       offset,
     });
@@ -341,6 +360,7 @@ export const readHandlers: McpHandlerMap = {
       args.workspaceId ? `workspaceId=${String(args.workspaceId)}` : null,
       args.projectId ? `projectId=${String(args.projectId)}` : null,
       args.facetSlug ? `facetSlug=${String(args.facetSlug)}` : null,
+      filters ? `filters=${JSON.stringify(filters)}` : null,
     ].filter(Boolean);
     const note =
       result.length === 0 && lens.length > 0
@@ -358,11 +378,18 @@ export const readHandlers: McpHandlerMap = {
     }
     // `fields`: extra property keys or columns the caller names, returned
     // whole — a lean row never makes a value unreachable.
-    const fields = Array.isArray(args.fields)
+    const named = Array.isArray(args.fields)
       ? (args.fields as unknown[]).filter(
           (f): f is string => typeof f === "string" && f.length > 0
         )
-      : undefined;
+      : [];
+    // A lean row drops `facets` (it only names it in `omitted`); a caller that
+    // asked for them with includeFacets must get them, whole.
+    const fields = includeFacets
+      ? [...new Set([...named, "facets", "facetSlugs"])]
+      : named.length > 0
+        ? named
+        : undefined;
     return ok({
       entities: await projectLeanEntityList(
         result as unknown as Array<Record<string, unknown>>,
@@ -819,8 +846,12 @@ export const readHandlers: McpHandlerMap = {
     return ok({
       entity: row.entity,
       profile: row.profile,
-      effectiveProperties: row.effectiveProperties,
+      // FACETS BEFORE the schema: a person's roles and their status are the
+      // answer an agent reads this for, and the reply cap cuts from the END.
+      // `effectiveProperties` is the long half (live: eddaa74b, b3372cca,
+      // 77b977c2 lost their facets behind it).
       facets: row.facets,
+      effectiveProperties: row.effectiveProperties,
       externalLinks: row.externalLinks,
       graph: row.graph,
       // The SIGNPOST. This is what makes the omission honest rather than
