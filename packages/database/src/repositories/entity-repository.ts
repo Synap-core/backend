@@ -6,7 +6,7 @@
  */
 
 import { eq, and, or, isNull, inArray, desc, type SQL } from "drizzle-orm";
-import { entities } from "../schema/index.js";
+import { documents, entities } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -678,6 +678,9 @@ export class EntityRepository extends BaseRepository<
       entity = row;
     }
 
+    // 3b. A pod-wide document given as this entity's body is filed with it.
+    await this.fileBodyWithEntity(entity);
+
     // 4. Index properties (async, non-blocking) — index through the
     //    requesting workspace's lens so overlay props get indexed too.
     if (profileId && Object.keys(validatedProperties).length > 0) {
@@ -738,6 +741,32 @@ export class EntityRepository extends BaseRepository<
     // Additive: the row exactly as before, plus the advisory `unmodeled` list
     // when (and only when) there is something to tell the caller.
     return unmodeled.length ? { ...entity, unmodeled } : entity;
+  }
+
+  /**
+   * A PART FOLLOWS ITS WHOLE (founder decision 22226da5, 2026-11-09): a
+   * POD-WIDE document that becomes the body of an entity STORED in a space is
+   * filed in that space. Every attach that writes `documentId` through this
+   * repository (create with a body id, `entities.update({ documentId })`, the
+   * create doors' attach step) lands here. Left alone: a document already in a
+   * space (the attach door, `assertDocumentAttachable`, decides whether it may
+   * be attached at all), and the body of a pod-wide entity, even one filed for
+   * a space (`home_workspace_id`): the home read rule already shows it to that
+   * space, and filing it there would also hand the space's editors a
+   * document the person may have written privately. Idempotent; it changes
+   * nothing but the document's `workspace_id`.
+   */
+  private async fileBodyWithEntity(entity: {
+    documentId?: string | null;
+    workspaceId?: string | null;
+  }): Promise<void> {
+    if (!entity.documentId || !entity.workspaceId) return;
+    await this.db
+      .update(documents)
+      .set({ workspaceId: entity.workspaceId })
+      .where(
+        and(eq(documents.id, entity.documentId), isNull(documents.workspaceId))
+      );
   }
 
   /**
@@ -954,6 +983,9 @@ export class EntityRepository extends BaseRepository<
     if (!entity) {
       throw new Error("Entity not found");
     }
+
+    // 3b. A pod-wide document attached as the body is filed with the entity.
+    if (data.documentId) await this.fileBodyWithEntity(entity);
 
     // 4. Reindex properties if changed — use the same lens as validation
     const reindexProfileId = newProfileId || existing.profileId;
