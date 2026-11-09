@@ -36,29 +36,11 @@ describe("stage ↔ subject lifecycle helpers", () => {
       profileSlug: "post",
       statusProperty: "post-status",
       humanOnlyStatuses: ["idea"],
-      onEnd: {},
     });
     expect(readSubjectLifecycle(null)).toEqual({
       profileSlug: null,
       statusProperty: null,
       humanOnlyStatuses: [],
-      onEnd: {},
     });
-  });
-
-  it("readSubjectLifecycle reads onEnd per terminal status and drops junk", () => {
-    expect(
-      readSubjectLifecycle({
-        onEnd: {
-          closed: " fixed ",
-          cancelled: "open",
-          failed: "",
-          stale: "open",
-          paused: 3,
-        },
-      }).onEnd
-    ).toEqual({ closed: "fixed", cancelled: "open" });
-    expect(readSubjectLifecycle({ onEnd: ["open"] }).onEnd).toEqual({});
-    expect(readSubjectLifecycle({ onEnd: "open" }).onEnd).toEqual({});
   });
 });

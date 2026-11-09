@@ -3,7 +3,7 @@
  * on every start and update door, as the SAME `session --targets--> entity`
  * edge a per-batch worker writes, and the machinery that already settles a
  * worker's targets settles them: process-sync stamps each one's result when
- * it moves, the close door stamps the open ones and applies `onEnd`.
+ * it moves, the close door stamps the open ones (and moves nothing).
  *
  * Real, on one PGlite with every table: `createFocusSession`,
  * `updateFocusSession`, the MCP `synap_start_session` / `synap_update_session`
@@ -24,8 +24,8 @@
  *    writes nothing yet;
  *  - a hand-made session (no `metadata.worker`) has its targets settled by
  *    process-sync: its own move `done`, someone else's `skipped`;
- *  - at close, an open target gets the playbook's `onEnd` move and a settled
- *    one does not.
+ *  - at close, an agent's cancel moves neither the subject nor an open target,
+ *    even when the run's frozen snapshot still carries a legacy `onEnd`.
  *
  * Stubbed, and why: the `focus_session` gate (decided per test; every other
  * subject reaches the real gate), post-commit delivery (events, realtime,
@@ -648,12 +648,14 @@ describe("process-sync settles a hand-made session's targets (no metadata.worker
   });
 });
 
-describe("at close, a declared target follows the playbook's onEnd", () => {
-  it("an open target moves; one the session settled does not", async () => {
+describe("at close, a session's end moves nothing (onEnd retired)", () => {
+  it("an agent's cancel leaves the subject and an open target where they are, even with a legacy onEnd frozen in the run", async () => {
+    // A run frozen before the retirement still carries onEnd in its snapshot
+    // (two live playbooks did on 9 Nov): the close door must not apply it.
     const profile = {
       profileSlug: "finding",
       statusProperty: "status",
-      onEnd: { cancelled: "open" },
+      onEnd: { cancelled: "open", failed: "open", closed: "open" },
     };
     const stages = [
       { key: "fix", name: "Fix", category: "active", subjectStatus: "fixing" },
@@ -666,12 +668,13 @@ describe("at close, a declared target follows the playbook's onEnd", () => {
                $3::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $4::jsonb, 1, 'active', now(), now())`,
       [playbookId, USER, JSON.stringify(stages), JSON.stringify(profile)]
     );
+    const [subject, open] = [await seedFinding(), await seedFinding()];
     const sessionId = randomUUID();
     await q(
       `insert into focus_sessions
-         (id, user_id, title, goal, status, origin, playbook_id, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
-       values ($1, $2, 'Fix', $3, 'active', 'playbook', $4, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, '{}', now(), now(), now())`,
-      [sessionId, USER, `Fix batch ${sessionId}`, playbookId]
+         (id, user_id, title, goal, status, origin, playbook_id, subject_entity_id, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
+       values ($1, $2, 'Fix', $3, 'active', 'playbook', $4, $5, '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, $6, now(), now(), now())`,
+      [sessionId, USER, `Fix batch ${sessionId}`, playbookId, subject, [AGENT]]
     );
     await q(
       `insert into playbook_runs (id, playbook_id, session_id, executor, status, created_by, definition_snapshot, started_at)
@@ -684,26 +687,26 @@ describe("at close, a declared target follows the playbook's onEnd", () => {
         JSON.stringify({ version: 1, stages, subjectProfile: profile }),
       ]
     );
-    const [open, settled] = [await seedFinding(), await seedFinding()];
     const declared = await updateFocusSession({
       sessionId,
       userId: USER,
-      targets: [open, settled],
+      targets: [open],
     });
     expect(declared).toMatchObject({ status: "updated" });
-    // The session moves `settled` itself: its target is done before the close.
-    await moveAndSync({ entityId: settled, to: "triaged", sessionId });
 
     const res = await completeFocusSession({
       sessionId,
       userId: USER,
+      agentUserId: AGENT,
       terminalStatus: "cancelled",
     });
     expect(res?.session.status).toBe("cancelled");
-    expect(await statusOf(open)).toBe("open");
-    expect(await statusOf(settled)).toBe("triaged");
-    expect(res?.endMoves?.moves).toEqual([
-      expect.objectContaining({ entityId: open, as: "target" }),
-    ]);
+    // Nothing moved: both keep their latest status.
+    expect(await statusOf(subject)).toBe("fixing");
+    expect(await statusOf(open)).toBe("fixing");
+    expect(res).not.toHaveProperty("endMoves");
+    // Still settled as a mark: the open target is stamped skipped.
+    const [edge] = await edgesOf(sessionId);
+    expect(edge?.metadata).toMatchObject({ result: "skipped" });
   });
 });

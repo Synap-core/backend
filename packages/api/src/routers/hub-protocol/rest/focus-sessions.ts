@@ -3101,8 +3101,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ? { closedNotDone: result.closedNotDone }
           : {}),
         ...(result.waiting ? { waiting: result.waiting } : {}),
-        // What the end moved (`subjectProfile.onEnd`), each with why.
-        ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {

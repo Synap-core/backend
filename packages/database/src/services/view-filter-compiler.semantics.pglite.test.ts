@@ -194,8 +194,8 @@ describe("ViewFilterCompiler — what it cannot compile THROWS", () => {
   const c = new ViewFilterCompiler({} as never);
   it.each([
     [
-      { field: "status", operator: "equals", value: "x" },
-      /Unknown filter field "status"/,
+      { field: "priority", operator: "equals", value: "x" },
+      /Unknown filter field "priority"/,
     ],
     [
       { field: "metadata.status", operator: "equals", value: "x" },
@@ -225,7 +225,7 @@ describe("ViewFilterCompiler — what it cannot compile THROWS", () => {
     await expect(
       c.compileFilters([
         { field: "title", operator: "equals", value: "a" },
-        { field: "status", operator: "equals", value: "open" },
+        { field: "priority", operator: "equals", value: "open" },
       ])
     ).rejects.toThrow(/Unknown filter field/);
   });

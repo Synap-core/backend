@@ -40,6 +40,9 @@
  *   not_connected  — the person is not connected to the recipient on that
  *                    network (LinkedIn messages only 1st-degree connections)
  *                                                               → CONNECT FIRST
+ *   do_not_contact — the recipient person is marked do not contact: the send
+ *                    door refuses every message to them (founder, 2026-11-09)
+ *                                                               → no action
  *   missing_field  — the request declared a parameter it never supplied → FILL
  *   validation     — the supplied values are not valid for the target
  *   conflict       — the target changed under the proposal (stale/duplicate)
@@ -61,6 +64,9 @@ export const FAILURE_ERROR_CLASSES = [
   "kind_missing",
   // Added 2026-11-03 (the channels send door), same rule as kind_missing.
   "not_connected",
+  // Added 2026-11-09 (do-not-contact at the send door), same rule as
+  // kind_missing: an older client reads it as unknown and says so.
+  "do_not_contact",
   "unknown",
 ] as const;
 

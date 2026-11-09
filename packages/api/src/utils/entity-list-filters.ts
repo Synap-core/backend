@@ -12,7 +12,10 @@
  *     slug is checked against that kind's declared properties (an unknown one
  *     is a 400, never a filter that matches nothing and reads as "no rows");
  *   - a `secret` property is refused: filtering is an oracle over the value
- *     (`VIEW_FILTER_OPERATORS_BY_VALUE_TYPE.secret` offers no operator).
+ *     (`VIEW_FILTER_OPERATORS_BY_VALUE_TYPE.secret` offers no operator);
+ *   - `status` / `statusCategory` read the listed thing's status: the
+ *     entity's columns for a kind, the role's facet when `profileSlug` names
+ *     a role (no property lookup, so a role list can filter by its stage).
  *
  * The compiled condition is ANDed with the list's other conditions, the read
  * floor (`accessScopeWhere`, which ANDs the key's grant) among them, so a
@@ -25,6 +28,7 @@ import {
   ProfileResolutionService,
   ViewFilterCompiler,
   getDb,
+  type StatusFilterSubject,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 
@@ -64,14 +68,20 @@ function badRequest(message: string): TRPCError {
  * `kindProfileIds`: the KIND profile rows the list's `profileSlug` resolved to
  * (never its role rows: a role's properties live on the facet, not in the
  * entity's `properties` the compiler reads). `undefined` = no `profileSlug`.
+ *
+ * `statusSubject`: set when `profileSlug` names a ROLE — a `status` /
+ * `statusCategory` clause then reads that role's facet, not the entity
+ * (`StatusFilterSubject`). Unset = a kind (or no slug): the entity's columns.
  */
 export async function entityListFiltersWhere(args: {
   filters: readonly ViewFilter[];
   profileSlug: string | undefined;
   kindProfileIds: readonly string[] | undefined;
   workspaceId: string | null | undefined;
+  statusSubject?: StatusFilterSubject;
 }): Promise<SQL | null> {
-  const { filters, profileSlug, kindProfileIds, workspaceId } = args;
+  const { filters, profileSlug, kindProfileIds, workspaceId, statusSubject } =
+    args;
   if (filters.length === 0) return null;
   if (filters.length > ENTITY_LIST_MAX_FILTERS) {
     throw badRequest(
@@ -127,7 +137,8 @@ export async function entityListFiltersWhere(args: {
       [...filters],
       scopeProfileIds,
       undefined,
-      workspaceId ?? null
+      workspaceId ?? null,
+      statusSubject
     );
   } catch (error) {
     throw new TRPCError({

@@ -133,6 +133,7 @@ const READ_FAILURE_OF: Record<FailureErrorClass, UrlReadFailureClass> = {
   kind_missing: "refused",
   provider: "refused",
   not_connected: "refused",
+  do_not_contact: "refused",
   missing_field: "refused",
   validation: "refused",
   conflict: "refused",

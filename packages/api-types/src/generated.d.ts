@@ -11679,6 +11679,13 @@ export interface Context {
 	 */
 	isHubProtocol?: boolean;
 	/**
+	 * Set ONLY by a Hub door that acts as the person (their own app token,
+	 * past `rejectAgentReviewer`) on the caller context it builds: the session
+	 * roster of the human doors applies there (`rosterReadFor`). Never set from
+	 * a request; ignored with an acting agent.
+	 */
+	personRoster?: boolean;
+	/**
 	 * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
 	 * its workspace binding, threaded from api-key-auth middleware. They let the
 	 * hub-protocol tRPC surface apply the SAME service-key workspace confinement
@@ -15969,6 +15976,7 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"conflict",
 	"kind_missing",
 	"not_connected",
+	"do_not_contact",
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
@@ -24046,45 +24054,6 @@ export type SessionLiveness = {
 	reason: string;
 	status: "unavailable";
 };
-/**
- * `via: "status_door"` — the write went through `moveStatus` (a declared
- * lifecycle, kind or role), so it emits the transition the follow reads.
- * Absent — the legacy plain-property `entities.update` fallback.
- */
-export type StageSubjectStatusOutcome = {
-	property: string;
-	status: "written";
-	value: string;
-	via?: "status_door";
-} | {
-	property: string;
-	proposalId: string;
-	status: "proposed";
-	value: string;
-	via?: "status_door";
-} | {
-	reason: "already_set" | "already_settled" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
-	status: "skipped";
-} | {
-	reason: string;
-	status: "failed";
-};
-export type SessionEndStatus = "cancelled" | "closed" | "failed";
-/** One thing the end tried to move, and what became of it. */
-export interface SessionEndMove {
-	entityId: string;
-	/** The session's subject, or a target still open at the close. */
-	as: "subject" | "target";
-	outcome: StageSubjectStatusOutcome;
-}
-/** What the close's end moves did, as the close result reports it. */
-export interface SessionEndMovesRecord {
-	/** The terminal status the session ended in. */
-	status: SessionEndStatus;
-	/** The value `onEnd[status]` names. */
-	value: string;
-	moves: SessionEndMove[];
-}
 export interface CancelRecordItem {
 	kind: "chat_turn" | "job" | "proposal";
 	id: string;
@@ -24264,6 +24233,83 @@ export interface SessionTwinCandidate {
 	 */
 	score: number;
 }
+/**
+ * STAGE ↔ SUBJECT STATUS — the forward half (a run entering a stage writes the
+ * subject's lifecycle value).
+ *
+ * A stage may declare `subjectStatus` (the value of the playbook's
+ * `subjectProfile.statusProperty` it corresponds to). When a run advances INTO
+ * such a stage, this writes that value onto the run's SUBJECT — through the
+ * GOVERNED entity-update door (`entities.update`, which runs
+ * `checkPermissionOrPropose`), never a raw UPDATE. An agent-driven advance may
+ * therefore come back `proposed`: that is SUCCESS (the human reviews the status
+ * change), not an error.
+ *
+ * Skips, each reported (never thrown — the stage already stands, and a status
+ * write that could not happen must not un-advance the run):
+ *  - no subject, or the stage declares no `subjectStatus`;
+ *  - no status property: the process names none AND its subject kind (or
+ *    role) declares no lifecycle. A process that names none follows the
+ *    declared lifecycle — `loadSessionProcess` resolves it, once, for every
+ *    reader (finding bfae3b84);
+ *  - the subject ALREADY holds the value (`already_set`).
+ * A caller's reply carries the outcome as `subjectMove`
+ * ({@link reportedSubjectMove}) whenever the stage asked for a move.
+ *
+ * BIRTH (finding e100ddf6): a session born from a staged playbook is seeded
+ * INTO its first stage (`create-session.ts`), so that stage's value is written
+ * at birth by the same rule — {@link writeBirthStageSubjectStatus}.
+ *
+ * NOT called (by the advance door) when:
+ *  - the advance FOLLOWS the subject (`skipSubjectWrite`, `@synap/jobs`
+ *    `utils/process-sync.ts`): the subject is the source of truth there, and a
+ *    follow that wrote back ping-ponged on stale events;
+ *  - the stage is held by its gate — entering a gated stage is not agreed yet.
+ *    A gate's PASS writes it: the stage-gate approval executor
+ *    (`routers/proposals/executors/playbook-stage-gate.ts`) for a human gate,
+ *    `resumeCheckGateIfMet` (`evaluations/evaluate.ts`) for a held check.
+ *
+ * STEP = STATUS (work model L5, 2026-10-12): for an ungated `"door"` advance
+ * the subject leads, the advance door calls this FIRST and leaves
+ * `current_stage` to process-sync's follow (`advance-stage.ts` header). Every
+ * other path still calls it after the stage write, as described above.
+ *
+ * A value listed in `subjectProfile.humanOnlyStatuses` is written with
+ * `forcePropose`: whoever drove the advance, a person decides it.
+ *
+ * A ROLE subject (`subjectProfile.profileSlug` is a role-profile, e.g. `lead`):
+ * the status lives on the role's FACET, so the move names the role and goes
+ * through the status door only. There is no plain-property fallback for a role
+ * — writing `leadStage` into the parent entity's JSONB would be a status no
+ * reader looks at, reported as `written`. A role move the door refuses
+ * (role not attached, no declared lifecycle, unknown option) is `failed`.
+ *
+ * Source of the definition: `loadSessionProcess` (@synap/jobs) — the RUN's
+ * frozen `definitionSnapshot` first, the live playbook second.
+ */
+/**
+ * `via: "status_door"` — the write went through `moveStatus` (a declared
+ * lifecycle, kind or role), so it emits the transition the follow reads.
+ * Absent — the legacy plain-property `entities.update` fallback.
+ */
+export type StageSubjectStatusOutcome = {
+	property: string;
+	status: "written";
+	value: string;
+	via?: "status_door";
+} | {
+	property: string;
+	proposalId: string;
+	status: "proposed";
+	value: string;
+	via?: "status_door";
+} | {
+	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
+	status: "skipped";
+} | {
+	reason: string;
+	status: "failed";
+};
 /** What a write did with each id. */
 export interface SessionTargetsWrite {
 	/** Newly working on these (a new edge, or an input edge promoted). */
@@ -30221,6 +30267,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
+				offset?: number | undefined;
 				status?: "active" | "draft" | "error" | "paused" | undefined;
 				triggerType?: "cron" | "event" | "manual" | "webhook" | undefined;
 				workspaceId?: string | null | undefined;
@@ -35196,7 +35243,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string | undefined;
 				failure?: {
 					enableProposalId?: string | undefined;
-					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
+					errorClass: "auth" | "conflict" | "do_not_contact" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
 						kind: "add" | "connect" | "enable" | "none" | "run";
@@ -38434,7 +38481,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				criteria: unknown;
 				currentStage: string | null;
-				endMoves?: SessionEndMovesRecord | undefined;
 				expectedOutputs: unknown;
 				goal: string;
 				id: string;
@@ -47620,11 +47666,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
-					onEnd?: {
-						cancelled?: string | undefined;
-						closed?: string | undefined;
-						failed?: string | undefined;
-					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -48705,11 +48746,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						} | undefined;
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
-					onEnd?: {
-						cancelled?: string | undefined;
-						closed?: string | undefined;
-						failed?: string | undefined;
-					} | undefined;
 				} | undefined;
 			};
 			meta: object;
@@ -59728,11 +59764,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								} | undefined;
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
-							onEnd?: {
-								cancelled?: string | undefined;
-								closed?: string | undefined;
-								failed?: string | undefined;
-							} | undefined;
 						} | undefined;
 					}[] | undefined;
 					automations?: {

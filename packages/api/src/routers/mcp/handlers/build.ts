@@ -55,8 +55,14 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
+  pageSlice,
+  LIST_PAGE_MAX,
+  VIEWS_PAGE_DEFAULT,
+  WIDGETS_PAGE_DEFAULT,
+  PLAYBOOKS_PAGE_DEFAULT,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import { ON_END_RETIRED_MESSAGE } from "../../../schemas/playbook-process.js";
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
@@ -349,7 +355,8 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: confinedWorkspaceId ?? null,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
-      limit: typeof args.limit === "number" ? args.limit : undefined,
+      limit:
+        typeof args.limit === "number" ? args.limit : PLAYBOOKS_PAGE_DEFAULT,
       cursor: typeof args.cursor === "string" ? args.cursor : undefined,
     });
     // How each of these has actually gone for this person — two queries for
@@ -481,6 +488,7 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     // WRITE: confined/explicit lens or advisory focus only — never membership[0].
     const outcome = await createPlaybookDoor(playbookDoorIdentity(ctx), {
       workspaceId: requestedWorkspaceId,
@@ -506,9 +514,6 @@ export const buildHandlers: McpHandlerMap = {
         if (args.statusProperty !== undefined) {
           subjectProfile.statusProperty = args.statusProperty;
         }
-        // What a session end moves the subject to: validated with the ONE
-        // schema and the definition check's option test by `playbooks.create`.
-        if (args.onEnd !== undefined) subjectProfile.onEnd = args.onEnd;
         return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
       })(),
       // `project` = a METHOD a project runs as a track. Any other value is
@@ -578,6 +583,7 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     type Patch = Parameters<typeof updatePlaybookDoor>[1]["patch"];
     // `subjectProfile` is ONE stored record the patch REPLACES (process keys
     // are carried over by `playbooks.update`), so a `statusProperty` alone
@@ -587,12 +593,9 @@ export const buildHandlers: McpHandlerMap = {
       args.subjectProfileSlug.trim()
         ? args.subjectProfileSlug.trim()
         : undefined;
-    if (
-      (args.statusProperty !== undefined || args.onEnd !== undefined) &&
-      !slug
-    ) {
+    if (args.statusProperty !== undefined && !slug) {
       return ok({
-        error: `${args.statusProperty !== undefined ? "statusProperty" : "onEnd"} needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
+        error: `statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
       });
     }
     const patch: Record<string, unknown> = {};
@@ -618,7 +621,6 @@ export const buildHandlers: McpHandlerMap = {
         ...(args.statusProperty !== undefined
           ? { statusProperty: args.statusProperty }
           : {}),
-        ...(args.onEnd !== undefined ? { onEnd: args.onEnd } : {}),
       };
     }
     const reasoning = readReasoning(args);
@@ -699,9 +701,17 @@ export const buildHandlers: McpHandlerMap = {
       profileId:
         typeof args.profileId === "string" ? args.profileId : undefined,
     });
-    if (args.detail === "full" || !Array.isArray(result)) return ok(result);
+    if (!Array.isArray(result)) return ok(result);
+    const { page, paging } = pageSlice(
+      result as Array<Record<string, unknown>>,
+      args,
+      VIEWS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
+    if (args.detail === "full") return ok({ views: page, ...paging });
     return ok({
-      views: (result as Array<Record<string, unknown>>).map(toViewDigest),
+      views: page.map(toViewDigest),
+      ...paging,
       note: VIEWS_DIGEST_NOTE,
     });
   },
@@ -766,9 +776,16 @@ export const buildHandlers: McpHandlerMap = {
     // The hub door returns the ONE catalog: built-ins (in-process) ∪ this
     // pod's installed / AI-defined cells (services/cells/renderables.ts).
     const rows = await caller.widgetDefinitions.listWidgetDefs({ workspaceId });
+    const { page: widgetPage, paging: widgetPaging } = pageSlice(
+      discoverRenderables(rows, surface),
+      args,
+      WIDGETS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     return ok({
       surface,
-      widgets: discoverRenderables(rows, surface),
+      widgets: widgetPage,
+      ...widgetPaging,
       // Content languages (```mermaid, ```math, code) are fences, not
       // directives — the catalog's fence rows, a document-only answer.
       ...(surface === "document" ? { fences: discoverFences() } : {}),

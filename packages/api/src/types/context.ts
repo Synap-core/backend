@@ -99,6 +99,13 @@ export interface Context {
    */
   isHubProtocol?: boolean;
   /**
+   * Set ONLY by a Hub door that acts as the person (their own app token,
+   * past `rejectAgentReviewer`) on the caller context it builds: the session
+   * roster of the human doors applies there (`rosterReadFor`). Never set from
+   * a request; ignored with an acting agent.
+   */
+  personRoster?: boolean;
+  /**
    * The authenticating API key's type (`user_pat` | `service` | `agent` | …) and
    * its workspace binding, threaded from api-key-auth middleware. They let the
    * hub-protocol tRPC surface apply the SAME service-key workspace confinement
