@@ -9039,6 +9039,51 @@ export interface WorkspacePlacement {
  * gravity".
  */
 export type ProjectResolutionRung = 1 | 2 | 3 | 3.5 | 4;
+/** What a run used: recorded in the run's definition snapshot. */
+export interface GuidanceUsed {
+	ref: string;
+	label: string;
+	/** Content hash of the item (its declaration and current rows). */
+	hash: string;
+	rows: Array<{
+		id: string;
+		replaces?: string;
+		version: string | null;
+	}>;
+}
+export interface GuidanceLeftOut {
+	ref: string;
+	label: string;
+	/** Over the budget: how the agent loads it. Not available: why. */
+	reason: string;
+}
+export interface RenderedGuidance {
+	/** The section; "" when the playbook declares no guidance. */
+	text: string;
+	/** cyrb53 of `text`; `null` when there is no section. */
+	hash: string | null;
+	/** The items rendered in full, in declared order. */
+	used: GuidanceUsed[];
+	/** Items left out to stay within the budget (named in the section). */
+	demoted: Array<GuidanceLeftOut & {
+		hash: string;
+	}>;
+	/** Items with no current version (named in the section). */
+	missing: GuidanceLeftOut[];
+	/** Estimated tokens of the heading plus the rendered items. */
+	tokens: number;
+}
+/** What a run records in its definition snapshot under `guidance`. */
+export type GuidanceSnapshot = {
+	demoted: RenderedGuidance["demoted"];
+	hash: string | null;
+	missing: GuidanceLeftOut[];
+	status: "ok";
+	used: GuidanceUsed[];
+} | {
+	error: string;
+	status: "unavailable";
+};
 /**
  * Write-free preview of what `createWorkspaceFromDefinition` WOULD do to the pod
  * catalog — computed by running the REAL create-path resolver
@@ -15198,6 +15243,16 @@ export interface PlaybookRunDetail {
 	proposals: RunProposalItem[];
 	/** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
 	agents: RunAgent[];
+	/**
+	 * The rules the run was given, as the POD stamped them on its definition
+	 * snapshot when it rendered the method (`recordRunGuidance`): the refs used
+	 * (with label, content hash, row ids + versions), those left out of the
+	 * prompt for budget (`demoted`), those with no approved version (`missing`),
+	 * or `status: "unavailable"` when they could not be read. `null` = the run
+	 * carries no stamp (declared none, or an older run): never "no rules were
+	 * checked". Absent when the session is private.
+	 */
+	guidance?: GuidanceSnapshot | null;
 	/**
 	 * A TRIAL run (the rule lab, design b199a3a4 slice 1b): the drafts it
 	 * rendered in place of current versions, and what it drafted (the agent's
