@@ -153,32 +153,28 @@ describe("synap_create_playbook → the process contract", () => {
     }
   });
 
-  it("onEnd reaches the procedure INSIDE subjectProfile, and a bad status key is refused there", async () => {
+  it("onEnd is retired: create and update refuse it, in the catalog's words, and send nothing", async () => {
     h.creates.length = 0;
-    await buildHandlers.synap_create_playbook!(
+    const created = await buildHandlers.synap_create_playbook!(
       ctx({
         name: "Fix a finding",
         goalTemplate: "Fix it",
         subjectProfileSlug: "finding",
-        onEnd: { cancelled: "open", failed: "open" },
+        onEnd: { cancelled: "open" },
       })
     );
-    expect(h.creates[0]!.subjectProfile).toEqual({
-      profileSlug: "finding",
-      onEnd: { cancelled: "open", failed: "open" },
-    });
-    expect(createInputSchema.safeParse(h.creates[0]).success).toBe(true);
+    expect(JSON.stringify(created)).toContain("onEnd — retired");
+    expect(h.creates).toHaveLength(0);
 
-    h.creates.length = 0;
-    await buildHandlers.synap_create_playbook!(
-      ctx({
-        name: "Fix a finding",
-        goalTemplate: "Fix it",
+    const updated = await buildHandlers.synap_update_playbook!({
+      ...ctx({
+        playbookId: "00000000-0000-4000-8000-0000000000cc",
         subjectProfileSlug: "finding",
-        onEnd: { stale: "open" },
-      })
-    );
-    expect(createInputSchema.safeParse(h.creates[0]).success).toBe(false);
+        onEnd: {},
+      }),
+      toolName: "synap_update_playbook",
+    } as McpToolContext);
+    expect(JSON.stringify(updated)).toContain("onEnd — retired");
   });
 
   it("the advertised tool schema teaches every process field", async () => {
@@ -193,17 +189,12 @@ describe("synap_create_playbook → the process contract", () => {
       "statusProperty",
       "activators",
       "humanOnlyStatuses",
-      "onEnd",
       "expectedOutputs",
     ]) {
       expect(props[k], k).toBeDefined();
     }
-    // Derived from the onEnd schema: its keys are the terminal statuses.
-    expect(Object.keys(props.onEnd!.properties as object).sort()).toEqual([
-      "cancelled",
-      "closed",
-      "failed",
-    ]);
+    // Retired (a session end moves nothing): no longer taught.
+    expect(props.onEnd).toBeUndefined();
     const stageProps = (props.stages!.items as Record<string, unknown>)
       .properties as Record<string, Record<string, unknown>>;
     for (const k of ["subjectStatus", "gate", "onFail", "expectedOutputs"]) {
