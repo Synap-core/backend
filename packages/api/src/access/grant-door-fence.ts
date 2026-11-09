@@ -203,9 +203,14 @@ export function grantHoldsAction(
   });
 }
 
+/** Is ONE scope pinned to some spaces, projects or objects? */
+function scopeIsPinned(scope: GrantScope): boolean {
+  return Boolean(scope.workspaceIds || scope.projectIds || scope.entityIds);
+}
+
 /** Does ONE scope read `subject` everywhere (every kind, no narrowing)? */
 function scopeReadsUnbounded(scope: GrantScope, subject: string): boolean {
-  if (scope.workspaceIds || scope.projectIds || scope.entityIds) return false;
+  if (scopeIsPinned(scope)) return false;
   if ((QUALIFIED_GRANT_SUBJECTS as readonly string[]).includes(subject))
     return allowedQualifiers(scope, subject, "read") === "all";
   return scope.permissions.some((p) =>
@@ -1164,9 +1169,7 @@ function readDoorMissing(
   if (!door || door.bound === "refused" || door.bound === "seamed") return null;
   if (door.bound === "person") return [`${door.subject}.read`];
   if (door.bound === "narrowed") return [`${door.subject}.${door.action}`];
-  const unpinned = grant.scopes.find(
-    (scope) => !scope.workspaceIds && !scope.projectIds && !scope.entityIds
-  );
+  const unpinned = grant.scopes.find((scope) => !scopeIsPinned(scope));
   if (!unpinned || door.subjects.length === 0) return null;
   return door.subjects
     .filter((subject) => !scopeReadsUnbounded(unpinned, subject))
