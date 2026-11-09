@@ -847,6 +847,129 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(turn).not.toHaveProperty("cacheWriteInputTokens");
   });
 
+  it("the first call's inventory (sections, tools, guidance) lands in the ledger; bad values are dropped, never a 400", async () => {
+    const inv = {
+      sections: [
+        { name: "persona", chars: 1_200 },
+        { name: "method", chars: 8_400 },
+      ],
+      tools: ["synap_ask", "synap_capture"],
+      guidance: ["kind:voice-guide"],
+    };
+    const ok = await seedRun();
+    expect(
+      (
+        await completeRun(ok.sessionId, {
+          outcome: "completed",
+          turn: {
+            ceiling: 250_000,
+            spentInputTokens: 9_000,
+            firstCall: { ...FIRST_CALL, ...inv },
+          },
+        })
+      ).json
+    ).toEqual({ status: "completed" });
+    expect((await ledger(ok.sessionId)).firstTurn?.firstCall).toMatchObject(
+      inv
+    );
+
+    // Each bad value reads as absent on its own; the counts and the turn stay.
+    const bad = await seedRun();
+    const done = await completeRun(bad.sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        firstCall: {
+          ...FIRST_CALL,
+          sections: [{ name: "", chars: -1 }],
+          tools: "synap_ask",
+          guidance: Array.from({ length: 13 }, (_, i) => `kind:k${i}`),
+        },
+      },
+    });
+    expect(done).toEqual({ code: 200, json: { status: "completed" } });
+    const fc = (await ledger(bad.sessionId)).firstTurn?.firstCall;
+    expect(fc).toMatchObject(FIRST_CALL);
+    expect(fc).not.toHaveProperty("sections");
+    expect(fc).not.toHaveProperty("tools");
+    expect(fc).not.toHaveProperty("guidance");
+
+    // An IS that predates the inventory sends none: the turn records as before.
+    const old = await seedRun();
+    await completeRun(old.sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        firstCall: FIRST_CALL,
+      },
+    });
+    const ofc = (await ledger(old.sessionId)).firstTurn?.firstCall;
+    expect(ofc).toEqual(FIRST_CALL);
+  });
+
+  it("the POD fills the turn's guidance from the run's stamped definition snapshot, over anything the IS sent", async () => {
+    const { sessionId, runId } = await seedRun();
+    await q(
+      `update playbook_runs set definition_snapshot = $2::jsonb where id = $1`,
+      [
+        runId,
+        JSON.stringify({
+          guidance: {
+            status: "ok",
+            hash: "abc",
+            used: [
+              {
+                ref: "kind:voice-guide",
+                label: "Voice guide",
+                hash: "h1",
+                rows: [],
+              },
+              {
+                ref: "skill:house-style",
+                label: "House style",
+                hash: "h2",
+                rows: [],
+              },
+            ],
+            demoted: [],
+            missing: [],
+          },
+        }),
+      ]
+    );
+    await completeRun(sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        firstCall: { ...FIRST_CALL, guidance: ["kind:from-the-is"] },
+      },
+    });
+    expect((await ledger(sessionId)).firstTurn?.firstCall?.guidance).toEqual([
+      "kind:voice-guide",
+      "skill:house-style",
+    ]);
+
+    // A turn that reports no first call records none (nothing to attach to).
+    const other = await seedRun();
+    await q(
+      `update playbook_runs set definition_snapshot = $2::jsonb where id = $1`,
+      [
+        other.runId,
+        JSON.stringify({ guidance: { status: "unavailable", error: "x" } }),
+      ]
+    );
+    await completeRun(other.sessionId, {
+      outcome: "completed",
+      turn: { ceiling: 1, spentInputTokens: 1, firstCall: FIRST_CALL },
+    });
+    expect(
+      (await ledger(other.sessionId)).firstTurn?.firstCall
+    ).not.toHaveProperty("guidance");
+  });
+
   it("a ledger left by an EARLIER run on the session does not count for this one", async () => {
     const { sessionId, runId } = await seedRun();
     await q(`update focus_sessions set metadata = $2::jsonb where id = $1`, [
