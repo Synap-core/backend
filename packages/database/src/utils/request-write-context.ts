@@ -251,6 +251,17 @@ export function runWithGrant<T>(
   return grant ? runWithPatch({ grant }, fn) : fn();
 }
 
+/**
+ * Run `fn` with NO key grant in force, the rest of the request context kept
+ * (acting agent, calling key...). For a VERDICT about the person, never for a
+ * read whose rows are returned: the review ladder's session rung asks whether
+ * the PERSON may read the proposal's session (founder, 9 Nov 2026), while the
+ * key's own reach stays bounded by its decide fence and by every read door.
+ */
+export function runWithoutGrant<T>(fn: () => T): T {
+  return getRequestGrant() ? runWithPatch({ grant: undefined }, fn) : fn();
+}
+
 /** The grant bounding the calling key, if any. */
 export function getRequestGrant(): KeyGrant | undefined {
   return storage.getStore()?.grant;

@@ -162,8 +162,12 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
 
 /**
  * The write gates a handler can name: the door's write checks, governance,
- * the gate's rung 0 itself (`grantWriteDenial`) and the channel and facet
- * write checks that run it (`assertChannelWrite`, `canWriteFacet`).
+ * the gate's rung 0 itself (`grantWriteDenial`), the channel and facet
+ * write checks that run it (`assertChannelWrite`, `canWriteFacet`), and the
+ * revise core's key check (`assertMayReviseProposal`: a key revising a
+ * proposal it did not file needs the approve right on that proposal's own
+ * space, project or object), which `mergeProposalRevision` runs on every
+ * revision.
  */
 const GATES = [
   "checkPermissionOrPropose",
@@ -173,6 +177,7 @@ const GATES = [
   "grantWriteDenial",
   "assertChannelWrite",
   "canWriteFacet",
+  "assertMayReviseProposal",
 ] as const;
 type Gate = (typeof GATES)[number];
 
@@ -436,6 +441,11 @@ const GATED_ELSEWHERE: Readonly<
     via: "sendExternalMessage",
     load: () => import("../connectors/external-dispatch.js"),
     why: "the person's send: filed through the send door (grant verdict, gate), then the approve door",
+  },
+  "PUT /channels/:channelId/drafts/:draftId": {
+    via: "mergeProposalRevision",
+    load: () => import("../services/proposals/proposals-service.js"),
+    why: "the person saves a draft's words: one revision through the revise core (review authority, the key's approve right on the draft's space, a space key rewords a message's body and subject only); nothing is sent",
   },
   "POST /packages/apply": {
     via: "proposeTemplateApply",
