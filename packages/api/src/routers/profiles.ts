@@ -45,6 +45,7 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { setProfileRenderer } from "../services/profiles/set-profile-renderer.js";
+import { assertRendererBindingTarget } from "../services/renderers/renderer-target-checks.js";
 import { mergeApplicableKinds } from "../utils/merge-applicable-kinds.js";
 import { parseProfilePresentation } from "@synap-core/types/presentation";
 import { diffDescriptiveProfileFields } from "../services/profiles/profile-descriptive-update.js";
@@ -1995,6 +1996,17 @@ export const profilesRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const slot = PROFILE_CONTENT_KIND_TO_SLOT[input.contentKind];
+      // The target rule every renderer door runs BEFORE its gate (the Hub
+      // route does too): a view or playbook renderer names ONE object the
+      // caller can open, any other kind is whole-kind only. Without it an
+      // agent's whole-kind `view` binding was filed for approval.
+      await assertRendererBindingTarget({
+        profileSlug: input.profileSlug,
+        slot,
+        scope: input.scope,
+        subjectId: input.subjectId,
+        userId: ctx.userId,
+      });
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: ctx.agentUserId ?? undefined,

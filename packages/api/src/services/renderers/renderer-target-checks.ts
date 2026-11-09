@@ -40,8 +40,11 @@ import {
 } from "../profiles/renderer-slots.js";
 import {
   RENDERER_TARGETS,
+  isPerObjectBindingKind,
+  rendererTargetProblem,
   type RendererStore,
   type RendererTarget,
+  type RendererTargetKind,
 } from "./renderer-targets.js";
 
 /**
@@ -194,6 +197,57 @@ export async function assertRendererTargetVisible(
     });
   }
   return { workspaceId: resolved.workspaceId ?? null };
+}
+
+/**
+ * THE target rule of a `renderer_bindings` write, named by `profileSlug` and
+ * `subjectId` as every renderer door receives it. Run by the one write door
+ * (`setProfileRenderer`, so the tRPC override, the Hub route, MCP and the
+ * approval executor all inherit it), and by each governed door BEFORE its
+ * gate, so a person is never handed a binding that cannot serve.
+ *
+ *   - a per-object target (a playbook, a view: `isPerObjectBindingKind`) is
+ *     held to its own slots and scopes, MUST name its object (`subjectId`;
+ *     without it the row is a whole-kind binding every view's or playbook's
+ *     page falls back to), and that object must be one the caller can open,
+ *     of that kind (`assertRendererTargetVisible`);
+ *   - any other kind is whole-kind only (decision 2026-09-07): a
+ *     `subjectId` is refused.
+ *
+ * The slot, scope and whole-kind refusals throw before any DB round trip.
+ */
+export async function assertRendererBindingTarget(input: {
+  profileSlug: string;
+  slot: string;
+  scope: string;
+  subjectId: string | null | undefined;
+  userId: string;
+}): Promise<void> {
+  const { profileSlug, slot, scope, userId } = input;
+  const subjectId = input.subjectId ?? null;
+  if (!isPerObjectBindingKind(profileSlug)) {
+    if (subjectId !== null) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "Renderer bindings are whole-kind only — a per-object binding " +
+          "(subjectId) is not supported. See renderer-bindings.ts.",
+      });
+    }
+    return;
+  }
+  const kind = profileSlug as Exclude<RendererTargetKind, "profile">;
+  const problem = rendererTargetProblem(kind, slot, scope);
+  if (problem) throw new TRPCError({ code: "BAD_REQUEST", message: problem });
+  if (subjectId === null) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        `A ${kind} renderer is bound to ONE ${kind}: pass its id as subjectId ` +
+        `(or target {kind:'${kind}', id}). Without it the binding would cover every ${kind}.`,
+    });
+  }
+  await assertRendererTargetVisible({ kind, id: subjectId }, userId);
 }
 
 /** What is bound on a target's slot now, or null when nothing is. */

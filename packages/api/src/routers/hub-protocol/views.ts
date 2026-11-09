@@ -30,6 +30,7 @@ import {
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 import {
   ViewContentSchema,
+  assertPipelineHasLifecycle,
   assertValidRendererRef,
   describeViewConfigErrors,
   getViewCategory,
@@ -61,8 +62,10 @@ const BentoWidgetInputSchema = z.object({
  * A view config an update may write: valid for the view's type (the same
  * schema and renderer-ref check `views.update` runs) and, for a bento, every
  * widget block it adds or changes placeable from this workspace's catalog
- * (the arrange gate; a block kept unchanged from `stored` is not re-judged).
- * Throws BAD_REQUEST naming every failing field or block.
+ * (the arrange gate; a block kept unchanged from `stored` is not re-judged),
+ * and for a pipeline a kind that declares a lifecycle (the create rule).
+ * Throws BAD_REQUEST naming every failing field or block, PRECONDITION_FAILED
+ * with the next step for a pipeline of a kind with no lifecycle.
  */
 async function assertViewConfigPlaceable(
   viewType: string,
@@ -79,6 +82,9 @@ async function assertViewConfigPlaceable(
     });
   }
   assertValidRendererRef(config);
+  if (viewType === "pipeline") {
+    await assertPipelineHasLifecycle(config, workspaceId);
+  }
   if (viewType === "bento") {
     const errors = await bentoBlockArrangeErrors(config, workspaceId, stored);
     if (errors.length > 0) {
