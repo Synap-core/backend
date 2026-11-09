@@ -92,9 +92,9 @@ export async function resolveSynapAiCeiling(
     grant: {
       scopes: scopes.map((r) => ({
         permissions: [...r.permissions],
-        workspaceIds: r.workspaceIds ? [...r.workspaceIds] : null,
-        projectIds: r.projectIds ? [...r.projectIds] : null,
-        entityIds: r.entityIds ? [...r.entityIds] : null,
+        workspaceIds: r.workspaceIds,
+        projectIds: r.projectIds,
+        entityIds: r.entityIds,
       })),
       clientId: SYNAP_AI_CLIENT_ID,
     },
