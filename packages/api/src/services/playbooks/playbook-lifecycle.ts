@@ -68,6 +68,8 @@ import {
 import {
   collectPlaybookCriteria,
   describeMissingParams,
+  fillParamsFromSubject,
+  needsSubjectKinds,
   readCriteria,
   readPlaybookParams,
   validatePlaybookParams,
@@ -83,6 +85,7 @@ import {
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
 import { recordPlaybookVersion } from "./playbook-versions.js";
+import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
 import {
   withBirthStageSlots,
@@ -155,39 +158,6 @@ export function withDeclaredParamsDefaulted(
     if (out[p.name] === undefined || out[p.name] === null) out[p.name] = "";
   }
   return out;
-}
-
-/**
- * The run's bound SUBJECT answers the playbook's entity param when the caller
- * left it unanswered.
- *
- * A subject-bound run already says WHICH entity it is about, and a playbook that
- * declares exactly one `entity` param ("Company — the session subject") is
- * asking for that same thing. Without this, every scheduled run over a subject
- * rendered `@{arg:company:entity}` as `""` ("Advance  through the Stellar grant
- * process") AND, on the `owe` path, filed an owed slot asking a person for the
- * entity the run was already bound to.
- *
- * Deliberately narrow: a caller-supplied value always wins, and a playbook with
- * two or more entity params is left alone — which of them is the subject is not
- * derivable, and guessing would bind the wrong one silently.
- */
-export function subjectAnswersEntityParam(
-  declared: readonly PlaybookParam[],
-  supplied: Record<string, unknown> | undefined,
-  subjectId: string | null | undefined
-): Record<string, unknown> {
-  const given = supplied ?? {};
-  if (!subjectId) return given;
-  const entityParams = declared.filter((p) => p.type === "entity");
-  if (entityParams.length !== 1) return given;
-  const name = entityParams[0]!.name;
-  const current = given[name];
-  const answered =
-    current !== undefined &&
-    current !== null &&
-    !(typeof current === "string" && current.trim() === "");
-  return answered ? given : { ...given, [name]: subjectId };
 }
 
 /**
@@ -585,10 +555,48 @@ export async function instantiateSessionRow(
   // Until this existed the declaration was decorative: nothing read `required`,
   // `default` or `type` on any run path, so a missing required param rendered
   // as `""` and a default never reached the prompt at all.
+  //
+  // The run's bound SUBJECT answers what the playbook declares it answers
+  // (`fillParamsFromSubject`, @synap/playbooks): an entity param that is the
+  // subject, and a `from: "subject.<field>"` param from that field. Done HERE,
+  // in the one funnel, so every door fills the same way — an activator's
+  // proposal carries no params (it names only its subject), and its approval
+  // replay used to be refused for a value the subject already held (Produce
+  // Content's `platform`, live 2026-11-09, proposal bff02fbb). The subject's
+  // visibility was enforced by the caller; this reads it to fill, never to
+  // widen what the run may see.
   const declaredParams = readPlaybookParams(playbook.params);
+  const subjectRow = input.subjectId
+    ? await db.query.entities.findFirst({
+        columns: { title: true, preview: true, properties: true },
+        where: eq(entities.id, input.subjectId),
+      })
+    : undefined;
+  const subjectKinds =
+    input.subjectId && subjectRow && needsSubjectKinds(declaredParams)
+      ? ((await subjectKindSlugs({
+          subjectId: input.subjectId,
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+        })) ?? [])
+      : [];
+  const subjectFill = fillParamsFromSubject(
+    declaredParams,
+    input.params,
+    input.subjectId
+      ? {
+          id: input.subjectId,
+          title: subjectRow?.title ?? null,
+          preview: subjectRow?.preview ?? null,
+          properties:
+            (subjectRow?.properties as Record<string, unknown> | null) ?? null,
+          kinds: subjectKinds,
+        }
+      : null
+  );
   const paramResolution = validatePlaybookParams(
     declaredParams,
-    subjectAnswersEntityParam(declaredParams, input.params, input.subjectId)
+    subjectFill.values
   );
   const onMissingRequired = input.onMissingRequired ?? "refuse";
   if (
@@ -614,18 +622,11 @@ export async function instantiateSessionRow(
   // Substituted against the RESOLVED values, so a declared `default` finally
   // reaches the agent's instruction.
   //
-  // Title = playbook name + the bound subject's own title. Read the entity here
-  // rather than trusting a caller-passed name: `instantiateSession` has three
+  // Title = playbook name + the bound subject's own title. The entity read
+  // above (the param fill's), never a caller-passed name: `instantiateSession` has three
   // callers and only one of them resolves the subject. The same title is what
   // an entity param holding the subject renders as in the prompt.
-  let subjectTitle: string | null = null;
-  if (input.subjectId) {
-    const subject = await db.query.entities.findFirst({
-      columns: { title: true },
-      where: eq(entities.id, input.subjectId),
-    });
-    subjectTitle = subject?.title ?? null;
-  }
+  const subjectTitle: string | null = subjectRow?.title ?? null;
   const prompt =
     input.goalOverride ??
     resolveGoal(

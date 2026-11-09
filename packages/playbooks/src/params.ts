@@ -363,3 +363,154 @@ export function describeMissingParams(
 ): string {
   return missing.map((p) => p.label?.trim() || p.name).join(", ");
 }
+
+// ── Answers that come from the run's SUBJECT ────────────────────────────────
+
+/**
+ * The run's bound subject, as the param fill reads it. `kinds` is every slug
+ * the subject counts as (its kind, the kind's ancestors, its live roles); it is
+ * only read to tell which of SEVERAL entity params is the subject.
+ */
+export interface ParamSubject {
+  id: string;
+  title?: string | null;
+  preview?: string | null;
+  properties?: Record<string, unknown> | null;
+  kinds?: readonly string[];
+}
+
+/** `from: "subject"`: the param IS the run's subject (an entity param). */
+export const PARAM_FROM_SUBJECT = "subject" as const;
+const SUBJECT_FIELD_PREFIX = "subject.";
+
+/** The field a `from: "subject.<field>"` param reads, else null. */
+export function subjectFieldOfParam(p: { from?: string }): string | null {
+  return p.from?.startsWith(SUBJECT_FIELD_PREFIX) &&
+    p.from.length > SUBJECT_FIELD_PREFIX.length
+    ? p.from.slice(SUBJECT_FIELD_PREFIX.length)
+    : null;
+}
+
+/**
+ * One usable value out of a subject field: a non-blank string (trimmed), a
+ * finite number or a boolean. A list counts only when it holds exactly ONE
+ * such value (a single-select stored as a list); several values are not a
+ * choice this function can make, so they answer nothing.
+ */
+function oneScalar(raw: unknown): unknown | undefined {
+  if (typeof raw === "string")
+    return raw.trim() === "" ? undefined : raw.trim();
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : undefined;
+  if (typeof raw === "boolean") return raw;
+  if (Array.isArray(raw)) {
+    const usable = raw
+      .map((v) => (Array.isArray(v) ? undefined : oneScalar(v)))
+      .filter((v) => v !== undefined);
+    return usable.length === 1 ? usable[0] : undefined;
+  }
+  return undefined;
+}
+
+function readSubjectField(subject: ParamSubject, field: string): unknown {
+  if (field === "title") return oneScalar(subject.title);
+  if (field === "preview") return oneScalar(subject.preview);
+  const props = subject.properties ?? {};
+  return Object.prototype.hasOwnProperty.call(props, field)
+    ? oneScalar(props[field])
+    : undefined;
+}
+
+/**
+ * Does telling the subject's entity param apart need the subject's kinds?
+ * Only with several entity params and none declared `from: "subject"` — so a
+ * caller can skip the kind read everywhere else.
+ */
+export function needsSubjectKinds(declared: readonly PlaybookParam[]): boolean {
+  const entity = declared.filter((p) => p.type === "entity");
+  return (
+    entity.length > 1 && !entity.some((p) => p.from === PARAM_FROM_SUBJECT)
+  );
+}
+
+export interface SubjectParamFill {
+  /** The supplied answers plus what the subject answered. */
+  values: Record<string, unknown>;
+  /** Param name → where its value came from (`subject` or `subject.<field>`). */
+  filled: Record<string, string>;
+}
+
+/**
+ * Fill the params the CALLER LEFT UNANSWERED from the run's bound subject —
+ * what the playbook DECLARES, never a guess:
+ *
+ *  1. `from: "subject"` on an entity param: that param is the subject.
+ *  2. `from: "subject.<field>"`: the subject's `title`, `preview` or property
+ *     `<field>` (Produce Content's `platform` is the post's `post-platform`).
+ *  3. No param declared the subject (back-compat, for entity params): the
+ *     playbook's ONLY entity param is the subject; with several, the one
+ *     NAMED after the subject's kind ("post" for a post). Two such, or none:
+ *     nothing is filled — which one is the subject is not derivable.
+ *
+ * A caller's answer always wins. A field that is empty, missing, an object or
+ * a list of several values fills nothing, so a required param stays missing
+ * and the run door's refusal names it — never a blank or a wrong value. PURE:
+ * the caller reads the subject (through its own visibility floor) and then
+ * validates the result with {@link validatePlaybookParams}, which coerces and
+ * type-checks a filled value exactly like a supplied one.
+ */
+export function fillParamsFromSubject(
+  declared: readonly PlaybookParam[],
+  supplied: Record<string, unknown> | undefined,
+  subject: ParamSubject | null | undefined
+): SubjectParamFill {
+  const values: Record<string, unknown> = { ...(supplied ?? {}) };
+  const filled: Record<string, string> = {};
+  if (!subject?.id) return { values, filled };
+  const unanswered = (name: string) =>
+    isAbsentParamValue(
+      Object.prototype.hasOwnProperty.call(values, name)
+        ? values[name]
+        : undefined
+    );
+
+  let subjectDeclared = false;
+  for (const p of declared) {
+    if (p.from === PARAM_FROM_SUBJECT && p.type === "entity") {
+      subjectDeclared = true;
+      if (unanswered(p.name)) {
+        values[p.name] = subject.id;
+        filled[p.name] = PARAM_FROM_SUBJECT;
+      }
+      continue;
+    }
+    const field = subjectFieldOfParam(p);
+    if (field === null || !unanswered(p.name)) continue;
+    const value = readSubjectField(subject, field);
+    if (value !== undefined) {
+      values[p.name] = value;
+      filled[p.name] = `${SUBJECT_FIELD_PREFIX}${field}`;
+    }
+  }
+  if (subjectDeclared) return { values, filled };
+
+  // 3 — the implicit rule. Entity params without a `from` of their own; one
+  // already holding the subject (the caller named it) settles it.
+  const entity = declared.filter((p) => p.type === "entity" && !p.from);
+  if (entity.some((p) => values[p.name] === subject.id)) {
+    return { values, filled };
+  }
+  const allEntity = declared.filter((p) => p.type === "entity");
+  let target: PlaybookParam | undefined;
+  if (allEntity.length === 1 && entity.length === 1) {
+    target = entity[0];
+  } else {
+    const kinds = new Set(subject.kinds ?? []);
+    const named = entity.filter((p) => kinds.has(p.name));
+    if (named.length === 1) target = named[0];
+  }
+  if (target && unanswered(target.name)) {
+    values[target.name] = subject.id;
+    filled[target.name] = PARAM_FROM_SUBJECT;
+  }
+  return { values, filled };
+}
