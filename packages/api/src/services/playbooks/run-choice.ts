@@ -96,7 +96,8 @@ export function distinctAgentLabels(
 
 export async function readPlaybookRunChoice(p: {
   userId: string;
-  playbook: Pick<Playbook, "id" | "executor" | "workspaceId">;
+  playbook: Pick<Playbook, "id" | "executor" | "workspaceId"> &
+    Partial<Pick<Playbook, "runner" | "requires">>;
 }): Promise<PlaybookRunChoice> {
   const synapAiAllowed = p.playbook.executor !== "external-agent";
   const [stored, roster, decided, provider] = await Promise.all([
@@ -181,8 +182,12 @@ export async function readPlaybookRunChoice(p: {
     playbookId: p.playbook.id,
     stored: remembered,
     // Never a silent default (D4): with nothing stored, a launch asks, even
-    // when Synap AI is the only way it can run.
-    ask: remembered === null && options.length > 0,
+    // when Synap AI is the only way it can run. A playbook whose own runner
+    // takes it is not a silent default: the playbook says who runs it.
+    ask:
+      remembered === null &&
+      decided.runOn.via !== "authored" &&
+      options.length > 0,
     synapAiAllowed,
     options,
     hidden,

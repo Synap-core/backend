@@ -136,7 +136,9 @@ All three are optional: without them a playbook runs exactly as before.
   Example: render on the Mac, else the devbox:
   `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
   `null` clears a playbook's runner. A choice made when running it comes
-  first, then the playbook's runner, then the person's remembered choice.
+  first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+  list is resolved then, and nobody it names → refused), then the playbook's
+  runner, then the person's remembered choice.
 - `requires`: capability keys (`["media-ffmpeg"]`), at most 16; a stage needs
   its own plus the playbook's. They are checked on the runner's computer
   before a step is handed over.

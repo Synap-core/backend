@@ -12,6 +12,7 @@
 
 import { trialRunInputSchema } from "../../../services/playbooks/trial-run.js";
 import { z } from "@hono/zod-openapi";
+import { playbookRunnerSchema } from "../../../schemas/playbook-runner.js";
 import type { Context } from "hono";
 
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
@@ -153,6 +154,11 @@ const RunPlaybookBodySchema = z.object({
     .optional()
     .describe(
       "Run it on Synap AI this time, whatever was remembered. Never with handToAgentId; refused on a playbook that runs only on agents."
+    ),
+  runner: playbookRunnerSchema
+    .optional()
+    .describe(
+      "Who runs THIS run, in the playbook runner grammar: 'synap_ai', {synapAi:{persona}}, {agentId}, {role, computer?}, {engine, computer?}, or an ordered list of fallbacks. A role, engine or list is resolved now (only an agent that is yours, awake and allowed takes it); nobody it names can take it → refused. Never with handToAgentId or runOn. It comes before the playbook's own runner and your remembered choice."
     ),
   remember: z
     .boolean()
@@ -779,6 +785,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           trackStage: body.trackStage,
           handToAgentId: body.handToAgentId,
           runOn: body.runOn,
+          ...(body.runner !== undefined ? { runner: body.runner } : {}),
           remember: body.remember,
           ...(body.trial ? { trial: body.trial } : {}),
           source: "hub-rest",

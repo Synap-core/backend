@@ -366,6 +366,45 @@ describe("POST /playbooks/:id/run — handToAgentId reaches the governed run (RE
   });
 });
 
+describe("POST /playbooks/:id/run — a runner chosen at Run reaches the governed run (REST and MCP)", () => {
+  it("REST: one agent named as the runner becomes the run's hand-off", async () => {
+    const { status } = await post(appAs(AGENT), `/playbooks/${PB}/run`, {
+      runner: { agentId: AGENT },
+    });
+    expect(status).toBe(202);
+    expect(h.handOffs).toEqual([
+      { userId: USER, agentUserId: AGENT, handToAgentId: AGENT },
+    ]);
+    expect(h.gateCalls[0]).toMatchObject({
+      data: { playbookId: PB, handToAgentId: AGENT },
+    });
+  });
+
+  it("REST: a misspelled runner is a 400, nothing asked", async () => {
+    const { status } = await post(appAs(), `/playbooks/${PB}/run`, {
+      runner: { agent: AGENT },
+    });
+    expect(status).toBe(400);
+    expect(h.gateCalls).toEqual([]);
+  });
+
+  it("MCP synap_run_playbook carries it through the same door", async () => {
+    await buildHandlers.synap_run_playbook!({
+      toolName: "synap_run_playbook",
+      args: { playbookId: PB, runner: { agentId: AGENT } },
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: {} as never,
+      lensCaller: {} as never,
+      workspaceAccessible: true,
+    });
+    expect(h.handOffs).toEqual([
+      { userId: USER, agentUserId: AGENT, handToAgentId: AGENT },
+    ]);
+  });
+});
+
 describe("PATCH /playbooks/:id — forwards every field the governed update takes", () => {
   it("`scope` reaches the gate (a Hub caller can make a playbook a project METHOD)", async () => {
     const res = await appAs(AGENT).request(`/playbooks/${PB}`, {

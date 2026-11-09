@@ -272,6 +272,11 @@ export async function runPlaybookDoor(
     /** Synap AI for this run (`RunPlaybookInput.runOn`); never with handToAgentId. */
     runOn?: "synap_ai";
     /**
+     * Who runs this run, in the playbook runner grammar (`playbooks.run`
+     * `runner`, validated there): mapped onto a hand-off or Synap AI.
+     */
+    runner?: unknown;
+    /**
      * Remember this run's choice as the person's for the playbook
      * (`playbooks.run` `remember`). Refused for an agent.
      */
@@ -396,6 +401,13 @@ export async function runPlaybookDoor(
       : {}),
     ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
     ...(input.runOn ? { runOn: input.runOn } : {}),
+    ...(input.runner !== undefined
+      ? {
+          runner: input.runner as Parameters<
+            ReturnType<typeof playbooksRouter.createCaller>["run"]
+          >[0]["runner"],
+        }
+      : {}),
     ...(input.remember ? { remember: true } : {}),
     ...(input.trial ? { trial: input.trial } : {}),
     source: input.source,
