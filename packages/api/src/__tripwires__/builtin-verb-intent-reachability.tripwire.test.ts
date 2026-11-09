@@ -382,6 +382,9 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
   "market.scaffold":
     "Authors a new marketplace package as a local draft document. It installs nothing and connects nothing, so connect_account would be a false claim.",
   // ── connection PROBING: repair is a human act, not a connect ──────────
+  // ── hosted verbs: the door every computer recipe runs through ───────────
+  "computer.run_recipe":
+    "The generic door that runs ANY recipe of a tool installed on a computer. What it does is the recipe's (cut, normalise, transcribe, …), so one intent on the door would be a false claim for every other recipe: discovery names each installed recipe under its own intent, and its run is this door.",
   "connector.health_check":
     "Probes an EXISTING connection and nudges a human to repair it. connect_account establishes a NEW authorization; this verb never does.",
   "capability.rotate_key":

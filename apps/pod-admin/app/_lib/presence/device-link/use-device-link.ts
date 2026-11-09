@@ -24,6 +24,7 @@ import { trpc } from "../../../../lib/trpc";
 import {
   createBrowserFlow,
   collectErrorMessages,
+  type CreateFlowResult,
 } from "../../../../lib/kratos-flow";
 import {
   PasskeyCancelled,
@@ -44,6 +45,7 @@ import {
   reasonCodeOf,
   registrationEvent,
   shouldPoll,
+  startPasskeyStep,
 } from "./link-model";
 import { rememberThisDevicePasskey } from "./use-this-device";
 
@@ -180,17 +182,56 @@ export function useDeviceLink() {
   /** Read the status again now (the failed-read state's Try again). */
   const readAgain = useCallback(() => setPollNonce((n) => n + 1), []);
 
+  // The settings flow, read BEFORE the press. WebKit (every iPhone browser,
+  // Safari on the Mac) opens a passkey prompt only while the tap still
+  // counts; a network wait between the tap and `credentials.create` uses
+  // that up and the browser refuses with NotAllowedError, no prompt shown
+  // (founder's iPhone, 10 Nov 2026). The passkeys card holds its flow the
+  // same way. A flow Kratos was sent is spent: the next try reads a new one.
+  const flowRef = useRef<CreateFlowResult | null>(null);
+  /** The flow was read (held in `flowRef`, or its read failed): no read again until it is spent. */
+  const [flowRead, setFlowRead] = useState(false);
+  const canCreate = state.kind === "approved" || state.kind === "create-failed";
+  useEffect(() => {
+    if (!canCreate || flowRead) return;
+    let live = true;
+    createBrowserFlow("settings").then(
+      (r) => {
+        if (!live) return;
+        flowRef.current = r;
+        setFlowRead(true);
+      },
+      () => {
+        // Not swallowed: with no flow held, the press reads it again and
+        // shows that failure (`create-failed` with its details).
+        if (live) setFlowRead(true);
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [canCreate, flowRead]);
+
   /** Create this device's passkey: from the person's press (WebAuthn needs it). */
   const create = useCallback(async (placement: PasskeyPlacement) => {
     dispatch({ type: "create" });
     try {
-      const started = await createBrowserFlow("settings");
-      if (!("flow" in started)) {
+      const step = await startPasskeyStep(
+        flowRef.current,
+        () => createBrowserFlow("settings"),
+        (flow) =>
+          registerPasskey(flow, placement, () => {
+            // Kratos is sent this flow: it is spent.
+            flowRef.current = null;
+            setFlowRead(false);
+          })
+      );
+      if (step.kind === "reauth") {
         // No settings flow for this sign-in: it must sign in again.
         dispatch({ type: "reauth" });
         return;
       }
-      const r = await registerPasskey(started.flow, placement);
+      const r = step.result;
       const next = registrationEvent(
         r.kind === "flow"
           ? {
@@ -217,7 +258,7 @@ export function useDeviceLink() {
       dispatch(next);
     } catch (err) {
       if (err instanceof PasskeyCancelled) {
-        dispatch({ type: "create-cancelled" });
+        dispatch({ type: "create-cancelled", detail: err.detail });
         return;
       }
       dispatch({
@@ -238,5 +279,7 @@ export function useDeviceLink() {
     }
   }, []);
 
-  return { state, now, ask, readAgain, create, cancel };
+  /** The press can open the prompt at once: the flow is read (or its read failed). */
+  const preparing = canCreate && !flowRead;
+  return { state, now, ask, readAgain, create, cancel, preparing };
 }

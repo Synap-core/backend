@@ -17616,6 +17616,820 @@
                                       "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
                                     },
                                     "maxItems": 16
+                                  },
+                                  "endAsk": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "why": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 500
+                                      },
+                                      "unblocks": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "ask": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["confirm"]
+                                              },
+                                              "prompt": {
+                                                "type": "string",
+                                                "maxLength": 500
+                                              },
+                                              "yes": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "label": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 80
+                                                  },
+                                                  "description": {
+                                                    "type": "string",
+                                                    "maxLength": 140
+                                                  },
+                                                  "recommended": {
+                                                    "type": "boolean"
+                                                  }
+                                                }
+                                              },
+                                              "no": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "label": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 80
+                                                  },
+                                                  "description": {
+                                                    "type": "string",
+                                                    "maxLength": 140
+                                                  },
+                                                  "recommended": {
+                                                    "type": "boolean"
+                                                  }
+                                                }
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["choose"]
+                                              },
+                                              "options": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "value": {
+                                                      "type": "string",
+                                                      "maxLength": 500
+                                                    },
+                                                    "icon": {
+                                                      "type": "string",
+                                                      "maxLength": 64
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "caution": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 60
+                                                    },
+                                                    "media": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "image",
+                                                            "video",
+                                                            "audio"
+                                                          ]
+                                                        },
+                                                        "ref": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "url": {
+                                                                  "type": "string",
+                                                                  "maxLength": 2000,
+                                                                  "format": "uri"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "url"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "assetId": {
+                                                                  "type": "string",
+                                                                  "format": "uuid"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "assetId"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "entityId": {
+                                                                  "type": "string",
+                                                                  "format": "uuid"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "entityId"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          ]
+                                                        },
+                                                        "alt": {
+                                                          "type": "string",
+                                                          "maxLength": 200
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "ref"
+                                                      ]
+                                                    },
+                                                    "followUp": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "prompt": {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120
+                                                        },
+                                                        "options": {
+                                                          "type": "array",
+                                                          "items": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "label": {
+                                                                "type": "string",
+                                                                "minLength": 1,
+                                                                "maxLength": 80
+                                                              },
+                                                              "value": {
+                                                                "type": "string",
+                                                                "maxLength": 500
+                                                              },
+                                                              "icon": {
+                                                                "type": "string",
+                                                                "maxLength": 64
+                                                              },
+                                                              "recommended": {
+                                                                "type": "boolean"
+                                                              },
+                                                              "description": {
+                                                                "type": "string",
+                                                                "maxLength": 140
+                                                              },
+                                                              "caution": {
+                                                                "type": "string",
+                                                                "minLength": 1,
+                                                                "maxLength": 60
+                                                              },
+                                                              "media": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "kind": {
+                                                                    "type": "string",
+                                                                    "enum": [
+                                                                      "image",
+                                                                      "video",
+                                                                      "audio"
+                                                                    ]
+                                                                  },
+                                                                  "ref": {
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "object",
+                                                                        "properties": {
+                                                                          "url": {
+                                                                            "type": "string",
+                                                                            "maxLength": 2000,
+                                                                            "format": "uri"
+                                                                          }
+                                                                        },
+                                                                        "required": [
+                                                                          "url"
+                                                                        ],
+                                                                        "additionalProperties": false
+                                                                      },
+                                                                      {
+                                                                        "type": "object",
+                                                                        "properties": {
+                                                                          "assetId": {
+                                                                            "type": "string",
+                                                                            "format": "uuid"
+                                                                          }
+                                                                        },
+                                                                        "required": [
+                                                                          "assetId"
+                                                                        ],
+                                                                        "additionalProperties": false
+                                                                      },
+                                                                      {
+                                                                        "type": "object",
+                                                                        "properties": {
+                                                                          "entityId": {
+                                                                            "type": "string",
+                                                                            "format": "uuid"
+                                                                          }
+                                                                        },
+                                                                        "required": [
+                                                                          "entityId"
+                                                                        ],
+                                                                        "additionalProperties": false
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  "alt": {
+                                                                    "type": "string",
+                                                                    "maxLength": 200
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "kind",
+                                                                  "ref"
+                                                                ]
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "label"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          },
+                                                          "minItems": 2,
+                                                          "maxItems": 4
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "prompt",
+                                                        "options"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": ["label"]
+                                                },
+                                                "minItems": 1,
+                                                "maxItems": 8
+                                              },
+                                              "allowOther": {
+                                                "type": "boolean"
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode", "options"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["form"]
+                                              },
+                                              "form": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "title": { "type": "string" },
+                                                  "note": { "type": "string" },
+                                                  "fields": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "key": {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 200
+                                                        },
+                                                        "label": {
+                                                          "type": "string",
+                                                          "maxLength": 200
+                                                        },
+                                                        "type": {
+                                                          "type": "string",
+                                                          "maxLength": 64
+                                                        },
+                                                        "constraints": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "enum": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "type": "string"
+                                                              }
+                                                            },
+                                                            "min": {
+                                                              "type": "number"
+                                                            },
+                                                            "max": {
+                                                              "type": "number"
+                                                            },
+                                                            "pattern": {
+                                                              "type": "string"
+                                                            }
+                                                          }
+                                                        },
+                                                        "required": {
+                                                          "type": "boolean"
+                                                        },
+                                                        "help": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "key",
+                                                        "label",
+                                                        "type"
+                                                      ]
+                                                    },
+                                                    "maxItems": 20
+                                                  }
+                                                },
+                                                "required": ["fields"]
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode", "form"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["act"]
+                                              },
+                                              "url": {
+                                                "type": "string",
+                                                "maxLength": 2000
+                                              },
+                                              "steps": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                },
+                                                "maxItems": 7
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["provide"]
+                                              },
+                                              "provide": {
+                                                "oneOf": [
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "type": "string",
+                                                        "enum": ["connection"]
+                                                      },
+                                                      "service": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "service"
+                                                    ]
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "type": "string",
+                                                        "enum": ["file"]
+                                                      },
+                                                      "accept": {
+                                                        "type": "array",
+                                                        "items": {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 100
+                                                        },
+                                                        "maxItems": 10
+                                                      }
+                                                    },
+                                                    "required": ["kind"]
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "type": "string",
+                                                        "enum": ["secret"]
+                                                      },
+                                                      "name": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": ["kind", "name"]
+                                                  }
+                                                ]
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode", "provide"]
+                                          }
+                                        ]
+                                      },
+                                      "optionsFrom": {
+                                        "type": "object",
+                                        "properties": {
+                                          "relation": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z][a-z0-9_-]*$"
+                                          }
+                                        },
+                                        "required": ["relation"],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": ["label", "ask"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -21843,6 +22657,820 @@
                                       "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
                                     },
                                     "maxItems": 16
+                                  },
+                                  "endAsk": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "why": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 500
+                                      },
+                                      "unblocks": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "ask": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["confirm"]
+                                              },
+                                              "prompt": {
+                                                "type": "string",
+                                                "maxLength": 500
+                                              },
+                                              "yes": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "label": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 80
+                                                  },
+                                                  "description": {
+                                                    "type": "string",
+                                                    "maxLength": 140
+                                                  },
+                                                  "recommended": {
+                                                    "type": "boolean"
+                                                  }
+                                                }
+                                              },
+                                              "no": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "label": {
+                                                    "type": "string",
+                                                    "minLength": 1,
+                                                    "maxLength": 80
+                                                  },
+                                                  "description": {
+                                                    "type": "string",
+                                                    "maxLength": 140
+                                                  },
+                                                  "recommended": {
+                                                    "type": "boolean"
+                                                  }
+                                                }
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["choose"]
+                                              },
+                                              "options": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "value": {
+                                                      "type": "string",
+                                                      "maxLength": 500
+                                                    },
+                                                    "icon": {
+                                                      "type": "string",
+                                                      "maxLength": 64
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "caution": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 60
+                                                    },
+                                                    "media": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "image",
+                                                            "video",
+                                                            "audio"
+                                                          ]
+                                                        },
+                                                        "ref": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "url": {
+                                                                  "type": "string",
+                                                                  "maxLength": 2000,
+                                                                  "format": "uri"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "url"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "assetId": {
+                                                                  "type": "string",
+                                                                  "format": "uuid"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "assetId"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "entityId": {
+                                                                  "type": "string",
+                                                                  "format": "uuid"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "entityId"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          ]
+                                                        },
+                                                        "alt": {
+                                                          "type": "string",
+                                                          "maxLength": 200
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "ref"
+                                                      ]
+                                                    },
+                                                    "followUp": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "prompt": {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120
+                                                        },
+                                                        "options": {
+                                                          "type": "array",
+                                                          "items": {
+                                                            "type": "object",
+                                                            "properties": {
+                                                              "label": {
+                                                                "type": "string",
+                                                                "minLength": 1,
+                                                                "maxLength": 80
+                                                              },
+                                                              "value": {
+                                                                "type": "string",
+                                                                "maxLength": 500
+                                                              },
+                                                              "icon": {
+                                                                "type": "string",
+                                                                "maxLength": 64
+                                                              },
+                                                              "recommended": {
+                                                                "type": "boolean"
+                                                              },
+                                                              "description": {
+                                                                "type": "string",
+                                                                "maxLength": 140
+                                                              },
+                                                              "caution": {
+                                                                "type": "string",
+                                                                "minLength": 1,
+                                                                "maxLength": 60
+                                                              },
+                                                              "media": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "kind": {
+                                                                    "type": "string",
+                                                                    "enum": [
+                                                                      "image",
+                                                                      "video",
+                                                                      "audio"
+                                                                    ]
+                                                                  },
+                                                                  "ref": {
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "object",
+                                                                        "properties": {
+                                                                          "url": {
+                                                                            "type": "string",
+                                                                            "maxLength": 2000,
+                                                                            "format": "uri"
+                                                                          }
+                                                                        },
+                                                                        "required": [
+                                                                          "url"
+                                                                        ],
+                                                                        "additionalProperties": false
+                                                                      },
+                                                                      {
+                                                                        "type": "object",
+                                                                        "properties": {
+                                                                          "assetId": {
+                                                                            "type": "string",
+                                                                            "format": "uuid"
+                                                                          }
+                                                                        },
+                                                                        "required": [
+                                                                          "assetId"
+                                                                        ],
+                                                                        "additionalProperties": false
+                                                                      },
+                                                                      {
+                                                                        "type": "object",
+                                                                        "properties": {
+                                                                          "entityId": {
+                                                                            "type": "string",
+                                                                            "format": "uuid"
+                                                                          }
+                                                                        },
+                                                                        "required": [
+                                                                          "entityId"
+                                                                        ],
+                                                                        "additionalProperties": false
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  "alt": {
+                                                                    "type": "string",
+                                                                    "maxLength": 200
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "kind",
+                                                                  "ref"
+                                                                ]
+                                                              }
+                                                            },
+                                                            "required": [
+                                                              "label"
+                                                            ],
+                                                            "additionalProperties": false
+                                                          },
+                                                          "minItems": 2,
+                                                          "maxItems": 4
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "prompt",
+                                                        "options"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": ["label"]
+                                                },
+                                                "minItems": 1,
+                                                "maxItems": 8
+                                              },
+                                              "allowOther": {
+                                                "type": "boolean"
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode", "options"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["form"]
+                                              },
+                                              "form": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "title": { "type": "string" },
+                                                  "note": { "type": "string" },
+                                                  "fields": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "key": {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 200
+                                                        },
+                                                        "label": {
+                                                          "type": "string",
+                                                          "maxLength": 200
+                                                        },
+                                                        "type": {
+                                                          "type": "string",
+                                                          "maxLength": 64
+                                                        },
+                                                        "constraints": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "enum": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "type": "string"
+                                                              }
+                                                            },
+                                                            "min": {
+                                                              "type": "number"
+                                                            },
+                                                            "max": {
+                                                              "type": "number"
+                                                            },
+                                                            "pattern": {
+                                                              "type": "string"
+                                                            }
+                                                          }
+                                                        },
+                                                        "required": {
+                                                          "type": "boolean"
+                                                        },
+                                                        "help": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "key",
+                                                        "label",
+                                                        "type"
+                                                      ]
+                                                    },
+                                                    "maxItems": 20
+                                                  }
+                                                },
+                                                "required": ["fields"]
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode", "form"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["act"]
+                                              },
+                                              "url": {
+                                                "type": "string",
+                                                "maxLength": 2000
+                                              },
+                                              "steps": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200
+                                                },
+                                                "maxItems": 7
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "mode": {
+                                                "type": "string",
+                                                "enum": ["provide"]
+                                              },
+                                              "provide": {
+                                                "oneOf": [
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "type": "string",
+                                                        "enum": ["connection"]
+                                                      },
+                                                      "service": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": [
+                                                      "kind",
+                                                      "service"
+                                                    ]
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "type": "string",
+                                                        "enum": ["file"]
+                                                      },
+                                                      "accept": {
+                                                        "type": "array",
+                                                        "items": {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 100
+                                                        },
+                                                        "maxItems": 10
+                                                      }
+                                                    },
+                                                    "required": ["kind"]
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "kind": {
+                                                        "type": "string",
+                                                        "enum": ["secret"]
+                                                      },
+                                                      "name": {
+                                                        "type": "string",
+                                                        "minLength": 1,
+                                                        "maxLength": 120
+                                                      }
+                                                    },
+                                                    "required": ["kind", "name"]
+                                                  }
+                                                ]
+                                              },
+                                              "lookedAt": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "entity",
+                                                        "document",
+                                                        "view",
+                                                        "automation",
+                                                        "playbook"
+                                                      ]
+                                                    },
+                                                    "id": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200
+                                                    }
+                                                  },
+                                                  "required": ["kind", "id"]
+                                                },
+                                                "maxItems": 8
+                                              },
+                                              "risk": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "high",
+                                                  "medium",
+                                                  "low"
+                                                ]
+                                              },
+                                              "stakes": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "routine",
+                                                  "commitment"
+                                                ],
+                                                "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                              },
+                                              "urgency": {
+                                                "type": "string",
+                                                "enum": ["today", "whenever"],
+                                                "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                              },
+                                              "answerBy": {
+                                                "type": "string",
+                                                "maxLength": 40,
+                                                "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                              },
+                                              "consequence": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                              },
+                                              "reversible": {
+                                                "type": "boolean",
+                                                "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                              },
+                                              "dedupeKey": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120,
+                                                "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                              }
+                                            },
+                                            "required": ["mode", "provide"]
+                                          }
+                                        ]
+                                      },
+                                      "optionsFrom": {
+                                        "type": "object",
+                                        "properties": {
+                                          "relation": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80,
+                                            "pattern": "^[a-z][a-z0-9_-]*$"
+                                          }
+                                        },
+                                        "required": ["relation"],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": ["label", "ask"],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": ["key", "name", "category"],
@@ -27923,6 +29551,748 @@
                             "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
                           },
                           "maxItems": 16
+                        },
+                        "endAsk": {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "why": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 500
+                            },
+                            "unblocks": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "ask": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": ["confirm"]
+                                    },
+                                    "prompt": {
+                                      "type": "string",
+                                      "maxLength": 500
+                                    },
+                                    "yes": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "recommended": { "type": "boolean" }
+                                      }
+                                    },
+                                    "no": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        },
+                                        "recommended": { "type": "boolean" }
+                                      }
+                                    },
+                                    "lookedAt": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "entity",
+                                              "document",
+                                              "view",
+                                              "automation",
+                                              "playbook"
+                                            ]
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["kind", "id"]
+                                      },
+                                      "maxItems": 8
+                                    },
+                                    "risk": {
+                                      "type": "string",
+                                      "enum": ["high", "medium", "low"]
+                                    },
+                                    "stakes": {
+                                      "type": "string",
+                                      "enum": ["routine", "commitment"],
+                                      "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                    },
+                                    "urgency": {
+                                      "type": "string",
+                                      "enum": ["today", "whenever"],
+                                      "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                    },
+                                    "answerBy": {
+                                      "type": "string",
+                                      "maxLength": 40,
+                                      "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                    },
+                                    "consequence": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200,
+                                      "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                    },
+                                    "reversible": {
+                                      "type": "boolean",
+                                      "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                    },
+                                    "dedupeKey": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 120,
+                                      "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                    }
+                                  },
+                                  "required": ["mode"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": ["choose"]
+                                    },
+                                    "options": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          "icon": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "recommended": { "type": "boolean" },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          },
+                                          "caution": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 60
+                                          },
+                                          "media": {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "image",
+                                                  "video",
+                                                  "audio"
+                                                ]
+                                              },
+                                              "ref": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "url": {
+                                                        "type": "string",
+                                                        "maxLength": 2000,
+                                                        "format": "uri"
+                                                      }
+                                                    },
+                                                    "required": ["url"],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "assetId": {
+                                                        "type": "string",
+                                                        "format": "uuid"
+                                                      }
+                                                    },
+                                                    "required": ["assetId"],
+                                                    "additionalProperties": false
+                                                  },
+                                                  {
+                                                    "type": "object",
+                                                    "properties": {
+                                                      "entityId": {
+                                                        "type": "string",
+                                                        "format": "uuid"
+                                                      }
+                                                    },
+                                                    "required": ["entityId"],
+                                                    "additionalProperties": false
+                                                  }
+                                                ]
+                                              },
+                                              "alt": {
+                                                "type": "string",
+                                                "maxLength": 200
+                                              }
+                                            },
+                                            "required": ["kind", "ref"]
+                                          },
+                                          "followUp": {
+                                            "type": "object",
+                                            "properties": {
+                                              "prompt": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 120
+                                              },
+                                              "options": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "label": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 80
+                                                    },
+                                                    "value": {
+                                                      "type": "string",
+                                                      "maxLength": 500
+                                                    },
+                                                    "icon": {
+                                                      "type": "string",
+                                                      "maxLength": 64
+                                                    },
+                                                    "recommended": {
+                                                      "type": "boolean"
+                                                    },
+                                                    "description": {
+                                                      "type": "string",
+                                                      "maxLength": 140
+                                                    },
+                                                    "caution": {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 60
+                                                    },
+                                                    "media": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "image",
+                                                            "video",
+                                                            "audio"
+                                                          ]
+                                                        },
+                                                        "ref": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "url": {
+                                                                  "type": "string",
+                                                                  "maxLength": 2000,
+                                                                  "format": "uri"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "url"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "assetId": {
+                                                                  "type": "string",
+                                                                  "format": "uuid"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "assetId"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "entityId": {
+                                                                  "type": "string",
+                                                                  "format": "uuid"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "entityId"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          ]
+                                                        },
+                                                        "alt": {
+                                                          "type": "string",
+                                                          "maxLength": 200
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "ref"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": ["label"],
+                                                  "additionalProperties": false
+                                                },
+                                                "minItems": 2,
+                                                "maxItems": 4
+                                              }
+                                            },
+                                            "required": ["prompt", "options"]
+                                          }
+                                        },
+                                        "required": ["label"]
+                                      },
+                                      "minItems": 1,
+                                      "maxItems": 8
+                                    },
+                                    "allowOther": { "type": "boolean" },
+                                    "lookedAt": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "entity",
+                                              "document",
+                                              "view",
+                                              "automation",
+                                              "playbook"
+                                            ]
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["kind", "id"]
+                                      },
+                                      "maxItems": 8
+                                    },
+                                    "risk": {
+                                      "type": "string",
+                                      "enum": ["high", "medium", "low"]
+                                    },
+                                    "stakes": {
+                                      "type": "string",
+                                      "enum": ["routine", "commitment"],
+                                      "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                    },
+                                    "urgency": {
+                                      "type": "string",
+                                      "enum": ["today", "whenever"],
+                                      "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                    },
+                                    "answerBy": {
+                                      "type": "string",
+                                      "maxLength": 40,
+                                      "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                    },
+                                    "consequence": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200,
+                                      "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                    },
+                                    "reversible": {
+                                      "type": "boolean",
+                                      "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                    },
+                                    "dedupeKey": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 120,
+                                      "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                    }
+                                  },
+                                  "required": ["mode", "options"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": ["form"]
+                                    },
+                                    "form": {
+                                      "type": "object",
+                                      "properties": {
+                                        "title": { "type": "string" },
+                                        "note": { "type": "string" },
+                                        "fields": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "key": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200
+                                              },
+                                              "label": {
+                                                "type": "string",
+                                                "maxLength": 200
+                                              },
+                                              "type": {
+                                                "type": "string",
+                                                "maxLength": 64
+                                              },
+                                              "constraints": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "enum": {
+                                                    "type": "array",
+                                                    "items": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "min": { "type": "number" },
+                                                  "max": { "type": "number" },
+                                                  "pattern": {
+                                                    "type": "string"
+                                                  }
+                                                }
+                                              },
+                                              "required": { "type": "boolean" },
+                                              "help": { "type": "string" }
+                                            },
+                                            "required": ["key", "label", "type"]
+                                          },
+                                          "maxItems": 20
+                                        }
+                                      },
+                                      "required": ["fields"]
+                                    },
+                                    "lookedAt": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "entity",
+                                              "document",
+                                              "view",
+                                              "automation",
+                                              "playbook"
+                                            ]
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["kind", "id"]
+                                      },
+                                      "maxItems": 8
+                                    },
+                                    "risk": {
+                                      "type": "string",
+                                      "enum": ["high", "medium", "low"]
+                                    },
+                                    "stakes": {
+                                      "type": "string",
+                                      "enum": ["routine", "commitment"],
+                                      "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                    },
+                                    "urgency": {
+                                      "type": "string",
+                                      "enum": ["today", "whenever"],
+                                      "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                    },
+                                    "answerBy": {
+                                      "type": "string",
+                                      "maxLength": 40,
+                                      "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                    },
+                                    "consequence": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200,
+                                      "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                    },
+                                    "reversible": {
+                                      "type": "boolean",
+                                      "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                    },
+                                    "dedupeKey": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 120,
+                                      "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                    }
+                                  },
+                                  "required": ["mode", "form"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": ["act"]
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "maxLength": 2000
+                                    },
+                                    "steps": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "maxItems": 7
+                                    },
+                                    "lookedAt": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "entity",
+                                              "document",
+                                              "view",
+                                              "automation",
+                                              "playbook"
+                                            ]
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["kind", "id"]
+                                      },
+                                      "maxItems": 8
+                                    },
+                                    "risk": {
+                                      "type": "string",
+                                      "enum": ["high", "medium", "low"]
+                                    },
+                                    "stakes": {
+                                      "type": "string",
+                                      "enum": ["routine", "commitment"],
+                                      "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                    },
+                                    "urgency": {
+                                      "type": "string",
+                                      "enum": ["today", "whenever"],
+                                      "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                    },
+                                    "answerBy": {
+                                      "type": "string",
+                                      "maxLength": 40,
+                                      "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                    },
+                                    "consequence": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200,
+                                      "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                    },
+                                    "reversible": {
+                                      "type": "boolean",
+                                      "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                    },
+                                    "dedupeKey": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 120,
+                                      "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                    }
+                                  },
+                                  "required": ["mode"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "mode": {
+                                      "type": "string",
+                                      "enum": ["provide"]
+                                    },
+                                    "provide": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["connection"]
+                                            },
+                                            "service": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["kind", "service"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["file"]
+                                            },
+                                            "accept": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 100
+                                              },
+                                              "maxItems": 10
+                                            }
+                                          },
+                                          "required": ["kind"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["secret"]
+                                            },
+                                            "name": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120
+                                            }
+                                          },
+                                          "required": ["kind", "name"]
+                                        }
+                                      ]
+                                    },
+                                    "lookedAt": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": [
+                                              "entity",
+                                              "document",
+                                              "view",
+                                              "automation",
+                                              "playbook"
+                                            ]
+                                          },
+                                          "id": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          }
+                                        },
+                                        "required": ["kind", "id"]
+                                      },
+                                      "maxItems": 8
+                                    },
+                                    "risk": {
+                                      "type": "string",
+                                      "enum": ["high", "medium", "low"]
+                                    },
+                                    "stakes": {
+                                      "type": "string",
+                                      "enum": ["routine", "commitment"],
+                                      "description": "commitment when the answer commits the person (deploy, spend, publish, delete, anything irreversible): a relayed answer then waits for their tap. Default routine."
+                                    },
+                                    "urgency": {
+                                      "type": "string",
+                                      "enum": ["today", "whenever"],
+                                      "description": "How soon, as a hint: today (default) | whenever. It can only LOWER the priority the pod derives: whenever ranks the ask lower."
+                                    },
+                                    "answerBy": {
+                                      "type": "string",
+                                      "maxLength": 40,
+                                      "description": "When the answer is needed, ISO-8601 with offset (2026-11-05T17:00:00Z). Due within the hour, it is the person's top priority and its push breaks through Focus."
+                                    },
+                                    "consequence": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200,
+                                      "description": "One line: what the answer will DO (e.g. 'Publishes the post to LinkedIn')."
+                                    },
+                                    "reversible": {
+                                      "type": "boolean",
+                                      "description": "Whether what the answer does can be undone. Omit when you do not know."
+                                    },
+                                    "dedupeKey": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 120,
+                                      "description": "Your own handle for this ticket: asking again with the same key UPDATES your open ask instead of adding a second one."
+                                    }
+                                  },
+                                  "required": ["mode", "provide"]
+                                }
+                              ]
+                            },
+                            "optionsFrom": {
+                              "type": "object",
+                              "properties": {
+                                "relation": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z][a-z0-9_-]*$"
+                                }
+                              },
+                              "required": ["relation"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["label", "ask"],
+                          "additionalProperties": false
                         }
                       },
                       "required": ["key", "name", "category"],
@@ -49626,6 +51996,116 @@
         }
       }
     },
+    "/host-jobs/{id}/uploads": {
+      "post": {
+        "tags": ["HostJobs"],
+        "summary": "Get an upload ticket for one output file of a hosted verb run",
+        "description": "A presigned PUT minted for the run's requester (their session and space), never for the computer. Pass the returned `uploadToken` in the finish's `files`. Only a `verb` job returns files. Only a connected computer's own key holding `host.runner` (\"Installs from the pod\" on that computer); any other caller, an agent hosted on the computer included, is refused `NOT_A_COMPUTER` (403).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "leaseId": { "type": "string", "format": "uuid" },
+                  "filename": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "mimeType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "size": { "type": "integer", "exclusiveMinimum": 0 }
+                },
+                "required": ["leaseId", "filename", "mimeType", "size"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The upload ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploadUrl": { "type": "string" },
+                    "method": { "type": "string", "enum": ["PUT"] },
+                    "headers": {
+                      "type": "object",
+                      "additionalProperties": { "type": "string" }
+                    },
+                    "uploadToken": { "type": "string" }
+                  },
+                  "required": ["uploadUrl", "method", "headers", "uploadToken"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a computer, or no host.runner scope",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such job for an installation on this computer",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The lease is no longer held",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is too large",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/host-jobs/{id}/finish": {
       "post": {
         "tags": ["HostJobs"],
@@ -49689,6 +52169,33 @@
                     "items": { "type": "string", "maxLength": 300 },
                     "maxItems": 100
                   },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "param": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 255
+                        },
+                        "size": { "type": "integer", "minimum": 0 },
+                        "uploadToken": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 4096
+                        },
+                        "error": { "type": "string", "maxLength": 500 }
+                      },
+                      "required": ["param", "name"]
+                    },
+                    "maxItems": 20
+                  },
                   "observedVersion": {
                     "type": ["string", "null"],
                     "maxLength": 128
@@ -49736,7 +52243,11 @@
                       "type": "string",
                       "enum": ["done", "failed", "stopped"]
                     },
-                    "installationStatus": { "type": "string" }
+                    "installationStatus": { "type": "string" },
+                    "files": {
+                      "type": "array",
+                      "items": { "type": "object", "additionalProperties": {} }
+                    }
                   },
                   "required": ["id", "status", "installationStatus"]
                 }

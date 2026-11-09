@@ -722,9 +722,9 @@ export function nextJobFor(
 export const TOOL_RECHECK_MIN_AGE_SECONDS = 10 * 60;
 
 /**
- * Queue the next job for this installation, at most ONE open per
- * installation: a second insert meets the partial unique index and is a
- * no-op. Returns the queued job's id, or null when nothing was due, the
+ * Queue the next job for this installation, at most ONE open lifecycle job
+ * per installation: a second insert meets the partial unique index and is a
+ * no-op (hosted verb runs are not counted, 0415). Returns the queued job's id, or null when nothing was due, the
  * ladder holds it back, or a job is already open.
  */
 export async function reconcileInstallation(
@@ -787,8 +787,9 @@ export async function reconcileComputer(
         eq(installations.machineUserId, runner.machineUserId),
         eq(installations.userId, runner.ownerUserId),
         ne(installations.status, "removed"),
-        // Skip the ones with an open job without a round trip per row.
-        drizzleSql`NOT EXISTS (SELECT 1 FROM ${hostJobs} WHERE ${hostJobs.installationId} = ${installations.id} AND ${hostJobs.status} IN ('queued', 'leased', 'running'))`
+        // Skip the ones with an open LIFECYCLE job without a round trip per
+        // row; a queued hosted verb run does not hold its check back (0415).
+        drizzleSql`NOT EXISTS (SELECT 1 FROM ${hostJobs} WHERE ${hostJobs.installationId} = ${installations.id} AND ${hostJobs.kind} <> 'verb' AND ${hostJobs.status} IN ('queued', 'leased', 'running'))`
       )
     );
   let queued = 0;

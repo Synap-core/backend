@@ -569,6 +569,7 @@ async function wake(p: {
     userId: p.ownerId,
     slotLabel: p.slotLabel,
     approved: p.value?.type === "confirm" && p.value.confirmed,
+    ...(p.value ? { value: p.value } : {}),
   });
   return triggerAutoRespond({
     channelId: p.channelId,

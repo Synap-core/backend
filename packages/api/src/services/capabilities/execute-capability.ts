@@ -169,6 +169,7 @@ import {
 } from "./propose-capability-enable.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
+import { isQueuedHostVerbResult } from "../host-jobs/hosted-verbs.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 import {
@@ -1781,8 +1782,13 @@ export async function markSkillProven(skillId: string): Promise<void> {
  */
 function outcomeDidTheWork(result: unknown): boolean {
   // A box run is QUEUED here, not performed: its finish stamps `proven_at`
-  // (box-runs.ts) once the script really exited 0.
-  return !isProposedEnvelope(result) && !isQueuedBoxRunResult(result);
+  // (box-runs.ts) once the script really exited 0. A hosted verb run
+  // (`computer.run_recipe`) is queued the same way: its host job is the run.
+  return (
+    !isProposedEnvelope(result) &&
+    !isQueuedBoxRunResult(result) &&
+    !isQueuedHostVerbResult(result)
+  );
 }
 
 /**

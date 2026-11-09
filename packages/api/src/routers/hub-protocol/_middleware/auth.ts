@@ -36,6 +36,7 @@ import {
   runWithActingAgent,
   runWithCallingKey,
   runWithClientKey,
+  runWithDelegatedTurnAgent,
   runWithGrant,
   clientKeyForApiKey,
   requestConversationId,
@@ -188,7 +189,11 @@ function logLegacyDelegation(keyId: string): void {
  *   - `act.sub` is verified but NOT entered as the request's acting agent:
  *     `getActingAgentUserId()` outranks the persona the IS names per write
  *     (`permission-check.ts`), so entering it would move every IS write onto a
- *     different governance lane — a separate, dogfooded step.
+ *     different governance lane — a separate, dogfooded step. It IS recorded
+ *     as the turn's delegated agent (`runWithDelegatedTurnAgent`), the proof
+ *     `resolveActorId` accepts when the IS names that same agent as a write's
+ *     persona: the pod chose it for this turn and signed it, so it needs no
+ *     act-as key (a house agent holds none).
  * Grant: the same explicit full access the `is_internal` key carries.
  */
 async function authenticateIsDelegation(
@@ -325,7 +330,16 @@ async function authenticateIsDelegation(
       { id: delegation.audience, keyType: "is_internal" },
       requestConversationId(c.req.header(CONVERSATION_HEADER))
     ),
-    () => runWithGrant(grant, () => next())
+    () =>
+      runWithGrant(grant, () =>
+        runWithDelegatedTurnAgent(
+          {
+            operatorUserId: delegation.operatorUserId,
+            agentUserId: delegation.agentUserId,
+          },
+          () => next()
+        )
+      )
   );
 }
 
