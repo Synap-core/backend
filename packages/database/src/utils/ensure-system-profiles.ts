@@ -795,46 +795,51 @@ function sortKeys(v: unknown): unknown {
  * OWN profile-scoped defs (the Knowledge `supersededBy` path) and converges them
  * on every pass.
  */
-export const SNIPPET_OWN_DEFS = [
-  {
-    slug: "body",
-    valueType: PropertyValueType.STRING,
-    constraints: { maxLength: 20000 },
-    uiHints: {
-      label: "Text",
-      inputType: "textarea",
-      helpText:
-        "The text, in markdown. A {name} is filled from the variables below when the snippet is rendered.",
+// A function, not a module constant: it reads `PropertyValueType` from the
+// barrel, which is still undefined at import time under a test that mocks
+// `../index.js` (8 suites failed to load on that).
+function snippetOwnDefs() {
+  return [
+    {
+      slug: "body",
+      valueType: PropertyValueType.STRING,
+      constraints: { maxLength: 20000 },
+      uiHints: {
+        label: "Text",
+        inputType: "textarea",
+        helpText:
+          "The text, in markdown. A {name} is filled from the variables below when the snippet is rendered.",
+      },
     },
-  },
-  {
-    slug: "variables",
-    valueType: PropertyValueType.ARRAY,
-    constraints: {},
-    uiHints: {
-      label: "Variables",
-      inputType: "json",
-      helpText:
-        'What {name} stands for — {name, type: text | number | entity | choice | boolean, required?, default?, from?: "subject.<field>"}.',
+    {
+      slug: "variables",
+      valueType: PropertyValueType.ARRAY,
+      constraints: {},
+      uiHints: {
+        label: "Variables",
+        inputType: "json",
+        helpText:
+          'What {name} stands for — {name, type: text | number | entity | choice | boolean, required?, default?, from?: "subject.<field>"}.',
+      },
     },
-  },
-  {
-    slug: "use",
-    valueType: PropertyValueType.STRING,
-    constraints: { enum: ["email", "message", "prompt", "reply", "other"] },
-    uiHints: { label: "Use", inputType: "select" },
-  },
-  {
-    slug: "channel",
-    valueType: PropertyValueType.STRING,
-    constraints: { maxLength: 200 },
-    uiHints: {
-      label: "Channel",
-      inputType: "text",
-      helpText: "Where it is sent or pasted, e.g. LinkedIn, else email.",
+    {
+      slug: "use",
+      valueType: PropertyValueType.STRING,
+      constraints: { enum: ["email", "message", "prompt", "reply", "other"] },
+      uiHints: { label: "Use", inputType: "select" },
     },
-  },
-] as const;
+    {
+      slug: "channel",
+      valueType: PropertyValueType.STRING,
+      constraints: { maxLength: 200 },
+      uiHints: {
+        label: "Channel",
+        inputType: "text",
+        helpText: "Where it is sent or pasted, e.g. LinkedIn, else email.",
+      },
+    },
+  ] as const;
+}
 
 /**
  * Ensure system profiles and property definitions exist
@@ -1420,7 +1425,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
-      // Snippet — the kind's ONE lifecycle (its four fields are SNIPPET_OWN_DEFS).
+      // Snippet — the kind's ONE lifecycle (its four fields are snippetOwnDefs).
       {
         slug: "snippetStatus",
         valueType: PropertyValueType.STRING,
@@ -2258,7 +2263,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     }
 
     // `snippet` owns its four fields: profile-scoped defs (never the shared
-    // global slug, see SNIPPET_OWN_DEFS), converged on every pass. A foreign
+    // global slug, see snippetOwnDefs), converged on every pass. A foreign
     // global def of the same slug is left exactly as it is.
     const snippetScopedDefIds = new Map<string, string>();
     {
@@ -2268,7 +2273,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       }
       const same = (a: unknown, b: unknown) =>
         JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
-      for (const def of SNIPPET_OWN_DEFS) {
+      for (const def of snippetOwnDefs()) {
         const scoped = await propertyDefRepo.getBySlug(
           def.slug,
           snippetProfileId,
