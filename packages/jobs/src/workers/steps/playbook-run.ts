@@ -36,6 +36,7 @@ import {
   type PlaybookRunMode,
 } from "@synap-core/types/automations";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
+import { findInFlightRunSession } from "../../utils/run-in-flight.js";
 import { logger } from "../automation-executor-logger.js";
 import type {
   StepContext,
@@ -99,6 +100,9 @@ async function backStampEventSession(
     );
   }
 }
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function executePlaybookRun(
   data: {
@@ -303,6 +307,25 @@ export async function executePlaybookRun(
       throw new Error(
         "playbook_run in propose mode needs the automation that owns it (no automationContext) — refusing to file an unattributable proposal"
       );
+    }
+    // ONE run per (playbook, subject) at a time — the rule the run spine's
+    // subject reuse applies to a run-mode node, applied before anything is
+    // filed. A run still working on this subject answers the activator: a
+    // second proposal could only start a duplicate run (see run-in-flight.ts).
+    // A name-only node (no id) is resolved at approval, where the replay
+    // checks the same thing.
+    if (resolvedSubjectId && UUID_RE.test(data.playbookId ?? "")) {
+      const inFlight = await findInFlightRunSession({
+        playbookId: data.playbookId!,
+        subjectId: resolvedSubjectId,
+      });
+      if (inFlight) {
+        return {
+          status: "skipped",
+          reason: AUTOMATION_SKIP_REASONS.runInFlight,
+          sessionId: inFlight.id,
+        };
+      }
     }
     // A worker's backlog holds its proposals too: past `maxPendingApprovals`
     // waiting on a person, it files no more (the spine's own gate for runs).

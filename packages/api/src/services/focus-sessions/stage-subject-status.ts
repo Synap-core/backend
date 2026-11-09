@@ -59,13 +59,14 @@ import {
   entities,
   eq,
   getWorkspaceMembership,
+  resolveStatusMoveTarget,
   type StatusMoveActor,
 } from "@synap/database";
 import type { Hold } from "@synap-core/types/lifecycle";
 // The ONE reader of a session's process definition — shared with the reverse
 // half in @synap/jobs (`process-sync.ts`).
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
-import { resolveStageGate } from "@synap/playbooks";
+import { resolveStageGate, type PlaybookStage } from "@synap/playbooks";
 import type { Context } from "../../types/context.js";
 import { moveStatus, type MoveStatusResult } from "../lifecycle/move-status.js";
 import { readSubjectProfile } from "../playbooks/playbook-activators.js";
@@ -95,7 +96,8 @@ export type StageSubjectStatusOutcome =
         | "already_set"
         | "subject_not_found"
         | "no_process"
-        | "stage_not_found";
+        | "stage_not_found"
+        | "subject_ahead";
     }
   | { status: "failed"; reason: string };
 
@@ -123,6 +125,38 @@ const NOTHING_TO_MOVE: ReadonlySet<string> = new Set([
   "stage_not_found",
   "stage_has_no_subject_status",
 ]);
+
+/**
+ * The status values a process reaches only AFTER `stageKey`: the
+ * `subjectStatus` of every later stage, minus any value an earlier-or-same
+ * stage also writes (a loop back to a shared status is not "ahead"). A
+ * subject already holding one of them is further along this very process
+ * than the stage — moving it to the stage's value would move it BACKWARDS.
+ * Empty for an unknown stage. PURE.
+ */
+export function statusesAheadOfStage(
+  stages: readonly (PlaybookStage | null | undefined)[],
+  stageKey: string
+): Set<string> {
+  const at = stages.findIndex((s) => s?.key === stageKey);
+  if (at < 0) return new Set();
+  const valueOf = (s: PlaybookStage | null | undefined) =>
+    typeof s?.subjectStatus === "string" && s.subjectStatus.trim()
+      ? s.subjectStatus.trim()
+      : null;
+  const upTo = new Set(
+    stages
+      .slice(0, at + 1)
+      .map(valueOf)
+      .filter((v): v is string => v !== null)
+  );
+  return new Set(
+    stages
+      .slice(at + 1)
+      .map(valueOf)
+      .filter((v): v is string => v !== null && !upTo.has(v))
+  );
+}
 
 /**
  * Write the entered stage's `subjectStatus` onto the session's subject, through
@@ -170,6 +204,14 @@ export async function writeStageSubjectStatus(input: {
       return { status: "skipped", reason: "no_status_property" };
 
     const reasoning = `The process entered stage "${stage.name ?? stage.key}", which is "${value}".`;
+    // BIRTH never moves a subject BACKWARDS: a run started on a thing that is
+    // already further along this process (a post at Scripted when the run's
+    // first stage is Brief) leaves it where it is. Writing the first stage's
+    // value moved Video 01 from Scripted back to Briefed (pod, 9 Nov 2026),
+    // and its "enters Briefed" activator then filed a second run for it.
+    const notBackFrom = input.atSessionBirth
+      ? statusesAheadOfStage(proc.stages, stage.key)
+      : undefined;
     return await writeSubjectStatusValue({
       session,
       entityId: session.subjectEntityId,
@@ -190,6 +232,7 @@ export async function writeStageSubjectStatus(input: {
         reason: reasoning,
       },
       ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
+      ...(notBackFrom && notBackFrom.size > 0 ? { notBackFrom } : {}),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -276,6 +319,12 @@ async function writeSubjectStatusValue(input: {
    * {@link writeBirthStageSubjectStatus}.
    */
   atSessionBirth?: boolean;
+  /**
+   * Values the thing must not be moved back FROM (a birth's
+   * {@link statusesAheadOfStage}): a thing already holding one is left where
+   * it is, `skipped: subject_ahead`.
+   */
+  notBackFrom?: ReadonlySet<string>;
 }): Promise<StageSubjectStatusOutcome> {
   const { session, entityId, value, reason, actor } = input;
   const proc = input.process;
@@ -299,6 +348,25 @@ async function writeSubjectStatusValue(input: {
     // the run's own space first. A kind moves in its own space.
     const roleWorkspaceId = session.workspaceId ?? subject.workspaceId ?? null;
     const wsId = subject.workspaceId ?? session.workspaceId ?? null;
+
+    if (input.notBackFrom && input.notBackFrom.size > 0) {
+      // The value the thing holds NOW, read where its move would read it: the
+      // role's facet, the kind's declared lifecycle, else the plain property.
+      const target = await resolveStatusMoveTarget(db, {
+        entityId,
+        ...(isRole
+          ? { role: proc.profileSlug, workspaceId: roleWorkspaceId }
+          : { workspaceId: wsId }),
+      });
+      const current = target.ok
+        ? target.target.current
+        : (subject.properties as Record<string, unknown> | null)?.[
+            proc.statusProperty
+          ];
+      if (typeof current === "string" && input.notBackFrom.has(current)) {
+        return { status: "skipped", reason: "subject_ahead" };
+      }
+    }
 
     const humanOnly = proc.humanOnlyStatuses.includes(value);
     const moveInput = {

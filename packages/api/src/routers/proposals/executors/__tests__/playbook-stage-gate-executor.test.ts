@@ -158,10 +158,12 @@ describe("focus_session/playbook.stage_gate — approval resumes the run", () =>
     >;
 
     expect(sessionUpdate().status).toBe("active");
-    // Guarded: it resumes ONLY a paused session.
-    expect(updates.find((u) => u.table === "focus_sessions")?.from).toBe(
-      "paused"
-    );
+    // Guarded: it resumes ONLY a paused session (or the reaper's `stale`
+    // aging of that same pause).
+    expect(updates.find((u) => u.table === "focus_sessions")?.from).toEqual([
+      "paused",
+      "stale",
+    ]);
     expect(result.success).toBe(true);
     const effect = result.effect as Record<string, unknown>;
     expect(effect.applied).toBe("verified");
@@ -179,9 +181,26 @@ describe("focus_session/playbook.stage_gate — approval resumes the run", () =>
     expect(sessionUpdate()).not.toHaveProperty("currentStage");
   });
 
+  it("REFUSES a gate on a run that ended — never an approval into nothing", async () => {
+    // Live 9 Nov 2026: gate 9c527c67 approved on closed run be143ceb changed
+    // nothing and read "approved".
+    for (const status of ["closed", "failed", "cancelled"]) {
+      updates.length = 0;
+      sessionRow = { ...sessionRow, status };
+      const executor = proposalExecRegistry.resolveExact(KEY)!;
+      await expect(executor.execute(args())).rejects.toThrow(
+        new RegExp(`This run ended \\(${status}\\)`)
+      );
+      // Nothing written: no resume, no approval stamp, no subject move.
+      expect(updates).toHaveLength(0);
+      expect(subjectWrites).toHaveLength(0);
+    }
+  });
+
   it("reports `none` when the session was not paused — no invented resume", async () => {
+    // A concurrent approve already resumed it.
     updateReturns = [];
-    sessionRow = { ...sessionRow, status: "closed" };
+    sessionRow = { ...sessionRow, status: "active" };
     const executor = proposalExecRegistry.resolveExact(KEY)!;
     const result = (await executor.execute(args())) as unknown as Record<
       string,

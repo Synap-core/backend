@@ -118,7 +118,10 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import type { PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
-import { ENDED_RUN_CLOSE_SUMMARY } from "../../focus-sessions/session-lifecycle-sweep.js";
+import {
+  ENDED_RUN_CLOSE_SUMMARY,
+  closeEndedRunSessions,
+} from "../../focus-sessions/session-lifecycle-sweep.js";
 import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
@@ -378,5 +381,54 @@ describe("a one-turn run ends itself when its turn completes", () => {
     expect(r.json.status).toBe("continued");
     expect((await runOf(runId)).status).toBe("running");
     expect((await sessionOf(sessionId)).status).toBe("active");
+  });
+  it("the hourly sweep never closes a run PAUSED AT ITS HUMAN STAGE GATE; an ended run's gates expire", async () => {
+    // Live 9 Nov 2026: run be143ceb's turn ended at its Draft gate (its
+    // playbook run read completed), the sweep closed it, and the person's
+    // approval of gate 9c527c67 then changed nothing.
+    const gated = await seedRun({ stages: STAGES });
+    const plain = await seedRun({ stages: STAGES });
+    for (const { sessionId, runId } of [gated, plain]) {
+      await q(`update playbook_runs set status = 'completed' where id = $1`, [
+        runId,
+      ]);
+      await q(`update focus_sessions set status = 'paused' where id = $1`, [
+        sessionId,
+      ]);
+    }
+    const gateId = randomUUID();
+    await q(
+      `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, data, created_by, created_at, updated_at)
+       values ($1, $2, 'pending', 'playbook.stage_gate', 'focus_session', $3, '{"stageKey":"review"}'::jsonb, $4, now(), now())`,
+      [gateId, gated.sessionId, gated.sessionId, IS_AGENT]
+    );
+
+    await closeEndedRunSessions();
+
+    expect((await sessionOf(gated.sessionId)).status).toBe("paused");
+    expect((await sessionOf(plain.sessionId)).status).toBe("closed");
+    const gate = async () =>
+      (
+        await q<{ status: string; data: Record<string, unknown> }>(
+          `select status, data from proposals where id = $1`,
+          [gateId]
+        )
+      ).rows[0]!;
+    expect((await gate()).status).toBe("pending");
+
+    // When that run DOES end (a person closes it), its gate goes with it.
+    const { completeFocusSession } =
+      await import("../../focus-sessions/complete-session.js");
+    await completeFocusSession({
+      sessionId: gated.sessionId,
+      userId: OWNER,
+      terminalStatus: "closed",
+      summary: "Done here.",
+      actor: { kind: "human", userId: OWNER },
+    });
+    expect(await gate()).toMatchObject({
+      status: "expired",
+      data: { expiredBy: "session_ended", sessionEndedAs: "closed" },
+    });
   });
 });

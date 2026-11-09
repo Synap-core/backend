@@ -24354,7 +24354,7 @@ export type StageSubjectStatusOutcome = {
 	value: string;
 	via?: "status_door";
 } | {
-	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
+	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_ahead" | "subject_not_found";
 	status: "skipped";
 } | {
 	reason: string;

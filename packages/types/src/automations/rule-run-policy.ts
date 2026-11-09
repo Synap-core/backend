@@ -138,6 +138,10 @@ export const AUTOMATION_SKIP_REASONS = {
   /** The subject's latest run of this playbook failed recently, so the
    *  subject-idempotent path did not start another one. Step output. */
   coolingDown: "cooling_down",
+  /** A propose-mode THEN found a run of the same playbook still in flight on
+   *  the subject, so it filed no second one. Step output
+   *  (`{ status: "skipped", reason, sessionId }`). */
+  runInFlight: "run_in_flight",
   /** Stage workers (`@synap-core/types/workers`): below threshold, approvals
    *  backlog, stale transition, volume ceiling. Step output + run row. */
   ...WORKER_SKIP_REASONS,

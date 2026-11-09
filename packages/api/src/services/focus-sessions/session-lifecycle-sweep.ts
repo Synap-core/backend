@@ -52,6 +52,7 @@ import {
   focusSessions,
   owedSlotWhere,
   focusSessionWaitsOnPersonWhere,
+  stageGatePendingIn,
   onlyOpenPullRequestsWhere,
   outstandingSlotExistsIn,
   personTouchedSubjectIds,
@@ -339,7 +340,11 @@ export function endedRunSessionWhere(): SQL {
     runSessionWhere(),
     inArray(focusSessions.status, [...OPEN]),
     drizzleSql`(${automationEnded} OR ${playbookEnded} OR ${intakeEnded})`,
-    nothingOwed()
+    nothingOwed(),
+    // A run paused at its human stage gate has "ended" its turn, not its
+    // work: the gate is the person's, and approving it continues the run
+    // (`stage-gate-wait.ts`). Closing it left the gate approvable into nothing.
+    drizzleSql`NOT ${stageGatePendingIn(focusSessions.id)}`
   ) as SQL;
 }
 
