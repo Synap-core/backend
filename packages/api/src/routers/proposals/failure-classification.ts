@@ -563,6 +563,8 @@ function rawFailureSentence(err: unknown, meta: ProposalFailureMeta): string {
       return "Couldn't apply — the kind it names isn't available in this space.";
     case "provider":
       return "Couldn't apply — the other service refused it.";
+    case "do_not_contact":
+      return "Couldn't apply — this person is marked do not contact.";
     default:
       return "Couldn't apply — an internal error occurred.";
   }
@@ -588,6 +590,8 @@ export const CLASS_TRPC_CODE: Record<FailureErrorClass, TRPCError["code"]> = {
   provider: "BAD_GATEWAY",
   // Refused before anything was sent: the recipient is not a connection.
   not_connected: "PRECONDITION_FAILED",
+  // Refused before anything was sent: the recipient is marked do not contact.
+  do_not_contact: "FORBIDDEN",
   unknown: "INTERNAL_SERVER_ERROR",
 };
 
