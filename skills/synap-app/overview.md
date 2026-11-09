@@ -4,6 +4,13 @@
 
 Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from `flow.of` (the kind's lifecycle in order, the playbook stage that owns each status, the things in each with who works them and their next step; tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`), and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
+## Pod-native first (founder, 9 Nov 2026)
+
+A tailored UI over the person's pod is built IN the pod first: views, bento
+dashboards, cells, and HTML pages bound as a kind's renderer, shown on the
+desktop (load `system/synap-ui/skill`; cells: `system/synap/viewframe-cells`).
+Build a standalone site or app only when the person asks for one.
+
 Synap is a sovereign data pod with a complete, typed API. You build an app on it
 the same way you'd build on any backend — except the backend is the user's own
 pod, and **every write is governed** (see `governance.md`).
@@ -12,15 +19,18 @@ pod, and **every write is governed** (see `governance.md`).
 
 | The user has… | Do this | Read |
 |---|---|---|
+| a screen over their pod data (a dashboard, a board, a kind's page) | no app: a view, bento or cell in the pod | `system/synap-ui/skill` |
 | an existing app (any framework) | add the SDK | `using-the-sdk.md`, `install-commands.md` |
-| nothing yet, wants a full app fast | a Website Factory app (shadcn + Tailwind v4); the HeroUI base app is retired | `creating-the-base-app.md` (retired), `using-the-sdk.md` |
+| a server app people sign in to with their own pod | `@synap-core/sdk/connect` (`createPodAppAuth`, SDK 1.3+) | the SDK's own `AGENTS.md` (`node_modules/@synap-core/sdk/AGENTS.md`) |
+| an app on their own pod, with its own key | `synap app init`, then `synap app connect` | `install-commands.md` |
+| nothing yet, wants a full app fast | a Next.js app on shadcn + Tailwind v4, plus the SDK. A public starter is decided but not published yet; the HeroUI base app is retired | `using-the-sdk.md` |
 | a server / script / CLI (no browser) | SDK with a session token, or the REST client with an API key | `using-the-sdk.md` |
 
-Both paths use the same underlying packages; only the amount of scaffolding differs.
+Every path uses the same packages; only the amount of scaffolding differs.
 
 ## The packages (all published under `@synap-core/*`)
 
-- `@synap-core/sdk` — typed tRPC client. `createSynapClient({ podUrl, ... })`. **The one you almost always want.**
+- `@synap-core/sdk` — typed tRPC client. `createSynapClient({ podUrl, ... })`. **The one you almost always want.** Subpaths: `@synap-core/sdk/connect` (server-only pod-app sign-in, `createPodAppAuth`), `@synap-core/sdk/public` (a public site, no credentials), `@synap-core/sdk/testing` (a mock pod).
 - `@synap-core/react` — React/TanStack-Query bindings (`SynapProvider`, hooks).
 - `@synap-core/sdk-realtime` — Socket.IO "something changed" events (`createRealtimeClient`).
 - `@synap-core/hub-rest-client` — zero-dep REST client for API-key holders (`HubRestClient`, `setupAgent`).
@@ -50,9 +60,24 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
   missing or does not verify; `SYNAP_RELEASE_VERIFY=warn` only warns.
 - **Managed (paid):** sign up at synap.live and provision a pod.
 
+## Where the app shows
+
+- On the desktop Home, the person keeps your site under **Your apps** (they pin
+  it or keep it as a tool).
+- A space can open on your site: its start page (`settings.layout.primarySurface`,
+  set by the space's template) is `{ kind: "url", url, podApp: { clientId } }`,
+  `clientId` being the app's client metadata URL. The desktop then opens the site
+  with this pod's address, so the app starts the pod's own sign-in. It grants the
+  site nothing.
+
 ## Honest scope
 
-Building on the user's OWN pod is fully supported today. Building a **multi-tenant
-commercial app** where *other* people connect *their* pods is **not yet supported**
-— per-app data scoping is still being built. If the user asks for that, say so;
-don't architect around a capability that isn't there.
+- **The person's own pod**: fully supported.
+- **An app other people use with THEIR pods**: supported through
+  `@synap-core/sdk/connect`. Each person connects their own pod and approves what
+  the app asks for. Such an app acts as its own agent there: its writes come back
+  as proposals the person reviews (`proposed` is success). Only Synap's own apps
+  act as the person.
+- **Not built yet, do not promise them**: an app the person approved acting as
+  them (decided, not built) and a public app starter (decided, not published).
+  If the user asks, say so; don't architect around a capability that isn't there.
