@@ -16,11 +16,7 @@
  */
 
 import { BUILDER_REF } from "./tool-profiles.js";
-import {
-  loadSkillCall,
-  RECONNECT_NOTE,
-  toolGroupList,
-} from "./tool-guidance.js";
+import { callToolNote, loadSkillCall, toolGroupList } from "./tool-guidance.js";
 
 export const ENTRY_REFLEX_PROSE = [
   "The user's Synap pod: source of truth. Tool names below are stems; your door may prefix them (`synap_ask`).",
@@ -33,7 +29,7 @@ export const ENTRY_REFLEX_PROSE = [
   // The same words `synap_load_skill`'s description and `synap_orient`'s
   // `yourTools` use (`tool-guidance.ts`): a client that drops `instructions`
   // still reads them there.
-  `6. **More tools on demand.** Unlock a group with \`${loadSkillCall("load_skill")}\`: ${toolGroupList("`")}, or \`${BUILDER_REF}\` for all. ${RECONNECT_NOTE}`,
+  `6. **More tools on demand.** Unlock a group with \`${loadSkillCall("load_skill")}\`: ${toolGroupList("`")}, or \`${BUILDER_REF}\` for all. ${callToolNote("call_tool", "`")}`,
   "",
   "Depth via `load_skill`: `system/synap/concepts`, `work-model`, `focus-sessions`, `hand-off`, `from-intent`, `writes`, `catalog`.",
 ].join("\n");

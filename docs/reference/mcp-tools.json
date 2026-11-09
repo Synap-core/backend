@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 116,
+  "toolCount": 117,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -23,7 +23,8 @@
     "synap_ask_person",
     "synap_relay_answer",
     "synap_complete_session",
-    "synap_load_skill"
+    "synap_load_skill",
+    "synap_call_tool"
   ],
   "groups": {
     "read": [
@@ -13151,6 +13152,56 @@
           }
         },
         "required": []
+      }
+    },
+    {
+      "name": "synap_call_tool",
+      "title": "Call a tool",
+      "group": "entry",
+      "annotations": {
+        "title": "Call a tool",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "description": "Run a tool this key has unlocked but your client does not list yet, in this turn: `tool` = its name, `arguments` = its input. Leave `arguments` out to get its input schema. Unlock a group first with synap_load_skill({ref: \"tools:read\"}).",
+      "parameters": [
+        {
+          "name": "tool",
+          "type": "string",
+          "required": true,
+          "description": "The tool to run, e.g. 'synap_create_document'."
+        },
+        {
+          "name": "arguments",
+          "type": "object",
+          "required": false,
+          "description": "The tool's input. Omit it to get the tool's input schema instead of running it."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: passed to the tool as its `sessionId` when `arguments` has none."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "description": "The tool to run, e.g. 'synap_create_document'."
+          },
+          "arguments": {
+            "type": "object",
+            "description": "The tool's input. Omit it to get the tool's input schema instead of running it."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: passed to the tool as its `sessionId` when `arguments` has none."
+          }
+        },
+        "required": ["tool"]
       }
     }
   ]

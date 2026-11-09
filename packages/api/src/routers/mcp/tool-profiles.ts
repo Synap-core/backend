@@ -14,7 +14,8 @@
  *
  * A profile narrows LISTING only. It is NOT a permission: `tools/call` of an
  * unlisted tool still runs under the key's scopes and governance, exactly as
- * before. That is deliberate — the claude.ai CP connector re-advertises its own
+ * before. (`synap_call_tool` alone runs only what the key lists:
+ * `call-tool.ts`.) That is deliberate — the claude.ai CP connector re-advertises its own
  * static catalog and proxies calls here, so gating calls on the profile would
  * break a connector whose list the pod does not control.
  *
@@ -58,6 +59,9 @@ export const ENTRY_TOOLS = [
   "synap_relay_answer",
   "synap_complete_session",
   "synap_load_skill",
+  // Runs a tool `load_skill` unlocked in the same turn, on every client: most
+  // never list again mid-conversation (plan "live tool unlock", c28d0683).
+  "synap_call_tool",
 ] as const;
 
 /**

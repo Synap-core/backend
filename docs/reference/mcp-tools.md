@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 116 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 117 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -122,6 +122,7 @@ The pod's MCP server lists 116 tools. A new agent key lists the `entry` tools; t
 | [`synap_create_skill`](#synap_create_skill)                               | Create tool (skill)               | build        | no        |
 | [`synap_update_skill`](#synap_update_skill)                               | Update skill                      | build        | no        |
 | [`synap_load_skill`](#synap_load_skill)                                   | Load skill                        | entry        | yes       |
+| [`synap_call_tool`](#synap_call_tool)                                     | Call a tool                       | entry        | no        |
 
 ## synap_ask
 
@@ -1959,3 +1960,15 @@ Load the full body of a seeded teaching skill (the L2 tier behind the one-line s
 | `skill`       | string | no       | Same as `ref` (used when `ref` is absent).                                                                                                                                      |
 | `name`        | string | no       | Same as `ref` (used when `ref` is absent).                                                                                                                                      |
 | `workspaceId` | string | no       | Optional: also include this workspace's skills (you must be a member). Omit to use your declared workspace focus, if any; otherwise only pod-wide and your own skills are read. |
+
+## synap_call_tool
+
+**Call a tool** · Group: `entry` · readOnlyHint: false · destructiveHint: true · openWorldHint: false
+
+Run a tool this key has unlocked but your client does not list yet, in this turn: `tool` = its name, `arguments` = its input. Leave `arguments` out to get its input schema. Unlock a group first with synap_load_skill({ref: "tools:read"}).
+
+| Parameter   | Type   | Required | Description                                                                     |
+| ----------- | ------ | -------- | ------------------------------------------------------------------------------- |
+| `tool`      | string | yes      | The tool to run, e.g. 'synap_create_document'.                                  |
+| `arguments` | object | no       | The tool's input. Omit it to get the tool's input schema instead of running it. |
+| `sessionId` | string | no       | Optional: passed to the tool as its `sessionId` when `arguments` has none.      |
