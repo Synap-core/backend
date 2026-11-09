@@ -379,7 +379,7 @@ describe("flow.of — a kind (finding-like)", () => {
     const open = state(f, "open").cards.find((c) => c.id === ids.open)!;
     expect(open.next).toMatchObject({ to: "fixing", humanOnly: false });
     expect(open.next!.owners.map((o) => o.stageKey)).toEqual(["fix"]);
-    expect(open.blocker).toBeNull();
+    expect(open.blocker).toHaveProperty("blocked");
     expect(open.profileSlug).toBe("finding");
     const fixing = state(f, "fixing").cards.find((c) => c.id === ids.fixing)!;
     expect(fixing.next!.to).toBe("fixed");
