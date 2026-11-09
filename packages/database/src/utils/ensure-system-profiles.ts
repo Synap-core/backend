@@ -76,6 +76,12 @@ const SUPERSEDED_KNOWLEDGE_DESCRIPTIONS: ReadonlyArray<string> = [
   "Reusable insights and cautions, with evidence and related graph entities.",
 ];
 
+const SNIPPET_FOLD_LINK_REASON =
+  "A fossil of the retired `devplane_prompt_snippet` kind: the conversion " +
+  "(`snippet.merge.devplane-prompt-snippet-into-snippet`) repoints its links " +
+  "onto `snippet`, where `snippetBody` is required and the others are second " +
+  "fields beside `body`, `use` and the title. `snippet` declares none of them.";
+
 /**
  * Profile-property links this seeder must actively REMOVE from pods that were
  * seeded by an older version of it.
@@ -150,6 +156,30 @@ export const RETIRED_PROFILE_PROPERTIES: ReadonlyArray<{
       "The seed declares `researchStatus` (ongoing/concluded/abandoned) as " +
       "research's status. A `status` link on `research` carries the TASK enum — " +
       "confirmed on the live pod — and no current seed declares it.",
+  },
+  // The `devplane_prompt_snippet` -> `snippet` conversion (`snippet.merge.*`)
+  // repoints the old kind's property LINKS onto `snippet`, `snippetBody` as a
+  // REQUIRED one. Without these entries a converted pod would reject every
+  // snippet written without it. The defs stay (global, shared); only the claim goes.
+  {
+    profileSlug: "snippet",
+    propertySlug: "snippetTitle",
+    reason: SNIPPET_FOLD_LINK_REASON,
+  },
+  {
+    profileSlug: "snippet",
+    propertySlug: "snippetBody",
+    reason: SNIPPET_FOLD_LINK_REASON,
+  },
+  {
+    profileSlug: "snippet",
+    propertySlug: "snippetCategory",
+    reason: SNIPPET_FOLD_LINK_REASON,
+  },
+  {
+    profileSlug: "snippet",
+    propertySlug: "snippetDescription",
+    reason: SNIPPET_FOLD_LINK_REASON,
   },
 ];
 
@@ -744,6 +774,68 @@ export const SYSTEM_PROFILE_SLUGS: ReadonlySet<string> = new Set([
   "tool_request",
 ]);
 
+/** Key-order-free JSON for comparing a stored (jsonb) value with the seed's. */
+function sortKeys(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>)
+        .sort(([x], [y]) => x.localeCompare(y))
+        .map(([k, val]) => [k, sortKeys(val)])
+    );
+  }
+  return v;
+}
+
+/**
+ * The snippet kind's four fields (plan d8743d2d). Generic slugs (`body`, `use`,
+ * `channel`, `variables`), so they are NEVER the shared global defs: a global def
+ * of that slug may already exist from a template with another type or enum, and
+ * the create-only seed would adopt it. `ensureSystemProfiles` gives `snippet` its
+ * OWN profile-scoped defs (the Knowledge `supersededBy` path) and converges them
+ * on every pass.
+ */
+export const SNIPPET_OWN_DEFS = [
+  {
+    slug: "body",
+    valueType: PropertyValueType.STRING,
+    constraints: { maxLength: 20000 },
+    uiHints: {
+      label: "Text",
+      inputType: "textarea",
+      helpText:
+        "The text, in markdown. A {name} is filled from the variables below when the snippet is rendered.",
+    },
+  },
+  {
+    slug: "variables",
+    valueType: PropertyValueType.ARRAY,
+    constraints: {},
+    uiHints: {
+      label: "Variables",
+      inputType: "json",
+      helpText:
+        'What {name} stands for — {name, type: text | number | entity | choice | boolean, required?, default?, from?: "subject.<field>"}.',
+    },
+  },
+  {
+    slug: "use",
+    valueType: PropertyValueType.STRING,
+    constraints: { enum: ["email", "message", "prompt", "reply", "other"] },
+    uiHints: { label: "Use", inputType: "select" },
+  },
+  {
+    slug: "channel",
+    valueType: PropertyValueType.STRING,
+    constraints: { maxLength: 200 },
+    uiHints: {
+      label: "Channel",
+      inputType: "text",
+      helpText: "Where it is sent or pasted, e.g. LinkedIn, else email.",
+    },
+  },
+] as const;
+
 /**
  * Ensure system profiles and property definitions exist
  *
@@ -1328,7 +1420,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
       },
-      // Snippet — the kind's ONE lifecycle plus its four fields (plan d8743d2d).
+      // Snippet — the kind's ONE lifecycle (its four fields are SNIPPET_OWN_DEFS).
       {
         slug: "snippetStatus",
         valueType: PropertyValueType.STRING,
@@ -1336,44 +1428,6 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           enum: systemLifecycleKeys("snippetStatus"),
         },
         uiHints: { label: "Status", inputType: "select", displayAs: "status" },
-      },
-      {
-        slug: "body",
-        valueType: PropertyValueType.STRING,
-        constraints: { maxLength: 20000 },
-        uiHints: {
-          label: "Text",
-          inputType: "textarea",
-          helpText:
-            "The text, in markdown. A {name} is filled from the variables below when the snippet is rendered.",
-        },
-      },
-      {
-        slug: "variables",
-        valueType: PropertyValueType.ARRAY,
-        constraints: {},
-        uiHints: {
-          label: "Variables",
-          inputType: "json",
-          helpText:
-            'What {name} stands for — {name, type: text | number | entity | choice | boolean, required?, default?, from?: "subject.<field>"}.',
-        },
-      },
-      {
-        slug: "use",
-        valueType: PropertyValueType.STRING,
-        constraints: { enum: ["email", "message", "prompt", "reply", "other"] },
-        uiHints: { label: "Use", inputType: "select" },
-      },
-      {
-        slug: "channel",
-        valueType: PropertyValueType.STRING,
-        constraints: { maxLength: 200 },
-        uiHints: {
-          label: "Channel",
-          inputType: "text",
-          helpText: "Where it is sent or pasted, e.g. LinkedIn, else email.",
-        },
       },
       {
         slug: "conclusion",
@@ -2203,6 +2257,48 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       }
     }
 
+    // `snippet` owns its four fields: profile-scoped defs (never the shared
+    // global slug, see SNIPPET_OWN_DEFS), converged on every pass. A foreign
+    // global def of the same slug is left exactly as it is.
+    const snippetScopedDefIds = new Map<string, string>();
+    {
+      const snippetProfileId = createdProfiles.get("snippet");
+      if (!snippetProfileId) {
+        throw new Error("System snippet profile was not created or resolved");
+      }
+      const same = (a: unknown, b: unknown) =>
+        JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
+      for (const def of SNIPPET_OWN_DEFS) {
+        const scoped = await propertyDefRepo.getBySlug(
+          def.slug,
+          snippetProfileId,
+          null
+        );
+        if (scoped?.profileId === snippetProfileId) {
+          if (
+            scoped.valueType !== def.valueType ||
+            !same(scoped.constraints ?? {}, def.constraints) ||
+            !same(scoped.uiHints ?? {}, def.uiHints)
+          ) {
+            await propertyDefRepo.update(scoped.id, {
+              valueType: def.valueType,
+              constraints: def.constraints,
+              uiHints: def.uiHints,
+            });
+          }
+          snippetScopedDefIds.set(def.slug, scoped.id);
+        } else {
+          const created = await propertyDefRepo.create({
+            ...def,
+            profileId: snippetProfileId,
+            workspaceId: null,
+          });
+          snippetScopedDefIds.set(def.slug, created.id);
+          propertiesCreated++;
+        }
+      }
+    }
+
     // Second pass: set parent profile relationships
     for (const profile of profiles) {
       const parentSlug = (profile as { parentSlug?: string }).parentSlug;
@@ -2330,7 +2426,9 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         const propertyDefId =
           (link.profileSlug === "knowledge"
             ? knowledgeScopedDefIds.get(prop.slug)
-            : undefined) ?? createdPropertyDefs.get(prop.slug);
+            : link.profileSlug === "snippet"
+              ? snippetScopedDefIds.get(prop.slug)
+              : undefined) ?? createdPropertyDefs.get(prop.slug);
         if (!propertyDefId) continue;
 
         // Link is idempotent (onConflictDoUpdate), so safe to call always

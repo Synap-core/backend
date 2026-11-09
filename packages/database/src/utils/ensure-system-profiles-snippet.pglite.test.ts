@@ -166,10 +166,142 @@ describe("ensureSystemProfiles: the snippet kind", () => {
     expect(defs).toHaveLength(1);
   }, 120_000);
 
+  it("unlinks the retired devplane fields the conversion moved onto snippet, keeping their defs", async () => {
+    const [snippet] = await profilesBySlug("snippet");
+    // What the merge leaves on a converted pod: the old kind's global defs,
+    // `snippetBody` REQUIRED, linked to `snippet`.
+    for (const slug of ["snippetBody", "snippetDescription"]) {
+      const [def] = await db
+        .insert(schema.propertyDefs)
+        .values({ slug, valueType: "string", constraints: {} })
+        .returning();
+      await db.insert(schema.profileProperties).values({
+        profileId: snippet.id,
+        propertyDefId: def.id,
+        required: slug === "snippetBody",
+      });
+    }
+    const r = await ensureSystemProfiles();
+    expect(r.error, r.error).toBeUndefined();
+    const slugs = (await linksOf(snippet.id)).map(
+      (l: { slug: string }) => l.slug
+    );
+    expect(slugs).not.toContain("snippetBody");
+    expect(slugs).not.toContain("snippetDescription");
+    expect(slugs).toContain("body");
+    // The def survives (global, shared); only the schema claim went.
+    const defs = await db
+      .select()
+      .from(schema.propertyDefs)
+      .where(eq(schema.propertyDefs.slug, "snippetBody"));
+    expect(defs).toHaveLength(1);
+  }, 120_000);
+
   it("ensureDevplaneProfiles no longer seeds the retired prompt snippet", async () => {
     const r = await ensureDevplaneProfiles();
     expect(r.error, r.error).toBeUndefined();
     expect(await profilesBySlug("devplane_prompt_snippet")).toHaveLength(0);
     expect(await profilesBySlug("devplane_app")).toHaveLength(1);
+  }, 120_000);
+});
+
+describe("ensureSystemProfiles: snippet fields never adopt a foreign global def", () => {
+  let pg2: Awaited<ReturnType<typeof makeLifecyclePglite>>;
+  let foreignChannel: { id: string };
+  let foreignBody: { id: string };
+
+  beforeAll(async () => {
+    pg2 = await makeLifecyclePglite();
+    h.db = pg2.db;
+    db = pg2.db; // `linksOf` reads the module's db
+    // A template already minted global defs of these generic slugs: `channel`
+    // an enum that rejects free text, `body` a number.
+    [foreignChannel] = await pg2.db
+      .insert(schema.propertyDefs)
+      .values({
+        slug: "channel",
+        valueType: "string",
+        constraints: { enum: ["linkedin", "email"] },
+        uiHints: { label: "Channel", inputType: "select" },
+      })
+      .returning();
+    [foreignBody] = await pg2.db
+      .insert(schema.propertyDefs)
+      .values({
+        slug: "body",
+        valueType: "number",
+        constraints: { min: 0 },
+        uiHints: { label: "Body", inputType: "number" },
+      })
+      .returning();
+  }, 120_000);
+  afterAll(async () => {
+    db = pglite.db;
+    h.db = db;
+    await pg2?.pg.close();
+  });
+
+  it("gives snippet its own correctly typed defs and leaves the foreign ones untouched", async () => {
+    const r = await ensureSystemProfiles();
+    expect(r.error, r.error).toBeUndefined();
+    const snippet = (
+      await pg2.db
+        .select()
+        .from(schema.profiles)
+        .where(
+          and(
+            eq(schema.profiles.slug, "snippet"),
+            eq(schema.profiles.scope, ProfileScope.SYSTEM)
+          )
+        )
+    )[0];
+    const links = await linksOf(snippet.id);
+    const own = (slug: string) =>
+      links.find((l: { slug: string }) => l.slug === slug);
+
+    const channel = own("channel");
+    expect(channel.defProfileId).toBe(snippet.id);
+    expect(channel.defId).not.toBe(foreignChannel.id);
+    expect(channel.valueType).toBe("string");
+    expect(channel.constraints.enum).toBeUndefined();
+    expect(channel.uiHints.inputType).toBe("text");
+
+    const body = own("body");
+    expect(body.defProfileId).toBe(snippet.id);
+    expect(body.defId).not.toBe(foreignBody.id);
+    expect(body.valueType).toBe("string");
+    expect(body.uiHints.inputType).toBe("textarea");
+
+    // `use` and `variables` are own defs too.
+    expect(own("use").defProfileId).toBe(snippet.id);
+    expect(own("variables").defProfileId).toBe(snippet.id);
+
+    const [fc] = await pg2.db
+      .select()
+      .from(schema.propertyDefs)
+      .where(eq(schema.propertyDefs.id, foreignChannel.id));
+    expect(fc.constraints).toEqual({ enum: ["linkedin", "email"] });
+    expect(fc.uiHints).toEqual({ label: "Channel", inputType: "select" });
+    expect(fc.profileId).toBeNull();
+    const [fb] = await pg2.db
+      .select()
+      .from(schema.propertyDefs)
+      .where(eq(schema.propertyDefs.id, foreignBody.id));
+    expect(fb.valueType).toBe("number");
+    expect(fb.constraints).toEqual({ min: 0 });
+    // snippet is not linked to either foreign def.
+    expect(
+      links.some(
+        (l: { defId: string }) =>
+          l.defId === foreignChannel.id || l.defId === foreignBody.id
+      )
+    ).toBe(false);
+
+    // A second pass converges without a third def.
+    await ensureSystemProfiles();
+    const again = await linksOf(snippet.id);
+    expect(
+      again.filter((l: { slug: string }) => l.slug === "channel")
+    ).toHaveLength(1);
   }, 120_000);
 });

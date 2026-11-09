@@ -8,8 +8,8 @@
  *
  * What it rules out:
  *   - the description is not dropped: with no body it becomes the body;
- *   - a snippet that has a body keeps it (the description is counted as a
- *     conflict, never silently overwriting the body);
+ *   - a snippet that has a body gets the description as its FIRST paragraph
+ *     (blank line, then the body): nothing discarded, nothing doubled;
  *   - every category lands on `use: prompt`, the old key is stripped;
  *   - the entity ends up on the `snippet` profile, type `snippet`, pod-wide
  *     (workspace_id NULL);
@@ -238,7 +238,7 @@ describe("snippet.* fold of devplane_prompt_snippet", () => {
     await db.close();
   });
 
-  it("keeps an existing body over the description, and counts the conflict", async () => {
+  it("puts the description first, then a blank line, then the body", async () => {
     const { db, sql, q, entity } = await setupPod();
     const id = await entity("Deploy", {
       snippetBody: "Deploy @{arg:app}",
@@ -250,12 +250,29 @@ describe("snippet.* fold of devplane_prompt_snippet", () => {
     const [row] = await q(`SELECT properties FROM entities WHERE id = $1`, [
       id,
     ]);
-    expect(row.properties.body).toBe("Deploy @{arg:app}");
+    expect(row.properties.body).toBe("General deploy\n\nDeploy @{arg:app}");
     expect(row.properties.use).toBe("prompt");
+    expect(row.properties.snippetDescription).toBeUndefined();
+    // Nothing was discarded, so nothing is counted as a conflict.
     const desc = s.results.find((r) =>
       r.opKey.endsWith("description-into-body")
     );
-    expect(desc?.counts).toMatchObject({ entitiesKeyConflicts: 1 });
+    expect(desc?.counts.entitiesKeyConflicts).toBeUndefined();
+    await db.close();
+  });
+
+  it("does not double a description the body already opens with", async () => {
+    const { db, sql, q, entity } = await setupPod();
+    const id = await entity("Re-run", {
+      snippetBody: "General deploy\n\nDeploy @{arg:app}",
+      snippetDescription: "General deploy",
+    });
+    const s = await runConversions(sql, SNIPPET_OPS, OPERATOR);
+    expect(errorsOf(s)).toEqual([]);
+    const [row] = await q(`SELECT properties FROM entities WHERE id = $1`, [
+      id,
+    ]);
+    expect(row.properties.body).toBe("General deploy\n\nDeploy @{arg:app}");
     await db.close();
   });
 

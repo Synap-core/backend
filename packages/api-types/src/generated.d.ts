@@ -35261,12 +35261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: Record<string, never> | undefined;
 			meta: object;
 			output: {
-				count?: undefined;
 				message: string;
-				seeded: boolean;
-			} | {
-				count: number;
-				message?: undefined;
 				seeded: boolean;
 			};
 		}>;

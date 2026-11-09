@@ -463,6 +463,8 @@ export interface MoveBasePropertyToFacetOp extends BaseOp {
  *   - both present → `onConflict` decides: `keepTarget` keeps the existing
  *     target value, `keepSource` overwrites it with the source value; the
  *     losing value is discarded and counted (`entitiesKeyConflicts`);
+ *     `prependSource` (text values) discards neither: the target becomes
+ *     `<source>\n\n<target>`, unless it already opens with the source;
  *   - `sourceKey` is ALWAYS stripped.
  *
  * Idempotent: after a run no matching entity carries `sourceKey`, so a re-run
@@ -651,6 +653,7 @@ export const FOLD_ROLE_NO_TARGET = ["attachFirst", "park"] as const;
 export const RENAME_PROPERTY_KEY_CONFLICTS = [
   "keepTarget",
   "keepSource",
+  "prependSource",
 ] as const;
 export type RenamePropertyKeyConflict =
   (typeof RENAME_PROPERTY_KEY_CONFLICTS)[number];
@@ -2165,23 +2168,17 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
 
     // ─── Snippet: `devplane_prompt_snippet` folds into the pod-wide `snippet` ───
     //
-    // `snippet` (stored text with variables, ensure-system-profiles.ts) is now
-    // the one kind for reusable text; the DevPlane-only prompt snippet is
-    // retired from `ensureDevplaneProfiles`. Read on the one real pod (founder,
-    // 2026-11-09): ONE entity, `snippetCategory: workflow`, a
-    // `snippetDescription`, no `snippetBody`, no `isExecutable`, no `linkedApp`.
-    //   - snippetBody -> body, then snippetDescription -> body: `keepTarget`, so
-    //     a snippet that has a body keeps it and its description is discarded
-    //     (counted as `entitiesKeyConflicts`, never silent); one with no body
-    //     (the real one) gets its description as the text.
-    //   - snippetCategory (deploy, debug, test, audit, review, workflow, custom)
-    //     has no field on `snippet`: every value becomes `use: prompt`.
-    //   - `isExecutable` / `linkedApp` have no field on `snippet`; they are not
-    //     moved, they stay in the entity's JSON.
-    //   - {{var}} / @{arg:x} placeholders are NOT rewritten: no `variables`
-    //     declaration can be derived from them (the real entity has no body).
-    //   - the merge repoints the entities; they were workspace-stamped, so the
-    //     scope reconcile makes them pod-wide like the kind.
+    // The DevPlane-only prompt snippet is retired from `ensureDevplaneProfiles`.
+    // Read on the one real pod (2026-11-09): ONE entity, `snippetCategory:
+    // workflow`, a `snippetDescription`, no body, no `isExecutable`/`linkedApp`.
+    //   - snippetBody -> body, then snippetDescription -> body as the FIRST
+    //     paragraph (`prependSource`: nothing discarded, never doubled).
+    //   - Known losses: `snippetCategory` has no field on `snippet` (every value
+    //     becomes `use: prompt`); `isExecutable` / `linkedApp` have no field and
+    //     stay only in the entity JSON. {{var}} / @{arg:x} bodies are not
+    //     rewritten (no `variables` can be derived).
+    //   - The merge repoints the entities; the scope reconcile makes the
+    //     workspace-stamped rows pod-wide like the kind.
     // Operator-run (`deferAtBoot`), after the boot that seeds `snippet`; each
     // step refuses until that canonical exists (`requiresCanonical`).
     {
@@ -2202,7 +2199,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "devplane_prompt_snippet",
       sourceKey: "snippetDescription",
       targetKey: "body",
-      onConflict: "keepTarget",
+      onConflict: "prependSource",
     },
     {
       op: "remapPropertyValues",
