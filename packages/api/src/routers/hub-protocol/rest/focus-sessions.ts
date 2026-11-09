@@ -450,7 +450,7 @@ const CreateBodySchema = z
 export function unsupportedUpdateFieldError(raw: unknown): string | null {
   if (typeof raw !== "object" || raw === null) return null;
   if ("completeOutput" in raw) {
-    return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to mark a declared deliverable done; it takes the row lock this door does not.";
+    return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use POST /focus-sessions/:id/outputs/complete (or the synap_update_session MCP tool) to mark a declared deliverable done; it takes the row lock this door does not.";
   }
   if ("retireOutput" in raw) {
     return "retireOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to withdraw a declared deliverable; it takes the row lock this door does not.";
@@ -630,6 +630,14 @@ const BlockOutputBodySchema = z.object({
 
 const UnblockOutputBodySchema = z.object({
   expectedLabel: z.string().min(1).max(500),
+});
+
+/**
+ * The CLAIM of a declared deliverable: its key (or exact label). The Hub twin
+ * of MCP `synap_update_session { completeOutput }`, through the same service.
+ */
+const CompleteOutputBodySchema = z.object({
+  output: z.string().min(1).max(500),
 });
 
 /** The person's answer to what an agent asked about a slot. */
@@ -1192,6 +1200,44 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           expectedLabel: z.string(),
           kind: z.string(),
         }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/outputs/complete",
+    tags: ["FocusSessions"],
+    summary: "Claim a declared deliverable as done",
+    description:
+      "The agent's claim on one declared deliverable, named by its key or " +
+      "exact label (`output`). The same service as MCP " +
+      "`synap_update_session { completeOutput }`: with evidence in place the " +
+      "pod verifies it at once (`completed`), otherwise it waits for review " +
+      "(`claimed`). A person's slot (`owner: 'human'`) is `refused`; no such " +
+      "deliverable is `no_match`. Owner-floored: another person's session is 404.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: CompleteOutputBodySchema,
+    },
+    responses: {
+      200: {
+        description: "The claim's verdict",
+        schema: z.object({
+          ok: z.boolean(),
+          result: z.enum(["completed", "claimed", "refused", "no_match"]),
+          output: z.string(),
+          message: z.string().optional(),
+        }),
+      },
+      202: {
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
+        schema: z.object({}).passthrough(),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -3890,6 +3936,90 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }),
     UnblockOutputBodySchema
   );
+
+  /**
+   * POST /focus-sessions/:id/outputs/complete
+   *
+   * The Hub door for CLAIMING a declared deliverable. The PATCH door refuses
+   * `completeOutput` (it takes no row lock: `unsupportedUpdateFieldError`), so
+   * an in-pod run, whose only door is Hub REST, could declare outputs and never
+   * claim one (run audit 80005d94, 10 Nov 2026). This calls the ONE service the
+   * MCP door calls (`updateFocusSession`): the row lock, the human-slot floor,
+   * the evidence verdict and governance are its, never a second copy here.
+   * Owner-floored like the block door (`resolveRowActingContext`).
+   */
+  app.post("/focus-sessions/:id/outputs/complete", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const raw = await c.req.json().catch(() => null);
+    const parsed = CompleteOutputBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, id),
+      });
+      if (!session) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      const acting = await resolveRowActingContext(c, session, {
+        notFound: `Focus session ${id} not found`,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const { updateFocusSession } =
+        await import("../../../services/focus-sessions/update-session.js");
+      const result = await updateFocusSession({
+        sessionId: session.id,
+        userId: acting.userId,
+        // The verified acting agent (auth context), never a body field.
+        agentUserId: c.get("agentUserId") as string | undefined,
+        completeOutput: parsed.data.output,
+      });
+      switch (result.status) {
+        case "not_found":
+          return c.json({ error: `Focus session ${id} not found` }, 404);
+        case "denied":
+          return c.json({ error: result.reason }, 403);
+        case "proposed":
+          return jsonGoverned(c, {
+            status: "proposed",
+            message: "The claim was proposed for review",
+            proposalId: result.proposalId,
+            summary: result.summary,
+            reviewPath: result.reviewPath,
+            reviewUrl: result.reviewUrl,
+          });
+        case "updated": {
+          const report = result.completeOutput;
+          return c.json({
+            ok: report?.result === "completed" || report?.result === "claimed",
+            result: report?.result ?? "no_match",
+            output: parsed.data.output,
+            ...(report?.message ? { message: report.message } : {}),
+          });
+        }
+        default:
+          // A lifecycle conflict: the session moved under the claim.
+          return c.json(result, 409);
+      }
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.completeOutput failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
 
   /**
    * POST /focus-sessions/:id/outputs/answer
