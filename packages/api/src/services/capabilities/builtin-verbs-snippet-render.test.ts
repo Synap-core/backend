@@ -197,6 +197,48 @@ describe("snippet.render", () => {
     expect(out.text).not.toContain("Grace");
   });
 
+  // ONE blank rule: the param validator's (`isAbsentParamValue`), which treats
+  // whitespace-only as no value. Subject fill, the required check and
+  // renderText must all agree on it.
+  it("a whitespace-only value counts as no value: the subject fills it", async () => {
+    const out = await render({
+      subjectEntityId: SUBJECT,
+      values: { first: " \n\t " },
+    });
+    expect(out.text.startsWith("Hi Grace,")).toBe(true);
+  });
+
+  it("a whitespace-only value for a required variable blocks", async () => {
+    await expect(render({ values: { first: "   " } })).rejects.toThrow(
+      /Missing required variable: first/
+    );
+  });
+
+  it("a whitespace-only subject field fills nothing and is recorded", async () => {
+    h.rows.set(SUBJECT, {
+      id: SUBJECT,
+      title: "   ",
+      preview: null,
+      properties: {},
+    });
+    h.rows.set(
+      SNIPPET,
+      snippet({
+        properties: {
+          body: "Hi {first}",
+          variables: [{ name: "first", from: "subject.title" }],
+        },
+      })
+    );
+    const out = await render({ subjectEntityId: SUBJECT });
+    expect(out.text).toBe("Hi ");
+    expect(out.misses).toContainEqual({
+      name: "subject.title",
+      kind: "unresolved-context",
+      count: 1,
+    });
+  });
+
   it("a retired snippet is refused", async () => {
     h.rows.set(SNIPPET, snippet({ status: "retired" }));
     await expect(render({ values: { first: "Ada" } })).rejects.toThrow(

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isAbsentParamValue,
   readPlaybookParams,
   findDroppedParamEntries,
   validatePlaybookParams,
@@ -74,6 +75,47 @@ describe("readPlaybookParams", () => {
   it("returns [] for a non-array bag", () => {
     expect(readPlaybookParams(null)).toEqual([]);
     expect(readPlaybookParams({ name: "a" })).toEqual([]);
+  });
+});
+
+describe("readPlaybookParams — `from`", () => {
+  it("keeps a declared `from` (trimmed) and nothing else changes", () => {
+    expect(
+      readPlaybookParams([
+        { name: "a", from: " subject.title " },
+        { name: "b", from: "  " },
+        { name: "c", from: 3 },
+        { name: "d" },
+      ])
+    ).toEqual([
+      { name: "a", type: "text", from: "subject.title" },
+      { name: "b", type: "text" },
+      { name: "c", type: "text" },
+      { name: "d", type: "text" },
+    ]);
+  });
+
+  it("is never enforced: a param with `from` validates like one without", () => {
+    const declared = readPlaybookParams([
+      { name: "a", required: true, from: "subject.title" },
+    ]);
+    expect(validatePlaybookParams(declared, {}).missingRequired).toHaveLength(
+      1
+    );
+    expect(validatePlaybookParams(declared, { a: "x" }).values).toEqual({
+      a: "x",
+    });
+  });
+});
+
+describe("isAbsentParamValue — the one blank rule", () => {
+  it("treats undefined, null, empty and whitespace-only as absent", () => {
+    for (const v of [undefined, null, "", "   ", "\n\t"]) {
+      expect(isAbsentParamValue(v)).toBe(true);
+    }
+    for (const v of ["x", " x ", 0, false]) {
+      expect(isAbsentParamValue(v)).toBe(false);
+    }
   });
 });
 

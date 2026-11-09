@@ -82,19 +82,25 @@ export type RenderTextResult =
   | { ok: true; text: string; misses: TextTemplateMiss[] }
   | { ok: false; missing: string[] };
 
-/** A bare identifier in double braces or any `{{…}}` span: not ours. */
-const DOUBLE_BRACE = String.raw`\{\{[^{}]*\}\}`;
-
 /**
- * Groups: 1 = a `{{…}}` span, 2 = `@{arg:NAME}` name, 3 = its type token,
- * 4 = `@{context:TYPE}`, 5 = bare `{NAME}`. Built from the grammar's own
- * patterns so the two cannot drift.
+ * Groups: 1 = `@{arg:NAME}` name, 2 = its type token, 3 = `@{context:TYPE}`,
+ * 4 = bare `{NAME}`. Built from the grammar's own patterns so the two cannot
+ * drift. A `{{…}}` span needs no branch of its own: `REF_BARE_ARG`'s
+ * `(?<!\{)` / `(?!\})` guards already leave `{{name}}` alone, and no other
+ * form matches inside one (checked over every string of up to 6 pieces drawn
+ * from `{ } @ {{ }} @{arg:x} @{context:text} x a.b` and a space: the matches
+ * outside a `{{…}}` span are the same with or without such a branch).
  */
 const SNIPPET_REF = new RegExp(
-  `(${DOUBLE_BRACE})|${REF_ARG.source}|${REF_CONTEXT.source}|${REF_BARE_ARG.source}`,
+  `${REF_ARG.source}|${REF_CONTEXT.source}|${REF_BARE_ARG.source}`,
   "g"
 );
 
+/**
+ * Blank means empty or whitespace-only: the string case of the param
+ * validator's rule (`isAbsentParamValue`, `@synap/playbooks`), which this
+ * package cannot import. `snippet.render` pins the two to agree.
+ */
 const isBlank = (v: string | undefined): boolean =>
   v === undefined || v.trim() === "";
 
@@ -151,18 +157,16 @@ export function renderText(
     last = at + m[0].length;
 
     if (m[1] !== undefined) {
-      text += m[0]; // {{…}}: not ours
-    } else if (m[2] !== undefined) {
       // @{arg:name}: only a declared variable is a variable.
-      text += declared.has(m[2])
-        ? variable(m[2])
-        : (miss(m[2], "unknown-arg"), "");
-    } else if (m[4] !== undefined) {
-      const value = m[4] === "text" ? contextText() : "";
-      if (value === "") miss(`context:${m[4]}`, "unresolved-context");
+      text += declared.has(m[1])
+        ? variable(m[1])
+        : (miss(m[1], "unknown-arg"), "");
+    } else if (m[3] !== undefined) {
+      const value = m[3] === "text" ? contextText() : "";
+      if (value === "") miss(`context:${m[3]}`, "unresolved-context");
       text += value;
     } else {
-      const name = m[5]!;
+      const name = m[4]!;
       if (declared.has(name)) {
         text += variable(name);
       } else if ((TEXT_TEMPLATE_BUILTINS as readonly string[]).includes(name)) {

@@ -154,6 +154,13 @@ export interface PlaybookParam {
   options?: string[];
   default?: unknown;
   required?: boolean;
+  /**
+   * Where the value comes from when the caller gives none, as a reference
+   * (`subject.<field>`: a field of the subject entity). Read, never enforced,
+   * by the doors that know a subject (`snippet.render`); a playbook run
+   * ignores it. Absent on every param that does not declare one.
+   */
+  from?: string;
 }
 
 // Reading a stored `params` bag, and validating the answers against it. In its

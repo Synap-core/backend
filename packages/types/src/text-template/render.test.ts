@@ -32,10 +32,10 @@ describe("renderText", () => {
     expect(r).toEqual({ ok: false, missing: ["first", "last"] });
   });
 
-  it("uses the default when the value is absent or blank", () => {
+  it("uses the default when the value is absent or whitespace-only", () => {
     const r = ok("{tone}", {
       variables: [{ name: "tone", default: "warm" }],
-      values: { tone: "" },
+      values: { tone: " \n\t " },
     });
     expect(r.text).toBe("warm");
   });

@@ -170,6 +170,9 @@ function readParamsAndDrops(raw: unknown): {
         ? { default: readDeclaredDefault(e) }
         : {}),
       ...(typeof e.required === "boolean" ? { required: e.required } : {}),
+      ...(typeof e.from === "string" && e.from.trim()
+        ? { from: e.from.trim() }
+        : {}),
     });
   }
   return { params: out, dropped };
@@ -226,7 +229,7 @@ function readDeclaredDefault(e: Record<string, unknown>): unknown {
  * and treating that as an answer would let a required param be satisfied by
  * leaving it empty, which is the defect this function exists to stop.
  */
-function isAbsent(value: unknown): boolean {
+export function isAbsentParamValue(value: unknown): boolean {
   return (
     value === undefined ||
     value === null ||
@@ -319,10 +322,10 @@ export function validatePlaybookParams(
   for (const param of declared) {
     declaredNames.add(param.name);
     const raw = given[param.name];
-    const absent = isAbsent(raw);
+    const absent = isAbsentParamValue(raw);
     const source = absent ? param.default : raw;
 
-    if (isAbsent(source)) {
+    if (isAbsentParamValue(source)) {
       if (param.required) missingRequired.push(param);
       // Absent with no default: NOT written. The template then renders it the
       // way it always did; the caller acts on `missingRequired`.

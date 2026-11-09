@@ -27,6 +27,7 @@ import {
 } from "@synap-core/types/text-template";
 import {
   describeParamTypeError,
+  isAbsentParamValue,
   readPlaybookParams,
   validatePlaybookParams,
 } from "@synap/playbooks";
@@ -4439,7 +4440,7 @@ const webSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
  * The snippet is an entity of kind `snippet` read through the caller's access
  * floor (`scoped.findFirst`), so a snippet the caller cannot read does not
  * exist for them. Properties: `body` (the text) and `variables` (PlaybookParam
- * shape, plus an optional `from: "subject.<field>"`). A snippet whose
+ * shape, with its optional `from: "subject.<field>"`). A snippet whose
  * lifecycle status is `retired` is refused. Whether only `current` snippets
  * reach a playbook run is the guidance's rule (`kind:snippet`), not this
  * verb's: a direct call renders a draft too.
@@ -4476,23 +4477,11 @@ function readSnippetVariables(raw: unknown): unknown {
   }
 }
 
-/** The `from: "subject.<field>"` of each declared variable, by name. */
-function readSubjectFields(raw: unknown): Map<string, string> {
-  const out = new Map<string, string>();
-  if (!Array.isArray(raw)) return out;
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue;
-    const e = entry as Record<string, unknown>;
-    if (
-      typeof e.name === "string" &&
-      typeof e.from === "string" &&
-      e.from.startsWith("subject.") &&
-      e.from.length > "subject.".length
-    ) {
-      out.set(e.name.trim(), e.from.slice("subject.".length));
-    }
-  }
-  return out;
+/** The field of a `from: "subject.<field>"` param, else null. */
+function subjectFieldOf(p: { from?: string }): string | null {
+  return p.from?.startsWith("subject.") && p.from.length > "subject.".length
+    ? p.from.slice("subject.".length)
+    : null;
 }
 
 const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
@@ -4531,23 +4520,20 @@ const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
-  const rawVariables = readSnippetVariables(props.variables);
-  const declared = readPlaybookParams(rawVariables);
-  const subjectFields = readSubjectFields(rawVariables);
-  const explicit = input.values ?? {};
-  const isBlank = (v: unknown): boolean =>
-    v === undefined || v === null || (typeof v === "string" && v.trim() === "");
-  const ownExplicit = (name: string): unknown =>
-    Object.prototype.hasOwnProperty.call(explicit, name)
-      ? explicit[name]
-      : undefined;
+  const declared = readPlaybookParams(readSnippetVariables(props.variables));
+  const supplied: Record<string, unknown> = { ...(input.values ?? {}) };
 
-  // Subject fill: only for variables the caller left blank, through the floor.
+  // Subject fill: only for variables the caller left blank (the param
+  // validator's own blank rule), through the floor.
   const subjectMisses: TextTemplateMiss[] = [];
-  const supplied: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(explicit)) supplied[name] = value;
   const wanted = declared.filter(
-    (p) => subjectFields.has(p.name) && isBlank(ownExplicit(p.name))
+    (p) =>
+      subjectFieldOf(p) !== null &&
+      isAbsentParamValue(
+        Object.prototype.hasOwnProperty.call(supplied, p.name)
+          ? supplied[p.name]
+          : undefined
+      )
   );
   if (wanted.length > 0) {
     const subject = input.subjectEntityId
@@ -4561,7 +4547,7 @@ const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
         })
       : undefined;
     for (const p of wanted) {
-      const field = subjectFields.get(p.name)!;
+      const field = subjectFieldOf(p)!;
       const raw =
         field === "title"
           ? subject?.title
@@ -4574,7 +4560,7 @@ const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
           : typeof raw === "number" || typeof raw === "boolean"
             ? String(raw)
             : "";
-      if (filled.trim() === "") {
+      if (isAbsentParamValue(filled)) {
         // Unreadable subject, no subject, or an empty field: fills nothing.
         subjectMisses.push({
           name: `subject.${field}`,
