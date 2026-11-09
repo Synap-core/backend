@@ -253,7 +253,11 @@ interface Key {
   permissions: string[];
   workspaceIds: string[] | null;
   clientId: string | null;
+  /** `integration:<kind>`: a key minted by "Connect an integration". */
+  hubId?: string;
 }
+const MEMBER = randomUUID(); // a teammate who is a member of a conversation
+const STRANGER = randomUUID(); // a teammate who sees none of it
 const KEYS = {
   /** The CRM, signed in as the person (an official app's person token). */
   crm: {
@@ -285,6 +289,60 @@ const KEYS = {
   full: {
     id: randomUUID(),
     userId: OWNER,
+    linkedUserId: null,
+    keyType: "hub_inbound",
+    permissions: ["*"],
+    workspaceIds: null,
+    clientId: null,
+  },
+  /** The CRM signed in as the person, with no right to send: it may revise. */
+  wordsOnly: {
+    id: randomUUID(),
+    userId: OWNER,
+    linkedUserId: null,
+    keyType: "app_person",
+    permissions: [
+      "entity.*.read",
+      "channel.read",
+      "proposal.read",
+      "proposal.approve",
+    ],
+    workspaceIds: [CRM],
+    clientId: "crm-app",
+  },
+  /** The CRM signed in as the person, reading only: no right to revise. */
+  readOnly: {
+    id: randomUUID(),
+    userId: OWNER,
+    linkedUserId: null,
+    keyType: "app_person",
+    permissions: ["entity.*.read", "channel.read", "proposal.read"],
+    workspaceIds: [CRM],
+    clientId: "crm-app",
+  },
+  /** The person's full key pasted into another AI app. */
+  integration: {
+    id: randomUUID(),
+    userId: OWNER,
+    linkedUserId: null,
+    keyType: "hub_inbound",
+    permissions: ["*"],
+    workspaceIds: null,
+    clientId: null,
+    hubId: "integration:custom",
+  },
+  member: {
+    id: randomUUID(),
+    userId: MEMBER,
+    linkedUserId: null,
+    keyType: "hub_inbound",
+    permissions: ["*"],
+    workspaceIds: null,
+    clientId: null,
+  },
+  stranger: {
+    id: randomUUID(),
+    userId: STRANGER,
     linkedUserId: null,
     keyType: "hub_inbound",
     permissions: ["*"],
@@ -541,6 +599,7 @@ beforeEach(() => {
         parentKeyId: null,
         scope: ["hub-protocol.read", "hub-protocol.write"],
         keyType: key.keyType,
+        hubId: key.hubId ?? null,
         workspaceId: null,
         expiresAt: null,
       },
@@ -1156,5 +1215,391 @@ describe("POST /channels/:id/send — the person sends what is in the box", () =
     });
     expect(res.status).toBe(404);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("PUT /channels/:id/drafts/:draftId — the person's edit is kept, nothing is sent", () => {
+  // Fresh drafts on QUIET (owned by OWNER, a CRM lead), filed by the agent.
+  const D_EDIT = randomUUID();
+  const D_FAILED = randomUUID();
+  const D_ELSEWHERE = randomUUID(); // filed in OTHER: outside the CRM key's space
+  const AI_TEXT = "Hello there\nsecond line";
+
+  const put = (
+    key: KeyName,
+    channelId: string,
+    draftId: string,
+    body: unknown
+  ) =>
+    app().request(`/api/hub/channels/${channelId}/drafts/${draftId}`, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer synap_${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  const rowOf = async (id: string) =>
+    (
+      await q<{
+        status: string;
+        data: Record<string, unknown>;
+        revision_history: Array<Record<string, unknown>>;
+        rejection_reason: string | null;
+        reviewed_by: string | null;
+        external_dispatched_at: string | null;
+      }>(
+        `select status, data, revision_history, rejection_reason, reviewed_by, external_dispatched_at
+           from proposals where id=$1`,
+        [id]
+      )
+    ).rows[0]!;
+  const nothingSent = () => {
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  };
+
+  beforeAll(async () => {
+    for (const [id, name] of [
+      [MEMBER, "Member"],
+      [STRANGER, "Stranger"],
+    ] as const) {
+      await q(
+        `insert into users (id, email, user_type, name) values ($1,$2,'human',$3)`,
+        [id, `${name.toLowerCase()}@example.test`, name]
+      );
+    }
+    // MEMBER takes part in QUIET's conversation; it is still OWNER's.
+    await q(
+      `insert into channel_members (id, channel_id, member_id, member_kind, role) values ($1,$2,$3,'human','member')`,
+      [randomUUID(), CH.QUIET, MEMBER]
+    );
+    await draft(D_EDIT, CRM, CH.QUIET, QUIET, T(10));
+    await draft(D_FAILED, CRM, CH.QUIET, QUIET, T(11), {
+      status: "approval_failed",
+      reason: "Couldn't apply — Linkedin refused the message.",
+    });
+    await draft(D_ELSEWHERE, OTHER, CH.QUIET, QUIET, T(12));
+  });
+
+  it("saves the person's words as one revision by them, over the AI's words, and sends nothing", async () => {
+    const res = await put("crm", CH.QUIET, D_EDIT, {
+      text: "My own words, Quinn",
+      expectedRevision: 0,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      draftId: D_EDIT,
+      revision: 1,
+      changed: true,
+      status: "pending",
+    });
+    const row = await rowOf(D_EDIT);
+    expect(row.status).toBe("pending");
+    expect(row.reviewed_by).toBeNull();
+    expect(row.external_dispatched_at).toBeNull();
+    expect(row.data).toMatchObject({
+      body: "My own words, Quinn",
+      channelId: CH.QUIET,
+      entityId: QUIET,
+      accountId: ACCOUNT,
+    });
+    expect(row.data.applied).toBeUndefined();
+    expect(row.revision_history).toHaveLength(1);
+    expect(row.revision_history[0]).toMatchObject({
+      by: OWNER,
+      before: { body: AI_TEXT },
+      patch: { body: "My own words, Quinn" },
+    });
+    expect(row.revision_history[0]!.actingAgentUserId).toBeUndefined();
+    nothingSent();
+  });
+
+  it("the same words record nothing (changed: false)", async () => {
+    const res = await put("crm", CH.QUIET, D_EDIT, {
+      text: "My own words, Quinn",
+      expectedRevision: 1,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      draftId: D_EDIT,
+      revision: 1,
+      changed: false,
+      status: "pending",
+    });
+    expect((await rowOf(D_EDIT)).revision_history).toHaveLength(1);
+    nothingSent();
+  });
+
+  it("a stale read is refused (409) and nothing is saved, words changed or not", async () => {
+    for (const text of ["Words from an old screen", "My own words, Quinn"]) {
+      const res = await put("crm", CH.QUIET, D_EDIT, {
+        text,
+        expectedRevision: 0,
+      });
+      expect(res.status).toBe(409);
+    }
+    const row = await rowOf(D_EDIT);
+    expect(row.data.body).toBe("My own words, Quinn");
+    expect(row.revision_history).toHaveLength(1);
+  });
+
+  it("a key that may not SEND still keeps the person's edit (saving is not sending)", async () => {
+    // The key truly may not send: the send door refuses it before anything.
+    const send = await post("wordsOnly", `/channels/${CH.QUIET}/send`, {
+      text: "Edited on a key that cannot send",
+      draftId: D_EDIT,
+      workspaceId: CRM,
+    });
+    expect(send.status).toBe(403);
+    expect(await send.json()).toMatchObject({ code: "GRANT_DENIED" });
+    expect((await rowOf(D_EDIT)).revision_history).toHaveLength(1);
+
+    const res = await put("wordsOnly", CH.QUIET, D_EDIT, {
+      text: "Edited on a key that cannot send",
+      subject: "About Tuesday",
+      expectedRevision: 1,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ revision: 2, changed: true });
+    const row = await rowOf(D_EDIT);
+    expect(row.status).toBe("pending");
+    expect(row.data).toMatchObject({
+      body: "Edited on a key that cannot send",
+      subject: "About Tuesday",
+      channelId: CH.QUIET,
+    });
+    nothingSent();
+  });
+
+  it("SECURITY: a space key with no right to revise is refused; nothing saved", async () => {
+    const res = await put("readOnly", CH.QUIET, D_EDIT, {
+      text: "Should not land",
+    });
+    expect(res.status).toBe(403);
+    // Refused by the revise core's key check, not before it.
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /may not revise changes here/
+    );
+    expect((await rowOf(D_EDIT)).data.body).toBe(
+      "Edited on a key that cannot send"
+    );
+  });
+
+  it("SECURITY: a draft filed in a space the key does not reach is not found", async () => {
+    const res = await put("crm", CH.QUIET, D_ELSEWHERE, { text: "x" });
+    expect(res.status).toBe(404);
+    expect((await rowOf(D_ELSEWHERE)).revision_history).toHaveLength(0);
+  });
+
+  it("SECURITY: an agent or an integration key never saves the person's draft", async () => {
+    for (const key of ["agent", "integration"] as const) {
+      const res = await put(key, CH.QUIET, D_EDIT, { text: "Not theirs" });
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toMatch(
+        /(agent credential|integration key) cannot approve/
+      );
+    }
+    expect((await rowOf(D_EDIT)).revision_history).toHaveLength(2);
+  });
+
+  it("SECURITY: only the conversation's own person saves: a member is refused, a stranger finds nothing", async () => {
+    const member = await put("member", CH.QUIET, D_EDIT, { text: "Mine now" });
+    expect(member.status).toBe(403);
+    expect(((await member.json()) as { error: string }).error).toMatch(
+      /Only the person whose conversation this is/
+    );
+    const stranger = await put("stranger", CH.QUIET, D_EDIT, {
+      text: "Mine now",
+    });
+    expect(stranger.status).toBe(404);
+    expect((await rowOf(D_EDIT)).revision_history).toHaveLength(2);
+  });
+
+  it("a draft that is not on this conversation, or not there at all, is not found", async () => {
+    expect((await put("crm", CH.LEAD, D_EDIT, { text: "x" })).status).toBe(404);
+    expect(
+      (await put("crm", CH.QUIET, randomUUID(), { text: "x" })).status
+    ).toBe(404);
+    expect((await put("crm", CH.QUIET, D_EDIT, { text: "  " })).status).toBe(
+      400
+    );
+    expect((await rowOf(D_EDIT)).revision_history).toHaveLength(2);
+  });
+
+  it("a failed send whose words are saved is reopened as pending, its failure kept in history", async () => {
+    const res = await put("crm", CH.QUIET, D_FAILED, {
+      text: "Trying again, Quinn",
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      draftId: D_FAILED,
+      revision: 1,
+      changed: true,
+      status: "pending",
+    });
+    const row = await rowOf(D_FAILED);
+    expect(row.status).toBe("pending");
+    expect(row.rejection_reason).toBeNull();
+    expect(row.data.body).toBe("Trying again, Quinn");
+    expect(row.revision_history[0]).toMatchObject({
+      by: OWNER,
+      reopened: { from: "approval_failed" },
+    });
+    nothingSent();
+  });
+});
+
+describe("GET /channels/:id/drafts/:draftId/versions — the AI's words, then the person's", () => {
+  const D_V = randomUUID();
+  const D_PLAIN = randomUUID(); // never revised
+  const D_TYPED = randomUUID(); // the person's own words, held
+  const AI_TEXT = "Hello there\nsecond line";
+
+  const versionsOf = async (key: KeyName, channelId: string, draftId: string) =>
+    get(key, `/channels/${channelId}/drafts/${draftId}/versions`);
+  const put = (draftId: string, body: unknown) =>
+    app().request(`/api/hub/channels/${CH.QUIET}/drafts/${draftId}`, {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer synap_crm`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  interface Versions {
+    draftId: string;
+    revision: number;
+    versions: Array<{
+      version: number;
+      author: string;
+      authorId: string | null;
+      at: string;
+      text: string;
+      subject?: string;
+    }>;
+  }
+
+  beforeAll(async () => {
+    await draft(D_V, CRM, CH.QUIET, QUIET, T(20));
+    await draft(D_PLAIN, CRM, CH.QUIET, QUIET, T(21));
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status,
+         created_by, proposed_by_user_id, agent_user_id, subject_user_id, revision_history, created_at, updated_at)
+       values ($1,$2,'messaging',$3,'messaging.external.send',$4::jsonb,'pending',$5,$5,null,$5,'[]'::jsonb,$6,$6)`,
+      [
+        D_TYPED,
+        CRM,
+        CH.QUIET,
+        JSON.stringify({
+          channelId: CH.QUIET,
+          entityId: QUIET,
+          accountId: ACCOUNT,
+          body: "Typed by me",
+          draftedBy: { agentUserId: null, appClientId: "crm-app" },
+        }),
+        OWNER,
+        T(22),
+      ]
+    );
+  });
+
+  it("lists the AI's first words, then each of the person's edits in order; the last is the draft's words now", async () => {
+    expect((await put(D_V, { text: "First edit" })).status).toBe(200);
+    expect(
+      (await put(D_V, { text: "Second edit", subject: "Hi" })).status
+    ).toBe(200);
+    const res = await versionsOf("crm", CH.QUIET, D_V);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Versions;
+    expect(body.draftId).toBe(D_V);
+    expect(body.revision).toBe(2);
+    expect(body.versions).toEqual([
+      {
+        version: 1,
+        author: "ai",
+        authorId: AGENT,
+        at: T(20),
+        text: AI_TEXT,
+      },
+      {
+        version: 2,
+        author: "person",
+        authorId: OWNER,
+        at: expect.any(String),
+        text: "First edit",
+      },
+      {
+        version: 3,
+        author: "person",
+        authorId: OWNER,
+        at: expect.any(String),
+        text: "Second edit",
+        subject: "Hi",
+      },
+    ]);
+    const now = (
+      await q<{ data: Record<string, unknown> }>(
+        `select data from proposals where id=$1`,
+        [D_V]
+      )
+    ).rows[0]!.data;
+    expect(body.versions.at(-1)!.text).toBe(now.body);
+  });
+
+  it("stays readable after the draft is sent", async () => {
+    const send = await post("crm", `/channels/${CH.QUIET}/send`, {
+      text: "Second edit",
+      subject: "Hi",
+      draftId: D_V,
+      expectedRevision: 2,
+      workspaceId: CRM,
+    });
+    expect(send.status).toBe(200);
+    expect(await send.json()).toMatchObject({ status: "sent" });
+    const res = await versionsOf("crm", CH.QUIET, D_V);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Versions;
+    expect(body.versions.map((v) => [v.author, v.text])).toEqual([
+      ["ai", AI_TEXT],
+      ["person", "First edit"],
+      ["person", "Second edit"],
+    ]);
+  });
+
+  it("a draft never edited has one version: its first words, by its drafter", async () => {
+    const ai = (await (
+      await versionsOf("crm", CH.QUIET, D_PLAIN)
+    ).json()) as Versions;
+    expect(ai).toEqual({
+      draftId: D_PLAIN,
+      revision: 0,
+      versions: [
+        { version: 1, author: "ai", authorId: AGENT, at: T(21), text: AI_TEXT },
+      ],
+    });
+    const typed = (await (
+      await versionsOf("crm", CH.QUIET, D_TYPED)
+    ).json()) as Versions;
+    expect(typed.versions).toEqual([
+      {
+        version: 1,
+        author: "person",
+        authorId: OWNER,
+        at: T(22),
+        text: "Typed by me",
+      },
+    ]);
+  });
+
+  it("SECURITY: another person's draft is not read: not found for a stranger, refused for a member", async () => {
+    expect((await versionsOf("stranger", CH.QUIET, D_V)).status).toBe(404);
+    expect((await versionsOf("member", CH.QUIET, D_V)).status).toBe(403);
+  });
+
+  it("a draft not on this conversation, or outside the key's space, is not found", async () => {
+    expect((await versionsOf("crm", CH.LEAD, D_V)).status).toBe(404);
+    expect((await versionsOf("crm", CH.LEAD, P_OTHER)).status).toBe(404);
+    expect((await versionsOf("crm", CH.QUIET, randomUUID())).status).toBe(404);
   });
 });

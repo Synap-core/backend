@@ -16,6 +16,7 @@ import {
   getWorkspaceMembership,
   inArray,
   isFullAccessGrant,
+  runWithoutGrant,
   users,
   type KeyGrant,
 } from "@synap/database";
@@ -216,9 +217,38 @@ async function subjectSessionUnreadableFor(
     ReviewedProposal,
     "targetType" | "targetId" | "sessionId" | "proposalType"
   >,
-  reader: { userId: string; roster: boolean }
+  reader: { userId: string; roster: boolean },
+  asPerson: boolean
 ): Promise<boolean> {
-  return (await unreadableProposalSessionIds([proposal], reader)).size > 0;
+  const read = async () =>
+    (await unreadableProposalSessionIds([proposal], reader)).size > 0;
+  return asPerson ? runWithoutGrant(read) : read();
+}
+
+/**
+ * Does the session rung judge the PERSON rather than the calling key? True
+ * only for a person: a key grant is in force, and neither the request nor
+ * the viewer is an agent (`actingAgentUserId` from the door, the ambient
+ * acting agent every key door enters, and the viewer's own user class).
+ *
+ * Why (founder, 9 Nov 2026, live 404 "Proposal not found" on the CRM's
+ * send): "nobody decides what they cannot read" is about the person. A
+ * space-limited app token of the person could not read a run of theirs filed
+ * in another space, so the person was refused their own draft. The key's
+ * reach is not lost: its decide fence (`assertMayDecideProposalAt`, the
+ * proposal's own space) and every read door stay grant-bounded, and only this
+ * verdict is computed outside the grant (no session row is returned). Agent
+ * principals keep the key-bounded rung exactly as before.
+ */
+async function sessionRungAsPerson(
+  sessionIds: readonly string[],
+  userId: string,
+  actingAgentUserId: string | null | undefined,
+  viewerIsAgentPrincipal?: boolean
+): Promise<boolean> {
+  if (sessionIds.length === 0 || !getRequestGrant()) return false;
+  if (actingAgentUserId || getActingAgentUserId()) return false;
+  return !(viewerIsAgentPrincipal ?? (await isAgentPrincipal(userId)));
 }
 
 /**
@@ -355,10 +385,15 @@ async function resolveReviewAuthorityFacts(args: {
   actingAgentUserId?: string | null;
 }): Promise<ReviewAuthorityFacts> {
   const { proposal, userId, purpose, roster, actingAgentUserId } = args;
-  const subjectSessionUnreadable = await subjectSessionUnreadableFor(proposal, {
-    userId,
-    roster,
-  });
+  const subjectSessionUnreadable = await subjectSessionUnreadableFor(
+    proposal,
+    { userId, roster },
+    await sessionRungAsPerson(
+      proposalSessionIds(proposal),
+      userId,
+      actingAgentUserId
+    )
+  );
   const proposalData = proposal.data as Record<string, unknown> | null;
   const sourceIdMatches = proposalData?.sourceId === userId;
 
@@ -477,11 +512,6 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
   ) => ReviewAuthorityFacts
 > {
   const { userId, rows, roster, actingAgentUserId } = args;
-  // One batched pair of selects for the whole page (see the redaction module).
-  const unreadableSessions = await unreadableProposalSessionIds(rows, {
-    userId,
-    roster,
-  });
 
   const wsIds = [
     ...new Set(
@@ -514,10 +544,26 @@ export async function resolveBatchedReviewAuthorityFacts(args: {
     for (const m of memberRows) roleByWs.set(m.workspaceId, m.role);
   }
 
+  // The viewer's agent class, read once: the approve floor below and whether
+  // the session rung judges the person (`sessionRungAsPerson`, the same rule
+  // as the single-proposal resolver).
+  const viewerIsAgentPrincipal = await isAgentPrincipal(userId);
+  const asPerson = await sessionRungAsPerson(
+    rows.flatMap(proposalSessionIds),
+    userId,
+    actingAgentUserId,
+    viewerIsAgentPrincipal
+  );
+  // One batched pair of selects for the whole page (see the redaction module).
+  const readSessions = () =>
+    unreadableProposalSessionIds(rows, { userId, roster });
+  const unreadableSessions = await (asPerson
+    ? runWithoutGrant(readSessions)
+    : readSessions());
+
   // These facts serve the APPROVE verdict (`resolveViewerReviewVerdicts`), so
   // an acting agent floors the class exactly as in the mutation resolver.
-  const viewerIsAgent =
-    Boolean(actingAgentUserId) || (await isAgentPrincipal(userId));
+  const viewerIsAgent = Boolean(actingAgentUserId) || viewerIsAgentPrincipal;
   const viewerIsPodAdmin = hasPodWideRow ? await isPodAdmin(userId) : false;
 
   // One `inArray` over the page's DISTINCT acting agents — never per row. An

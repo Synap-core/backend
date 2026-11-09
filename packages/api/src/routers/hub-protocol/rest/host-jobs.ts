@@ -63,6 +63,7 @@ import {
   finishHostJob,
   heartbeatHostJob,
   leaseHostJob,
+  noteHostRunner,
   reportHostJob,
   type HostLeaseRefusal,
   type HostObserved,
@@ -212,7 +213,16 @@ export function registerHostJobsRoutes(app: HubHono): void {
       // The pod-side reconciler first: each installation on this computer
       // gets the ONE job it is due (a verify past its cadence, a repair),
       // so a computer waking from sleep finds one job each, never a pile.
-      await reconcileComputer(who.runner);
+      // A runner that came back (a new process, or a long gap) has every
+      // tool on the computer checked again (self-heal): `runner` is the
+      // runner process's id, sent by synap-cli in the lease body (the
+      // schema passes unknown fields through, so an older pod ignores it).
+      const runnerId = (parsed.data as { runner?: unknown }).runner;
+      const cameBack = await noteHostRunner(
+        who.runner,
+        typeof runnerId === "string" ? runnerId : null
+      );
+      await reconcileComputer(who.runner, { recheckTools: cameBack });
       const job = await leaseHostJob(who.runner, parsed.data);
       return c.json({ job });
     } catch (err) {
