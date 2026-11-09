@@ -15975,6 +15975,7 @@ declare const FAILURE_ERROR_CLASSES: readonly [
 	"conflict",
 	"kind_missing",
 	"not_connected",
+	"do_not_contact",
 	"unknown"
 ];
 export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
@@ -35202,7 +35203,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error?: string | undefined;
 				failure?: {
 					enableProposalId?: string | undefined;
-					errorClass: "auth" | "conflict" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
+					errorClass: "auth" | "conflict" | "do_not_contact" | "kind_missing" | "missing_field" | "no_connection" | "not_connected" | "permission" | "provider" | "target_missing" | "transient" | "unknown" | "validation";
 					next?: {
 						hint: string;
 						kind: "add" | "connect" | "enable" | "none" | "run";

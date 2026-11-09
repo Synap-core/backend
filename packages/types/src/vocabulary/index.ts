@@ -3473,6 +3473,27 @@ export function resolveMembersDecideLabel(
 }
 
 /**
+ * Why the send door sent nothing: the recipient person is marked do not
+ * contact (`doNotContact` on the person, founder 2026-11-09). ONE sentence for
+ * every door that refuses it (the send door's `error`, an approval's failure).
+ * `name` is the person's title, else "this person"; `reason` is their
+ * `doNotContactReason`, said as written, omitted when empty.
+ */
+export function resolveDoNotContactRefusal(params: {
+  name?: string | null;
+  reason?: string | null;
+  locale?: Locale;
+}): string {
+  const t = sentences(catalogLocaleOf(params.locale));
+  const name =
+    params.name?.trim() || t("vocabulary.refusal.doNotContact.unnamed");
+  const reason = params.reason?.trim();
+  return reason
+    ? t("vocabulary.refusal.doNotContact.reason", { name, reason })
+    : t("vocabulary.refusal.doNotContact", { name });
+}
+
+/**
  * Who holds a slot that was HANDED to an agent (`delegatedTo`, an agent TYPE
  * token) — past mood, because the hand-off already happened. ONE spelling for
  * the session page's outcome row, the hand-off toast and Relay's owed rows.

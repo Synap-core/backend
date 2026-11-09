@@ -5769,6 +5769,7 @@
                         "conflict",
                         "kind_missing",
                         "not_connected",
+                        "do_not_contact",
                         "unknown"
                       ]
                     },
