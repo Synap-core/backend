@@ -40,6 +40,11 @@ const M0409 = readFileSync(
   resolve(HERE, "../migrations/0409_installations.sql"),
   "utf8"
 );
+/** 0415 renames the one-open-job index (hosted verb runs queue beside it). */
+const M0415 = readFileSync(
+  resolve(HERE, "../migrations/0415_host_jobs_verb_runs.sql"),
+  "utf8"
+);
 const BASELINE = readFileSync(
   resolve(HERE, "../migrations/0000_baseline_schema.sql"),
   "utf8"
@@ -84,6 +89,8 @@ describe("migration 0409 — installations", () => {
     await pg.exec(STUBS);
     await pg.exec(M0409);
     await pg.exec(M0409);
+    // The drizzle schema declares the indexes as they stand after 0415.
+    await pg.exec(M0415);
     for (const { table, columns } of TABLES) {
       const cfg = getTableConfig(table);
       const declared = cfg.columns.map((c) => c.name);

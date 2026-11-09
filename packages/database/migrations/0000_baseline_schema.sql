@@ -6058,12 +6058,12 @@ CREATE INDEX IF NOT EXISTS "idx_host_jobs_queue"
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_installation"
   ON "host_jobs" ("installation_id", "queued_at" DESC);
 
--- At most ONE open job per installation (the pod-side reconciler queues the
--- next one only once this one settles): a sleeping laptop holds one queued
--- job, never a pile.
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_host_jobs_one_open_per_installation"
+-- At most ONE open LIFECYCLE job per installation (the pod-side reconciler
+-- queues the next one only once this one settles): a sleeping laptop holds one
+-- queued check, never a pile. Hosted verb runs (`verb`) queue beside it (0415).
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_host_jobs_one_open_lifecycle_per_installation"
   ON "host_jobs" ("installation_id")
-  WHERE "status" IN ('queued', 'leased', 'running');
+  WHERE "status" IN ('queued', 'leased', 'running') AND "kind" <> 'verb';
 
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_user_queued"
   ON "host_jobs" ("user_id", "queued_at" DESC);

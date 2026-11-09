@@ -19839,6 +19839,48 @@ export interface CatalogPlacement {
 	licence?: string | null;
 	computers?: ComputerChoice[];
 }
+declare const RUN_RECIPE_VERB = "computer.run_recipe";
+/** One recipe of a tool installed on one of the person's computers, ready to run. */
+export interface InstalledRecipeMatch {
+	/** "<recipe> on <computer>". */
+	label: string;
+	capability: string;
+	recipe: string;
+	description: string;
+	computer: {
+		id: string;
+		name: string;
+	};
+	/** The recipe's params as declared (type, required, default, description). */
+	params: Record<string, unknown>;
+	/** What to run: `synap_run_capability` with this verb and these parameters (fill `params`). */
+	run: {
+		parameters: {
+			capability: string;
+			computer: string;
+			recipe: string;
+		};
+		verbId: typeof RUN_RECIPE_VERB;
+	};
+	score: number;
+}
+/**
+ * The recipes an intent's capabilities can run NOW on the person's computers.
+ * `matches`: the recipes the query's words hit (name, then description),
+ * ranked; `unmatched`: per tool and computer, the names of the other recipes
+ * (an intent like edit_video holds 20 of them, and words are not the only way
+ * to pick one). `error`: the read failed, never an empty answer.
+ */
+export type InstalledRecipes = {
+	matches: InstalledRecipeMatch[];
+	unmatched: Array<{
+		capability: string;
+		computer: string;
+		recipes: string[];
+	}>;
+} | {
+	error: string;
+};
 /**
  * Why a candidate matched, for an agent choosing between results: the query
  * terms it hit, rarest (highest-weighted) first, and the fields they hit.
@@ -20167,6 +20209,14 @@ export interface AbstractIntentMatch {
 	intent: string;
 	/** Verbs declaring it under this caller's lens. `[]` is a real answer. */
 	verbs: IntentVerbMatch[];
+	/**
+	 * "<recipe> on <computer>": the recipes of this intent's tools INSTALLED and
+	 * checked on the person's computers, run with `computer.run_recipe`
+	 * (hosted verbs). ABSENT when none of its tools is installed on a computer;
+	 * `error` when that read failed. The catalog side (packages to install) is
+	 * `marketplace`.
+	 */
+	recipes?: InstalledRecipes;
 	score: number;
 	confidence: number;
 	match: TermMatch;

@@ -484,6 +484,9 @@ const COMPUTER_RUNNER_WRITES: Readonly<
     "POST /host-jobs/:id/heartbeat",
     "POST /host-jobs/:id/report",
     "POST /host-jobs/:id/finish",
+    // A hosted verb run's output files: tickets minted for the job's
+    // requester, only while this computer holds the verb job's lease.
+    "POST /host-jobs/:id/uploads",
   ].map((key) => [
     key,
     {

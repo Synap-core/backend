@@ -79,6 +79,7 @@
  */
 
 import type { CatalogPlacement } from "../installations/request-installation.js";
+import type { InstalledRecipes } from "../host-jobs/hosted-verbs.js";
 import { listIntentRows, type IntentRow } from "./intent-registry.js";
 import { intentText, rankIntentRows } from "./intent-ranking.js";
 
@@ -188,6 +189,14 @@ export interface AbstractIntentMatch {
   intent: string;
   /** Verbs declaring it under this caller's lens. `[]` is a real answer. */
   verbs: IntentVerbMatch[];
+  /**
+   * "<recipe> on <computer>": the recipes of this intent's tools INSTALLED and
+   * checked on the person's computers, run with `computer.run_recipe`
+   * (hosted verbs). ABSENT when none of its tools is installed on a computer;
+   * `error` when that read failed. The catalog side (packages to install) is
+   * `marketplace`.
+   */
+  recipes?: InstalledRecipes;
   score: number;
   confidence: number;
   match: TermMatch;
@@ -713,15 +722,30 @@ export async function findByIntent(
     // through its synonym "remove background", never through its slug.
     const ranked = rankIntentRows(input.intent, vocabulary);
     const best = ranked[0]?.score ?? 0;
+    const top = ranked.slice(0, limit);
+    // The installed side of each intent: the recipes its tools can run on
+    // the person's computers now (hosted verbs). ONE read for every intent.
+    const { installedRecipesFor } =
+      await import("../host-jobs/hosted-verbs.js");
+    const recipesByIntent = await installedRecipesFor({
+      userId: input.userId,
+      intents: top.map((r) => r.item.slug),
+      query: input.intent,
+      limit,
+    });
     result.intents = {
-      matches: ranked.slice(0, limit).map((r) => ({
-        intent: r.item.slug,
-        verbs: byIntent.get(r.item.slug) ?? [],
-        score: r.score,
-        confidence: normalise(r.score, best),
-        match: r.match,
-        termCoverage: coverageOf(r.match, terms),
-      })),
+      matches: top.map((r) => {
+        const recipes = recipesByIntent.get(r.item.slug);
+        return {
+          intent: r.item.slug,
+          verbs: byIntent.get(r.item.slug) ?? [],
+          ...(recipes ? { recipes } : {}),
+          score: r.score,
+          confidence: normalise(r.score, best),
+          match: r.match,
+          termCoverage: coverageOf(r.match, terms),
+        };
+      }),
     };
     scoring.intents = {
       ranker:
