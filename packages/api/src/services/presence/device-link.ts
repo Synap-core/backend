@@ -233,13 +233,17 @@ export async function requestDeviceLink(args: {
         )
       );
     if (Number(recent?.n ?? 0) >= DEVICE_LINK_REQUESTS_MAX) return null;
+    // One live request per person: a new ask replaces the pending one AND an
+    // approval nobody redeemed yet, so an older approval cannot be redeemed
+    // later by the session that asked for it.
     await tx
       .update(presenceDeviceLinks)
       .set({ status: "replaced", decidedAt: now })
       .where(
         and(
           eq(presenceDeviceLinks.userId, args.userId),
-          eq(presenceDeviceLinks.status, "pending")
+          inArray(presenceDeviceLinks.status, ["pending", "approved"]),
+          isNull(presenceDeviceLinks.redeemedAt)
         )
       );
     const [row] = await tx

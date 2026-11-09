@@ -375,6 +375,27 @@ describe("Add this device: asking", () => {
     expect(h.notices).toEqual([]);
   });
 
+  it("asking again replaces an approval nobody redeemed yet: only the newest request can be redeemed", async () => {
+    const first = await approved();
+    await ask();
+    expect(
+      (
+        await deviceLinkStatus({
+          userId: PERSON,
+          sessionKey: NEW_PHONE,
+          id: first.id,
+        })
+      ).status
+    ).toBe("replaced");
+    expect(
+      await redeemDeviceLink({
+        userId: PERSON,
+        sessionKey: NEW_PHONE,
+        kind: "passkey",
+      })
+    ).toBe(false);
+  });
+
   it("asking tells every device, and asking again replaces the pending request", async () => {
     const first = await ask();
     expect(first.number).toMatch(/^\d{2}$/);
