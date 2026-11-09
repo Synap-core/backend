@@ -53,7 +53,7 @@ import {
   type LifecycleProjectionScope,
 } from "../services/lifecycle/project-lifecycle-columns.js";
 import {
-  deriveLifecycleLists,
+  dropStaleLifecycleLists,
   fillFacetInitialStatus,
 } from "../services/lifecycle/heal-lifecycle-declarations.js";
 import { EVERY_PROFILE, opProfileSlugs } from "./data-changes.js";
@@ -168,7 +168,7 @@ export interface OpCounts {
   lifecycleUncategorized?: number;
   /** fillFacetInitialStatus: facets given their lifecycle's initial status. */
   facetsInitialStatusFilled?: number;
-  /** deriveLifecycleLists: lifecycle defs whose stored option list / default was rewritten. */
+  /** dropStaleLifecycleLists: lifecycle defs whose stored option list / default was rewritten. */
   lifecycleListsHealed?: number;
   /** renameProfile: entities whose `type` was rewritten to the new slug. */
   entitiesRetyped?: number;
@@ -296,7 +296,7 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   // door and the next boot fill it.
   projectLifecycleColumns: "advisory",
   fillFacetInitialStatus: "advisory",
-  deriveLifecycleLists: "advisory",
+  dropStaleLifecycleLists: "advisory",
   reconcileEntityScope: "advisory",
   reconcileFacetScope: "advisory",
   keep: "advisory",
@@ -661,8 +661,8 @@ async function applyOp(
       return applyProjectLifecycleColumns(tx);
     case "fillFacetInitialStatus":
       return applyHeal(tx, "facetsInitialStatusFilled", fillFacetInitialStatus);
-    case "deriveLifecycleLists":
-      return applyHeal(tx, "lifecycleListsHealed", deriveLifecycleLists);
+    case "dropStaleLifecycleLists":
+      return applyHeal(tx, "lifecycleListsHealed", dropStaleLifecycleLists);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -3050,7 +3050,7 @@ export async function computeCounts(
       return {};
     }
     case "fillFacetInitialStatus":
-    case "deriveLifecycleLists": {
+    case "dropStaleLifecycleLists": {
       // Dry run DERIVED from the apply: the same statements, rolled back.
       try {
         await sql.begin(async (tx) => {

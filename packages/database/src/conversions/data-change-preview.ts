@@ -119,7 +119,7 @@ export function opTerms(op: ConversionOp): DataChangeTerms {
     case "dedupeRelationDefs":
     case "projectLifecycleColumns":
     case "fillFacetInitialStatus":
-    case "deriveLifecycleLists":
+    case "dropStaleLifecycleLists":
       return { kinds: [], fields: [] };
     case "reconcileEntityScope":
     case "reconcileFacetScope":

@@ -7,12 +7,15 @@
  *    statement, exactly what `bornLifecycleFor` does at a birth. Only a
  *    non-terminal, non-person-only initial is filled (the same rule as a
  *    birth); a facet holding a mirror value is left to `projectLifecycleColumns`.
- *  - {@link deriveLifecycleLists}: the stored `uiHints.enumValues` and
- *    `constraints.defaultValue` of a lifecycle def are rewritten from the one
- *    declaration (`constraints.enumOptions`), the same derivation
- *    `withDerivedLifecycleLists` applies on read.
+ *  - {@link dropStaleLifecycleLists}: ONE option list per lifecycle. A
+ *    lifecycle def's stale `uiHints.enumValues` key is DELETED (nobody writes
+ *    it, no reader keys on it: `enumOptions` is the list) and its stale
+ *    `constraints.defaultValue` is set to the declaring link's initial status
+ *    (removed when there is none or the links disagree). `enumOptions` is never
+ *    edited, so a value an old row holds stays admissible. A def with no
+ *    `enumOptions` is left alone: there `enumValues` may be the only list.
  *
- * Both are idempotent: they touch only rows that differ from the derivation.
+ * Both are idempotent: they touch only rows that differ.
  * The nearest declaration in the profile hierarchy wins (as
  * `getEffectiveLifecycle`).
  */
@@ -60,8 +63,8 @@ export async function fillFacetInitialStatus(tx: Sql): Promise<number> {
   return rows.length;
 }
 
-/** Lifecycle defs' stored `uiHints.enumValues` / `constraints.defaultValue` → derived. Returns defs rewritten. */
-export async function deriveLifecycleLists(tx: Sql): Promise<number> {
+/** Lifecycle defs: delete the stale `uiHints.enumValues`, align `constraints.defaultValue` with the link default. Returns defs rewritten. */
+export async function dropStaleLifecycleLists(tx: Sql): Promise<number> {
   const rows = await tx`
     WITH lc AS (
       SELECT pp.property_def_id AS def_id,
@@ -74,28 +77,22 @@ export async function deriveLifecycleLists(tx: Sql): Promise<number> {
     ),
     want AS (
       SELECT pd.id,
-             COALESCE((SELECT jsonb_agg(o->>'key' ORDER BY ord)
-                         FROM jsonb_array_elements(pd.constraints->'enumOptions')
-                              WITH ORDINALITY AS t(o, ord)
-                        WHERE o->>'category' IN ('open','active','paused','done','lost')),
-                      '[]'::jsonb) AS keys,
              CASE WHEN lc.n_defaults = 1 THEN to_jsonb(lc.init) END AS init
         FROM property_defs pd JOIN lc ON lc.def_id = pd.id
        WHERE jsonb_typeof(pd.constraints->'enumOptions') = 'array'
          AND jsonb_array_length(pd.constraints->'enumOptions') > 0
     )
     UPDATE property_defs pd
-       SET ui_hints = jsonb_set(COALESCE(pd.ui_hints, '{}'::jsonb), '{enumValues}', w.keys),
+       SET ui_hints = COALESCE(pd.ui_hints, '{}'::jsonb) - 'enumValues',
            constraints = CASE WHEN w.init IS NULL
                               THEN pd.constraints - 'defaultValue'
                               ELSE jsonb_set(pd.constraints, '{defaultValue}', w.init) END,
            updated_at = now()
       FROM want w
      WHERE pd.id = w.id
-       AND (pd.ui_hints->'enumValues' IS DISTINCT FROM w.keys
-            AND pd.ui_hints ? 'enumValues'
-            OR pd.constraints->'defaultValue' IS DISTINCT FROM w.init
-               AND pd.constraints ? 'defaultValue')
+       AND (pd.ui_hints ? 'enumValues'
+            OR (pd.constraints ? 'defaultValue'
+                AND pd.constraints->'defaultValue' IS DISTINCT FROM w.init))
     RETURNING pd.id`;
   return rows.length;
 }

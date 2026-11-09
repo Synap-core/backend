@@ -30,7 +30,6 @@ import {
 } from "@synap-core/types/lifecycle";
 import { isWaitKind } from "@synap-core/types/units";
 import { foldPropertyKey } from "../services/did-you-mean.js";
-import { normalizeEnumOptions } from "./property-enum.js";
 
 export {
   LIFECYCLE_CATEGORIES,
@@ -262,39 +261,5 @@ export function classifyLifecycleMove(
     toCategory: opt.category,
     intoTerminal: TERMINAL_LIFECYCLE_CATEGORIES.includes(opt.category),
     humanOnly: opt.humanOnly === true,
-  };
-}
-
-/**
- * ONE option list per lifecycle: `constraints.enumOptions` is the declaration.
- * What a form reads from `uiHints.enumValues` (the options a person may pick:
- * the CATEGORISED ones, since a move into an uncategorised key is refused) and
- * `constraints.defaultValue` (the initial status: the declaring link's default)
- * are DERIVED from it here, whatever a pod stored beside it. Applied to the
- * lifecycle property at the effective-property seam. PURE.
- */
-export function withDerivedLifecycleLists<
-  P extends {
-    constraints?: unknown;
-    uiHints?: unknown;
-    defaultValue?: unknown;
-  },
->(prop: P): P {
-  const constraints = (prop.constraints ?? {}) as Record<string, unknown>;
-  const options = normalizeEnumOptions(constraints.enumOptions);
-  if (!options) return prop;
-  const { defaultValue: _stale, ...rest } = constraints;
-  return {
-    ...prop,
-    constraints:
-      typeof prop.defaultValue === "string"
-        ? { ...rest, defaultValue: prop.defaultValue }
-        : rest,
-    uiHints: {
-      ...((prop.uiHints ?? {}) as Record<string, unknown>),
-      enumValues: options
-        .filter((o) => isLifecycleCategory(o.category))
-        .map((o) => o.key),
-    },
   };
 }

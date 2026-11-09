@@ -3,9 +3,11 @@
  *  - `fillFacetInitialStatus`: a status-less facet of a role with a lifecycle
  *    gets the initial status (column, category, mirror); a facet that has a
  *    status, a terminal initial, or no lifecycle is left alone.
- *  - `deriveLifecycleLists`: a lifecycle def's stale `uiHints.enumValues` and
- *    `constraints.defaultValue` are rewritten from `enumOptions` + the link
- *    default; a def that stored neither is not given one.
+ *  - `dropStaleLifecycleLists`: a lifecycle def's stale `uiHints.enumValues` is
+ *    deleted and its `constraints.defaultValue` aligned with the link default;
+ *    `enumOptions` is never edited; a def with no `enumOptions` keeps its
+ *    `enumValues` (the only list there); a def that stored neither is not
+ *    given one.
  * Both: dry run writes nothing; a second run changes nothing.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -75,7 +77,7 @@ function makePgliteSql(db: PGlite): Sql {
 }
 
 const FILL = "sf1.lifecycle.fill-facet-initial-status";
-const DERIVE = "sf1.lifecycle.derive-option-lists";
+const DERIVE = "sf1.lifecycle.drop-stale-option-lists";
 const ops = (k: string) => selectManifestOps(CONVERSION_MANIFEST, [k]);
 const OPERATOR: RunOptions = { dryRun: false, destructiveTail: false };
 const DRY: RunOptions = { dryRun: true, destructiveTail: false };
@@ -88,6 +90,7 @@ let nullPact: string;
 let nullPlain: string;
 let leadDef: string;
 let plainDef: string;
+let legacyDef: string;
 
 beforeAll(async () => {
   h = await makeLifecyclePglite();
@@ -156,6 +159,11 @@ beforeAll(async () => {
     "a"
   );
   plainDef = plain.defId;
+  // A legacy def whose ONLY list is `uiHints.enumValues` (no enumOptions).
+  const legacy = await mkRole("legacy", "legacyStage", [], "x", {
+    uiHints: { enumValues: ["x", "y"] },
+  });
+  legacyDef = legacy.defId;
   const person = (
     await db
       .insert(schema.entities)
@@ -231,8 +239,8 @@ describe("fillFacetInitialStatus", () => {
   });
 });
 
-describe("deriveLifecycleLists", () => {
-  it("rewrites a stale stored list and default from the one declaration", async () => {
+describe("dropStaleLifecycleLists", () => {
+  it("deletes the stale second list, aligns the default, never edits enumOptions", async () => {
     const dry = await runConversions(sql, ops(DERIVE), DRY);
     expect(dry.results[0]).toMatchObject({
       counts: { lifecycleListsHealed: 1 },
@@ -244,14 +252,16 @@ describe("deriveLifecycleLists", () => {
 
     await runConversions(sql, ops(DERIVE), OPERATOR);
     const lead = await defRow(leadDef);
-    expect(lead.ui_hints.enumValues).toEqual(["new", "engaged"]);
+    expect(lead.ui_hints.enumValues).toBeUndefined();
     expect(lead.constraints.defaultValue).toBe("new");
-    // the declaration itself is untouched
+    // the declaration itself is untouched, uncategorised `prospect` included
     expect(lead.constraints.enumOptions).toHaveLength(3);
     // a def that stored neither is not given one
     const plain = await defRow(plainDef);
     expect(plain.ui_hints?.enumValues).toBeUndefined();
     expect(plain.constraints.defaultValue).toBeUndefined();
+    // a def whose only list is enumValues keeps it
+    expect((await defRow(legacyDef)).ui_hints.enumValues).toEqual(["x", "y"]);
   });
 
   it("a second run changes nothing", async () => {

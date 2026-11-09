@@ -38,7 +38,7 @@ export type ConversionOp =
   | RenameProfileOp
   | ProjectLifecycleColumnsOp
   | FillFacetInitialStatusOp
-  | DeriveLifecycleListsOp
+  | DropStaleLifecycleListsOp
   | FoldBookingDealIntoLeadOp
   | RekindByStatusOp;
 
@@ -688,14 +688,14 @@ export interface FillFacetInitialStatusOp extends BaseOp {
 
 /**
  * Status-first wave (doors audit bug 5): ONE option list per lifecycle. The
- * stored `uiHints.enumValues` (categorised option keys) and
- * `constraints.defaultValue` (the declaring link's initial status) of every
- * lifecycle def are rewritten from `constraints.enumOptions`, the declaration;
- * a stale copy is only ever replaced, never added. Idempotent.
+ * stale `uiHints.enumValues` key of every lifecycle def is DELETED (nobody
+ * writes it; `constraints.enumOptions` is the one list, never edited here) and
+ * its stale `constraints.defaultValue` is aligned with the declaring link's
+ * initial status. A def with no `enumOptions` is left alone. Idempotent.
  * (`services/lifecycle/heal-lifecycle-declarations.ts`)
  */
-export interface DeriveLifecycleListsOp extends BaseOp {
-  op: "deriveLifecycleLists";
+export interface DropStaleLifecycleListsOp extends BaseOp {
+  op: "dropStaleLifecycleLists";
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -1883,8 +1883,8 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       opKey: "sf1.lifecycle.fill-facet-initial-status",
     },
     {
-      op: "deriveLifecycleLists",
-      opKey: "sf1.lifecycle.derive-option-lists",
+      op: "dropStaleLifecycleLists",
+      opKey: "sf1.lifecycle.drop-stale-option-lists",
     },
 
     {
@@ -2296,7 +2296,7 @@ export const CONVERSION_OP_TYPES = [
   "renameProfile",
   "projectLifecycleColumns",
   "fillFacetInitialStatus",
-  "deriveLifecycleLists",
+  "dropStaleLifecycleLists",
   "foldBookingDealIntoLead",
   "rekindByStatus",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
@@ -2589,7 +2589,7 @@ export function validateManifest(manifest: ConversionManifest): void {
         break;
       case "projectLifecycleColumns":
       case "fillFacetInitialStatus":
-      case "deriveLifecycleLists":
+      case "dropStaleLifecycleLists":
         break; // no parameters: every declared lifecycle
       case "renameProfile":
         requireSlug(op.opKey, op.slug);
