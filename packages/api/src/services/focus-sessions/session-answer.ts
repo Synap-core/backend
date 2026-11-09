@@ -702,6 +702,12 @@ export async function recordOwnerRoomReply(p: {
     if (session.userId !== p.userId) return { status: "not_owner" };
 
     const question = await findOpenQuestion(p.channelId);
+    // WAKE SEAM (decision pending: outcome `wake-on-message` on session
+    // 4e027878, plan "The run's room inside the app" decision 1): the owner's
+    // free message with no open question wakes nobody here, so a pod-run
+    // agent mid-run gets no new turn (a waiting agent still reads it as an
+    // `owner_message` change). Waking it would go on this branch, for both
+    // send doors, through the same `wake` and `resolveWakeTarget` as below.
     if (!question) return { status: "no_open_question" };
 
     if (question.confirmationId) {
