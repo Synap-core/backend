@@ -1055,6 +1055,13 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     ),
     synap_relay_answer: WRITE,
     synap_ask_person: WRITE,
+    // The dispatcher: the tools/call door unwraps it BEFORE the fence runs
+    // (`routers/mcp/index.ts`), so a fenced key is judged on the tool it
+    // names, never this name. Refused here so that if the name ever did
+    // reach the fence, it would stay closed.
+    synap_call_tool: REFUSED(
+      "A dispatcher: the fence judges the tool it names, never this name."
+    ),
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
     synap_promote_session_to_playbook: WRITE,

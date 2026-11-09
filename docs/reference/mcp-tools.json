@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 116,
+  "toolCount": 117,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -23,7 +23,8 @@
     "synap_ask_person",
     "synap_relay_answer",
     "synap_complete_session",
-    "synap_load_skill"
+    "synap_load_skill",
+    "synap_call_tool"
   ],
   "groups": {
     "read": [
@@ -5644,7 +5645,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope \"session\" is a template for one focus session; scope \"project\" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
+      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope \"session\" is a template for one focus session; scope \"project\" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
       "parameters": [
         {
           "name": "name",
@@ -11847,7 +11848,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
+      "description": "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
       "parameters": [
         {
           "name": "name",
@@ -13151,6 +13152,56 @@
           }
         },
         "required": []
+      }
+    },
+    {
+      "name": "synap_call_tool",
+      "title": "Call a tool",
+      "group": "entry",
+      "annotations": {
+        "title": "Call a tool",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "description": "Run a tool this key has unlocked but your client does not list yet, in this turn: `tool` = its name, `arguments` = its input. Leave `arguments` out to get its input schema. Unlock a group first with synap_load_skill({ref: \"tools:read\"}).",
+      "parameters": [
+        {
+          "name": "tool",
+          "type": "string",
+          "required": true,
+          "description": "The tool to run, e.g. 'synap_create_document'."
+        },
+        {
+          "name": "arguments",
+          "type": "object",
+          "required": false,
+          "description": "The tool's input. Omit it to get the tool's input schema instead of running it."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: passed to the tool as its `sessionId` when `arguments` has none."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string",
+            "description": "The tool to run, e.g. 'synap_create_document'."
+          },
+          "arguments": {
+            "type": "object",
+            "description": "The tool's input. Omit it to get the tool's input schema instead of running it."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: passed to the tool as its `sessionId` when `arguments` has none."
+          }
+        },
+        "required": ["tool"]
       }
     }
   ]

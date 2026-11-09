@@ -1,5 +1,5 @@
 {
-  "entryChars": 93347,
+  "entryChars": 94031,
   "tools": {
     "synap_add_track_stage": 1495,
     "synap_advance_track": 1779,
@@ -7,6 +7,7 @@
     "synap_ask": 2765,
     "synap_ask_person": 5515,
     "synap_attach_facet": 1835,
+    "synap_call_tool": 684,
     "synap_capture": 18805,
     "synap_change_kind_scope": 1666,
     "synap_complete_session": 4910,

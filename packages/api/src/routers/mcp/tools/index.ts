@@ -114,11 +114,12 @@ import {
 } from "../tool-profiles.js";
 import { loadKeyToolAccess, unlockKeyToolGroups } from "../tool-access.js";
 import {
+  callToolNote,
   loadSkillCall,
-  RECONNECT_NOTE,
   toolGroupList,
   yourToolsBlock,
 } from "../tool-guidance.js";
+import { CALL_TOOL_NAME } from "../call-tool-name.js";
 import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
@@ -666,7 +667,7 @@ export interface ToolsListContext {
   door?: CapabilityBriefDoor;
 }
 
-/** Above this many newly listed tools, the unlock reply names them instead of inlining schemas. */
+/** Above this many newly listed tools, the unlock reply gives each one line instead of its schema. */
 const UNLOCK_INLINE_SCHEMA_MAX = 15;
 
 /** `synap_load_skill`'s ref: `ref`, else its aliases `skill` / `name`. */
@@ -718,7 +719,7 @@ async function withYourTools(
   } catch (err) {
     yourTools = {
       unavailable: `Could not read this key's tool list: ${err instanceof Error ? err.message : String(err)}`,
-      unlock: `${loadSkillCall("synap_load_skill")} unlocks more tools. ${RECONNECT_NOTE}`,
+      unlock: `${loadSkillCall("synap_load_skill")} unlocks more tools. ${callToolNote(CALL_TOOL_NAME)}`,
     };
   }
   const { startHere, ...rest } = parsed as Record<string, unknown>;
@@ -732,12 +733,14 @@ async function withYourTools(
 
 /**
  * `synap_load_skill`'s tool-depth half (V1 D4). Persists `groups` on an ENTRY
- * key, pings `list_changed`, and returns a short note for the reply — with the
- * new tools' schemas inline when the set is small, because the HTTP door
- * cannot deliver the notification (see `mcp/index.ts`). `text` is "" when
- * there is nothing to say. `isGroupRef`: the caller asked for tools by name
- * (`tools:<group>`), so every outcome is worth a sentence; a skill load only
- * mentions an unlock that happened.
+ * key, pings `list_changed`, and returns a short note for the reply: the new
+ * tools with their schemas (one line each above the cap), runnable at once
+ * through `synap_call_tool`, because the HTTP door cannot deliver the
+ * notification and most clients never list again mid-conversation (see
+ * `mcp/index.ts`, `call-tool.ts`). `text` is "" when there is nothing to
+ * say. `isGroupRef`: the caller asked for tools by name (`tools:<group>`), so
+ * every outcome is worth a sentence; a skill load only mentions an unlock that
+ * happened.
  */
 async function unlockToolGroupsForSkill(
   groups: ToolGroup[],
@@ -775,20 +778,28 @@ async function unlockToolGroupsForSkill(
     added.flatMap((g) => [...TOOL_GROUPS[g]] as string[])
   );
   const defs = (await tools.list()).filter((t) => names.has(t.name));
-  // Honest about delivery: this door answers with plain JSON, so the
-  // `list_changed` ping above does not reach the client — the tools show up
-  // in its list only when it lists again (reconnect / a new session).
-  const lead =
-    `Unlocked tool group${added.length > 1 ? "s" : ""}: ${added.join(", ")} (${defs.map((t) => t.name).join(", ")}). ` +
-    `They appear in your tool list after you reconnect the Synap MCP server or start a new session (Claude Code: /mcp); this connection cannot refresh it for you.`;
-  if (defs.length > UNLOCK_INLINE_SCHEMA_MAX) return { text: lead };
+  // The note opens with these words: the claude.ai connector strips it by
+  // them (`POD_UNLOCK_NOTE_RE`, control plane `routes/mcp.ts`).
+  const head = `Unlocked tool group${added.length > 1 ? "s" : ""}: ${added.join(", ")}`;
+  const oneLine = (t: Tool) => (t.description ?? "").split("\n")[0];
+  if (defs.length > UNLOCK_INLINE_SCHEMA_MAX) {
+    // One line each: the description's first sentence, cut at 140 chars.
+    const brief = (t: Tool) => {
+      const sentence = oneLine(t).split(/(?<=\.)\s/)[0] ?? "";
+      return sentence.length > 140 ? `${sentence.slice(0, 139)}…` : sentence;
+    };
+    const lines = defs.map((t) => `- ${t.name}: ${brief(t)}`).join("\n");
+    return {
+      text: `${head}. ${callToolNote(CALL_TOOL_NAME)} For a tool's input schema, call ${CALL_TOOL_NAME} with the tool name and no arguments.\n\n${lines}`,
+    };
+  }
   const schemas = defs.map((t) => ({
     name: t.name,
-    description: (t.description ?? "").split("\n")[0],
+    description: oneLine(t),
     inputSchema: t.inputSchema,
   }));
   return {
-    text: `${lead} Their schemas, for reference:\n\n\`\`\`json\n${JSON.stringify(schemas)}\n\`\`\``,
+    text: `${head} (${defs.map((t) => t.name).join(", ")}). ${callToolNote(CALL_TOOL_NAME)} Their schemas:\n\n\`\`\`json\n${JSON.stringify(schemas)}\n\`\`\``,
   };
 }
 
@@ -3739,7 +3750,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
         inputSchema: {
           type: "object",
           properties: {
@@ -6424,7 +6435,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6879,6 +6890,40 @@ export const tools = {
           },
           // `ref` or one of its aliases; the handler refuses none of them set.
           required: [],
+        },
+      },
+      {
+        // Unwrapped by the tools/call door before anything judges the call
+        // (`mcp/index.ts`, `call-tool.ts`): the fence, governance and every
+        // limit apply to the tool it names, as to a direct call of that tool.
+        name: CALL_TOOL_NAME,
+        annotations: {
+          title: "Call a tool",
+          // It may run any write: a client approves it as one.
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description: `Run a tool this key has unlocked but your client does not list yet, in this turn: \`tool\` = its name, \`arguments\` = its input. Leave \`arguments\` out to get its input schema. Unlock a group first with ${loadSkillCall("synap_load_skill")}.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              description: "The tool to run, e.g. 'synap_create_document'.",
+            },
+            arguments: {
+              type: "object",
+              description:
+                "The tool's input. Omit it to get the tool's input schema instead of running it.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "Optional: passed to the tool as its `sessionId` when `arguments` has none.",
+            },
+          },
+          required: ["tool"],
         },
       },
     ];

@@ -22,6 +22,7 @@ import {
   type ToolGroup,
 } from "./tool-profiles.js";
 import { DOOR_TOOL_NAMES } from "./door-tool-names.generated.js";
+import { CALL_TOOL_NAME } from "./call-tool-name.js";
 import type { SkillDoor } from "../../services/capability-briefs/door-tool-render.js";
 
 /** The group the worked example unlocks. */
@@ -43,18 +44,15 @@ export function toolGroupList(quote: string, withPurpose = false): string {
   ).join(", ");
 }
 
-/** When unlocked tools show: the pod's HTTP door cannot push `list_changed`. */
-export const RECONNECT_NOTE = "They appear after you reconnect.";
-
 /**
- * When unlocked tools show, per door. The claude.ai connector lists them from
- * its next listing with no reconnect (its own unlock note says so).
+ * How an unlocked tool runs in the same turn, with this door's name for the
+ * dispatcher (`synap_call_tool`, `call-tool.ts`). Most clients list a new
+ * tool only when they list again, so the dispatcher is the one way that works
+ * on every client; nothing needs a reconnect.
  */
-const UNLOCK_SHOWS: Readonly<Record<SkillDoor, string>> = {
-  "pod-mcp": RECONNECT_NOTE,
-  "cp-connector":
-    "They are listed from your next conversation; nothing to reconnect.",
-};
+export function callToolNote(callToolName: string, quote = ""): string {
+  return `Run an unlocked tool at once with ${quote}${callToolName}({tool, arguments})${quote}.`;
+}
 
 /** A pod tool's name on `door` (`pod__*` on the connector), else its pod name. */
 export function doorToolName(podName: string, door: SkillDoor): string {
@@ -98,7 +96,7 @@ export function yourToolsBlock(
     ask,
     ...(locked.length
       ? {
-          unlock: `${loadSkillCall(loadSkill, locked.includes(EXAMPLE_GROUP) ? EXAMPLE_GROUP : locked[0])}: one group below, or "${BUILDER_REF}" for every tool. ${UNLOCK_SHOWS[door]}`,
+          unlock: `${loadSkillCall(loadSkill, locked.includes(EXAMPLE_GROUP) ? EXAMPLE_GROUP : locked[0])}: one group below, or "${BUILDER_REF}" for every tool. ${callToolNote(toolName(CALL_TOOL_NAME))}`,
           groups: Object.fromEntries(
             locked.map((g) => [toolGroupRef(g), TOOL_GROUP_PURPOSES[g]])
           ),
