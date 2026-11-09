@@ -34,6 +34,8 @@ import type {
   RuleCreateCaller,
   PlaybookCreateCaller,
   ViewCreateCaller,
+  CellDefineCaller,
+  RendererBindCaller,
   CompositeUpdateCaller,
 } from "./materialize-composite.js";
 import { buildCompositeUpdateCaller } from "./composite-update-caller.js";
@@ -68,6 +70,11 @@ export interface RuleLoopCallerContext {
    * was the bypass.
    */
   skillAuthor: { agentUserId: string | null; personApproved: boolean };
+  /**
+   * The proposal being applied, when there is one: stamped on the renderer
+   * bindings a `bind_renderer` op writes, as their lineage.
+   */
+  sourceProposalId?: string;
 }
 
 export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
@@ -76,11 +83,152 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   ruleCaller: RuleCreateCaller;
   playbookCaller: PlaybookCreateCaller;
   viewCaller: ViewCreateCaller;
+  cellCaller: CellDefineCaller;
+  rendererCaller: RendererBindCaller;
   updateCaller: CompositeUpdateCaller;
 } {
   const { database, userId, workspaceId, auditSource, skillAuthor } = ctx;
 
   return {
+    // A playbook's UI: the generated cell, through the ONE cell door
+    // (`defineCell` runs the mount and sandbox checks again on the source
+    // the reviewer approved). Never overwrites a cell of the same key that
+    // appeared after the proposal was filed: that cell is somebody's.
+    cellCaller: {
+      define: async (cellOp) => {
+        const { defineCell, readStoredCellContent, cellTypeKeyFor } =
+          await import("../services/cells/define-cell.js");
+        const { CONTENT_KINDS } = await import("@synap/database/schema");
+        const contentKind = cellOp.contentKind;
+        if (
+          contentKind !== undefined &&
+          !(CONTENT_KINDS as readonly string[]).includes(contentKind)
+        ) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `create_cell: "${contentKind}" is not a content kind (${CONTENT_KINDS.join(", ")})`,
+          });
+        }
+        const existing = await readStoredCellContent({
+          name: cellOp.name,
+          workspaceId: cellOp.workspaceId,
+        });
+        if (existing) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `create_cell: a cell "${cellTypeKeyFor(cellOp.name)}" already exists here; approval never overwrites it`,
+          });
+        }
+        const defined = await defineCell({
+          name: cellOp.name,
+          rendererSource: cellOp.rendererSource,
+          workspaceId: cellOp.workspaceId,
+          ...(cellOp.description ? { description: cellOp.description } : {}),
+          ...(contentKind
+            ? {
+                contentKind: contentKind as (typeof CONTENT_KINDS)[number],
+              }
+            : {}),
+          userId,
+        });
+        return {
+          id: defined.id,
+          typeKey: defined.typeKey,
+          workspaceId: cellOp.workspaceId,
+          created: defined.changeType === "created",
+        };
+      },
+    },
+
+    // …and the one object's page it shows on, through the ONE binding door.
+    // A slot that already shows something is refused (named, the batch goes
+    // on): approval never replaces a page somebody chose meanwhile.
+    rendererCaller: {
+      bind: async (bindOp) => {
+        const {
+          assertCellBindable,
+          assertRendererTargetVisible,
+          cellRendererRefFor,
+          readBoundRenderer,
+        } = await import("../services/renderers/renderer-target-checks.js");
+        const { setProfileRenderer } =
+          await import("../services/profiles/set-profile-renderer.js");
+        const { SLOT_TO_CONTENT_KIND } =
+          await import("../services/profiles/renderer-slots.js");
+        const {
+          rendererBindings,
+          and: andWhere,
+          eq: eqWhere,
+          isNull: isNullWhere,
+          desc,
+        } = await import("@synap/database");
+        const target = { kind: bindOp.targetKind, id: bindOp.targetId };
+        await assertRendererTargetVisible(target, userId);
+        const lensWorkspaceId =
+          bindOp.scope === "workspace" ? bindOp.workspaceId : null;
+        const incumbent = await readBoundRenderer({
+          target,
+          slot: bindOp.slot,
+          userId,
+          workspaceId: lensWorkspaceId,
+        });
+        if (incumbent) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `bind_renderer: this ${bindOp.targetKind}'s page already shows a renderer (${incumbent.source}); approval never replaces it`,
+          });
+        }
+        await assertCellBindable({
+          cellKey: bindOp.cellKey,
+          workspaceId: bindOp.workspaceId,
+          userId,
+        });
+        const ref = await cellRendererRefFor(
+          bindOp.cellKey,
+          undefined,
+          bindOp.workspaceId
+        );
+        await setProfileRenderer({
+          userId,
+          workspaceId: bindOp.workspaceId,
+          profileSlug: bindOp.targetKind,
+          subjectId: bindOp.targetId,
+          slot: bindOp.slot,
+          ref,
+          scope: bindOp.scope,
+          ...(ctx.sourceProposalId
+            ? { sourceProposalId: ctx.sourceProposalId }
+            : {}),
+        });
+        // The row the door just wrote: the active binding of this object's
+        // slot at this scope (the door supersedes, so there is one).
+        const [row] = await database
+          .select({ id: rendererBindings.id })
+          .from(rendererBindings)
+          .where(
+            andWhere(
+              eqWhere(rendererBindings.scopeKind, bindOp.scope),
+              eqWhere(rendererBindings.subjectKind, bindOp.targetKind),
+              eqWhere(rendererBindings.subjectId, bindOp.targetId),
+              eqWhere(
+                rendererBindings.contentKind,
+                SLOT_TO_CONTENT_KIND[bindOp.slot]
+              ),
+              isNullWhere(rendererBindings.revokedAt)
+            )
+          )
+          .orderBy(desc(rendererBindings.createdAt))
+          .limit(1);
+        if (!row) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "bind_renderer: the binding door wrote no active row",
+          });
+        }
+        return { bindingId: row.id };
+      },
+    },
+
     // A Library rebuild's CHANGES (`update_*`), each through its object's
     // existing update door — see `composite-update-caller.ts`.
     updateCaller: buildCompositeUpdateCaller(ctx),

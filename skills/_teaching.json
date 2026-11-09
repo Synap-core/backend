@@ -963,6 +963,23 @@
       "capability": null
     }
   },
+  "synap-ui/playbook-ui": {
+    "teachesTools": [
+      "propose_app_from_playbook",
+      "create_view",
+      "update_view",
+      "create_cell",
+      "promote_cell_to_renderer"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "UI for a playbook: one verb proposes its pipeline, dashboard, board cell and page binding as one review.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap-ui/more": {
     "teachesTools": [],
     "skillGroup": "build",
@@ -1086,7 +1103,11 @@
     }
   },
   "synap/asks": {
-    "teachesTools": ["synap_ask_person", "synap_start_session", "synap_update_session"],
+    "teachesTools": [
+      "synap_ask_person",
+      "synap_start_session",
+      "synap_update_session"
+    ],
     "skillGroup": "core",
     "alwaysOn": false,
     "summary": "Asks: the full shapes of an ask (confirm, choose with followUp and media, form, act, provide) and its shared fields, with examples.",

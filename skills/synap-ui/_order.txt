@@ -1,6 +1,7 @@
 views.md
 before-you-build.md
 four-builds.md
+playbook-ui.md
 view-list.md
 creating-views.md
 bento-layouts.md

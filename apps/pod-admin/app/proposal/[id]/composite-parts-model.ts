@@ -309,8 +309,46 @@ const DRAWERS = {
           tags((v.scopeProfileSlugs ?? []).map((k) => resolveObjectNoun(k)))
         ),
         ...field("members", text(String(v.memberCount))),
+        ...field(
+          "lifecycleOf",
+          v.lifecycleOf ? text(resolveObjectNoun(v.lifecycleOf)) : null
+        ),
+        ...field("widgets", tags(v.widgets)),
       ])
     ),
+  cells: ({ graph, opByRef }) =>
+    (graph.cells ?? []).map((c) => {
+      // The whole source, from the stored op: a person approves code they
+      // can read, never only its excerpt.
+      const raw = opByRef.get(c.ref)?.rendererSource;
+      const source =
+        !c.existingCellKey && typeof raw === "string" && raw.trim()
+          ? raw
+          : null;
+      return record("cells", c.ref, "cell", c.name, [
+        ...field(
+          "source",
+          source
+            ? codeValue(source)
+            : c.sourceExcerpt
+              ? text(
+                  c.sourceTruncated ? `${c.sourceExcerpt}…` : c.sourceExcerpt
+                )
+              : null
+        ),
+        ...field("existingCell", text(c.existingCellKey)),
+        ...field("description", text(c.description)),
+        ...field(
+          "showsOn",
+          tags(
+            c.bindings.map(
+              (b) =>
+                `${b.targetName ?? resolveObjectNoun(b.targetKind)} · ${humanizeToken(b.slot)}`
+            )
+          )
+        ),
+      ]);
+    }),
   updates: ({ graph, opByRef }) =>
     (graph.updates ?? []).map((u) => {
       // The new values whole, from the stored op's patch.

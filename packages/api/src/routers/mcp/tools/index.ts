@@ -3672,6 +3672,43 @@ export const tools = {
         },
       },
       {
+        name: "synap_propose_app_from_playbook",
+        annotations: {
+          title: "Propose a playbook's UI",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "The one verb for 'build me an app / a UI for this playbook'. From the playbook and the kind it works (its declared lifecycle), files ONE proposal holding: the kind's pipeline view, a dashboard (bento) over the same kind, a generated board cell drawn live from flow.of (columns = states in order, headed by the owning stage; governed moves), and that board on the playbook's page. Nothing is created until a person approves it; `proposed` is success, pass on reviewUrl. Parts that already exist are skipped (`alreadyExists`), a page that already shows something is never replaced (`leftOut`), and a second call returns the same pending proposal (`status: duplicate`). Refused with the next step when the playbook works no kind or the kind has no lifecycle (synap_declare_lifecycle).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            playbookId: {
+              type: "string",
+              description:
+                "The playbook (synap_list_playbooks / synap_match_playbooks).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Only for a pod-wide playbook: the space its views go in. A playbook in a space builds there.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["playbookId"],
+        },
+      },
+      {
         name: "synap_promote_session_to_playbook",
         annotations: {
           title: "Save session as template",

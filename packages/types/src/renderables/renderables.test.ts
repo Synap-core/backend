@@ -287,10 +287,14 @@ describe("leaf subpath", () => {
 });
 
 describe("composite create_view types", () => {
-  it("every type a create_view op may ask for is a structured view", async () => {
-    const { COMPOSITE_VIEW_TYPES, STRUCTURED_VIEW_TYPES } =
+  it("every type a create_view op may ask for is a structured view or a playbook UI view", async () => {
+    const { COMPOSITE_VIEW_TYPES, STRUCTURED_VIEW_TYPES, VIEW_BY_KEY } =
       await import("./views.js");
     for (const t of COMPOSITE_VIEW_TYPES) {
+      if (t === "pipeline" || t === "bento") {
+        expect(VIEW_BY_KEY[t]?.implemented, t).toBe(true);
+        continue;
+      }
       expect(STRUCTURED_VIEW_TYPES, t).toContain(t);
     }
   });

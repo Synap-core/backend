@@ -8,6 +8,7 @@ import type { EventAction } from "../events/unified.js";
 import { isLikelyUUID } from "./proposal-utils.js";
 import type { ProposalPartReach } from "./reach.js";
 import type { ProposalToolRun } from "./capability-run.js";
+import type { CompositeViewType } from "../renderables/views.js";
 export { isLikelyUUID };
 
 // Governance grant-option derivation (pure, browser-safe) — the SSOT the
@@ -610,13 +611,47 @@ export interface ProposalReviewGraph {
   views?: Array<{
     ref: string;
     name: string;
-    viewType: "list" | "table" | "kanban" | "gallery";
+    viewType: CompositeViewType;
     /** Kinds the list shows, when the op named them. */
     scopeProfileSlugs?: string[];
     /** How many things the list holds (in-batch refs + existing ids). */
     memberCount: number;
     /** The group container the list is about, when there is one. */
     containerRef?: string;
+    /** A pipeline: the kind whose declared lifecycle its columns are. */
+    lifecycleOf?: string;
+    /** A bento: the widget keys it places, in block order. */
+    widgets?: string[];
+  }>;
+  /**
+   * `create_cell` / `bind_renderer` — a GENERATED cell (its source is code a
+   * person approves) and the pages it shows on. A binding of a cell in this
+   * bundle is drawn under that cell; a binding of an existing cell gets an
+   * entry of its own (`existingCellKey`).
+   */
+  cells?: Array<{
+    /** The `create_cell` op's ref, or the `bind_renderer` op's for an existing cell. */
+    ref: string;
+    name: string;
+    /** Set when this entry binds a cell that already exists (no source here). */
+    existingCellKey?: string;
+    description?: string;
+    contentKind?: string;
+    /** How the frame draws it: `module` (React) or `page` (HTML). */
+    mechanism?: "module" | "page";
+    /** The first characters of the source. The whole source is the op's. */
+    sourceExcerpt?: string;
+    sourceTruncated?: boolean;
+    sourceBytes?: number;
+    bindings: Array<{
+      ref: string;
+      targetKind: BindRendererTargetKind;
+      targetId: string;
+      /** The object's name, when the pod read it for this viewer. */
+      targetName?: string;
+      slot: "detail";
+      scope: "pod" | "workspace";
+    }>;
   }>;
   /**
    * `update_*` — CHANGES to rows an earlier bundle made (a Library rebuild:
@@ -1008,7 +1043,13 @@ export interface CompositeCreateViewOp {
   /** Stable handle for this view within the proposal (e.g. "list1"). */
   ref: string;
   name: string;
-  viewType: "list" | "table" | "kanban" | "gallery";
+  /**
+   * A list type, or a playbook's UI view: `pipeline` (config `{profileSlug}`:
+   * the kind's declared lifecycle as columns, refused by the views door for a
+   * kind with none) or `bento` (config `{blocks}`, every widget from the
+   * catalog). Both carry no member set.
+   */
+  viewType: CompositeViewType;
   /** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
   workspaceId?: string;
   /** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
@@ -1027,6 +1068,65 @@ export {
   COMPOSITE_VIEW_TYPES,
   type CompositeViewType,
 } from "../renderables/views.js";
+
+/**
+ * ── UI ops (a playbook's UI, 2026-11-09) ────────────────────────────────────
+ *
+ * The UI an agent proposes for a playbook (`synap_propose_app_from_playbook`)
+ * is pod-native pieces filed as ONE governed bundle: the kind's pipeline and a
+ * bento (`create_view`), a GENERATED cell (`create_cell`) and where it shows
+ * (`bind_renderer`). One review, one undo, nothing created unless approved.
+ *
+ * `create_cell` materializes through the ONE cell door (`defineCell`), which
+ * runs the same mount and sandbox checks `synap_create_cell` runs; the source
+ * the reviewer approves is the source stored. `bind_renderer` binds a cell to
+ * ONE object's page (a playbook's or a view's `detail`), through the one
+ * binding door (`setProfileRenderer`): a per-object binding, which never
+ * writes a legacy store, so undo is a revoke of exactly the row it made.
+ *
+ * Both per-op RESILIENT: a cell that fails leaves the views beside it, and a
+ * binding whose cell did not land is skipped, named.
+ */
+export interface CompositeCreateCellOp {
+  op: "create_cell";
+  /** Stable handle for this cell within the proposal (e.g. "board"). */
+  ref: string;
+  /** The cell's name; its key is derived from it (`generated:<slug>`). */
+  name: string;
+  /** The cell's whole source: an ES module, or an HTML page. */
+  rendererSource: string;
+  description?: string;
+  /** Space the cell lives in; absent ⇒ pod-global. */
+  workspaceId?: string;
+  /**
+   * Its renderer slot kind (`CONTENT_KINDS` of `@synap/database`, e.g.
+   * `entity-detail`), checked by the cell door. Absent ⇒ `widget`.
+   */
+  contentKind?: string;
+}
+
+/** The objects whose OWN page a `bind_renderer` op may give a renderer. */
+export const BIND_RENDERER_TARGET_KINDS = ["playbook", "view"] as const;
+export type BindRendererTargetKind =
+  (typeof BIND_RENDERER_TARGET_KINDS)[number];
+
+export interface CompositeBindRendererOp {
+  op: "bind_renderer";
+  /** Stable handle for this binding within the proposal (e.g. "board-on-playbook"). */
+  ref: string;
+  /** The object whose page shows the cell: an existing playbook or view. */
+  target: { kind: BindRendererTargetKind; id: string };
+  /** Its slot: one object's page has only `detail`. */
+  slot: "detail";
+  /** `pod` = the object's own page everywhere; `workspace` = in one space. */
+  scope: "pod" | "workspace";
+  /** Required for `scope: "workspace"`. */
+  workspaceId?: string;
+  /** The cell: a `create_cell` op in this batch… */
+  cellRef?: string;
+  /** …or an existing cell's key. Exactly one of the two. */
+  cellKey?: string;
+}
 
 /**
  * ── Connected PLAN ops ──────────────────────────────────────────────────────
@@ -1259,6 +1359,8 @@ export type CompositeProposalOperation =
   | CompositeCreateDocumentOp
   | CompositeCreateProjectOp
   | CompositeCreateLinkOp
+  | CompositeCreateCellOp
+  | CompositeBindRendererOp
   // The update arms are listed one by one (not as `CompositeUpdateOperation`):
   // the gate-coverage tripwire reads each arm's `interface … { op: "…" }`.
   | CompositeUpdateSkillOp
@@ -1352,6 +1454,10 @@ const _RESILIENT_OPERATION_KINDS = [
   "create_playbook",
   // A list over the bundle's things: a failed list must not discard them.
   "create_view",
+  // A playbook's UI: a cell that fails leaves the views beside it, and a
+  // binding whose cell did not land is skipped, named.
+  "create_cell",
+  "bind_renderer",
   // A rebuild's changes to what it made before: a failed change must not
   // discard the new things filed beside it.
   ...UPDATE_OPERATION_KINDS,
@@ -1694,6 +1800,8 @@ export function isCompositeProposalData(
         o.op === "create_rule" ||
         o.op === "create_playbook" ||
         o.op === "create_view" ||
+        o.op === "create_cell" ||
+        o.op === "bind_renderer" ||
         isPlanOperation(o) ||
         isUpdateOperation(o))
   );
