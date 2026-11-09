@@ -438,6 +438,8 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
       "a workspace/template proposal's own tools and skills, applied on its (person's) approval",
     "routers/proposals/executors/skill.ts":
       "the skill/create executor: skill/create is a sensitive approval",
+    "routers/automations.ts":
+      "not a skill, tool or MCP column: `approved: true` is the flag `materializeApprovedAutomation` passes so a person-approved automation keeps its STATED status instead of the agent draft floor. Callers: the automation/create executor (after applyProposalApproval's presence step, apply-approval.ts assertPresenceForApproval) and the rule-loop automationCaller, which states `status: draft`. automation/create is not in SENSITIVE_APPROVALS, so a session alone may approve it; the automation's nodes keep their propose/run mode",
     "routers/hub-protocol/rest/mcp-servers.ts":
       "selects the column (a read: `columns: { approved: true }`), writes nothing",
     "connectors/materialize-tools.ts":

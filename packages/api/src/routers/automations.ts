@@ -982,14 +982,14 @@ export async function materializeAutomationForPrincipal(input: {
   definition: AutomationMaterializationInput;
   /** The row's `createdBy` — the runtime principal. */
   createdBy: string;
-  /** Present ⇒ an AGENT authored this ⇒ forced `draft`, unless `personApproved`. */
+  /** Present ⇒ an AGENT authored this ⇒ forced `draft`, unless `approved`. */
   agentUserId?: string | undefined;
   /**
    * A person APPROVED this exact definition (proposal approval): the approval
    * is the review the draft floor stands in for, so the author's status is
-   * kept. Only the proposal executor sets it.
+   * kept. Set only by `materializeApprovedAutomation`.
    */
-  personApproved?: boolean | undefined;
+  approved?: boolean | undefined;
   /** Converge retries on a caller-owned id (proposal target, rule id). */
   stableId?: string | undefined;
 }): Promise<string | null> {
@@ -1003,7 +1003,7 @@ export async function materializeAutomationForPrincipal(input: {
     input.definition,
     input.createdBy,
     input.stableId,
-    Boolean(input.agentUserId) && !input.personApproved
+    Boolean(input.agentUserId) && !input.approved
   );
 }
 
@@ -1027,7 +1027,7 @@ export async function materializeApprovedAutomation(input: {
     definition: input.definition,
     createdBy: input.agentUserId,
     agentUserId: input.agentUserId,
-    personApproved: true,
+    approved: true,
     stableId: input.stableId,
   });
 }
