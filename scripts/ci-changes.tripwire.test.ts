@@ -1742,6 +1742,11 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
     expect(step("Checkout relay-app")).toContain(
       "ref: ${{ steps.companions.outputs.relay }}"
     );
+    // The backend's own node_modules (its @trpc/* hoist) never shadows the
+    // slice's: the linked packages resolve like the devbox's one root install.
+    expect(step("Lay out the root workspace slice")).toContain(
+      "rm -rf node_modules packages/*/node_modules"
+    );
     // The app dists the devbox builds before typechecking (APP_DIST_FILTER).
     expect(step("Build the app packages")).toContain(
       '--filter "./browser^..."'

@@ -1240,8 +1240,8 @@ jobs:
           echo "layout=${layout# }" >> "$GITHUB_OUTPUT"
 
       # Lays out ../synap-app (app-bases, at its companion when named),
-      # ../synap-control-plane-api and ../synap-backend, installs and builds
-      # this repo.
+      # ../synap-control-plane-api and ../synap-backend. No backend build:
+      # the slice builds the three linked packages itself.
       - name: Monorepo layout + dependencies
         if: ${{ env.RUN_WORK == 'true' }}
         uses: ./.github/actions/monorepo-setup
@@ -1249,6 +1249,7 @@ jobs:
           app-id: ${{ vars.SYNAP_READER_APP_ID }}
           app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
           cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+          build: "false"
           refs: ${{ steps.companions.outputs.layout }}
 
       - name: Checkout browser
@@ -1271,11 +1272,19 @@ jobs:
           path: .relay-checkout
           persist-credentials: false
 
+      # The backend's OWN install (monorepo-setup) goes first: its
+      # node_modules hoists @trpc/* (.npmrc) at the backend's lockfile version,
+      # so api-types resolved @trpc/server 11.17 while the app packages resolved
+      # the slice's 11.25 ("Property 'pathSeparator' is missing", the sdk's dts
+      # build failed and ~9,600 errors followed, run 42692128986). On the
+      # devbox the backend is a member of the ONE root install; here the three
+      # linked packages resolve from the slice's node_modules, as there.
       - name: Lay out the root workspace slice
         if: ${{ env.RUN_WORK == 'true' }}
         run: |
           set -euo pipefail
           P="${GITHUB_WORKSPACE}/.."
+          rm -rf node_modules packages/*/node_modules apps/*/node_modules
           echo "app-bases : $(cd "$P/synap-app" && git rev-parse --short HEAD)"
           echo "browser   : $(cd .browser-checkout && git rev-parse --short HEAD)"
           echo "relay-app : $(cd .relay-checkout && git rev-parse --short HEAD)"
