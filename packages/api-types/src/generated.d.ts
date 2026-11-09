@@ -26793,6 +26793,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				limit?: number | undefined;
+				sessionId?: string | undefined;
 				workspaceId?: string | undefined;
 			};
 			meta: object;
