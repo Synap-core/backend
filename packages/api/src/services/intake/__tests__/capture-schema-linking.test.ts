@@ -236,14 +236,25 @@ describe("the kind floor — live spaces, inside the request's grant", () => {
 
   it("a grant narrows only when every scope names its spaces", () => {
     expect(grantedWorkspaceIdsOf(undefined)).toBeNull();
+    // A scope with no space that also WRITES is unbounded: it lifts the narrowing.
     expect(
       grantedWorkspaceIdsOf({
         scopes: [
           { permissions: ["entity.read"], workspaceIds: [CONTENT] },
-          { permissions: ["entity.read"], workspaceIds: null },
+          { permissions: ["entity.read", "entity.create"], workspaceIds: null },
         ],
       })
     ).toBeNull();
+    // A scope with no space that only READS (every kind, since 2026-11-09 a pod-wide read) writes nothing, so it
+    // reaches no space for routing and does not lift it (`placeBeyondPodWideReads`).
+    expect([
+      ...grantedWorkspaceIdsOf({
+        scopes: [
+          { permissions: ["entity.read"], workspaceIds: [CONTENT] },
+          { permissions: ["entity.read"], workspaceIds: null },
+        ],
+      })!,
+    ]).toEqual([CONTENT]);
     expect([
       ...grantedWorkspaceIdsOf({
         scopes: [
