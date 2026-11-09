@@ -21,7 +21,7 @@
     "synap_create_rule": 7893,
     "synap_create_skill": 5014,
     "synap_create_verb": 2621,
-    "synap_create_view": 2543,
+    "synap_create_view": 2861,
     "synap_create_workspace": 1355,
     "synap_declare_lifecycle": 2797,
     "synap_declare_workspace_source": 2141,
@@ -94,6 +94,7 @@
     "synap_run_playbook": 4496,
     "synap_run_worker": 1201,
     "synap_set_project_focus": 1332,
+    "synap_set_start_page": 1578,
     "synap_set_track_params": 1455,
     "synap_set_track_participant": 2673,
     "synap_set_track_status": 4581,
@@ -115,7 +116,8 @@
     "synap_update_skill": 2490,
     "synap_update_space_brief": 1296,
     "synap_update_track": 5196,
-    "synap_update_view_content": 1162,
+    "synap_update_view": 1620,
+    "synap_update_view_content": 1281,
     "synap_update_workspace": 848,
     "synap_wait_for_answer": 4694
   }

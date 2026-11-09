@@ -91,7 +91,8 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
 - On the desktop Home, the person keeps your site under **Your apps** (they pin
   it or keep it as a tool).
 - A space can open on your site: its start page (`settings.layout.primarySurface`,
-  set by the space's template) is `{ kind: "url", url, podApp: { clientId } }`,
+  set by the space's template, or by `synap_set_start_page { workspaceId, url,
+  podAppClientId }`) is `{ kind: "url", url, podApp: { clientId } }`,
   `clientId` being the app's client metadata URL. The desktop then opens the site
   with this pod's address, so the app starts the pod's own sign-in. It grants the
   site nothing.
