@@ -23,7 +23,10 @@
  * and companies in one board (each card names its own kind); a stage naming
  * a status the lifecycle does not declare is listed on its flow.
  *
- * Each card carries `blocker: null`: the blocker derivation (S3) fills it.
+ * Each card carries its `blocker`: the SAME value `statusOf` returns for the
+ * thing (`deriveThingBlocker`), read for every card of the board in ONE batch
+ * (`readThingBlockers`); `{status: "unavailable"}` when that read failed,
+ * never "not blocked".
  * Doors: tRPC `flow.of`, Hub `GET /flow`, MCP `synap_get_flow`. A key bounded by
  * a grant passes `readProfileUnderGrant` (the `GET /lifecycle` narrowing);
  * its rows are bounded by the access seams; what no seam bounds (workers) or
@@ -49,7 +52,6 @@ import {
   resolveStageCategory,
   resolveStageGate,
   stageForSubjectStatus,
-  type PlaybookStageCategory,
 } from "@synap/playbooks";
 import {
   isTerminalLifecycleCategory,
@@ -67,6 +69,7 @@ import {
   type EnabledWorker,
 } from "../playbooks/workers.js";
 import { nextPathStep } from "../status/next-move.js";
+import { readThingBlockers } from "../status/thing-blockers.js";
 import { boardLensInput, readBoard, type BoardReader } from "./board.js";
 import { resolveBoardLens } from "./board-lens.js";
 import { readProfileUnderGrant } from "./fenced-profile-read.js";
@@ -85,134 +88,27 @@ export const flowOfInput = z.object({
 
 export type FlowOfInput = z.output<typeof flowOfInput>;
 
-/** A stage that owns a status: where a flow moves a thing into it. */
-export interface FlowStageRef {
-  playbookId: string;
-  playbookName: string;
-  stageKey: string;
-  stageName: string;
-  category: PlaybookStageCategory;
-  /** The stage's entry gate (`resolveStageGate`); null = none. */
-  gate: "human" | "check" | "awaits" | null;
-  /** Who runs the flow (`playbooks.executor`). */
-  executor: string;
-}
-
-export interface FlowStage {
-  key: string;
-  name: string;
-  category: PlaybookStageCategory;
-  /** The status this stage writes / follows; null = not tied to the lifecycle. */
-  subjectStatus: string | null;
-  gate: FlowStageRef["gate"];
-}
-
-export interface FlowWorker {
-  ruleId: string;
-  activatorKey: string;
-  mode: "run" | "propose";
-  scope: EnabledWorker["scope"];
-  projectId: string | null;
-  state: EnabledWorker["state"];
-}
-
-export interface FlowOfFlow {
-  id: string;
-  name: string;
-  /** Null = pod-wide. */
-  workspaceId: string | null;
-  /** The live definition's version; runs snapshot theirs. */
-  version: number;
-  executor: string;
-  stages: FlowStage[];
-  /** Declared states a stage of this flow owns, in stage order. */
-  owns: string[];
-  /** Stage statuses the lifecycle does not declare (a renamed state). */
-  undeclaredStatuses: string[];
-  /** Open runs, and how many run a frozen copy older than `version`. */
-  runs: { open: number; onOlderVersion: number };
-  /** Its enabled workers (empty when `workers` is withheld). */
-  workers: FlowWorker[];
-}
-
-export interface FlowNextStep {
-  /** The state a move targets. */
-  to: string;
-  label: string;
-  /** Only a person may move it there. */
-  humanOnly: boolean;
-  /** The stage(s) that own that state; [] = no flow moves it there. */
-  owners: FlowStageRef[];
-}
-
-export interface FlowCard {
-  id: string;
-  /** A role's facet (what a role move targets); null on a kind. */
-  facetId: string | null;
-  name: string | null;
-  /** The thing's own kind (a role holds people and companies). */
-  profileSlug: string | null;
-  status: string | null;
-  since: string;
-  enteredAt: string | null;
-  stuck: boolean;
-  workedBy: Array<{
-    sessionId: string;
-    kind: "session" | "worker";
-    live: boolean;
-  }>;
-  /** On `properties: true` only. */
-  properties?: Record<string, unknown>;
-  /**
-   * Its next main-path step; null when it has ended, is paused or lost, or
-   * stands in a status the lifecycle does not declare.
-   */
-  next: FlowNextStep | null;
-  /** What stands between it and its next status (filled by S3); null now. */
-  blocker: null;
-}
-
-export interface FlowState {
-  key: string;
-  label: string;
-  category: string;
-  tone: string;
-  humanOnly: boolean;
-  /** Declared order, from 0. */
-  order: number;
-  owners: FlowStageRef[];
-  count: number;
-  /** Things past its stuck rule; null = it declares none. */
-  stuck: number | null;
-  /** done/lost count only what entered within the window. */
-  windowed: boolean;
-  cards: FlowCard[];
-}
-
-export interface FlowOf {
-  profileSlug: string;
-  profileKind: "kind" | "role";
-  property: string;
-  /** The space lens; null = pod-wide only; undefined lens reads as null. */
-  workspaceId: string | null;
-  states: FlowState[];
-  /** Things in no declared state (never dropped); null when none. */
-  unclassified: { count: number; unset: number; cards: FlowCard[] } | null;
-  flows: FlowOfFlow[];
-  /** The space's declared outputs; null without a space lens. */
-  space: { primaryOutput: string | null; produces: string[] } | null;
-  totals: {
-    total: number;
-    live: number;
-    doneWindowed: number;
-    lostWindowed: number;
-  };
-  window: { days: number; since: string };
-  /** A live worker covers this read; null when `workers` is withheld. */
-  hasWorker: boolean | null;
-  /** Parts this caller's grant does not reach: not read, never "none". */
-  withheld: Array<"flows" | "workers">;
-}
+export type {
+  FlowCard,
+  FlowCardBlocker,
+  FlowNextStep,
+  FlowOf,
+  FlowOfFlow,
+  FlowStage,
+  FlowStageRef,
+  FlowState,
+  FlowWorker,
+} from "./flow-schema.js";
+import type {
+  FlowCard,
+  FlowCardBlocker,
+  FlowNextStep,
+  FlowOf,
+  FlowOfFlow,
+  FlowStage,
+  FlowStageRef,
+  FlowState,
+} from "./flow-schema.js";
 
 type FlowReader = BoardReader;
 
@@ -429,6 +325,20 @@ export async function readFlowOf(
     };
   });
 
+  // ONE blockers read for every card on the board (the states' and the
+  // unclassified column's), floored on the reader like statusOf's. A failed
+  // read marks each card `unavailable`; it never reads as "not blocked".
+  const stray = board.columns.find((c) => c.key === UNCLASSIFIED_STATUS);
+  const blockers: Awaited<ReturnType<typeof readThingBlockers>> | null =
+    await readThingBlockers(
+      { userId: ctx.userId },
+      board.columns.flatMap((c) =>
+        c.items.map((i) => ({ id: i.id, status: i.status, lifecycle }))
+      )
+    ).catch(() => null);
+  const blockerOf = (id: string): FlowCardBlocker =>
+    blockers?.get(id) ?? { status: "unavailable" };
+
   const optionByKey = new Map(lifecycle.options.map((o) => [o.key, o]));
   const cardOf = (
     item: (typeof board.columns)[number]["items"][number]
@@ -462,7 +372,7 @@ export async function readFlowOf(
       workedBy: item.workedBy ?? [],
       ...(input.properties ? { properties: item.card?.properties ?? {} } : {}),
       next,
-      blocker: null,
+      blocker: blockerOf(item.id),
     };
   };
 
@@ -482,8 +392,6 @@ export async function readFlowOf(
       cards: (col?.items ?? []).map(cardOf),
     };
   });
-  const stray = board.columns.find((c) => c.key === UNCLASSIFIED_STATUS);
-
   return {
     profileSlug: input.profileSlug,
     profileKind: lifecycle.profileKind,

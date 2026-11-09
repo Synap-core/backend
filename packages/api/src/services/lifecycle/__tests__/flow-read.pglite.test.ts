@@ -15,6 +15,10 @@
  *  - a flow of another space, or an archived one, listed in this space;
  *  - a role read losing the kind of each thing (people and companies);
  *  - the space's primary output not read from its settings;
+ *  - a card's `blocker` not the one `statusOf` returns for the thing (a
+ *    person's owed slot, an agent's slot that declares `blocks`), one read per
+ *    card instead of one for the board, a card with nothing blocking it not
+ *    `blocked: false`, or a grant-bounded key told of a session it cannot read;
  *  - a key bounded by a grant answered pod-wide, answered a kind it may not
  *    read, or shown flows / workers its grant does not reach as "none".
  *
@@ -87,6 +91,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       async getEffectiveLifecycle(profileId: string) {
         return lifecycles[profileId] ?? null;
       }
+      async getEffectiveLifecycles(ids: readonly string[]) {
+        return new Map(ids.map((id) => [id, lifecycles[id] ?? null]));
+      }
     },
   };
 });
@@ -94,6 +101,9 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { runWithGrant, type KeyGrant } from "@synap/database";
 import { flowOfInput, readFlowOf, type FlowOf } from "../flow-read.js";
+import { flowOfSchema } from "../flow-schema.js";
+import { readStatusOf } from "../../status/status-read.js";
+import { listSessionOutputsWithOutcomes } from "../../focus-sessions/session-outputs.js";
 
 const USER = "user-1";
 const WS = "55555555-5555-4555-8555-555555555555";
@@ -369,7 +379,7 @@ describe("flow.of — a kind (finding-like)", () => {
     const open = state(f, "open").cards.find((c) => c.id === ids.open)!;
     expect(open.next).toMatchObject({ to: "fixing", humanOnly: false });
     expect(open.next!.owners.map((o) => o.stageKey)).toEqual(["fix"]);
-    expect(open.blocker).toBeNull();
+    expect(open.blocker).toHaveProperty("blocked");
     expect(open.profileSlug).toBe("finding");
     const fixing = state(f, "fixing").cards.find((c) => c.id === ids.fixing)!;
     expect(fixing.next!.to).toBe("fixed");
@@ -479,5 +489,125 @@ describe("flow.of — a key bounded by a grant", () => {
     );
     expect(withFlows.withheld).toEqual(["workers"]);
     expect(withFlows.flows.map((p) => p.name)).toContain("Fix a finding");
+  });
+});
+
+describe("flow.of — a card's blocker is statusOf's blocker", () => {
+  const NOW = new Date().toISOString();
+  async function session(subject: string, outputs: unknown[]) {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, subject_entity_id, title, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+       values ($1,$2,$3,$4,'Work','Do it','active','user',$5::jsonb,'{}'::jsonb,now(),now(),now())`,
+      [id, USER, WS, subject, JSON.stringify(outputs)]
+    );
+    return id;
+  }
+  const blockerOf = (f: FlowOf, key: string, id: string) =>
+    state(f, key).cards.find((c) => c.id === id)!.blocker;
+
+  beforeAll(async () => {
+    // "Open one": a person's owed ask. "Fixing one": an agent's slot that
+    // declares what it blocks. "Renamed state" (unclassified): nothing.
+    ids.askSession = await session(ids.open, [
+      {
+        kind: "decision",
+        label: "Fix it now?",
+        owner: "human",
+        status: "pending",
+        blockedReason: "decision",
+        owedSince: NOW,
+        ask: { mode: "confirm" },
+      },
+    ]);
+    await session(ids.fixing, [
+      {
+        kind: "output",
+        label: "Patch",
+        status: "pending",
+        blocks: {},
+        blockerKey: "needs_patch",
+      },
+    ]);
+  });
+
+  it("carries the blocker statusOf returns, for blocked and free things", async () => {
+    const f = await read({ profileSlug: "finding", workspaceId: WS });
+    const answers = await readStatusOf(USER, [ids.open, ids.fixing, ids.stray]);
+    const statusBlocker = (id: string) =>
+      (answers.find((a) => a.id === id) as { blocker?: unknown }).blocker;
+    const open = blockerOf(f, "open", ids.open);
+    expect(open).toMatchObject({
+      blocked: true,
+      ball: "me",
+      why: { reason: "input" },
+      ref: { kind: "slot", id: ids.askSession },
+    });
+    expect(open).toEqual(statusBlocker(ids.open));
+    const fixing = blockerOf(f, "fixing", ids.fixing);
+    expect(fixing).toMatchObject({
+      blocked: true,
+      ball: "agent",
+      why: { blockerKey: "needs_patch" },
+    });
+    expect(fixing).toEqual(statusBlocker(ids.fixing));
+    const stray = f.unclassified!.cards.find((c) => c.id === ids.stray)!;
+    expect(stray.blocker).toMatchObject({ blocked: false, count: 0 });
+    expect(stray.blocker).toEqual(statusBlocker(ids.stray));
+  });
+
+  it("an undelivered slot of the session names the thing it holds up", async () => {
+    const { db: pg } = await import("@synap/database");
+    const view = await listSessionOutputsWithOutcomes({
+      db: pg,
+      userId: USER,
+      sessionId: ids.askSession,
+    });
+    const slot = view!.pendingExpected.find((e) => e.label === "Fix it now?");
+    expect(slot?.blockedThing).toMatchObject({
+      thing: { id: ids.open, name: "Open one" },
+      statusNow: { key: "open" },
+      statusNext: { key: "fixing" },
+    });
+    expect(slot).not.toHaveProperty("subjectEntityId");
+  });
+
+  it("the response parses against the Hub schema, blockers included", async () => {
+    const f = await read({ profileSlug: "finding", workspaceId: WS });
+    expect(() =>
+      flowOfSchema.parse(JSON.parse(JSON.stringify(f)))
+    ).not.toThrow();
+    const lead = await read({ profileSlug: "lead", workspaceId: WS });
+    expect(() =>
+      flowOfSchema.parse(JSON.parse(JSON.stringify(lead)))
+    ).not.toThrow();
+  });
+
+  it("a key bounded by a grant is not told of a session it cannot read", async () => {
+    const grantOf = (permissions: string[]) =>
+      ({
+        scopes: [
+          {
+            permissions,
+            workspaceIds: [WS],
+            projectIds: null,
+            entityIds: null,
+          },
+        ],
+        clientId: null,
+      }) as KeyGrant;
+    const blind = await runWithGrant(grantOf(["entity.finding.read"]), () =>
+      read({ profileSlug: "finding", workspaceId: WS })
+    );
+    expect(blockerOf(blind, "open", ids.open)).toMatchObject({
+      blocked: false,
+    });
+    const sighted = await runWithGrant(
+      grantOf(["entity.finding.read", "session.read"]),
+      () => read({ profileSlug: "finding", workspaceId: WS })
+    );
+    expect(blockerOf(sighted, "open", ids.open)).toMatchObject({
+      blocked: true,
+    });
   });
 });

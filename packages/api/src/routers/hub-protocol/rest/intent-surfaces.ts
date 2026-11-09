@@ -44,6 +44,7 @@ import {
   flowOfInput,
   readFlowOf,
 } from "../../../services/lifecycle/flow-read.js";
+import { flowOfSchema } from "../../../services/lifecycle/flow-schema.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { lifecycleRouter } from "../../lifecycle.js";
 import { signalsRouter } from "../../signals.js";
@@ -246,10 +247,10 @@ export function registerIntentSurfacesRoutes(app: HubHono): void {
     tags: ["Lifecycle"],
     summary: "The flow of a kind or role: states, owning stages, things",
     description:
-      "`flow.of` — one read to draw a kind's or role's work in a space: `states` in declared order, each with the flow stage(s) that own it (`owners`), its count and its `cards` (who works each one, its `next` step and the stage that owns it, `blocker` reserved); `unclassified` things; `flows` (the active playbooks working it: stages with the status each owns, gate, executor, workers, open runs and those on an older version); the space's `primaryOutput`; `withheld` names the parts a key's grant does not reach. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
+      "`flow.of` — one read to draw a kind's or role's work in a space: `states` in declared order, each with the flow stage(s) that own it (`owners`), its count and its `cards` (who works each one, its `next` step and the stage that owns it, its `blocker`: the same value `statusOf` returns, or `{status: \"unavailable\"}`); `unclassified` things; `flows` (the active playbooks working it: stages with the status each owns, gate, executor, workers, open runs and those on an older version); the space's `primaryOutput`; `withheld` names the parts a key's grant does not reach. A key bounded by a grant must name `workspaceId` and hold `entity.<profileSlug>.read` (`facet.read` for a role) there (403 otherwise).",
     request: { query: flowQuery },
     responses: {
-      200: { description: "Flow", schema: z.object({}).passthrough() },
+      200: { description: "Flow", schema: flowOfSchema },
       ...errors,
     },
   });

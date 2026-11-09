@@ -41,14 +41,23 @@ export function blockedThingIdOf(
 }
 
 /**
- * Stamp {@link OwedSlot.blockedThing} on every slot that names a thing the
- * reader may read. THROWS on a failed read (the caller's read fails, as any
- * other part of the owed read would).
+ * What a slot needs to say which thing it holds up: its declared `blocks`
+ * and the subject of the session it sits on. An owed slot carries both; a
+ * session's declared slot (`pendingExpected`) is given its session's subject.
  */
-export async function withBlockedThings(
+export type BlockedThingSlot = Pick<OwedSlot, "blocks" | "subjectEntityId"> & {
+  blockedThing?: NeedsYouBlocks;
+};
+
+/**
+ * Stamp `blockedThing` on every slot that names a thing the reader may read.
+ * THROWS on a failed read (the caller's read fails, as any other part of the
+ * owed read would).
+ */
+export async function withBlockedThings<T extends BlockedThingSlot>(
   userId: string,
-  slots: OwedSlot[]
-): Promise<OwedSlot[]> {
+  slots: T[]
+): Promise<T[]> {
   const ids = [...new Set(slots.flatMap((s) => blockedThingIdOf(s) ?? []))];
   if (ids.length === 0) return slots;
   const rows = await db
