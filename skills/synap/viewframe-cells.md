@@ -184,13 +184,14 @@ All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, p
 
 The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one goal.
 
-| Operation              | Params                                                                                                | Returns                                                                                                                                                                                                                              |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy` | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }` |
-| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                            |
-| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                     | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                      |
-| `attention.count`      | `profileSlug`, `trackId`                                                                              | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                   |
-| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`      | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                |
+| Operation              | Params                                                                                                                    | Returns                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy`                     | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }`                                                                                                                         |
+| `flow.of`              | `profileSlug` (a kind or a role, required), `trackId`, `windowDays`, `firstN` (cards per state, at most 50), `properties` | `{ profileSlug, profileKind, states: [{ key, label, category, owners: [{ playbookId, playbookName, stageKey, stageName }], count, stuck, cards: [{ id, name, since, stuck, workedBy, next }] }], unclassified, flows, totals, window, withheld }`: the states in declared order with the playbook stage that owns each. Draw a board from a playbook from it |
+| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                                    | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                                                                                                                                                    |
+| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                                         | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                                                                                                                                              |
+| `attention.count`      | `profileSlug`, `trackId`                                                                                                  | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                                                                                                                                           |
+| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`                          | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                                                                                                                                        |
 
 ```js
 const board = await SynapWidget.query("lifecycle.board", {
@@ -203,6 +204,41 @@ const month = await SynapWidget.query("lifecycle.throughput", {
   bucket: "month",
   count: 1,
 });
+```
+
+A board drawn from a playbook, in an HTML page (`window.synap.query`, the same ops): one column per state, in declared order, headed by the stage that owns it.
+
+```html
+<div id="board"></div>
+<script>
+  window.synap.query("flow.of", { profileSlug: "deal", firstN: 5 }).then(
+    (flow) => {
+      document.getElementById("board").replaceChildren(
+        ...flow.states.map((state) => {
+          const col = document.createElement("section");
+          const owner = state.owners[0];
+          col.append(
+            Object.assign(document.createElement("h3"), {
+              textContent: `${state.label} · ${state.count}`,
+            }),
+            Object.assign(document.createElement("p"), {
+              textContent: owner ? owner.stageName : "",
+            }),
+            ...state.cards.map((card) =>
+              Object.assign(document.createElement("div"), {
+                textContent: card.name ?? "",
+              })
+            )
+          );
+          return col;
+        })
+      );
+    },
+    (err) => {
+      document.getElementById("board").textContent = err.message; // a failure, never an empty board
+    }
+  );
+</script>
 ```
 
 A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.
