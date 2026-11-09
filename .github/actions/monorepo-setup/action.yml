@@ -26,6 +26,14 @@ inputs:
       cache). "false": install only (a job that lints needs no dist).
     required: false
     default: "true"
+  refs:
+    description: >
+      Space-separated `<dir>=<ref>` pairs that pin a sibling to a ref (passed
+      to the layout resolver as `--ref`, over main and over a Depends-On test
+      ref). Only ci.yml's "Dependent repos typecheck" sets it, from the PR
+      body's `Companion:` lines (scripts/layout/layout.mjs companionRefs).
+    required: false
+    default: ""
   restore-turbo-cache:
     description: >
       "true": restore the newest turbo cache before building. "false": build
@@ -89,10 +97,13 @@ runs:
       env:
         LAYOUT_TOKEN: ${{ steps.app-token.outputs.token || inputs.cross-repo-token }}
         PR_BODY: ${{ github.event.pull_request.body }}
+        REFS: ${{ inputs.refs }}
       run: |
         set -euo pipefail
+        ref_args=()
+        for kv in $REFS; do ref_args+=(--ref "$kv"); done
         node "${GITHUB_WORKSPACE}/scripts/layout/layout.mjs" materialize backend-ci \
-          --root "${GITHUB_WORKSPACE}/.." --self-path "${GITHUB_WORKSPACE}" --body-env PR_BODY
+          --root "${GITHUB_WORKSPACE}/.." --self-path "${GITHUB_WORKSPACE}" --body-env PR_BODY "${ref_args[@]}"
         test -f "${GITHUB_WORKSPACE}/../synap-control-plane-api/src/routes/packages.ts"
         test -d "${GITHUB_WORKSPACE}/../synap-app/packages/workspace-templates/src"
         test -f "${GITHUB_WORKSPACE}/../synap-backend/packages/api/package.json"
