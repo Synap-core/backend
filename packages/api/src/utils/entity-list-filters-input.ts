@@ -42,7 +42,7 @@ export function parseEntityListFiltersInput(
   if (!parsed.success) {
     return {
       ok: false,
-      error: `Invalid filters: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+      error: `Invalid filters: ${parsed.error.issues.map((i: { message: string }) => i.message).join("; ")}`,
     };
   }
   const filters = parsed.data.length > 0 ? parsed.data : undefined;

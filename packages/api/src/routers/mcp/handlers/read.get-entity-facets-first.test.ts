@@ -42,7 +42,7 @@ describe("synap_get_entity lean key order", () => {
       args: { entityId: "e1" },
       userId: "user-1",
       apiKeyScopes: ["mcp.read"],
-    } as McpToolContext);
+    } as unknown as McpToolContext);
     const b = r.content?.[0];
     if (!b || b.type !== "text") throw new Error("expected text");
     const keys = Object.keys(JSON.parse(b.text));

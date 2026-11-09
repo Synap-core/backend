@@ -376,6 +376,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
           },
         },
       },
+      400: {
+        description:
+          "Malformed `filters` (unparseable JSON, too many clauses, a property " +
+          "filter without profileSlug, an unknown or secret property).",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       401: {
         description: "Unauthorized",
         content: { "application/json": { schema: ErrorSchema } },

@@ -10,7 +10,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { projectLean } = vi.hoisted(() => ({
-  projectLean: vi.fn(async (rows: unknown[]) => rows),
+  projectLean: vi.fn(
+    async (rows: unknown[], _options?: { fields?: string[] }) => rows
+  ),
 }));
 vi.mock("../../../services/entity-lean-list.js", async (importOriginal) => ({
   ...(await importOriginal<
