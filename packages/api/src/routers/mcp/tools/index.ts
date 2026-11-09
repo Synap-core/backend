@@ -69,6 +69,8 @@ import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../../../services/profiles/renderer-slots.js";
+// What a renderer can be bound to — the ONE target vocabulary.
+import { RENDERER_TARGET_KINDS } from "../../../services/renderers/renderer-targets.js";
 // The catalog names `synap_find` accepts — SPREAD from the service that owns
 // them, never re-typed, so a fourth catalog cannot be advertised without
 // existing (and vice versa). Same idiom as ABSTRACT_VERBS above.
@@ -3598,24 +3600,38 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | card | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
+          "Escalation L4: bind a cell that already proved itself as a renderer. For a kind's records (profileSlug; slots list|detail|card|dashboard) or ONE capability, playbook or view (target {kind,id}; slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
         inputSchema: {
           type: "object",
           properties: {
             profileSlug: {
               type: "string",
-              description: "Slug of the profile to bind the renderer on.",
+              description: "A kind's records (profile slug).",
+            },
+            target: {
+              type: "object",
+              description:
+                "One capability, playbook or view: {kind, id} (or {kind:'profile', slug}).",
+              properties: {
+                kind: { type: "string", enum: [...RENDERER_TARGET_KINDS] },
+                id: { type: "string" },
+                slug: { type: "string" },
+              },
+              required: ["kind"],
             },
             slot: {
               type: "string",
               enum: [...RENDERER_SLOTS],
               description:
-                "Which renderer slot to set. 'card' = the entity's small embeddable block (this is the ONLY door that reaches it besides Renderer Studio in Builder mode — most personalization requests from a user are this slot, not 'detail').",
+                "'card' = the entity's small embeddable block (most personalization asks are this slot).",
             },
             cellKey: {
               type: "string",
-              description:
-                "The cell typeKey to bind (e.g. from synap_create_cell).",
+              description: "Cell typeKey (synap_create_cell).",
+            },
+            clear: {
+              type: "boolean",
+              description: "Unbind the slot (no cellKey).",
             },
             props: {
               type: "object",
@@ -3625,11 +3641,11 @@ export const tools = {
               type: "string",
               enum: [...RENDERER_SCOPES],
               description:
-                "'workspace' (default) = per-workspace overlay; 'pod' = profile system default. Workspace scope requires workspaceId.",
+                "'workspace' (default, needs workspaceId); 'pod' = everywhere; 'user' = only you.",
             },
             workspaceId: {
               type: "string",
-              description: "Workspace UUID (required for scope 'workspace').",
+              description: "Workspace UUID.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -3642,7 +3658,7 @@ export const tools = {
                 "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
-          required: ["profileSlug", "slot", "cellKey"],
+          required: ["slot"],
         },
       },
       {

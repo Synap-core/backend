@@ -33,6 +33,22 @@ import type {
   RendererSlot,
   RendererScope,
 } from "../../../services/profiles/renderer-slots.js";
+import type { RendererRef } from "@synap/database";
+import {
+  RENDERER_TARGETS,
+  readRendererTarget,
+  rendererTargetProblem,
+} from "../../../services/renderers/renderer-targets.js";
+import {
+  assertCellBindable,
+  assertRendererTargetVisible,
+  cellRendererRefFor,
+  readBoundRenderer,
+} from "../../../services/renderers/renderer-target-checks.js";
+import {
+  bindCapabilityRenderer,
+  withCapabilityPage,
+} from "../../../services/capabilities/bind-capability-renderer.js";
 import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
@@ -292,23 +308,76 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    // Governed: for an AI agent this returns `status: 'proposed'` (binding an
-    // AI-generated cell as a durable renderer is consequential); an operator
-    // auto-applies.
-    const result = await caller.profiles.setRenderer({
+    // ONE door for every renderer target (`renderer-targets.ts`): a kind's
+    // records (profileSlug, or target {kind:'profile', slug}), or one
+    // capability, playbook or view (target {kind, id}).
+    const target = readRendererTarget(args);
+    if (typeof target === "string") return toolError(target);
+    const slot = args.slot as RendererSlot;
+    const scope = (args.scope as RendererScope | undefined) ?? "workspace";
+    const workspaceId = (args.workspaceId as string | undefined) ?? null;
+    const clear = args.clear === true;
+    const cellKey = typeof args.cellKey === "string" ? args.cellKey : undefined;
+    if (clear ? cellKey !== undefined : !cellKey) {
+      return toolError(
+        `Tool '${toolName}': pass cellKey to bind a cell, or clear: true (and no cellKey) to unbind the slot.`
+      );
+    }
+    const problem = rendererTargetProblem(target.kind, slot, scope);
+    if (problem) return toolError(`Tool '${toolName}': ${problem}`);
+    const reasoning = readReasoning(args);
+    const props = args.props as Record<string, unknown> | undefined;
+
+    // Governed: for an AI agent each door returns `status: 'proposed'`
+    // (binding an AI-generated cell as a durable renderer is consequential);
+    // an operator auto-applies.
+    let result: { status: string; proposalId: string | null };
+    if (RENDERER_TARGETS[target.kind].store === "capability_pages") {
+      // The capability page-set's ONE door, shared with the desktop's
+      // `capabilities.setRenderer`. Same checks as the Hub door runs.
+      await assertRendererTargetVisible(target, userId);
+      let ref: RendererRef | null = null;
+      if (cellKey) {
+        await assertCellBindable({ cellKey, workspaceId, userId });
+        ref = await cellRendererRefFor(cellKey, props, workspaceId);
+      }
+      result = await bindCapabilityRenderer({
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        source: "intelligence",
+        capabilityId: (target as { id: string }).id,
+        workspaceId,
+        // A capability's `pod` renderer is its own default, seen everywhere.
+        scope: scope === "pod" ? "capability" : "workspace",
+        pages: (stored) => withCapabilityPage(stored, slot, ref),
+        ...(reasoning ? { reasoning } : {}),
+      });
+    } else {
+      result = await caller.profiles.setRenderer({
+        userId,
+        workspaceId: workspaceId ?? undefined,
+        profileSlug: target.kind === "profile" ? target.slug : target.kind,
+        ...(target.kind === "profile" ? {} : { subjectId: target.id }),
+        slot,
+        ...(clear ? { clear: true } : { cellKey }),
+        props,
+        scope,
+        ...(agentUserId ? { agentUserId } : {}),
+        // `profiles.setRenderer` has declared `reasoning` since it was written
+        // and forwards it into the gate; this door never sent one.
+        ...(reasoning ? { reasoning } : {}),
+      });
+    }
+    if (result.status !== "applied") return ok({ ...result, target, slot });
+    // Read back through the store's reader — what the target's page shows
+    // now — so "applied" is a fact the agent can see, not a claim.
+    const nowBound = await readBoundRenderer({
+      target,
+      slot,
       userId,
-      workspaceId: args.workspaceId as string | undefined,
-      profileSlug: args.profileSlug as string,
-      slot: args.slot as RendererSlot,
-      cellKey: args.cellKey as string,
-      props: args.props as Record<string, unknown> | undefined,
-      scope: args.scope as RendererScope | undefined,
-      ...(agentUserId ? { agentUserId } : {}),
-      // `profiles.setRenderer` has declared `reasoning` since it was written
-      // and forwards it into the gate; this door never sent one.
-      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+      workspaceId: scope === "workspace" ? workspaceId : null,
     });
-    return ok(result);
+    return ok({ ...result, target, slot, nowBound });
   },
   synap_promote_session_to_playbook: async (
     ctx: McpToolContext

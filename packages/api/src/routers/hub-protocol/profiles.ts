@@ -27,12 +27,8 @@ import { PROFILE_CONTENT_KINDS } from "@synap-core/types/renderables";
 import { TRPCError } from "@trpc/server";
 import type { RendererRef } from "@synap/database";
 import {
-  and,
   db,
   eq,
-  isNull,
-  or,
-  widgetDefinitions,
   propertyDefs,
   PropertyValueType,
   slugifyPropertyKey,
@@ -48,6 +44,17 @@ import { assertMayActAs } from "./guard.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import {
+  assertCellBindable,
+  assertRendererTargetVisible,
+  buildCellRendererRef,
+  cellRendererRefFor,
+} from "../../services/renderers/renderer-target-checks.js";
+import {
+  isPerObjectBindingKind,
+  rendererTargetProblem,
+  type RendererTargetKind,
+} from "../../services/renderers/renderer-targets.js";
+import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../../services/profiles/renderer-slots.js";
@@ -60,32 +67,8 @@ import { updatePropertyDef as updatePropertyDefApply } from "../../services/prof
 /** The `property_defs.value_type` PG enum values, as strings. */
 const PROPERTY_VALUE_TYPE_VALUES: string[] = Object.values(PropertyValueType);
 
-/**
- * Frame definitions are registered directly. Iframe widgets resolve through the
- * generic (sandboxed) iframe host.
- *
- * `"native"` is kept in the branch below deliberately, and NOT because native is
- * sandboxed — it never was. The renderer has been removed, but legacy rows still
- * carry `renderer_type = 'native'`. Mapping them to the sandboxed iframe host is
- * the fail-SAFE degradation: such a row has no `rendererSource`, so it renders an
- * init error instead of executing anything. Do not "fix" this by routing native
- * anywhere that runs code. See NATIVE_RENDERER_REJECTED in
- * `routers/widget-definitions.ts`.
- */
-export function buildCellRendererRef(
-  cellKey: string,
-  props?: Record<string, unknown>,
-  rendererType?: string | null
-): RendererRef {
-  if (rendererType === "iframe" || rendererType === "native") {
-    return {
-      kind: "cell",
-      cellKey: "iframe-widget",
-      props: { typeKey: cellKey, ...(props ?? {}) },
-    };
-  }
-  return { kind: "cell", cellKey, props: props ?? {} };
-}
+/** Moved to the shared renderer-target module; re-exported for its callers. */
+export { buildCellRendererRef };
 
 const ProfileRendererContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
 
@@ -389,7 +372,10 @@ export const hubProfilesRouter = router({
         workspaceId: z.string().uuid().optional(),
         profileSlug: z.string().min(1),
         slot: z.enum(RENDERER_SLOTS),
-        cellKey: z.string().min(1),
+        /** The cell to bind. Omit it with `clear: true` to unbind the slot. */
+        cellKey: z.string().min(1).optional(),
+        /** Unbind whatever this slot holds at this scope (no `cellKey`). */
+        clear: z.boolean().optional(),
         props: z.record(z.string(), z.unknown()).optional(),
         scope: z.enum(RENDERER_SCOPES).optional(),
         /**
@@ -412,23 +398,55 @@ export const hubProfilesRouter = router({
       assertMayActAs(ctx, input.userId);
       const scope = input.scope ?? "workspace";
       const workspaceId = input.workspaceId ?? null;
-      const definition = await db.query.widgetDefinitions.findFirst({
-        where: and(
-          eq(widgetDefinitions.typeKey, input.cellKey),
-          workspaceId
-            ? or(
-                eq(widgetDefinitions.workspaceId, workspaceId),
-                isNull(widgetDefinitions.workspaceId)
-              )
-            : isNull(widgetDefinitions.workspaceId)
-        ),
-        columns: { rendererType: true },
-      });
-      const ref: RendererRef = buildCellRendererRef(
-        input.cellKey,
-        input.props,
-        definition?.rendererType
-      );
+      if (input.clear ? input.cellKey !== undefined : !input.cellKey) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Pass a cellKey to bind, or clear: true (and no cellKey) to unbind.",
+        });
+      }
+
+      // The target checks every renderer door runs BEFORE the gate, so a
+      // person never approves a binding that cannot serve. A `subjectId`
+      // names one object, which only a per-object target (a playbook, a
+      // view) has; for any other kind it is refused here rather than at
+      // approval.
+      if (input.subjectId !== undefined) {
+        if (!isPerObjectBindingKind(input.profileSlug)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Renderer bindings are whole-kind only — a per-object binding " +
+              "(subjectId) is not supported. See renderer-bindings.ts.",
+          });
+        }
+        await assertRendererTargetVisible(
+          {
+            kind: input.profileSlug as "playbook" | "view",
+            id: input.subjectId,
+          },
+          input.userId
+        );
+      }
+      if (isPerObjectBindingKind(input.profileSlug)) {
+        const problem = rendererTargetProblem(
+          input.profileSlug as RendererTargetKind,
+          input.slot,
+          scope
+        );
+        if (problem) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: problem });
+        }
+      }
+      let ref: RendererRef | null = null;
+      if (input.cellKey) {
+        await assertCellBindable({
+          cellKey: input.cellKey,
+          workspaceId,
+          userId: input.userId,
+        });
+        ref = await cellRendererRefFor(input.cellKey, input.props, workspaceId);
+      }
 
       const perm = await checkPermissionOrPropose({
         userId: input.userId,

@@ -99,9 +99,8 @@ import {
 } from "../services/capabilities/marketplace-install.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { CapabilityExecuteInput } from "../contracts/capability-execute.js";
-import { setCapabilityRenderer } from "../services/capabilities/set-capability-renderer.js";
+import { bindCapabilityRenderer } from "../services/capabilities/bind-capability-renderer.js";
 import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 import {
   findCapabilityShadows,
@@ -659,7 +658,9 @@ export const capabilitiesRouter = router({
    * DELIBERATELY absent from DEFAULT_AUTO_APPROVE like every meta-model write):
    * an operator applies immediately; an agent caller gets `status:"proposed"`,
    * which the `capability/renderer.set` proposal executor materializes on
-   * approval via the SAME `setCapabilityRenderer` service used here.
+   * approval via the SAME `setCapabilityRenderer` service. The gate and the
+   * apply live in `bindCapabilityRenderer`, the door MCP
+   * `synap_promote_cell_to_renderer` (capability target) also calls.
    *
    * scope 'workspace' (default) writes the per-workspace overlay
    * (workspaces.settings.capabilityRenderers[capabilityId]); scope 'capability'
@@ -679,80 +680,20 @@ export const capabilitiesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const scope = input.scope ?? "workspace";
-      const workspaceId = input.workspaceId ?? null;
-
-      // Load the capability by id ALONE, then gate on the LOADED row's workspace
-      // (never a request-supplied workspaceId — the cross-workspace write-leak
-      // class). assertWorkspaceWrite is the AUTHZ floor; the governance gate
-      // below decides auto-apply vs propose, not access.
-      const [cap] = await db
-        .select({
-          id: capabilitiesTable.id,
-          workspaceId: capabilitiesTable.workspaceId,
-          createdBy: capabilitiesTable.createdBy,
-        })
-        .from(capabilitiesTable)
-        .where(eq(capabilitiesTable.id, input.capabilityId))
-        .limit(1);
-      if (!cap) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Capability not found",
-        });
-      }
-
-      if (scope === "capability") {
-        // Editing the capability's own default → must be able to write ITS
-        // workspace (or own it, if pod-wide).
-        await assertWorkspaceWrite(db, userId, {
-          workspaceId: cap.workspaceId,
-          ownerId: cap.createdBy,
-        });
-      } else {
-        if (!workspaceId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "workspaceId is required for a workspace-scoped renderer",
-          });
-        }
-        // Writing a per-workspace overlay → must be able to write THAT workspace.
-        await assertWorkspaceWrite(db, userId, { workspaceId });
-      }
-
-      const pages = input.pages as CapabilityRendererPage[];
-
-      const perm = await checkPermissionOrPropose({
+      // The ONE governed door, shared with MCP `synap_promote_cell_to_renderer`
+      // (capability target): authorize on the loaded capability, gate, apply.
+      const result = await bindCapabilityRenderer({
         userId,
-        // Governance lens: the capability's own workspace for a default write,
-        // the overlay target for a workspace-scoped write.
-        workspaceId: scope === "capability" ? cap.workspaceId : workspaceId,
-        subjectType: "capability",
-        action: "renderer.set",
         source: "operator",
-        reasoning: input.reasoning,
-        // STORE EVERYTHING approval needs — the executor reads capabilityId +
-        // scope + the full pages payload, so approving actually applies the
-        // binding (not a {id}-only gate that no-ops).
-        data: { capabilityId: input.capabilityId, scope, pages },
-      });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
-      }
-
-      // Granted (operator) → apply immediately via the shared write path.
-      await setCapabilityRenderer({
-        userId,
-        workspaceId,
         capabilityId: input.capabilityId,
-        pages,
-        scope,
+        workspaceId: input.workspaceId ?? null,
+        scope: input.scope ?? "workspace",
+        pages: input.pages as CapabilityRendererPage[],
+        reasoning: input.reasoning,
       });
-      return { status: "applied" as const, proposalId: null };
+      return result.status === "proposed"
+        ? { status: "proposed" as const, proposalId: result.proposalId }
+        : { status: "applied" as const, proposalId: null };
     }),
 
   /**
