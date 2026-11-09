@@ -39,9 +39,6 @@ export const POD_WIDE_READ_SUBJECTS = [
   "channel",
 ] as const;
 
-const KIND_READ = /^entity\.[a-z0-9][a-z0-9_-]*\.read$/;
-const SUBJECT_READ = /^([a-z][a-z0-9_]*)\.read$/;
-
 /**
  * What an app may hold pod-wide: a READ, and nothing else. Exactly one of
  *  - `entity.<kind>.read`, one named kind (decision e1b59d38 "B");
@@ -53,14 +50,14 @@ const SUBJECT_READ = /^([a-z][a-z0-9_]*)\.read$/;
  * metadata document), where the person ticks it (consent, the `app/connect`
  * executor), where it is stored and read back (`readAppConnectRequests`) and
  * where it becomes a grant (`grantsForApprovedRequests`).
+ *
+ * ONE regex literal on purpose: the SDK mirrors this rule and its tripwire
+ * (`grammar.tripwire.test.ts`) reads the literal from this source. The subject
+ * alternation must equal `POD_WIDE_READ_SUBJECTS` (`pod-wide.test.ts` ties them
+ * both ways).
  */
 export function isPodWideReadPermission(permission: string): boolean {
-  if (permission === "entity.read" || KIND_READ.test(permission)) return true;
-  const subject = SUBJECT_READ.exec(permission)?.[1];
-  return (
-    subject !== undefined &&
-    (POD_WIDE_READ_SUBJECTS as readonly string[]).includes(subject)
-  );
+  return /^(?:entity\.(?:[a-z0-9][a-z0-9_-]*\.)?read|(?:playbook|session|view|document|relation|project|automation|proposal|channel)\.read)$/.test(permission);
 }
 
 /**

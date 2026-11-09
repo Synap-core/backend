@@ -4,6 +4,9 @@
  * playbooks, runs, views and documents are no longer invisible to a grant limited to spaces. The rule's other half is
  * what stays out: nothing that writes, acts or means "every verb".
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   POD_WIDE_READ_SUBJECTS,
@@ -52,6 +55,24 @@ describe("isPodWideReadPermission", () => {
       "PLAYBOOK.read",
     ])
       expect(isPodWideReadPermission(p), JSON.stringify(p)).toBe(false);
+  });
+});
+
+// The rule is ONE regex literal (the SDK's tripwire reads it from the source), and the exported list is what docs and
+// callers read: they must be the same set, in both directions. Read from the source so a subject added to one and
+// not the other is red; the extraction itself is asserted so this cannot go vacuous.
+describe("POD_WIDE_READ_SUBJECTS is the regex's subject alternation", () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "pod-wide.ts"), "utf8");
+  const fn = src.slice(src.indexOf("export function isPodWideReadPermission"));
+  const alternation = /\(\?:([a-z_|]+)\)\\\.read\)\$/.exec(fn)?.[1];
+
+  it("finds the alternation in the source", () => {
+    expect(alternation, "the subject alternation in isPodWideReadPermission").toBeDefined();
+    expect(alternation!.split("|").length).toBeGreaterThanOrEqual(9);
+  });
+
+  it("lists exactly the exported subjects", () => {
+    expect([...alternation!.split("|")].sort()).toEqual([...POD_WIDE_READ_SUBJECTS].sort());
   });
 });
 
