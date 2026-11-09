@@ -28,11 +28,20 @@ export function passkeyAddStep(input: {
   passkeys: number;
   /** Their Relay device keys; null while the read failed. */
   deviceKeys: number | null;
+  /**
+   * They hold an authenticator app or unused recovery codes, which the
+   * confirm dialog takes as a typed code; null while the read failed.
+   * Optional: omitted reads as "none" (callers that do not read factors).
+   */
+  codes?: boolean | null;
   /** A grant is held and still in time. */
   granted: boolean;
 }): PasskeyAddStep {
   if (input.passkeys > 0) return input.granted ? "create" : "authorize";
-  if (input.deviceKeys === null) return "devicesFailed";
+  if (input.deviceKeys === null || input.codes === null) return "devicesFailed";
+  // A code is a factor too: Kratos' guard refuses a plain add, but a typed
+  // code gives the grant in this browser (the dialog opens on the code).
+  if (input.codes) return input.granted ? "create" : "authorize";
   return input.deviceKeys > 0 ? "relayOnly" : "add";
 }
 

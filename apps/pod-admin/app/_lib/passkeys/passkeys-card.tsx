@@ -110,6 +110,12 @@ export function PasskeysCard({
   const devices = trpc.presence.devices.list.useQuery(undefined, {
     retry: false,
   });
+  // An authenticator app or recovery codes are a factor too: Kratos' guard
+  // refuses a plain add, so they confirm first (the same read as the count).
+  const factors = trpc.presence.factors.useQuery(undefined, {
+    retry: false,
+    staleTime: 60_000,
+  });
   // The mode in force: the last passkey stays while it is `enforce` (W5).
   const sensitivity = usePodSensitivity();
   const authorize = useAuthorizePasskeyChange();
@@ -275,6 +281,9 @@ export function PasskeysCard({
   const step = passkeyAddStep({
     passkeys: count,
     deviceKeys: devices.isError ? null : (devices.data?.length ?? 0),
+    codes: factors.isError
+      ? null
+      : Boolean(factors.data?.totp) || (factors.data?.recoveryCodes ?? 0) > 0,
     granted: grantedUntil !== null && Date.now() < grantedUntil,
   });
   const enabled =

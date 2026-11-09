@@ -32,6 +32,39 @@ describe("passkeyAddStep", () => {
     );
   });
 
+  it("an authenticator app or recovery codes: confirm with a code first (the guard refuses a plain add)", () => {
+    expect(
+      passkeyAddStep({
+        passkeys: 0,
+        deviceKeys: 0,
+        codes: true,
+        granted: false,
+      })
+    ).toBe("authorize");
+    expect(
+      passkeyAddStep({
+        passkeys: 0,
+        deviceKeys: 1,
+        codes: true,
+        granted: false,
+      })
+    ).toBe("authorize");
+    expect(
+      passkeyAddStep({ passkeys: 0, deviceKeys: 0, codes: true, granted: true })
+    ).toBe("create");
+  });
+
+  it("an unread factor list with no passkey is a failed read, not an open door", () => {
+    expect(
+      passkeyAddStep({
+        passkeys: 0,
+        deviceKeys: 0,
+        codes: null,
+        granted: false,
+      })
+    ).toBe("devicesFailed");
+  });
+
   it("an unread device list with no passkey is a failed read, not an open door", () => {
     expect(
       passkeyAddStep({ passkeys: 0, deviceKeys: null, granted: false })
