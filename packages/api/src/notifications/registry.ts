@@ -1330,46 +1330,6 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     dedupeWindowMs: 6 * 60 * 60 * 1000,
   },
   {
-    // The ASK of self-healing installations (services/installations/
-    // self-heal.ts): the pod tried to bring a capability on one of the
-    // person's computers back to what they approved, as many times as its
-    // ladder allows, and stopped. Sent ONCE, by the finish that reached the
-    // cap (`self-heal-notice.ts`). Tokens: `action` (install | remove),
-    // `attempts`, `name`, `computer`, `capabilityKey`, `lastError`.
-    type: "installation.self_heal_stopped",
-    category: "system",
-    label: "Install keeps failing",
-    icon: "alert-triangle",
-    priority: "high",
-    messageSyntax: "icu",
-    titleTemplate:
-      "{action, select, remove {{name} could not be removed from {computer}} other {{name} on {computer} still does not work}}",
-    bodyTemplate:
-      "{action, select, remove {The pod tried {attempts, plural, one {# time} other {# times}} to remove it and stopped. Last error: {lastError} Run `synap tools remove {capabilityKey}` on {computer} to see why; that also tries again.} other {The pod tried {attempts, plural, one {# time} other {# times}} to make it work as you approved it, and stopped. Last error: {lastError} Run `synap tools install {capabilityKey}` on {computer} to see why; that also tries again.}}",
-    defaultChannels: ["in_app"],
-    ttl: 0,
-    dedupeWindowMs: 24 * 60 * 60 * 1000,
-  },
-  {
-    // An install the person approved waits for a capability it needs first
-    // (`placement.requires.capabilities`) that nobody approved on that
-    // computer. Sent once, at the approval (`self-heal-notice.ts`); the
-    // install goes by itself once the prerequisite is installed there.
-    // Tokens: `name`, `computer`, `prerequisite`, `others` (how many more).
-    type: "installation.prerequisite_needed",
-    category: "system",
-    label: "Install waits for another",
-    icon: "link",
-    priority: "normal",
-    messageSyntax: "icu",
-    titleTemplate: "{name} on {computer} waits for {prerequisite}",
-    bodyTemplate:
-      "{others, plural, =0 {Approve {prerequisite} for {computer}, and {name} installs right after it.} other {Approve {prerequisite} and # more for {computer}, and {name} installs right after them.}}",
-    defaultChannels: ["in_app"],
-    ttl: 0,
-    dedupeWindowMs: 7 * 24 * 60 * 60 * 1000,
-  },
-  {
     // The invite was the consent: a member who joined by a Pod invite linked
     // their Synap account through a first-party app, and no owner was asked
     // (`services/application-connections/invite-consent.ts`). News for the

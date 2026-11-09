@@ -68,7 +68,7 @@ import {
   selfHealGate,
   type InstallationJobHistoryEntry,
 } from "./self-heal.js";
-import { notifyPrerequisiteNeeded } from "./self-heal-notice.js";
+import { askForPrerequisites } from "./self-heal-notice.js";
 
 /**
  * Was this installation request already approved? The approve executor's
@@ -532,6 +532,13 @@ export async function applyInstallationRequest(input: {
       .where(eq(installations.id, live.id))
       .returning()) as [InstallationRow];
     if (upgrade || input.action === "update") kindHint = "update";
+    // The person approved a repair (their own ask, or the pod's "try
+    // again" card): it runs now, whatever the self-heal ladder says.
+    else if (
+      input.action === "install" &&
+      (live.status === "installed" || live.status === "failed")
+    )
+      kindHint = "install";
   }
   const jobId = await reconcileInstallation(row, { kind: kindHint });
   if (input.action === "install" && !jobId) {
@@ -539,7 +546,7 @@ export async function applyInstallationRequest(input: {
     // computer: ONE ask, now, never one per lease.
     const prerequisites = await loadPrerequisiteState(row);
     if (prerequisites.missing.length > 0) {
-      await notifyPrerequisiteNeeded(row, prerequisites.missing);
+      await askForPrerequisites(row, prerequisites.missing);
     }
   }
   return { installation: row, jobId };
@@ -649,7 +656,9 @@ export async function loadPrerequisiteState(
  *                                               pin a version would drift
  *                                               forever
  *   - installed, check due (never, or past
- *     `verify.reverifyEvery`, default P7D)    → verify
+ *     `verify.reverifyEvery`, default P7D, or
+ *     a tool not checked for 10 min when the
+ *     runner came back: `recheckTools`)       → verify
  * A job that failed is tried again only through the ladder
  * ({@link selfHealGate}: back-off, cap, a person's stop). An install (first
  * or repair) waits, counting no failure, while a prerequisite is not ready.
@@ -659,7 +668,8 @@ export function nextJobFor(
   now: Date = new Date(),
   hint?: HostJobKind,
   history: readonly InstallationJobHistoryEntry[] = [],
-  prerequisites: PrerequisiteState = NO_PREREQUISITES
+  prerequisites: PrerequisiteState = NO_PREREQUISITES,
+  recheckTools = false
 ): HostJobKind | null {
   if (row.status === "removed" || row.status === "removing") return null;
   if (row.desiredState === "removed") {
@@ -690,8 +700,12 @@ export function nextJobFor(
     return last === "install" || last === "update" ? null : install();
   }
   const verify = (row.manifest.verify ?? {}) as { reverifyEvery?: unknown };
-  const every =
+  const cadence =
     isoDurationSeconds(verify.reverifyEvery) ?? TOOL_REVERIFY_DEFAULT_SECONDS;
+  const every =
+    recheckTools && row.kind === "tool"
+      ? Math.min(cadence, TOOL_RECHECK_MIN_AGE_SECONDS)
+      : cadence;
   if (
     row.verifiedAt === null ||
     (now.getTime() - row.verifiedAt.getTime()) / 1000 > every
@@ -701,6 +715,13 @@ export function nextJobFor(
 }
 
 /**
+ * When the computer's runner comes back (`noteHostRunner`), every tool on it
+ * not checked in this long is checked again: a version check, cheap, and the
+ * moment a tool removed by hand is found (instead of its next `reverifyEvery`).
+ */
+export const TOOL_RECHECK_MIN_AGE_SECONDS = 10 * 60;
+
+/**
  * Queue the next job for this installation, at most ONE open per
  * installation: a second insert meets the partial unique index and is a
  * no-op. Returns the queued job's id, or null when nothing was due, the
@@ -708,14 +729,21 @@ export function nextJobFor(
  */
 export async function reconcileInstallation(
   row: InstallationRow,
-  opts: { now?: Date; kind?: HostJobKind } = {}
+  opts: { now?: Date; kind?: HostJobKind; recheckTools?: boolean } = {}
 ): Promise<string | null> {
   const history = await loadInstallationJobHistory(row.id);
   const prerequisites =
     row.desiredState === "installed"
       ? await loadPrerequisiteState(row)
       : NO_PREREQUISITES;
-  const kind = nextJobFor(row, opts.now, opts.kind, history, prerequisites);
+  const kind = nextJobFor(
+    row,
+    opts.now,
+    opts.kind,
+    history,
+    prerequisites,
+    opts.recheckTools ?? false
+  );
   if (!kind) return null;
   const [job] = await db
     .insert(hostJobs)
@@ -744,10 +772,13 @@ export async function reconcileInstallation(
  * This replaces a separate timer: a computer that never leases has nothing
  * to run anyway.
  */
-export async function reconcileComputer(runner: {
-  machineUserId: string;
-  ownerUserId: string;
-}): Promise<number> {
+export async function reconcileComputer(
+  runner: {
+    machineUserId: string;
+    ownerUserId: string;
+  },
+  opts: { recheckTools?: boolean } = {}
+): Promise<number> {
   const rows = await db
     .select()
     .from(installations)
@@ -763,6 +794,12 @@ export async function reconcileComputer(runner: {
   let queued = 0;
   const now = new Date();
   for (const row of rows)
-    if (await reconcileInstallation(row, { now })) queued += 1;
+    if (
+      await reconcileInstallation(row, {
+        now,
+        recheckTools: opts.recheckTools,
+      })
+    )
+      queued += 1;
   return queued;
 }

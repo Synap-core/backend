@@ -40,64 +40,37 @@ const h = vi.hoisted(() => ({
   prerequisiteAsks: [] as Array<{ installationId: string; missing: string[] }>,
 }));
 
-// The prerequisite ask is recorded, not sent: its own test below drives the
-// real producer with a stub door.
+// The prerequisite ask is recorded, not filed: its own test below drives the
+// real producer with a stub ask door.
 vi.mock(
   "../../../services/installations/self-heal-notice.js",
   async (importOriginal) => {
     const actual = await importOriginal<Record<string, unknown>>();
     return {
       ...actual,
-      notifyPrerequisiteNeeded: async (
-        row: { id: string },
-        missing: string[]
-      ) => {
+      askForPrerequisites: async (row: { id: string }, missing: string[]) => {
         h.prerequisiteAsks.push({
           installationId: row.id,
           missing: [...missing],
         });
-        return true;
+        return missing.length;
       },
     };
   }
 );
 
-vi.mock("@synap/database", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  const { PGlite } = await import("@electric-sql/pglite");
-  const { drizzle } = await import("drizzle-orm/pglite");
-  const schema = await import("@synap/database/schema");
-  const client = new PGlite();
-  h.client = client as unknown as typeof h.client;
-  h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
-});
-
-vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
-      h.gate.push(opts);
-      return opts.agentUserId
-        ? {
-            granted: false,
-            proposalId: randomUUID(),
-            proposalType: "installation.request",
-            reviewUrl: "https://pod.example/review",
-          }
-        : { granted: true };
-    },
-  };
-});
-
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerInstallationsRoutes } from "./installations.js";
 import {
+  applyInstallationRequest,
+  loadInstallableCapability,
+  loadPersonsComputer,
   nextJobFor,
+  NO_PREREQUISITES,
   reconcileComputer,
   requiredCapabilityKeys,
 } from "../../../services/installations/installations.js";
+import { requestInstallation } from "../../../services/installations/request-installation.js";
 import {
   SELF_HEAL_BACKOFF_SECONDS,
   SELF_HEAL_MAX_FAILURES,
@@ -483,6 +456,34 @@ describe("the reconciler", () => {
     finishedAt: ago(s),
   });
 
+  it("self-heal 6: a runner that came back has every tool not checked for 10 min checked again", () => {
+    const daily = { verify: { reverifyEvery: "P1D" } };
+    const checked = (s: number) => row({ verifiedAt: ago(s), manifest: daily });
+    expect(
+      nextJobFor(checked(20 * 60), now, undefined, [], NO_PREREQUISITES, true)
+    ).toBe("verify");
+    expect(nextJobFor(checked(20 * 60), now)).toBeNull();
+    expect(
+      nextJobFor(checked(5 * 60), now, undefined, [], NO_PREREQUISITES, true)
+    ).toBeNull();
+    // A service is checked by its own health window, not by this.
+    expect(
+      nextJobFor(
+        row({
+          kind: "service",
+          verifiedAt: ago(20 * 60),
+          manifest: daily,
+          lastReportAt: ago(60),
+        }),
+        now,
+        undefined,
+        [],
+        NO_PREREQUISITES,
+        true
+      )
+    ).toBeNull();
+  });
+
   it("repairs a drift ONCE per finding", () => {
     const drifted = row({ observedVersion: "1.1.0" });
     expect(
@@ -726,12 +727,15 @@ describe("the reconciler", () => {
   });
 });
 
-describe("self-heal: the card when the pod stops trying", () => {
-  it("is sent once, by the failure that reaches the cap, never before or after", async () => {
-    const { notifyIfSelfHealStopped } = await vi.importActual<
+describe("self-heal: the one-tap asks", () => {
+  const actualAsks = () =>
+    vi.importActual<
       typeof import("../../../services/installations/self-heal-notice.js")
     >("../../../services/installations/self-heal-notice.js");
-    const inst = randomUUID();
+  const inst = randomUUID();
+
+  it("when the pod stops trying, ONE 'try again' card is filed, by the failure that reaches the cap", async () => {
+    const { askToTryAgainIfStopped, SELF_HEAL_AUTHOR } = await actualAsks();
     await q(
       `INSERT INTO installations (id, user_id, kind, capability_id, capability_key, machine_user_id, status, status_detail, manifest)
        VALUES ($1, $2, 'tool', $3, $4, $5, 'failed', 'The step “Homebrew: install mlx-whisper” failed: exit 1', '{}'::jsonb)`,
@@ -750,34 +754,118 @@ describe("self-heal: the card when the pod stops trying", () => {
           100 - i,
         ]
       );
-    const sent: Array<Record<string, unknown>> = [];
+    const asked: Array<Record<string, unknown>> = [];
     const deps = {
-      create: async (input: Record<string, unknown>) => (
-        sent.push(input),
-        randomUUID()
+      request: async (input: Record<string, unknown>) => (
+        asked.push(input),
+        { status: "proposed", proposalId: randomUUID() }
       ),
     };
     for (let i = 1; i < SELF_HEAL_MAX_FAILURES; i++) {
       await fail(i);
-      expect(await notifyIfSelfHealStopped(inst, deps as never)).toBe(false);
+      expect(await askToTryAgainIfStopped(inst, deps as never)).toBe(false);
     }
     await fail(SELF_HEAL_MAX_FAILURES);
-    expect(await notifyIfSelfHealStopped(inst, deps as never)).toBe(true);
+    expect(await askToTryAgainIfStopped(inst, deps as never)).toBe(true);
     await fail(SELF_HEAL_MAX_FAILURES + 1);
-    expect(await notifyIfSelfHealStopped(inst, deps as never)).toBe(false);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({
-      type: "installation.self_heal_stopped",
+    expect(await askToTryAgainIfStopped(inst, deps as never)).toBe(false);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
       userId: PERSON,
-      groupKey: `installation:${inst}`,
-      data: {
-        name: "Transcribe",
-        computer: "Off box",
-        action: "install",
-        attempts: SELF_HEAL_MAX_FAILURES,
-        capabilityKey: KEY,
-        lastError: "The step “Homebrew: install mlx-whisper” failed: exit 1",
+      agentUserId: OFFBOX,
+      capabilityKey: KEY,
+      action: "install",
+      computer: { id: OFFBOX, name: "Off box" },
+      filedByPod: { author: SELF_HEAL_AUTHOR },
+    });
+    expect((asked[0]!.filedByPod as { reasoning: string }).reasoning).toBe(
+      `The pod tried ${SELF_HEAL_MAX_FAILURES} times to make ${KEY} work on Off box, as you approved it, and stopped. ` +
+        "Last error: The step “Homebrew: install mlx-whisper” failed: exit 1. Approve to try again now. " +
+        `To see each step, run \`synap tools install ${KEY}\` on Off box.`
+    );
+  });
+
+  it("the pod's ask is always ONE proposal, even for a repair that would ask nobody", async () => {
+    // The Mac already has it (the asks above): a repair there asks nobody.
+    const computer = (await loadPersonsComputer(PERSON, MAC))!;
+    h.gate.length = 0;
+    const ask = await requestInstallation({
+      userId: PERSON,
+      agentUserId: MAC,
+      computer,
+      capabilityKey: KEY,
+      action: "install",
+      filedByPod: {
+        author: "system:installation-self-heal",
+        reasoning: "Try again.",
       },
     });
+    expect(ask.status).toBe("proposed");
+    expect(h.gate).toHaveLength(1);
+    expect(h.gate[0]).toMatchObject({
+      forcePropose: true,
+      machineAuthor: "system:installation-self-heal",
+      reasoning: "Try again.",
+    });
+  });
+
+  it("approving it runs the repair now, past the ladder's cap", async () => {
+    // The installation above sits past the cap: the reconciler alone queues nothing.
+    await reconcileComputer({ machineUserId: OFFBOX, ownerUserId: PERSON });
+    const open = () =>
+      q<{ kind: string }>(
+        `SELECT kind FROM host_jobs WHERE installation_id = $1 AND status IN ('queued','leased','running')`,
+        [inst]
+      );
+    expect((await open()).rows).toEqual([]);
+    const out = await applyInstallationRequest({
+      computer: (await loadPersonsComputer(PERSON, OFFBOX))!,
+      capability: (await loadInstallableCapability(KEY))!,
+      action: "install",
+      approverId: PERSON,
+    });
+    expect(out.jobId).not.toBeNull();
+    expect((await open()).rows).toEqual([{ kind: "install" }]);
+  });
+
+  it("a prerequisite nobody approved is ONE card per prerequisite: its own install on that computer", async () => {
+    const { askForPrerequisites, SELF_HEAL_AUTHOR } = await actualAsks();
+    const asked: Array<Record<string, unknown>> = [];
+    const deps = {
+      request: async (input: Record<string, unknown>) => (
+        asked.push(input),
+        { status: "proposed", proposalId: randomUUID() }
+      ),
+    };
+    const [row] = (
+      await q<Record<string, unknown>>(
+        `SELECT id FROM installations WHERE id = $1`,
+        [inst]
+      )
+    ).rows;
+    expect(row).toBeDefined();
+    const dependent = {
+      id: inst,
+      userId: PERSON,
+      machineUserId: OFFBOX,
+      capabilityKey: "media-download",
+    } as InstallationRow;
+    expect(
+      await askForPrerequisites(dependent, ["media-ffmpeg"], deps as never)
+    ).toBe(1);
+    expect(asked).toEqual([
+      expect.objectContaining({
+        userId: PERSON,
+        agentUserId: OFFBOX,
+        capabilityKey: "media-ffmpeg",
+        action: "install",
+        fromCatalog: true,
+        filedByPod: {
+          author: SELF_HEAL_AUTHOR,
+          reasoning:
+            "media-download on Off box needs media-ffmpeg first. Approve to install media-ffmpeg there; media-download installs right after it.",
+        },
+      }),
+    ]);
   });
 });

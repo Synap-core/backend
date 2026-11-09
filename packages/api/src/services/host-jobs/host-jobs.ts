@@ -31,7 +31,8 @@
  * verify moves nothing, except that a verify that PASSES on a `failed`
  * installation makes it `installed` (the tool works: what failed was the job,
  * self-heal case 1). A failed lifecycle job whose failure is the cap of the
- * self-heal ladder sends the person ONE card (`installations/self-heal-notice`).
+ * self-heal ladder files the person ONE "try again" card, an installation
+ * request they approve in one tap (`installations/self-heal-notice`).
  * Reports and finishes store what the runner OBSERVED
  * (health, verify, version, os, arch). Health (ok, degraded, drifted, stale,
  * unknown, failed) is a READ verdict ({@link installationHealth}), never
@@ -71,7 +72,7 @@ import type {
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
 import { boxStatusForVerdict, capLog } from "../box-runs/box-runs.js";
 import { redactSecrets } from "../../utils/redact-secrets.js";
-import { notifyIfSelfHealStopped } from "../installations/self-heal-notice.js";
+import { askToTryAgainIfStopped } from "../installations/self-heal-notice.js";
 import { LIFECYCLE_JOB_KINDS } from "../installations/self-heal.js";
 
 /** A lease lives this long; each heartbeat extends it to now + TTL. */
@@ -291,6 +292,70 @@ export async function recordComputerSystem(
         changed
       )
     );
+}
+
+/**
+ * A runner that comes back (a new process: the worker restarted, the CLI was
+ * updated, the computer rebooted) or that was not seen for this long (the
+ * computer slept) is a moment to check every tool on the computer again
+ * (self-heal: "the pod has it installed, but not the computer").
+ */
+export const HOST_RUNNER_GAP_SECONDS = 30 * 60;
+/** How often a runner's last-seen time is written (at most). */
+const HOST_RUNNER_SEEN_WRITE_SECONDS = 5 * 60;
+
+/** A runner process's id, as its lease body sends it (`runner`). */
+const RUNNER_ID = /^[0-9a-f-]{8,64}$/i;
+
+/**
+ * Note the runner that is leasing, on the computer
+ * (`users.agent_metadata.hostRunner = {id, seenAt}`), and answer whether it
+ * came back: a new process id, a gap longer than
+ * {@link HOST_RUNNER_GAP_SECONDS}, or the first lease ever. A runner that
+ * sends no id (an older CLI) is judged by the gap alone. Written only when
+ * the id changed or the last write is older than a few minutes, never on
+ * every 30 s poll.
+ */
+export async function noteHostRunner(
+  runner: HostRunner,
+  runnerId: string | null,
+  now: Date = new Date()
+): Promise<boolean> {
+  const id = runnerId && RUNNER_ID.test(runnerId) ? runnerId : null;
+  const [row] = await db
+    .select({ agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(
+      and(
+        eq(users.id, runner.machineUserId),
+        eq(users.agentType, MACHINE_AGENT_TYPE)
+      )
+    )
+    .limit(1);
+  if (!row) return false;
+  const prev = (row.agentMetadata as { hostRunner?: unknown } | null)
+    ?.hostRunner as { id?: unknown; seenAt?: unknown } | undefined;
+  const prevId = typeof prev?.id === "string" ? prev.id : null;
+  const prevSeen =
+    typeof prev?.seenAt === "string" ? new Date(prev.seenAt) : null;
+  const ageSeconds =
+    prevSeen && !Number.isNaN(prevSeen.getTime())
+      ? (now.getTime() - prevSeen.getTime()) / 1000
+      : null;
+  const cameBack =
+    ageSeconds === null ||
+    ageSeconds > HOST_RUNNER_GAP_SECONDS ||
+    (id !== null && id !== prevId);
+  if (cameBack || ageSeconds! > HOST_RUNNER_SEEN_WRITE_SECONDS) {
+    const hostRunner = { id: id ?? prevId, seenAt: now.toISOString() };
+    await db
+      .update(users)
+      .set({
+        agentMetadata: drizzleSql`coalesce(${users.agentMetadata}, '{}'::jsonb) || ${JSON.stringify({ hostRunner })}::jsonb`,
+      })
+      .where(eq(users.id, runner.machineUserId));
+  }
+  return cameBack;
 }
 
 // ── Lease ───────────────────────────────────────────────────────────────────
@@ -714,7 +779,7 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
       installationStatus = await currentStatus(job.installationId);
   }
   if (!ok && (LIFECYCLE_JOB_KINDS as readonly string[]).includes(job.kind)) {
-    await notifyIfSelfHealStopped(job.installationId);
+    await askToTryAgainIfStopped(job.installationId);
   }
   return { ok: true, job, installationStatus };
 }
