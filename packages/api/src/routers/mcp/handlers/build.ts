@@ -62,6 +62,7 @@ import {
   PLAYBOOKS_PAGE_DEFAULT,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import { ON_END_RETIRED_MESSAGE } from "../../../schemas/playbook-process.js";
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
@@ -487,6 +488,7 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     // WRITE: confined/explicit lens or advisory focus only — never membership[0].
     const outcome = await createPlaybookDoor(playbookDoorIdentity(ctx), {
       workspaceId: requestedWorkspaceId,
@@ -512,9 +514,6 @@ export const buildHandlers: McpHandlerMap = {
         if (args.statusProperty !== undefined) {
           subjectProfile.statusProperty = args.statusProperty;
         }
-        // What a session end moves the subject to: validated with the ONE
-        // schema and the definition check's option test by `playbooks.create`.
-        if (args.onEnd !== undefined) subjectProfile.onEnd = args.onEnd;
         return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
       })(),
       // `project` = a METHOD a project runs as a track. Any other value is
@@ -584,6 +583,7 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     type Patch = Parameters<typeof updatePlaybookDoor>[1]["patch"];
     // `subjectProfile` is ONE stored record the patch REPLACES (process keys
     // are carried over by `playbooks.update`), so a `statusProperty` alone
@@ -593,12 +593,9 @@ export const buildHandlers: McpHandlerMap = {
       args.subjectProfileSlug.trim()
         ? args.subjectProfileSlug.trim()
         : undefined;
-    if (
-      (args.statusProperty !== undefined || args.onEnd !== undefined) &&
-      !slug
-    ) {
+    if (args.statusProperty !== undefined && !slug) {
       return ok({
-        error: `${args.statusProperty !== undefined ? "statusProperty" : "onEnd"} needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
+        error: `statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
       });
     }
     const patch: Record<string, unknown> = {};
@@ -624,7 +621,6 @@ export const buildHandlers: McpHandlerMap = {
         ...(args.statusProperty !== undefined
           ? { statusProperty: args.statusProperty }
           : {}),
-        ...(args.onEnd !== undefined ? { onEnd: args.onEnd } : {}),
       };
     }
     const reasoning = readReasoning(args);

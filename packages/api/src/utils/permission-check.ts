@@ -1181,15 +1181,13 @@ export interface PermissionCheckBaseOpts {
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
-   * / 2.86 (other moves: execute once attributed). `atSessionEnd`: a session
-   * END move, which skips 2.85; `atSessionBirth` + `outOfTerminal`: a session
-   * BIRTH move reopening a done/lost thing, which always proposes (2.076)
-   * (governance-policy `lifecycleMove`).
+   * / 2.86 (other moves: execute once attributed). `atSessionBirth` +
+   * `outOfTerminal`: a session BIRTH move reopening a done/lost thing, which
+   * always proposes (2.076) (governance-policy `lifecycleMove`).
    */
   lifecycleMove?: {
     intoTerminal: boolean;
     humanOnly: boolean;
-    atSessionEnd?: boolean;
     outOfTerminal?: boolean;
     atSessionBirth?: boolean;
   };
@@ -1367,7 +1365,6 @@ interface AnonymousPolicyFacts {
     | {
         intoTerminal: boolean;
         humanOnly: boolean;
-        atSessionEnd?: boolean;
         outOfTerminal?: boolean;
         atSessionBirth?: boolean;
       }

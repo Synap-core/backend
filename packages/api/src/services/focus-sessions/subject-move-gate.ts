@@ -43,9 +43,8 @@
  *    decision and is followed as written").
  *  - `system` (server code), an approved replay (governance already decided:
  *    the gate executor's own write comes back through the door this way or as
- *    the approver), a session END move and a session BIRTH move (their writers
- *    run the session's own lifecycle, and birth seeds the first stage, which is
- *    never gated on entry).
+ *    the approver) and a session BIRTH move (its writer runs the session's
+ *    own lifecycle and seeds the first stage, which is never gated on entry).
  */
 
 import {

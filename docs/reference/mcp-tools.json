@@ -3152,7 +3152,7 @@
           "name": "targets",
           "type": "array<string>",
           "required": false,
-          "description": "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already)."
+          "description": "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already)."
         },
         {
           "name": "blockedBySessionIds",
@@ -3429,7 +3429,7 @@
             "type": "array",
             "items": { "type": "string", "format": "uuid" },
             "maxItems": 100,
-            "description": "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already)."
+            "description": "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already)."
           },
           "blockedBySessionIds": {
             "type": "array",
@@ -5770,12 +5770,6 @@
           "description": "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
         },
         {
-          "name": "onEnd",
-          "type": "object",
-          "required": false,
-          "description": "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
-        },
-        {
           "name": "expectedOutputs",
           "type": "array<object>",
           "required": false,
@@ -6166,20 +6160,6 @@
             "items": { "type": "string", "minLength": 1, "maxLength": 200 },
             "description": "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
           },
-          "onEnd": {
-            "type": "object",
-            "properties": {
-              "closed": { "type": "string", "minLength": 1, "maxLength": 200 },
-              "cancelled": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200
-              },
-              "failed": { "type": "string", "minLength": 1, "maxLength": 200 }
-            },
-            "additionalProperties": false,
-            "description": "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
-          },
           "expectedOutputs": {
             "type": "array",
             "items": {
@@ -6407,12 +6387,6 @@
           "type": "array<string>",
           "required": false,
           "description": "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
-        },
-        {
-          "name": "onEnd",
-          "type": "object",
-          "required": false,
-          "description": "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
         },
         {
           "name": "expectedOutputs",
@@ -6833,20 +6807,6 @@
             "type": "array",
             "items": { "type": "string", "minLength": 1, "maxLength": 200 },
             "description": "LEGACY coverage: status options no stage owns, set only by a person (e.g. Idea, Archived). The lifecycle's own humanOnly flag is what the status door enforces; with the stages' subjectStatus values this list should cover every option."
-          },
-          "onEnd": {
-            "type": "object",
-            "properties": {
-              "closed": { "type": "string", "minLength": 1, "maxLength": 200 },
-              "cancelled": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200
-              },
-              "failed": { "type": "string", "minLength": 1, "maxLength": 200 }
-            },
-            "additionalProperties": false,
-            "description": "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
           },
           "expectedOutputs": {
             "type": "array",
