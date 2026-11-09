@@ -505,6 +505,8 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   requiredIntents: unknown;
   guidance: unknown;
   subjectProfile: unknown;
+  runner: unknown;
+  requires: unknown;
 } {
   return {
     version: playbook.version,
@@ -525,6 +527,10 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     guidance: { declared: playbook.guidance },
     // The kind the run's subject must be (the subject-kind floor).
     subjectProfile: playbook.subjectProfile,
+    // Who the run was declared to be done by, and the tools it needs (0416):
+    // the stage runner reads them from this frozen copy, never the live row.
+    runner: playbook.runner,
+    requires: playbook.requires,
   };
 }
 

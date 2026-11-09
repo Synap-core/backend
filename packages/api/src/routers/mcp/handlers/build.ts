@@ -638,6 +638,18 @@ export const buildHandlers: McpHandlerMap = {
             >[1]["guidance"],
           }
         : {}),
+      // Who runs it and the tools it needs: validated by `playbooks.create`
+      // (`playbookRunnerSchema`, `requiresSchema`), refused, never dropped.
+      ...(args.runner !== undefined
+        ? {
+            runner: args.runner as Parameters<
+              typeof createPlaybookDoor
+            >[1]["runner"],
+          }
+        : {}),
+      ...(args.requires !== undefined
+        ? { requires: args.requires as string[] }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -681,6 +693,8 @@ export const buildHandlers: McpHandlerMap = {
       "guidance",
       "status",
       "scope",
+      "runner",
+      "requires",
     ] as const satisfies ReadonlyArray<keyof Patch>) {
       if (args[key] !== undefined) patch[key] = args[key];
     }

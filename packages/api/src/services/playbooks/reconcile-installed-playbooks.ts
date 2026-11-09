@@ -38,6 +38,12 @@ export interface InstalledPlaybookReconcileResult {
   kind: "up-to-date" | "updated" | "adopted" | "foreign" | "proposed";
   applied: string[];
   ownerOwned: string[];
+  /**
+   * Who-runs-it changes the template made that were NOT applied (the pod
+   * owns its runners): `runner` or `stages.<key>.runner`, each a keep-or-drop
+   * line for a person (`planPlaybookReconcile`).
+   */
+  held: string[];
   /** `proposed` only: the review the change waits on. */
   proposalId?: string;
 }
@@ -58,6 +64,7 @@ export async function reconcileInstalledPlaybook(args: {
     name: (args.row.name as string) ?? "",
     applied: plan.applied,
     ownerOwned: plan.ownerOwned,
+    held: plan.held,
   };
   const needsWrite = Object.keys(plan.patch).length > 0 || !!plan.metadata;
   if (plan.kind === "foreign" || !needsWrite || args.dryRun) {

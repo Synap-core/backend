@@ -7941,6 +7941,40 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: true;
 			tableName: "playbooks";
 		}, {}, {}>;
+		requires: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: unknown;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "requires";
+			notNull: true;
+			tableName: "playbooks";
+		}, {}, {}>;
+		runner: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: unknown;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "runner";
+			notNull: false;
+			tableName: "playbooks";
+		}, {}, {}>;
 		schedule: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -40604,6 +40638,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						exists?: boolean | undefined;
 						param: string;
 					} | undefined;
+					runner?: unknown;
+					uses?: unknown;
+					requires?: string[] | undefined;
 				}[] | undefined;
 				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -47441,6 +47478,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposedPlaybookId?: string | undefined;
 				reasoning?: string | undefined;
 				requiredIntents?: string[] | undefined;
+				requires?: string[] | undefined;
+				runner?: unknown;
 				schedule?: unknown;
 				scope?: "project" | "session" | undefined;
 				source?: string | undefined;
@@ -47653,6 +47692,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						exists?: boolean | undefined;
 						param: string;
 					} | undefined;
+					runner?: unknown;
+					uses?: unknown;
+					requires?: string[] | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -47798,6 +47840,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params: unknown;
 				projectsUsingCount: number;
 				requiredIntents: unknown;
+				requires: unknown;
+				runner: unknown;
 				schedule: unknown;
 				scope: "project" | "session" | null;
 				stages: unknown;
@@ -47892,6 +47936,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params: unknown;
 				projectsUsingCount: number;
 				requiredIntents: unknown;
+				requires: unknown;
+				runner: unknown;
 				schedule: unknown;
 				scope: "project" | "session" | null;
 				stages: unknown;
@@ -47929,7 +47975,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
 					runHealth: RunHealth | null;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					servesGoals: ServedGoal[];
@@ -47968,6 +48016,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					stages: unknown;
@@ -48079,6 +48129,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					stages: unknown;
@@ -48523,6 +48575,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				params?: Record<string, unknown>[] | undefined;
 				reasoning?: string | undefined;
 				requiredIntents?: string[] | undefined;
+				requires?: string[] | undefined;
+				runner?: unknown;
 				schedule?: unknown;
 				scope?: "project" | "session" | undefined;
 				source?: string | undefined;
@@ -48735,6 +48789,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						exists?: boolean | undefined;
 						param: string;
 					} | undefined;
+					runner?: unknown;
+					uses?: unknown;
+					requires?: string[] | undefined;
 				}[] | undefined;
 				status?: "active" | "archived" | "draft" | "paused" | undefined;
 				subjectProfile?: {
@@ -48786,6 +48843,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					params: unknown;
 					requiredIntents: unknown;
+					requires: unknown;
+					runner: unknown;
 					schedule: unknown;
 					scope: "project" | "session" | null;
 					stages: unknown;
@@ -59542,6 +59601,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 						params?: Record<string, unknown>[] | undefined;
 						requiredIntents?: string[] | undefined;
+						requires?: string[] | undefined;
+						runner?: unknown;
 						schedule?: unknown;
 						scope?: "project" | "session" | undefined;
 						stages?: {
@@ -59753,6 +59814,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								exists?: boolean | undefined;
 								param: string;
 							} | undefined;
+							runner?: unknown;
+							uses?: unknown;
+							requires?: string[] | undefined;
 						}[] | undefined;
 						status?: "active" | "archived" | "draft" | "paused" | undefined;
 						subjectProfile?: {

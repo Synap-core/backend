@@ -59,6 +59,8 @@ export const IS_ONLY_TOOL_TOKENS: Record<string, string> = {
  * tools — never rewritten, never noted. Each says what the token really is.
  */
 export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
+  synap_ai:
+    "a runner value (the pod's own AI) in a playbook's or a step's `runner`, not a tool",
   synap_packages: "a database table (the marketplace catalog), not a tool",
   market_publish:
     "a tool of the Synap control-plane connector (the catalog), not a pod tool",
