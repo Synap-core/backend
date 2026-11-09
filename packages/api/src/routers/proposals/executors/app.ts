@@ -223,7 +223,8 @@ export function registerAppExecutors(): void {
       if (app.ownerUserId !== userId) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Only the person who connected this app can let it act as them",
+          message:
+            "Only the person who connected this app can let it act as them",
         });
       }
       const grant = await grantFromActAsPersonProposal({

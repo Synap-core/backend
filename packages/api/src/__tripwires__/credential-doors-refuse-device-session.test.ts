@@ -197,6 +197,8 @@ const KNOWN_CREDENTIAL_DOORS = [
   "packages/api/src/routers/api-keys.ts decideKeyRequest",
   "packages/api/src/routers/apps.ts create",
   'packages/api/src/routers/proposals/executors/app.ts executor "app/connect"',
+  // An approved app's token becomes the person's (W3 3c).
+  'packages/api/src/routers/proposals/executors/app.ts executor "app/actAsPerson"',
   "packages/api/src/routers/governance-rules.ts create",
   "packages/api/src/routers/secrets-vault.ts reveal",
   "packages/api/src/routers/workspaces/invites.ts createInvite",

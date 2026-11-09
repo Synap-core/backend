@@ -38,8 +38,7 @@ export function readActsAsPersonGrant(
   app: Pick<ActsAsPersonConnection, "metadata">
 ): AppActsAsPersonGrant | null {
   const raw = (app.metadata ?? {})["actsAsPerson"] as
-    | Partial<AppActsAsPersonGrant>
-    | undefined;
+    Partial<AppActsAsPersonGrant> | undefined;
   if (!raw || typeof raw !== "object") return null;
   if (
     typeof raw.proposalId !== "string" ||
@@ -157,4 +156,3 @@ export function capToActsAsPersonGrant<
       frozen.has(`${r.workspaceId} ${r.permission}`)
   );
 }
-

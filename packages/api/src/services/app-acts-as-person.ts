@@ -191,7 +191,11 @@ export async function requestActAsPerson(args: {
       requestedByAgentUserId: agentUserId,
     },
   });
-  return { proposalId: proposal.id, reviewUrl: openLink(proposal.id), requests };
+  return {
+    proposalId: proposal.id,
+    reviewUrl: openLink(proposal.id),
+    requests,
+  };
 }
 
 /**
