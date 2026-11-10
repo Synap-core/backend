@@ -28,9 +28,13 @@
  *      the answer wakes the asking agent (`session-answer.ts`). The counter
  *      resets once the ask has LANDED, so after an answer the run again gets
  *      N continuations.
- * If neither lands, the run is simply left `running`: the stall flag and the
- * reaper see it — never a false `completed` — and the count is NOT reset, so
- * the next stop asks again instead of continuing on its own.
+ * If neither lands, nothing will move the run again: it ends `failed`
+ * (`could_not_continue`) and its session closes `failed`, instead of waiting
+ * a day for the reaper.
+ *
+ * A turn that FAILED (`outcome: failed`: every pod read failed, the turn
+ * threw, or its first call did not fit its budget) ends the run the same way,
+ * with the IS's reason (`endFailedRun`).
  *
  * NO PERSON IN THE LOOP (founder decision E3, 2026-10-27). A run an automation
  * started (its schedule included) has nobody watching it, so step 2 never
@@ -60,6 +64,7 @@ import {
   eq,
   focusSessions,
   liveRunStatusWhere,
+  owedSlotWhere,
   playbookRuns,
 } from "@synap/database";
 import type { PlaybookRun } from "@synap/database/schema";
@@ -83,6 +88,7 @@ import { raiseRunAsk } from "./run-ask.js";
 import { settleStageEndAsk, stageAskTurnEntries } from "./stage-end-ask.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
 import { closeStagelessRunSessionAtTurnEnd } from "../focus-sessions/session-lifecycle-sweep.js";
+import { completeFocusSession } from "../focus-sessions/complete-session.js";
 import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
 import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
@@ -107,6 +113,28 @@ export const TURN_HISTORY_MAX = 10;
 export const RUN_CONTINUE_SLOT_LABEL = "Keep the run going";
 
 const count = z.number().int().nonnegative();
+
+/** Why a `stopped` turn stopped: the run stays live. */
+const RUN_STOP_REASONS = ["turn_budget", "max_steps"] as const;
+
+/**
+ * Why a `failed` turn failed, as the IS reports it: every pod call of the
+ * turn failed (`read_failed`), the turn threw after its provider fallbacks
+ * (`turn_error`), or its first call did not fit its token budget
+ * (`budget_exceeded`, a continuation would hit the same wall).
+ */
+export const RUN_TURN_FAILURE_REASONS = [
+  "read_failed",
+  "turn_error",
+  "budget_exceeded",
+] as const;
+export type RunTurnFailureReason = (typeof RUN_TURN_FAILURE_REASONS)[number];
+
+/**
+ * Why a run ended `failed` at a turn's end: the IS's reasons, or the pod's own
+ * `could_not_continue` (a stopped run it could neither continue nor ask about).
+ */
+export type RunFailureReason = RunTurnFailureReason | "could_not_continue";
 
 /** Bounds of the first call's inventory (`firstCall.sections|tools|guidance`). */
 export const FIRST_CALL_SECTIONS_MAX = 24;
@@ -135,13 +163,16 @@ const checkpointRecordSchema = z.object({
  */
 export const completeRunBodySchema = z
   .object({
-    outcome: z.enum(["completed", "stopped"]).default("completed"),
+    outcome: z.enum(["completed", "stopped", "failed"]).default("completed"),
     /**
      * Why a `stopped` turn stopped: its token budget, or its step limit (the
      * founder default 2026-10-21: a step-limit stop is wired exactly like the
-     * budget stop, never marked completed).
+     * budget stop, never marked completed). Why a `failed` turn failed: one of
+     * {@link RUN_TURN_FAILURE_REASONS}.
      */
-    reason: z.enum(["turn_budget", "max_steps"]).optional(),
+    reason: z
+      .enum([...RUN_STOP_REASONS, ...RUN_TURN_FAILURE_REASONS])
+      .optional(),
     /**
      * The agent type that ran the turn — the continuation wakes the same one.
      * A FREE string (root CLAUDE.md "agentType = free string"), so no pattern;
@@ -254,15 +285,29 @@ export const completeRunBodySchema = z
       .optional()
       .catch(undefined),
   })
-  .refine((b) => b.outcome !== "stopped" || b.reason !== undefined, {
+  .refine((b) => b.outcome !== "stopped" || isRunStopReason(b.reason), {
     message: "outcome 'stopped' needs a reason ('turn_budget' | 'max_steps')",
+    path: ["reason"],
+  })
+  .refine((b) => b.outcome !== "failed" || isRunTurnFailureReason(b.reason), {
+    message: `outcome 'failed' needs a reason (${RUN_TURN_FAILURE_REASONS.map((r) => `'${r}'`).join(" | ")})`,
     path: ["reason"],
   });
 
 export type CompleteRunBody = z.infer<typeof completeRunBodySchema>;
 
 /** Why a turn stopped before the run was finished. */
-export type RunStopReason = NonNullable<CompleteRunBody["reason"]>;
+export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
+
+function isRunStopReason(r: string | undefined): r is RunStopReason {
+  return (RUN_STOP_REASONS as readonly string[]).includes(r ?? "");
+}
+
+function isRunTurnFailureReason(
+  r: string | undefined
+): r is RunTurnFailureReason {
+  return (RUN_TURN_FAILURE_REASONS as readonly string[]).includes(r ?? "");
+}
 
 /** The limit a stopped turn hit, in the words the room reads. */
 function stopLimitWords(reason: RunStopReason | undefined): string {
@@ -278,14 +323,16 @@ export type CompleteRunStatus =
   | "left_running"
   /** No person in the loop: the run ended at its limit, with a notice. */
   | "stopped"
+  /** The run could not read, its turn broke, or it could not continue. */
+  | "failed"
   /** A retried report of a turn already settled: nothing done again. */
   | "duplicate";
 
 /** One turn's end, as stored. */
 export interface RunTurnRecord {
   at: string;
-  outcome: "completed" | "stopped";
-  reason?: RunStopReason;
+  outcome: CompleteRunBody["outcome"];
+  reason?: RunStopReason | RunTurnFailureReason;
   agentType?: string;
   /** The IS's id for the turn (`CompleteRunBody.turnKey`). */
   turnKey?: string;
@@ -590,6 +637,91 @@ async function endUnattendedRun(p: {
     }
   }
   return "stopped";
+}
+
+/** Why the run failed, in the words the room reads. */
+function failureWords(reason: RunFailureReason): string {
+  switch (reason) {
+    case "read_failed":
+      return "This run could not reach the pod: every read of its turn failed.";
+    case "turn_error":
+      return "This run's turn broke before it finished (the AI provider failed, or the turn itself did).";
+    case "budget_exceeded":
+      return "This run's turn could not start within its token budget.";
+    case "could_not_continue":
+      return "This run stopped before it was finished, and it could neither go on by itself nor ask you to keep it going.";
+  }
+}
+
+/**
+ * The end of a run that cannot go on (lane E of the playbook runtime fixes,
+ * findings db27cac2, a00f5eb6, 15835191): the run ends `failed` with the
+ * reason, one pod notice in the room says what failed and how to retry, and
+ * the session closes `failed` through the ONE close door. Before, such a run
+ * stayed `running` and its session `active` until the reaper, a day later.
+ *
+ * The close is automatic, so like every automatic close it never closes a
+ * session that still owes the person a slot (W2 calm, `closeSessionViaDoor`):
+ * the ask stays live where they will answer it. A close the door refuses or
+ * proposes is logged; the hourly ended-run sweep closes the session then.
+ */
+async function endFailedRun(p: {
+  run: RunRow;
+  session: SessionRoom;
+  reason: RunFailureReason;
+  turnRef: string;
+}): Promise<CompleteRunStatus> {
+  const why = failureWords(p.reason);
+  const ended = await applyRunCapture({
+    run: p.run,
+    status: "failed",
+    error: why,
+    // A budget wall is not a fault: the automation's breakers skip it (F3).
+    stopReason: p.reason === "budget_exceeded" ? "budget" : undefined,
+  });
+  if (!ended) return "no-running-run";
+  logger.info(
+    { runId: p.run.id, sessionId: p.session.id, reason: p.reason },
+    "run-turn-end: the run ended failed"
+  );
+  if (p.session.channelId) {
+    try {
+      await postChannelMessage({
+        channelId: p.session.channelId,
+        content: `${why} The run ends here as failed; what it did so far stays in this session. You can run it again from here.`,
+        userId: p.session.userId,
+        role: "system",
+        idempotencyKey: `run-failed:${p.run.id}:${p.turnRef}`,
+      });
+    } catch (err) {
+      logger.error(
+        { err, runId: p.run.id, sessionId: p.session.id },
+        "run-turn-end: the run failed, but its notice could not be posted"
+      );
+    }
+  }
+  try {
+    const [owes] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(and(eq(focusSessions.id, p.session.id), owedSlotWhere()))
+      .limit(1);
+    if (!owes) {
+      await completeFocusSession({
+        sessionId: p.session.id,
+        userId: p.session.userId,
+        terminalStatus: "failed",
+        summary: why,
+        actor: { kind: "system", userId: p.session.userId },
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      { err, runId: p.run.id, sessionId: p.session.id },
+      "run-turn-end: closing the failed run's session failed (the hourly sweep closes it)"
+    );
+  }
+  return "failed";
 }
 
 /**
@@ -985,11 +1117,24 @@ export async function settleRunTurnEnd(p: {
     return "completed";
   }
 
+  // Failing is idempotent like completing (only a LIVE run fails, and the
+  // notice is keyed by the turn), so a retried report settles what its first
+  // attempt could not.
+  if (body.outcome === "failed") {
+    return endFailedRun({
+      run,
+      session,
+      reason: isRunTurnFailureReason(body.reason) ? body.reason : "turn_error",
+      turnRef: body.turnKey ?? String(recorded?.state.turns.length ?? 0),
+    });
+  }
+
   // Stopped (budget or step limit): the run stays LIVE whatever happens
   // below — even when the turn could not be recorded (row gone mid-call).
   if (recorded?.duplicate) return "duplicate";
   if (!recorded?.decision) return "left_running";
   const { decision, state, unattended } = recorded;
+  const reason = isRunStopReason(body.reason) ? body.reason : undefined;
   // Idempotency for the room posts: the IS's turn id, else (an older IS) the
   // stop count — which a retried report re-increments, so only `turnKey`
   // makes a retry recognisable.
@@ -1004,13 +1149,20 @@ export async function settleRunTurnEnd(p: {
       agentType: body.agentType ?? "meta",
       continuation: decision.continuation,
       turnRef,
-      reason: body.reason,
+      reason,
       checkpoint: body.checkpoint,
     });
     if (continued) return "continued";
-    // No person to ask: a continuation that could not be dispatched leaves
-    // the run live for the stall flag and the reaper.
-    if (unattended) return "left_running";
+    // No person to ask: a continuation that could not be dispatched ends the
+    // run now, instead of leaving it live for the reaper.
+    if (unattended) {
+      return endFailedRun({
+        run,
+        session,
+        reason: "could_not_continue",
+        turnRef,
+      });
+    }
   }
   if (unattended) {
     return endUnattendedRun({
@@ -1018,7 +1170,7 @@ export async function settleRunTurnEnd(p: {
       session,
       stops: state.stops,
       turnRef,
-      reason: body.reason,
+      reason,
     });
   }
 
@@ -1028,15 +1180,14 @@ export async function settleRunTurnEnd(p: {
     askingAgentUserId: p.askingAgentUserId,
     stops: state.stops,
     turnRef,
-    reason: body.reason,
+    reason,
   });
   if (asked) {
     await resetAfterAsk(session.id, run.id);
     const parked = await applyRunCapture({ run, status: "waiting_on_you" });
     if (parked) return "waiting_on_you";
   }
-  if (run.status !== "running") {
-    await applyRunCapture({ run, status: "running" });
-  }
-  return "left_running";
+  // Neither continued nor asked: nothing will move this run again, so it
+  // ends now instead of waiting for the reaper.
+  return endFailedRun({ run, session, reason: "could_not_continue", turnRef });
 }

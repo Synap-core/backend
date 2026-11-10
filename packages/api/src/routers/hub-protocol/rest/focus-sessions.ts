@@ -4290,8 +4290,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * playbook_run from how the turn ended (`run-turn-end.ts`, B8 2026-10-21).
    * No body / `outcome: 'completed'` → the run completes (the old behaviour).
    * `outcome: 'stopped'` + `reason: 'turn_budget' | 'max_steps'` → the run stays LIVE: it
-   * continues on its own up to N times, then the person is asked. Best-effort
-   * on "no run": a session that is not a playbook run is a normal 200.
+   * continues on its own up to N times, then the person is asked.
+   * `outcome: 'failed'` + `reason: 'read_failed' | 'turn_error' |
+   * 'budget_exceeded'` → the run ends failed and its session closes failed.
+   * Best-effort on "no run": a session that is not a playbook run is a
+   * normal 200.
    */
   app.post("/focus-sessions/:sessionId/complete-run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
