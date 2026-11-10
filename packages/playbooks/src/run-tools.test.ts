@@ -51,13 +51,25 @@ describe("runClassOf", () => {
 });
 
 describe("the floors and the vocabulary", () => {
-  it("one-shot has none, short the 6 reads, long the 19 core tools; short is inside long", () => {
+  it("one-shot has none, short the 6 reads, long the 19 core tools, the relation read and its own 3; short is inside long", () => {
     expect(RUN_TOOL_FLOORS["one-shot"]).toEqual([]);
     expect(SHORT_RUN_FLOOR).toHaveLength(6);
-    expect(LONG_RUN_FLOOR).toHaveLength(19);
+    expect(LONG_RUN_FLOOR).toHaveLength(23);
     for (const t of SHORT_RUN_FLOOR) expect(LONG_RUN_FLOOR).toContain(t);
   });
-  it("every floor tool is a declarable run tool; no session, ask or room tool is", () => {
+  it("a long run drives its own session (decision 832469a0); a short one reads only", () => {
+    for (const t of [
+      "update_run",
+      "post_in_room",
+      "get_brand_kit",
+      "graph_traverse",
+    ]) {
+      expect(LONG_RUN_FLOOR).toContain(t);
+      expect(SHORT_RUN_FLOOR).not.toContain(t);
+      expect(isRunToolName(t)).toBe(true);
+    }
+  });
+  it("every floor tool is a declarable run tool; no tool that names ANY session is", () => {
     for (const t of LONG_RUN_FLOOR) expect(isRunToolName(t)).toBe(true);
     for (const t of [
       "update_session",

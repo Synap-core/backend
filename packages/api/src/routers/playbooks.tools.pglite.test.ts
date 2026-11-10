@@ -185,7 +185,7 @@ describe("one tools field — the door stores it, the run gets floor plus only t
     expect(p.intents).toEqual([]);
   });
 
-  it("a long playbook's run gets the 19 core tools plus its declared ones", async () => {
+  it("a long playbook's run gets its floor (the core, the relation read, its own session tools) plus its declared ones", async () => {
     const id = await create({
       name: "Ship a change",
       tools: ["web_fetch"],
