@@ -334,6 +334,11 @@ export interface RunPlaybookInput {
    */
   stageOnly?: string;
   /**
+   * The run's own title (a `forEach` child: its step, part and items), kept
+   * over the derived "<playbook> — <subject>" name. Absent ⇒ derived.
+   */
+  ownTitle?: string;
+  /**
    * The PROJECT this run is filed into (`focus_sessions.project_id`). Must be
    * visible to `userId`; refused otherwise.
    */
@@ -1821,6 +1826,7 @@ async function executeSingleRun(
       ? { pinnedVersion: input.pinnedVersion }
       : {}),
     ...(input.stageOnly ? { stageOnly: input.stageOnly } : {}),
+    ...(input.ownTitle ? { ownTitle: input.ownTitle } : {}),
     workspaceId: input.workspaceId,
     userId: actorId,
     // The birth stage's subject move is governed as the agent that ran it.

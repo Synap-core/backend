@@ -9,8 +9,11 @@ import {
   PLAYBOOK_FOR_EACH_PARALLEL,
 } from "@synap/playbooks";
 import {
+  FAN_OUT_ORPHAN_MINUTES,
   batchParamValue,
+  batchTitle,
   batchesToStart,
+  failOrphanedBatches,
   forEachList,
   planFanOut,
 } from "./stage-for-each.js";
@@ -88,5 +91,70 @@ describe("batchParamValue", () => {
     expect(batchParamValue(["billing"], 1)).toBe("billing");
     expect(batchParamValue([{ id: "a" }], 1)).toBe('{"id":"a"}');
     expect(batchParamValue(["a", "b"], 30)).toBe('["a","b"]');
+  });
+});
+
+describe("batchTitle", () => {
+  it("names the step, the part and the items", () => {
+    expect(
+      batchTitle({ stageName: "Review", part: 2, parts: 3, items: ["f31"] })
+    ).toBe("Review, part 2 of 3: f31");
+    expect(
+      batchTitle({
+        stageName: "Review",
+        part: 1,
+        parts: 3,
+        items: [{ id: "x", title: "Billing" }, { title: "Auth" }],
+      })
+    ).toBe("Review, part 1 of 3: Billing and 1 more");
+    expect(
+      batchTitle({ stageName: "Review", part: 1, parts: 1, items: [] })
+    ).toBe("Review, part 1 of 1");
+  });
+});
+
+describe("failOrphanedBatches", () => {
+  const now = new Date("2026-11-10T12:00:00.000Z");
+  const ago = (min: number) =>
+    new Date(now.getTime() - min * 60_000).toISOString();
+  const fanOut = (
+    children: Parameters<typeof batchesToStart>[0]["children"]
+  ) => ({
+    over: "ids",
+    as: "item",
+    batch: 1,
+    total: children.length,
+    children,
+  });
+
+  it("fails a running batch with no run past the window; spares a fresh claim and a started one", () => {
+    const f = fanOut([
+      {
+        items: ["a"],
+        status: "running",
+        claimedAt: ago(FAN_OUT_ORPHAN_MINUTES + 1),
+      },
+      { items: ["b"], status: "running", claimedAt: ago(1) },
+      {
+        items: ["c"],
+        status: "running",
+        sessionId: "s",
+        claimedAt: ago(60),
+      },
+      { items: ["d"], status: "queued" },
+    ]);
+    const out = failOrphanedBatches(f, now);
+    expect(out.children.map((c) => c.status)).toEqual([
+      "failed",
+      "running",
+      "running",
+      "queued",
+    ]);
+    expect(out.children[0]!.error).toMatch(/never started/);
+  });
+
+  it("returns the same fan-out when nothing is orphaned", () => {
+    const f = fanOut([{ items: ["b"], status: "running", claimedAt: ago(1) }]);
+    expect(failOrphanedBatches(f, now)).toBe(f);
   });
 });

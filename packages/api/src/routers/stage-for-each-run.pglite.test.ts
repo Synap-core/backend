@@ -21,7 +21,11 @@
  *     waiting on that child, and its agent is told which part failed;
  *   - a replayed close starts nothing and settles nothing twice;
  *   - `max` caps the items; a step that `uses` a playbook runs that playbook;
- *   - `over` naming no list: the step fails and the room says why.
+ *   - `over` naming no list: the step fails and the room says why;
+ *   - each child is titled by its step, part and items;
+ *   - entering the step again (a second tools re-check) fans out nothing more;
+ *   - a batch whose run never started is failed by the sweep, which then
+ *     finishes the step; a batch claimed a minute ago is left alone.
  */
 import {
   describe,
@@ -97,7 +101,7 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    checkPermissionOrPropose: async () => ({ allowed: true }),
+    checkPermissionOrPropose: async () => ({ granted: true }),
   };
 });
 
@@ -109,6 +113,10 @@ import { playbooksRouter } from "./playbooks.js";
 import type { Context } from "../types/context.js";
 import { advanceSessionStage } from "../services/focus-sessions/advance-stage.js";
 import { settleStageChild } from "../services/playbooks/stage-child.js";
+import {
+  startStageForEach,
+  sweepOrphanedFanOuts,
+} from "../services/playbooks/stage-for-each.js";
 
 const USER = randomUUID();
 const WS = randomUUID();
@@ -353,6 +361,15 @@ describe("entering a forEach step", () => {
         child.expected_outputs.some((o) => o.label === "Consolidation")
       ).toBe(false);
     }
+    // Each child is named by its step, part and items.
+    expect(
+      (
+        await q<{ title: string }>(
+          `select title from focus_sessions where id = $1`,
+          [kids[1]!.id]
+        )
+      ).rows[0]!.title
+    ).toBe("Review, part 2 of 3: f31 and 29 more");
     // Its items are in its goal; another batch's are not.
     const second = String((await session(kids[1]!.id)).metadata.prompt);
     expect(second).toContain("part 2 of 3");
@@ -428,6 +445,78 @@ describe("entering a forEach step", () => {
     expect((await systemLines(channelId)).at(-1)).toContain(
       '"findingIds" is not a list.'
     );
+  });
+});
+
+describe("entering the step again", () => {
+  it("a second entry of a fanned-out step starts nothing: one fan-out", async () => {
+    const { sessionId } = await startParent(REVIEW, { findingIds: ids(70) });
+    const step = await stepRow(sessionId);
+    const again = await startStageForEach({
+      session: {
+        id: sessionId,
+        userId: USER,
+        channelId: null,
+        status: "paused",
+      },
+      stage: reviewStep({ over: "findingIds", as: "area", batch: 30 }),
+      stageRunId: step.id,
+    });
+    expect(again).toEqual({ status: "already_started" });
+    expect(await children(sessionId)).toHaveLength(3);
+    expect((await stepRow(sessionId)).fan_out).toEqual(step.fan_out);
+  });
+});
+
+describe("a batch whose run never started", () => {
+  async function orphan(claimedMinutesAgo: number) {
+    const started = await startParent(REVIEW, { findingIds: ids(70) });
+    const step = await stepRow(started.sessionId);
+    const kids = await children(started.sessionId);
+    // Batch 1 was claimed and the pod stopped before its run had a session;
+    // batches 2 and 3 were delivered.
+    const fanOut = {
+      ...step.fan_out!,
+      children: step.fan_out!.children.map((c, i) =>
+        i === 0
+          ? {
+              items: c.items,
+              status: "running",
+              claimedAt: new Date(
+                Date.now() - claimedMinutesAgo * 60_000
+              ).toISOString(),
+            }
+          : { ...c, status: "done" }
+      ),
+    };
+    await q(`update session_stage_runs set fan_out = $2::jsonb where id = $1`, [
+      step.id,
+      JSON.stringify(fanOut),
+    ]);
+    for (const kid of kids) await endChild(kid.id, "closed");
+    return started;
+  }
+
+  it("the sweep fails it, finishes the step, resumes the parent and names the part", async () => {
+    const { sessionId, channelId } = await orphan(60);
+    expect(await sweepOrphanedFanOuts()).toBe(1);
+    const step = await stepRow(sessionId);
+    expect(step.status).toBe("done");
+    expect(step.fan_out!.children[0]!.status).toBe("failed");
+    const parent = await session(sessionId);
+    expect(parent.status).toBe("active");
+    expect(parent.current_stage).toBe("summarize");
+    expect(
+      (await systemLines(channelId)).find((l) =>
+        l.startsWith("Step Review is done")
+      )
+    ).toContain("part 1 failed.");
+  });
+
+  it("a batch claimed a minute ago is still starting: the sweep leaves it", async () => {
+    const { sessionId } = await orphan(1);
+    expect(await sweepOrphanedFanOuts()).toBe(0);
+    expect((await stepRow(sessionId)).status).toBe("waiting_child");
   });
 });
 
