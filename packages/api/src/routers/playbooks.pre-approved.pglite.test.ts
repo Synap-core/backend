@@ -48,7 +48,24 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   const db = drizzle(client, { schema });
-  const mocked = { ...actual, getDb: async () => db };
+  const mocked = {
+    ...actual,
+    getDb: async () => db,
+    // The gate's receipt writer and its dedup peek, on this database (their
+    // default handle is their own connection, which PGlite does not serve).
+    insertPendingProposal: (input: unknown) =>
+      (actual.insertPendingProposal as (i: unknown, e: unknown) => unknown)(
+        input,
+        db
+      ),
+    findExistingPendingDuplicate: (input: unknown) =>
+      (
+        actual.findExistingPendingDuplicate as (
+          i: unknown,
+          e: unknown
+        ) => unknown
+      )(input, db),
+  };
   Object.defineProperty(mocked, "db", { get: () => db, enumerable: true });
   return mocked;
 });

@@ -424,6 +424,7 @@ type PlaybookRunGenerated = {
   skipped?: undefined;
   parentLink?: undefined;
   held?: undefined;
+  heldBecause?: undefined;
   handedTo?: undefined;
 };
 

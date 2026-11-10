@@ -292,7 +292,7 @@ describe("an agent's run of a playbook the person allowed beforehand", () => {
       [{}, [{ kind: "tool", id: "gmail", name: "Gmail" }]],
     ] as const) {
       h.playbook = playbook as Record<string, unknown>;
-      h.granted = granted as unknown[];
+      h.granted = [...granted];
       const r = await agentRun(RULE);
       expect(r).toMatchObject({ held: true, heldBecause: "declares_tools" });
     }
