@@ -356,9 +356,12 @@ export function describeViewConfigErrors(error: unknown): string {
  * the declaration at render time (`resolveProfileLifecycle`, the ONE
  * resolution the board uses). A kind with no declared lifecycle has no columns,
  * so its pipeline is refused here, before the gate, with the next step —
- * never filed as a proposal that would approve into an empty board.
+ * never filed as a proposal that would approve into an empty board. Run on
+ * CREATE and on every UPDATE that writes a pipeline's config or switches a
+ * view to `pipeline` (this router's `update`, Hub `views.updateView` and so
+ * MCP `synap_update_view`).
  */
-async function assertPipelineHasLifecycle(
+export async function assertPipelineHasLifecycle(
   config: Record<string, unknown> | undefined,
   workspaceId: string | null
 ): Promise<void> {
@@ -382,7 +385,7 @@ async function assertPipelineHasLifecycle(
         message:
           `"${profileSlug}" declares no lifecycle, so a pipeline of it would have no columns. ` +
           `Declare its lifecycle first (agents: synap_declare_lifecycle { profileId: <the "${profileSlug}" profile id>, property, options: [{ key, category }] }), ` +
-          `then create the pipeline view.`,
+          `then save the pipeline view.`,
         cause: err,
       });
     }
@@ -1852,6 +1855,15 @@ export const viewsRouter = router({
           });
         }
         assertValidRendererRef(input.config);
+      }
+      // A pipeline draws its kind's declared lifecycle: an update that writes
+      // its config, or turns a view into a pipeline, is held to the same rule
+      // as create (the config it will have: the new one, else the stored one).
+      if (viewType === "pipeline" && (input.config || input.type)) {
+        await assertPipelineHasLifecycle(
+          (input.config ?? view.config) as Record<string, unknown> | undefined,
+          view.workspaceId
+        );
       }
 
       // Direct DB update via ViewRepository

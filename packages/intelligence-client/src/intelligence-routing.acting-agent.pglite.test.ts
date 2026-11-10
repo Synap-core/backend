@@ -1,7 +1,9 @@
 /**
- * `resolveIntelligenceService(...).agentUserId` — the acting identity of a
- * headless IS turn (automations, playbooks, background auto-respond) is only
- * ever a HOUSE agent (reach 'pod').
+ * `resolveIntelligenceService(...).agentUserId` — the acting identity of an
+ * IS turn (runs, chat, automations, background auto-respond) is the person's
+ * ONE personal AI, in every space (decision 6b45c6c3). It used to be a HOUSE
+ * agent guessed from space membership (else nobody, so the person); the old
+ * cases below that guess now pin the personal AI instead.
  *
  * The workspace branch used to take ANY agent user the human created that is a
  * member of the space (`.limit(1)`), so an IS turn could be credited to — and
@@ -116,57 +118,85 @@ beforeAll(async () => {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
 });
 
-describe("IS turn acting identity — a house agent, never an external one", () => {
-  it("workspace: an external member with its own key is skipped for the house agent", async () => {
+/** The person's personal AI, as `ensurePersonalAgentUser` makes it. */
+async function personal(owner: string): Promise<string> {
+  const id = randomUUID();
+  await h.client!.query(
+    `insert into users (id, user_type, agent_type, created_by_user_id, is_personal_agent)
+     values ($1, 'agent', 'orchestrator', $2, true)`,
+    [id, owner]
+  );
+  return id;
+}
+
+async function personalAgentsOf(owner: string): Promise<string[]> {
+  const { rows } = await h.client!.query<{ id: string }>(
+    `select id from users where created_by_user_id = $1 and is_personal_agent = true`,
+    [owner]
+  );
+  return rows.map((r) => r.id);
+}
+
+async function membershipsOf(agentId: string): Promise<number> {
+  const { rows } = await h.client!.query<{ n: number }>(
+    `select count(*)::int as n from workspace_members where user_id = $1`,
+    [agentId]
+  );
+  return rows[0]!.n;
+}
+
+describe("IS turn acting identity — the person's one personal AI (decision 6b45c6c3)", () => {
+  it("a space whose ONE house member is a persona ⇒ the personal AI, not the persona", async () => {
     const human = randomUUID();
     const ws = randomUUID();
-    // External inserted FIRST, so an unfiltered `.limit(1)` returns it.
-    await agent(human, "claude-code", { ws, key: "user_pat" });
-    const house = await agent(human, "meta", { ws, key: "is_internal" });
-    expect(await actingAgent(human, ws)).toBe(house);
+    const mine = await personal(human);
+    await agent(human, "meta", { ws, key: "is_internal" });
+    expect(await actingAgent(human, ws)).toBe(mine);
   });
 
-  it("workspace: an external member bound for dispatch is skipped for the house agent", async () => {
+  it("a space with several house agents ⇒ the personal AI, never nobody", async () => {
     const human = randomUUID();
     const ws = randomUUID();
-    await agent(human, "claude-code", { ws, bound: true });
-    const house = await agent(human, "meta", { ws });
-    expect(await actingAgent(human, ws)).toBe(house);
-  });
-
-  it("workspace: an agent with no agentType is not a house agent", async () => {
-    const human = randomUUID();
-    const ws = randomUUID();
-    await agent(human, "  ", { ws });
-    const house = await agent(human, "meta", { ws });
-    expect(await actingAgent(human, ws)).toBe(house);
-  });
-
-  it("workspace: only an external member ⇒ no acting agent, never the external one", async () => {
-    const human = randomUUID();
-    const ws = randomUUID();
-    await agent(human, "claude-code", { ws, key: "user_pat" });
-    expect(await actingAgent(human, ws)).toBeUndefined();
-  });
-
-  it("workspace: two house agents ⇒ refuses to guess, like the pod-wide branch", async () => {
-    const human = randomUUID();
-    const ws = randomUUID();
+    const mine = await personal(human);
     await agent(human, "meta", { ws });
     await agent(human, "builder", { ws });
-    expect(await actingAgent(human, ws)).toBeUndefined();
+    expect(await actingAgent(human, ws)).toBe(mine);
   });
 
-  it("pod-wide: an external agent does not make the house agent ambiguous", async () => {
+  it("a space whose only member is an external agent ⇒ the personal AI, never the external one", async () => {
     const human = randomUUID();
-    await agent(human, "claude-code", { key: "user_pat" });
-    const house = await agent(human, "meta");
-    expect(await actingAgent(human)).toBe(house);
+    const ws = randomUUID();
+    const external = await agent(human, "claude-code", { ws, key: "user_pat" });
+    const acting = await actingAgent(human, ws);
+    expect(acting).not.toBe(external);
+    expect(await personalAgentsOf(human)).toEqual([acting]);
   });
 
-  it("pod-wide: a sole external agent is never the acting agent", async () => {
+  it("no personal AI yet ⇒ created once, pod-wide, and never enrolled in the space", async () => {
     const human = randomUUID();
-    await agent(human, "claude-code", { bound: true });
-    expect(await actingAgent(human)).toBeUndefined();
+    const ws = randomUUID();
+    const first = await actingAgent(human, ws);
+    expect(first).toBeDefined();
+    expect(await actingAgent(human, ws)).toBe(first);
+    expect(await actingAgent(human)).toBe(first);
+    expect(await personalAgentsOf(human)).toEqual([first]);
+    expect(await membershipsOf(first!)).toBe(0);
+  });
+
+  it("the same personal AI in every space and pod-wide", async () => {
+    const human = randomUUID();
+    const mine = await personal(human);
+    await agent(human, "meta", { ws: randomUUID() });
+    expect(await actingAgent(human, randomUUID())).toBe(mine);
+    expect(await actingAgent(human)).toBe(mine);
+  });
+
+  it("another person's personal AI is never theirs", async () => {
+    const human = randomUUID();
+    const other = randomUUID();
+    const theirs = await personal(other);
+    const mine = await personal(human);
+    expect(await actingAgent(human)).toBe(mine);
+    expect(await actingAgent(human)).not.toBe(theirs);
   });
 });

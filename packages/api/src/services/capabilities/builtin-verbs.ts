@@ -2454,6 +2454,44 @@ const toolRequestHandler: BuiltinVerbHandler = async (params, ctx) => {
   });
 };
 
+/**
+ * computer.run_recipe — run a recipe of a tool INSTALLED on one of the
+ * person's computers, there, with nobody at the keyboard (hosted verbs, plan
+ * b647769e §3.2, plan 64072312 U8). POST-gate: the outer capability gate
+ * decided this run (an agent's ask is reviewed unless granted). The ONE door
+ * is `queueRecipeRun`: the computer is one where the tool is installed and
+ * checked, the recipe and its values come from the approved manifest, each
+ * input file is one the person can read. It QUEUES a host job and answers
+ * `{status: "queued", hostJobId}`; the run's files come back on that job and in
+ * the asking session's room. A refusal throws its sentence (the next step).
+ */
+const runRecipeParams = z
+  .object({
+    capability: z.string().trim().min(1).max(200),
+    recipe: z.string().trim().min(1).max(100),
+    params: z.record(z.string(), z.unknown()).default({}),
+    computer: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = runRecipeParams.parse(params);
+  const { queueRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const out = await queueRecipeRun({
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.automationRun?.sessionId ?? ctx.sessionId ?? null,
+    workspaceId: ctx.workspaceId,
+    skillId: ctx.verbId ?? null,
+    capabilityKey: input.capability,
+    recipe: input.recipe,
+    values: input.params,
+    computer: input.computer ?? null,
+  });
+  if (!out.ok) throw new Error(`${out.code}: ${out.error}`);
+  return out.result;
+};
+
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketInstallParams.parse(params);
   const { runMarketInstall } = await import("./marketplace-install.js");
@@ -4674,6 +4712,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "market.scaffold": marketScaffoldHandler,
   // Tool demand — a tool the user needs that Synap cannot connect yet.
   "tool.request": toolRequestHandler,
+  // Hosted verbs — a recipe of a tool installed on the person's computer.
+  "computer.run_recipe": runRecipeHandler,
   // Connection health — probe a connector + nudge the operator if it's dead, so
   // a config feed doesn't go silently dead on an expired token.
   "connector.health_check": connectorHealthCheckHandler,
@@ -4779,6 +4819,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "market.install": marketInstallParams,
   "market.scaffold": marketScaffoldParams,
   "tool.request": toolRequestParams,
+  "computer.run_recipe": runRecipeParams,
   "connector.health_check": connectorHealthCheckParams,
   "capability.rotate_key": capabilityRotateKeyParams,
   "channel.ingest": channelIngestParams,

@@ -112,6 +112,7 @@ export * from "./utils/control-plane-link.js";
 export * from "./utils/onboarding-milestones.js";
 export * from "./utils/is-delegation.js";
 export * from "./utils/agent-turn-overrides.js";
+export * from "./utils/personal-agent-user.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/workspace-identity.js";
 export * from "./utils/pg-errors.js";

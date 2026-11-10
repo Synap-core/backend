@@ -874,6 +874,26 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         additionalProperties: false,
       },
     },
+    // ── Hosted verbs — a recipe of a tool installed on a computer ───────────
+    {
+      name: "computer.run_recipe",
+      kind: "builtin",
+      scope: "pod",
+      intent: null,
+      description:
+        "Run one recipe of a tool INSTALLED on one of the person's computers (media-ffmpeg's loudness-normalize, reframe-crop, …), on that computer, with nobody at the keyboard. `capability` is the tool's key, `recipe` the recipe's name (the tool's approved recipes; an unknown name is refused with the list), `params` its values: a `file` param takes a pod file id (a file entity you can read), an `output` param a bare file name with an extension (\"voice-loud.m4a\"). `computer` names one (\"mac\", its name or id); omitted, the one where the tool is installed and checked. Never sent to a computer where the tool is missing or failed its check: that is refused with the next step (synap_request_installation). QUEUES the run: returns { status: 'queued', hostJobId, computer, recipe }; the run's log and files land on that host job and in the asking session's room. The files are the person's, in the run's space.",
+      parameters: {
+        type: "object",
+        required: ["capability", "recipe"],
+        properties: {
+          capability: { type: "string" },
+          recipe: { type: "string" },
+          params: { type: "object" },
+          computer: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+    },
     // ── Marketplace (Wave 3b) — search/install over cp_catalog_cache ────────
     {
       name: "market.search",

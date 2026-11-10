@@ -33,6 +33,16 @@
  * does not parse, names an unknown repo, or a dependency that can never land
  * (closed unmerged, missing) HOLDS: it never reads as landed.
  *
+ * `Companion:` lines (same grammar, a backend pull request body) name the
+ * OTHER order: the dependent repo's change that lands AFTER this one, because
+ * it uses what this change adds (a new type member app-bases cannot reference
+ * before backend main has it). Only ci.yml's "Dependent repos typecheck" reads
+ * them (companionRefs): it typechecks that repo at the companion's ref instead
+ * of main. A companion never holds a merge and never moves the other jobs'
+ * siblings; after this PR lands, the companion lands next.
+ *   Companion: app-bases@fix/new-filter-field   a branch (or a commit)
+ *   Companion: app-bases#412                    a pull request (its head)
+ *
  * Self-contained on purpose (node: imports and global fetch only, Node >= 18):
  * it runs before any install, in CI, on the devbox and on EAS.
  *
@@ -40,6 +50,9 @@
  *   dir <name>                  the directory of a repo, from any of its names
  *   slug <name>                 its owner/slug on GitHub
  *   siblings <layout>           the sibling directories a layout lays out
+ *   companions [--body-env VAR | --body-file F] [--self <repo>]
+ *       prints `<dir>=<ref>` for each `Companion:` line (exit 2 on a line
+ *       that does not parse: a malformed companion is never read as "none")
  *   depends-on [sources] [--self <repo>] [--format text|json|lane-refs]
  *       sources, any of: --body-file F | --body-env VAR | --git-range R
  *       [--git-dir D] | --compare <repo>@<ref> (the trailers of the commits
@@ -114,7 +127,8 @@ export function layoutNamed(name, layout = loadLayout()) {
   return def;
 }
 
-const LINE = /^[ \t]*Depends-On:[ \t]*(.*?)[ \t]*$/i;
+const lineOf = (keyword) =>
+  new RegExp(`^[ \\t]*${keyword}:[ \\t]*(.*?)[ \\t]*$`, "i");
 const PR_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/i;
 const PR_REF = /^([\w./-]*)#(\d+)$/;
 const GIT_REF = /^([\w./-]+)@([\w./-]+)$/;
@@ -127,8 +141,9 @@ const GIT_REF = /^([\w./-]+)@([\w./-]+)$/;
  */
 export function parseDependsOn(
   text,
-  { self = null, layout = loadLayout() } = {}
+  { self = null, layout = loadLayout(), keyword = "Depends-On" } = {}
 ) {
+  const LINE = lineOf(keyword);
   const deps = [];
   const errors = [];
   let fenced = false;
@@ -146,8 +161,7 @@ export function parseDependsOn(
     if (!value || /\s/.test(value)) {
       errors.push({
         line,
-        reason:
-          "one dependency per line: `Depends-On: <repo>#<n>` or `Depends-On: <repo>@<sha>`",
+        reason: `one dependency per line: \`${keyword}: <repo>#<n>\` or \`${keyword}: <repo>@<sha>\``,
       });
       continue;
     }
@@ -201,6 +215,37 @@ export function parseDependsOn(
     deps.push(full);
   }
   return { deps, errors };
+}
+
+/** The `Companion:` lines of a PR body: parseDependsOn's grammar and result shape. */
+export function parseCompanions(text, opts = {}) {
+  return parseDependsOn(text, { ...opts, keyword: "Companion" });
+}
+
+/**
+ * `dir -> ref` for each companion: a branch or commit as written, a pull
+ * request as its head (`refs/pull/<n>/head`). Throws on a line that did not
+ * parse, a ref that starts with `-` (it would reach git as an option), and two
+ * companions in one repo: a malformed companion must fail the check, never
+ * read as "none" and test the repo's main instead. `exclude` drops the
+ * caller's own directory.
+ */
+export function companionRefs({ deps, errors }, { exclude = [] } = {}) {
+  if (errors.length)
+    throw new Error(errors.map((e) => `${e.line}: ${e.reason}`).join("; "));
+  const out = new Map();
+  for (const d of deps) {
+    if (exclude.includes(d.dir)) continue;
+    const ref = d.kind === "pr" ? `refs/pull/${d.number}/head` : d.ref;
+    if (ref.startsWith("-"))
+      throw new Error(`${d.line}: a ref cannot start with "-"`);
+    if (out.has(d.dir))
+      throw new Error(
+        `two companions in ${d.dir} (${out.get(d.dir)}, ${ref}): one per repo`
+      );
+    out.set(d.dir, ref);
+  }
+  return out;
 }
 
 /**
@@ -640,6 +685,17 @@ async function main(argv) {
     case "siblings":
       console.log(layoutNamed(pos[0], layout).siblings.join("\n"));
       return 0;
+    case "companions": {
+      const self = opts.self ? need(opts.self).dir : null;
+      const text = readSource(opts);
+      if (text === null)
+        throw new Error("companions needs --body-file or --body-env");
+      const refs = companionRefs(parseCompanions(text, { self, layout }), {
+        exclude: self ? [self] : [],
+      });
+      for (const [d, r] of refs) console.log(`${d}=${r}`);
+      return 0;
+    }
     case "depends-on": {
       const gh = githubClient();
       const self = opts.self ? need(opts.self).dir : null;
@@ -754,7 +810,7 @@ async function main(argv) {
     }
     default:
       console.error(
-        "usage: layout.mjs dir|slug <name> · siblings <layout> · depends-on … · materialize <layout> --root R …"
+        "usage: layout.mjs dir|slug <name> · siblings <layout> · companions … · depends-on … · materialize <layout> --root R …"
       );
       return 2;
   }

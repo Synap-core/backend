@@ -8,6 +8,7 @@
  *   POST /host-jobs/lease          LeaseBody      → { job: LeasedHostJob | null }
  *   POST /host-jobs/:id/heartbeat  HeartbeatBody  → HeartbeatAnswer
  *   POST /host-jobs/:id/report     ReportBody     → ReportAnswer
+ *   POST /host-jobs/:id/uploads    UploadBody     → presigned PUT (a hosted verb's output)
  *   POST /host-jobs/:id/finish     FinishBody     → FinishAnswer
  *   GET  /host-jobs/:id/logs                      → LogsAnswer (the owner)
  *
@@ -176,6 +177,36 @@ export const HostJobReportBodySchema = z
     }
   );
 
+/** Files one hosted verb run may return (as a box run). */
+export const HOST_VERB_MAX_FILES = 20;
+
+/**
+ * One file a hosted verb wrote: the recipe's `output` param it answers, the
+ * name it was written under, and the upload token the uploads door minted
+ * (absent when the runner could not upload it: `error` says why).
+ */
+export const HostJobFileSchema = z.object({
+  param: z.string().min(1).max(64),
+  name: z.string().min(1).max(255),
+  size: z.number().int().nonnegative().optional(),
+  uploadToken: z.string().min(1).max(4096).optional(),
+  error: z.string().max(500).optional(),
+});
+export type HostJobFile = z.output<typeof HostJobFileSchema>;
+
+/**
+ * `POST /host-jobs/:id/uploads`: one output file of a hosted verb. The pod
+ * answers a presigned PUT minted for the run's REQUESTER (their session, their
+ * space), never for the computer: the file lands as the work of whoever asked.
+ */
+export const HostJobUploadBodySchema = z.object({
+  leaseId: LeaseId,
+  filename: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(255),
+  size: z.number().int().positive(),
+});
+export type HostJobUploadBody = z.input<typeof HostJobUploadBodySchema>;
+
 export const HostJobFinishBodySchema = z
   .object({
     leaseId: LeaseId,
@@ -198,6 +229,12 @@ export const HostJobFinishBodySchema = z
     output: z.record(z.string(), z.unknown()).optional(),
     /** What the runner removed on a failure path. */
     cleanedUp: z.array(z.string().max(300)).max(100).optional(),
+    /**
+     * A hosted verb's files (kind `verb`): one per `output` param the recipe
+     * wrote, each uploaded first through `POST /host-jobs/:id/uploads`. The
+     * pod stores each one as the requester's file (`finalizeAgentUpload`).
+     */
+    files: z.array(HostJobFileSchema).max(HOST_VERB_MAX_FILES).optional(),
     /** A tool's install, update or verify: what the check saw. */
     ...ObservedFields,
   })
@@ -243,6 +280,25 @@ export interface LeasedHostJob {
   /** The job as queued (the op, its input). */
   spec: Record<string, unknown>;
   parameters: Record<string, unknown>;
+  /**
+   * A hosted verb's input files (kind `verb`): each `file` / `files` param of
+   * its recipe, as a signed GET minted at THIS lease for the job's owner (the
+   * read floor is checked again, so a file deleted or no longer readable since
+   * the ask fails the job instead). The runner downloads them into the job's
+   * folder; `parameters` keeps the file entity ids.
+   */
+  inputs?: Record<string, HostJobInputFile[]>;
+}
+
+/** One input file of a hosted verb, as the lease hands it to the runner. */
+export interface HostJobInputFile {
+  fileEntityId: string;
+  url: string;
+  expiresAt: string;
+  /** A safe file name to write it under (its title, cleaned), never a path. */
+  name: string;
+  mimeType: string | null;
+  size: number | null;
 }
 
 export interface HostJobHeartbeatAnswer {
@@ -262,6 +318,23 @@ export interface HostJobFinishAnswer {
   id: string;
   status: "done" | "failed" | "stopped";
   installationStatus: string;
+  /** A hosted verb's files as the pod stored them. */
+  files?: HostJobStoredFile[];
+}
+
+/** A hosted verb's output file, as stored on the job's evidence. */
+export interface HostJobStoredFile {
+  param: string;
+  name: string;
+  /**
+   * stored: a file entity of the requester; proposed: an agent's file waiting
+   * for the person's review; refused / missing: not stored, `error` says why.
+   */
+  status: "stored" | "proposed" | "refused" | "missing";
+  fileEntityId?: string;
+  documentId?: string;
+  proposalId?: string;
+  error?: string;
 }
 
 export interface HostJobLogsAnswer {

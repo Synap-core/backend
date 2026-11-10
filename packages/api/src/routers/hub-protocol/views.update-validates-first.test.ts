@@ -17,6 +17,7 @@
  * (no `widget_definitions` rows are seeded), and the approve path.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TRPCError } from "@trpc/server";
 
 const VIEW_ID = "00000000-0000-4000-8000-0000000000f1";
 const WORKSPACE = "00000000-0000-4000-8000-0000000000f2";
@@ -29,6 +30,7 @@ const h = vi.hoisted(() => ({
     config: Record<string, unknown> | null;
   },
   gate: vi.fn(),
+  resolveLifecycle: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -49,6 +51,9 @@ vi.mock("../../utils/permission-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils/permission-check.js")>()),
   checkPermissionOrPropose: h.gate,
 }));
+vi.mock("../../services/lifecycle/board-lens.js", () => ({
+  resolveProfileLifecycle: h.resolveLifecycle,
+}));
 
 import { hubViewsRouter } from "./views.js";
 
@@ -67,6 +72,7 @@ beforeEach(() => {
   h.viewRow = { workspaceId: WORKSPACE, type: "bento", config: null };
   h.gate.mockReset();
   h.gate.mockResolvedValue({ proposalId: "proposal-1" });
+  h.resolveLifecycle.mockReset();
 });
 
 describe("hub views.updateView validates the config before the gate", () => {
@@ -193,5 +199,50 @@ describe("hub views.updateView validates the config before the gate", () => {
       workspaceId: WORKSPACE,
       data: { id: VIEW_ID, config },
     });
+  });
+});
+
+/**
+ * A PIPELINE draws its kind's declared lifecycle as columns. `views.create`
+ * refused a kind with none; an UPDATE that pointed a pipeline at such a kind
+ * passed, was approved, and opened an empty board. Now the same rule runs here
+ * before the gate (so `synap_update_view` too).
+ */
+describe("hub views.updateView — a pipeline's kind must declare a lifecycle", () => {
+  beforeEach(() => {
+    h.viewRow = {
+      workspaceId: WORKSPACE,
+      type: "pipeline",
+      config: { profileSlug: "deal" },
+    };
+  });
+
+  it("refuses a pipeline pointed at a kind with no lifecycle, with the next step, and files nothing", async () => {
+    h.resolveLifecycle.mockRejectedValue(
+      new TRPCError({ code: "PRECONDITION_FAILED", message: "no lifecycle" })
+    );
+    const run = caller().updateView({
+      userId: USER,
+      viewId: VIEW_ID,
+      config: { profileSlug: "note" },
+    });
+    await expect(run).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await expect(run).rejects.toThrow(
+      /"note" declares no lifecycle.*synap_declare_lifecycle/
+    );
+    expect(h.resolveLifecycle).toHaveBeenCalledWith("note", WORKSPACE);
+    expect(h.gate).not.toHaveBeenCalled();
+  });
+
+  it("CONTROL — files a pipeline pointed at a kind that declares one", async () => {
+    h.resolveLifecycle.mockResolvedValue({ lifecycle: { options: [{}] } });
+    const result = await caller().updateView({
+      userId: USER,
+      viewId: VIEW_ID,
+      config: { profileSlug: "lead" },
+    });
+    expect(result).toMatchObject({ status: "proposed" });
+    expect(h.resolveLifecycle).toHaveBeenCalledWith("lead", WORKSPACE);
+    expect(h.gate).toHaveBeenCalledTimes(1);
   });
 });

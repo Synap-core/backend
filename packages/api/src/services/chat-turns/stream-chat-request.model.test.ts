@@ -33,6 +33,10 @@ vi.mock("../../utils/intelligence-routing.js", () => ({
   }),
 }));
 vi.mock("../../utils/pod-callback.js", () => ({ getPodCallback: () => ({}) }));
+// Every turn acts as the person's ONE personal AI (decision 6b45c6c3).
+vi.mock("../../utils/personal-agent-user.js", () => ({
+  ensurePersonalAgentUser: async () => "synap-ai",
+}));
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   agentOverridesForTurn: (...a: unknown[]) => spies.overrides(...a),
@@ -170,6 +174,8 @@ describe("POST chat/stream without a model", () => {
       query: "hello",
       threadId: "ch",
       userId: "person",
+      // The turn acts as the person's personal AI (decision 6b45c6c3).
+      agentUserId: "synap-ai",
       workspaceId: "ws",
       agentType: "meta",
       stream: true,

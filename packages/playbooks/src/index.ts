@@ -155,10 +155,15 @@ export interface PlaybookParam {
   default?: unknown;
   required?: boolean;
   /**
-   * Where the value comes from when the caller gives none, as a reference
-   * (`subject.<field>`: a field of the subject entity). Read, never enforced,
-   * by the doors that know a subject (`snippet.render`); a playbook run
-   * ignores it. Absent on every param that does not declare one.
+   * Where the value comes from when the caller gives none, as a reference:
+   * `subject.<field>` (the subject entity's `title`, `preview` or a property)
+   * or, on an entity param, `subject` (the subject itself). Read by the doors
+   * that know a subject: `snippet.render`, and every playbook run (the run
+   * funnel fills it through `fillParamsFromSubject` before validating, so a
+   * run an activator starts on a post answers `platform` from the post's
+   * `post-platform`). A field with no usable value fills nothing: a required
+   * param then stays missing and the run is refused, naming it. Absent on
+   * every param that does not declare one.
    */
   from?: string;
 }
@@ -1357,6 +1362,44 @@ export interface PlaybookStage {
    * playbook's own `requires`. Absent ⇒ nothing is checked, as before.
    */
   requires?: string[];
+  /**
+   * The question the POD asks the person when a run's turn ends this stage —
+   * see {@link PlaybookStageEndAsk}. Absent ⇒ the stage asks nothing, as
+   * before.
+   */
+  endAsk?: PlaybookStageEndAsk;
+}
+
+/**
+ * A stage-end ask (plan 08e4fba7 decision 5, founder 9 Nov 2026): a run never
+ * asks the person — it has no ask tool — so a playbook that needs a person's
+ * structured answer mid-run DECLARES it on the stage the answer ends. When a
+ * run's turn completes with this stage (or an earlier one) current, the pod
+ * raises it as ONE owed slot, the run waits (`waiting_on_you`), and the
+ * person's answer wakes a run turn told which stage comes next.
+ */
+export interface PlaybookStageEndAsk {
+  /** The slot's label: what the answer is ("Next week's priorities"). */
+  label: string;
+  /** One line of facts: why the person is asked now. */
+  why?: string;
+  /** What moves once they answer ("The run creates a task for each one"). */
+  unblocks?: string;
+  /** How they answer — the one ask shape. */
+  ask: SlotAsk;
+  /** A `choose` ask's options read from the pod at raise time. */
+  optionsFrom?: PlaybookStageEndAskOptionsFrom;
+}
+
+/**
+ * Where a stage-end `choose` reads its options: the entities linked TO the
+ * run's subject by `relation` (a variant `derived_from` its asset), newest
+ * first, each an option whose value is the entity id. They come before the
+ * declared options, eight in all. None found ⇒ the ask is not raised: there is
+ * nothing to choose among.
+ */
+export interface PlaybookStageEndAskOptionsFrom {
+  relation: string;
 }
 
 /**

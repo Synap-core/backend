@@ -196,9 +196,12 @@ Ruleset **"base branch security"** on the default branch. After §5.3 it holds:
   - `Full suite` (`ci.yml`)
   - `API e2e` (`ci.yml`)
   - `Reference docs are current` (`ci.yml`; its own workflow `reference-docs.yml` until 2026-10-28)
+  - `Dependent repos typecheck` (`ci.yml`; required from 2026-11-09, decision
+    b74c6d31: app-bases, browser and relay-app typechecked against the PR's
+    shared types, at a `Companion:` ref when the PR body names one)
 
   These names come from the check runs of a recent `main` commit; the script
-  refuses a name that main's latest CI run did not report. All four workflows
+  refuses a name that main's latest CI run did not report. All five checks
   run on every pull request to `main` with no `paths:` filter. If a job is
   renamed, update `REQUIRED_CHECKS` in the script and re-run it, or every pull
   request waits on the old name.

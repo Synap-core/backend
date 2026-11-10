@@ -5,6 +5,8 @@ import {
   findDroppedParamEntries,
   validatePlaybookParams,
   describeMissingParams,
+  fillParamsFromSubject,
+  needsSubjectKinds,
 } from "./params.js";
 import type { PlaybookParam } from "./index.js";
 
@@ -451,5 +453,220 @@ describe("findDroppedParamEntries — what a write door must refuse", () => {
       findDroppedParamEntries([{ name: "task", type: "text", required: true }])
     ).toEqual([]);
     expect(findDroppedParamEntries(undefined)).toEqual([]);
+  });
+});
+
+describe("fillParamsFromSubject — what the run's subject answers", () => {
+  const POST = "2f500b2f-6610-4c9a-ab59-64039e21561c";
+  const OTHER = "11111111-2222-4333-8444-555555555555";
+  // Produce Content as installed, with the mapping it now declares.
+  const produceContent = readPlaybookParams([
+    { name: "post", type: "entity", label: "Post", required: true },
+    {
+      name: "platform",
+      type: "text",
+      label: "Platform",
+      required: true,
+      from: "subject.post-platform",
+    },
+    {
+      name: "format",
+      type: "text",
+      label: "Format",
+      from: "subject.post-format",
+    },
+    { name: "takes", type: "text" },
+    { name: "composition", type: "entity" },
+  ]);
+  const post = {
+    id: POST,
+    title: "Video 01",
+    properties: { "post-platform": "Instagram", "post-format": "Short Video" },
+    kinds: ["post"],
+  };
+
+  it("an activator's empty params: the post, its platform and its format come from the subject", () => {
+    const { values, filled } = fillParamsFromSubject(produceContent, {}, post);
+    expect(values).toEqual({
+      post: POST,
+      platform: "Instagram",
+      format: "Short Video",
+    });
+    expect(filled).toEqual({
+      post: "subject",
+      platform: "subject.post-platform",
+      format: "subject.post-format",
+    });
+    expect(
+      validatePlaybookParams(produceContent, values).missingRequired
+    ).toEqual([]);
+  });
+
+  it("a caller's answer always wins", () => {
+    const { values, filled } = fillParamsFromSubject(
+      produceContent,
+      { platform: "LinkedIn", post: OTHER },
+      post
+    );
+    expect(values.platform).toBe("LinkedIn");
+    expect(values.post).toBe(OTHER);
+    expect(filled).toEqual({ format: "subject.post-format" });
+  });
+
+  it("a blank answer is no answer: the subject fills it", () => {
+    expect(
+      fillParamsFromSubject(produceContent, { platform: "  " }, post).values
+        .platform
+    ).toBe("Instagram");
+  });
+
+  it("an empty field fills nothing: the required param stays missing and is named", () => {
+    const { values } = fillParamsFromSubject(
+      produceContent,
+      {},
+      {
+        ...post,
+        properties: { "post-platform": "" },
+      }
+    );
+    expect(values).not.toHaveProperty("platform");
+    const { missingRequired } = validatePlaybookParams(produceContent, values);
+    expect(describeMissingParams(missingRequired)).toBe("Platform");
+  });
+
+  it("a list of several values is not a choice it makes; a list of one is that value", () => {
+    const several = fillParamsFromSubject(
+      produceContent,
+      {},
+      {
+        ...post,
+        properties: { "post-platform": ["Instagram", "TikTok"] },
+      }
+    );
+    expect(several.values).not.toHaveProperty("platform");
+    const one = fillParamsFromSubject(
+      produceContent,
+      {},
+      {
+        ...post,
+        properties: { "post-platform": ["Instagram"] },
+      }
+    );
+    expect(one.values.platform).toBe("Instagram");
+  });
+
+  it("an object field fills nothing", () => {
+    expect(
+      fillParamsFromSubject(
+        produceContent,
+        {},
+        {
+          ...post,
+          properties: { "post-platform": { name: "Instagram" } },
+        }
+      ).values
+    ).not.toHaveProperty("platform");
+  });
+
+  it("reads title and preview as fields too", () => {
+    const declared = readPlaybookParams([
+      { name: "headline", from: "subject.title" },
+      { name: "summary", from: "subject.preview" },
+    ]);
+    expect(
+      fillParamsFromSubject(
+        declared,
+        {},
+        {
+          id: POST,
+          title: " Video 01 ",
+          preview: "A hook",
+        }
+      ).values
+    ).toEqual({ headline: "Video 01", summary: "A hook" });
+  });
+
+  it("no subject: nothing is filled", () => {
+    expect(fillParamsFromSubject(produceContent, { x: 1 }, null)).toEqual({
+      values: { x: 1 },
+      filled: {},
+    });
+  });
+
+  describe("which entity param is the subject", () => {
+    it("the only entity param is the subject (the rule every run already had)", () => {
+      const declared = readPlaybookParams([
+        { name: "company", type: "entity", required: true },
+      ]);
+      expect(fillParamsFromSubject(declared, {}, { id: POST }).values).toEqual({
+        company: POST,
+      });
+    });
+
+    it("several: the one named after the subject's kind", () => {
+      expect(needsSubjectKinds(produceContent)).toBe(true);
+      const { values } = fillParamsFromSubject(produceContent, {}, post);
+      expect(values.post).toBe(POST);
+      expect(values).not.toHaveProperty("composition");
+    });
+
+    it("several, none named after its kind: none is guessed", () => {
+      const declared = readPlaybookParams([
+        { name: "a", type: "entity", required: true },
+        { name: "b", type: "entity", required: true },
+      ]);
+      expect(
+        fillParamsFromSubject(declared, {}, { id: POST, kinds: ["post"] })
+          .values
+      ).toEqual({});
+    });
+
+    it("a role counts as a kind: a lead playbook's `lead` param on a person wearing it", () => {
+      const declared = readPlaybookParams([
+        { name: "lead", type: "entity", required: true },
+        { name: "campaign", type: "entity" },
+      ]);
+      expect(
+        fillParamsFromSubject(
+          declared,
+          {},
+          {
+            id: POST,
+            kinds: ["person", "lead"],
+          }
+        ).values
+      ).toEqual({ lead: POST });
+    });
+
+    it('`from: "subject"` says it explicitly, and then no other is inferred', () => {
+      const declared = readPlaybookParams([
+        { name: "piece", type: "entity", required: true, from: "subject" },
+        { name: "post", type: "entity" },
+      ]);
+      expect(needsSubjectKinds(declared)).toBe(false);
+      expect(fillParamsFromSubject(declared, {}, post).values).toEqual({
+        piece: POST,
+      });
+    });
+
+    it('`from: "subject"` on a text param is not the subject (only an entity is)', () => {
+      const declared = readPlaybookParams([
+        { name: "who", type: "text", from: "subject" },
+      ]);
+      expect(fillParamsFromSubject(declared, {}, post).values).toEqual({});
+    });
+
+    it("the caller already named the subject in another entity param: nothing more is bound", () => {
+      const { values } = fillParamsFromSubject(
+        produceContent,
+        { composition: POST },
+        post
+      );
+      expect(values).toEqual({
+        composition: POST,
+        platform: "Instagram",
+        format: "Short Video",
+      });
+    });
   });
 });

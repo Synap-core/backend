@@ -51,7 +51,7 @@
  * Every run records the commit it tested in a step name of "What changed"
  * (`Tested commit <sha>`: the jobs API returns step names). A queue entry
  * whose tree equals the tree of the commit tested by the PR run on which ALL
- * 4 required checks concluded `success` (one run; skipped, neutral or missing
+ * 5 required checks (4 until 2026-11-09) concluded `success` (one run; skipped, neutral or missing
  * is not success) re-runs nothing: the required checks skip, which GitHub
  * reports as passed, and the step summary names the reused run. Anything else
  * falls through to the light queue run above, then to the tier. What it
@@ -101,9 +101,11 @@
  *   hold          why a required check reports RED instead of being skipped:
  *                 "draft" | "negctl" | "stacked" | "" (see decide())
  *   draft_hold    hold == "draft" (kept for readers of the old output)
- *   dependents    the "Dependent repos" job runs: shared types changed (or the
- *                 job's own files), so app-bases, browser and relay-app are
- *                 checked out and typechecked against this head
+ *   dependents    "Dependent repos typecheck" (a required check) does its
+ *                 work: shared types changed (or the job's own files), so
+ *                 app-bases, browser and relay-app are checked out (at a
+ *                 PR body's `Companion:` ref when named) and typechecked
+ *                 against this head; false = its "Not affected" step
  *   reason        one line for the job log
  *
  * Usage (ci.yml): node scripts/ci-changes.mjs
@@ -200,6 +202,9 @@ const IMAGE_INPUTS = [
 const SHARED_FOR_DEPENDENTS = [
   /^packages\/(types|api-types|markdown-core)\//,
   /^scripts\/ci\/dependent-root\//,
+  /^scripts\/ci\/dependents-typecheck\.mjs$/,
+  /^scripts\/layout\//,
+  /^\.github\/actions\/monorepo-setup\//,
   /^\.github\/workflows\/ci\.yml$/,
 ];
 export const touchesDependents = (files) =>
@@ -250,7 +255,7 @@ export function suitesPassed(checkRuns) {
 
 /**
  * The checks a same-tree queue entry takes whole from the PR's own run: the
- * 4 required checks (scripts/apply-main-protection.sh REQUIRED_CHECKS; the
+ * 5 required checks (scripts/apply-main-protection.sh REQUIRED_CHECKS; the
  * tripwire pins them equal).
  */
 export const QUEUE_REUSE_CHECKS = [
@@ -258,6 +263,7 @@ export const QUEUE_REUSE_CHECKS = [
   "Full suite",
   "API e2e",
   "Reference docs are current",
+  "Dependent repos typecheck",
 ];
 
 /** The "What changed" step that names the commit a run tested. */

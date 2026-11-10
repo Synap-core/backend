@@ -86,6 +86,16 @@ vi.mock("./find-objects.js", async (orig) => ({
     searchObjectCatalogs(input),
 }));
 
+// The installed side of an intent (hosted verbs): its own read, tested on
+// PGlite in host-jobs/hosted-verbs.pglite.test.ts. Here: what the door hands
+// it, and that its answer rides on the intent row.
+const installedRecipesFor = vi.fn(
+  async (_input: unknown): Promise<Map<string, unknown>> => new Map()
+);
+vi.mock("../host-jobs/hosted-verbs.js", () => ({
+  installedRecipesFor: (input: unknown) => installedRecipesFor(input),
+}));
+
 const { findByIntent } = await import("./find-intent.js");
 
 const GMAIL_SEND_ARGS = {
@@ -172,6 +182,7 @@ const CATALOG: RegistryCapability[] = [
 const NO_PLAYBOOKS = { candidates: [], optOut: TEMPLATE_OPT_OUT };
 
 beforeEach(() => {
+  installedRecipesFor.mockReset().mockResolvedValue(new Map());
   listCapabilities.mockReset().mockResolvedValue(CATALOG);
   matchSessionTemplate.mockReset().mockResolvedValue(NO_PLAYBOOKS);
   queryCatalogCache.mockReset().mockResolvedValue([]);
@@ -760,5 +771,59 @@ describe("tripwire: the door never routes through understandQuery's residue", ()
 
   it("no import of, or call to, understandQuery / cleanedQuery", () => {
     expect(code).not.toMatch(/understandQuery|cleanedQuery|understand-query/);
+  });
+});
+
+describe("findByIntent — the recipes installed on the person's computers", () => {
+  const RECIPES = {
+    matches: [
+      {
+        label: "range-cut on MacBook-Pro",
+        capability: "media-ffmpeg",
+        recipe: "range-cut",
+        description: "Keep one range of a video.",
+        computer: { id: "m-mac", name: "MacBook-Pro" },
+        params: {},
+        run: {
+          verbId: "computer.run_recipe",
+          parameters: {
+            capability: "media-ffmpeg",
+            recipe: "range-cut",
+            computer: "MacBook-Pro",
+          },
+        },
+        score: 3,
+      },
+    ],
+    unmatched: [],
+  };
+
+  it("an intent row carries the installed recipes for THAT intent, read once for the intents shown, with the FULL query", async () => {
+    installedRecipesFor.mockResolvedValue(new Map([["send_message", RECIPES]]));
+    const r = await findByIntent({ intent: "send a message", ...lens });
+    const shown = r.intents!.matches.map((m) => m.intent);
+    expect(shown).toContain("send_message");
+    expect(installedRecipesFor).toHaveBeenCalledTimes(1);
+    expect(installedRecipesFor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "u1",
+        intents: shown,
+        query: "send a message",
+      })
+    );
+    const send = r.intents!.matches.find((m) => m.intent === "send_message")!;
+    expect(send.recipes).toEqual(RECIPES);
+    // An intent no installed tool serves carries no block at all.
+    for (const m of r.intents!.matches)
+      if (m.intent !== "send_message") expect(m).not.toHaveProperty("recipes");
+  });
+
+  it("a failed read is said on the row, never an empty list", async () => {
+    installedRecipesFor.mockResolvedValue(
+      new Map([["send_message", { error: "could not be read" }]])
+    );
+    const r = await findByIntent({ intent: "send a message", ...lens });
+    const send = r.intents!.matches.find((m) => m.intent === "send_message")!;
+    expect(send.recipes).toEqual({ error: "could not be read" });
   });
 });

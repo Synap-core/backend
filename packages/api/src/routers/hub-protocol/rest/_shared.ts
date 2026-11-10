@@ -32,6 +32,7 @@ import {
   or,
   drizzleSql,
   getWorkspaceMembership,
+  getDelegatedTurnAgent,
 } from "@synap/database";
 import { apiKeys } from "@synap/database/schema";
 
@@ -898,6 +899,18 @@ export function confineWorkspaceOrForbidden<
  *      (`api_keys.linkedUserId = userId`, the "act-as" grant minted by
  *      `POST /setup/agent`).
  *
+ * OR, for (2): the request is an AI-service turn whose POD-SIGNED delegation
+ * names this exact agent (`act.sub`) for this exact operator (`sub`) —
+ * `getDelegatedTurnAgent()`, entered only by `authenticateIsDelegation` after
+ * verifying the pod's own signature. The pod chose that agent for the turn
+ * (`resolveIntelligenceService` → the operator's house agent), and a house
+ * agent holds no key of its own, so no `api_keys` row can ever link it: without
+ * this, every direct write of a turn the pod itself attributed to a house
+ * agent was refused here (live 2026-11-09: approved Brand runs, 400 on
+ * create_document / update_entity, while capture — which never reads a body
+ * agent — went through). The IS cannot widen it: `act.sub` is the pod's
+ * signature, not a value the caller picks, and it holds for one operator only.
+ *
  * SECURITY: without check (2), any caller could pass an arbitrary
  * `agentUserId` belonging to someone else's agent and have every write
  * attributed to (and governed as) that agent — a governed-agent-write →
@@ -927,7 +940,14 @@ export async function resolveActorId(
 
   // Acting as your OWN agent identity is always allowed (agentUserId === the
   // verified acting userId — e.g. an agent key calling on its own behalf).
-  if (agentUserId !== userId) {
+  // The agent the pod signed for this AI-service turn, for this operator, is
+  // allowed too (see above).
+  const delegated = getDelegatedTurnAgent();
+  const podSignedForTurn =
+    delegated !== undefined &&
+    delegated.agentUserId === agentUserId &&
+    delegated.operatorUserId === userId;
+  if (agentUserId !== userId && !podSignedForTurn) {
     const grant = await db.query.apiKeys.findFirst({
       where: and(
         eq(apiKeys.userId, agentUserId),
