@@ -16,6 +16,11 @@
  *   - floored by the SAME predicate the id prober (`resolveObjectKind`) and the
  *     registered VisibilityRule use for that table, so find never names a row
  *     `/open/<id>` would refuse to open;
+ *   - bounded by the calling KEY's grant (`grantReadPredicate`, the clause
+ *     `scopedDb` applies): a floor that does not AND it itself
+ *     (`userVisibleWhere`, `projectVisibleWhere`) gets it ANDed here. Guarded by
+ *     `__tests__/find-objects.grants.pglite.test.ts`, derived from
+ *     {@link OBJECT_CATALOGS};
  *   - matched by the ONE term matcher (`sqlTermMatch` for the "any term hits"
  *     filter and the candidate order, `rankByTerms` for the score);
  *   - bounded: at most {@link CANDIDATE_CAP} candidates are read, best lexical
@@ -64,6 +69,7 @@ import {
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
 import { AccessContext } from "../../access/context.js";
 import { openLink } from "../../utils/deep-links.js";
 
@@ -168,10 +174,12 @@ const readAutomations: Reader = async (terms, userId) => {
       workspaceId: automations.workspaceId,
     })
     .from(automations)
-    // The registered `automations` VisibilityRule — the `automation` probe's floor.
+    // The registered `automations` VisibilityRule — the `automation` probe's
+    // floor — AND the calling key's grant (`userVisibleWhere` carries none).
     .where(
       and(
         userVisibleWhere(automations.workspaceId, userId),
+        grantReadPredicate(automations),
         ne(automations.status, "archived"),
         m.where
       )
@@ -240,9 +248,16 @@ const readGoals: Reader = async (terms, userId) => {
     })
     .from(projectTracks)
     .innerJoin(projects, eq(projects.id, projectTracks.projectId))
-    // A goal is exactly as visible as its project (the `track` probe's floor).
+    // A goal is exactly as visible as its project (the `track` probe's
+    // floor), AND the calling key's grant on both (`projectVisibleWhere`
+    // carries none).
     .where(
-      and(projectVisibleWhere(AccessContext.operator({ userId })), m.where)
+      and(
+        projectVisibleWhere(AccessContext.operator({ userId })),
+        grantReadPredicate(projectTracks),
+        grantReadPredicate(projects),
+        m.where
+      )
     )
     .orderBy(desc(m.order), desc(projectTracks.updatedAt))
     .limit(CANDIDATE_CAP);
@@ -270,9 +285,14 @@ const readProjects: Reader = async (terms, userId) => {
       workspaceId: projects.workspaceId,
     })
     .from(projects)
-    // THE project predicate (the `project` probe's floor).
+    // THE project predicate (the `project` probe's floor), AND the calling
+    // key's grant (`projectVisibleWhere` carries none).
     .where(
-      and(projectVisibleWhere(AccessContext.operator({ userId })), m.where)
+      and(
+        projectVisibleWhere(AccessContext.operator({ userId })),
+        grantReadPredicate(projects),
+        m.where
+      )
     )
     .orderBy(desc(m.order), desc(projects.updatedAt))
     .limit(CANDIDATE_CAP);

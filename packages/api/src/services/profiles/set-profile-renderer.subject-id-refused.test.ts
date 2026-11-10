@@ -74,6 +74,17 @@ describe("the per-object exception: a playbook or a view (renderer-targets.ts)",
     ).rejects.toThrow(/A view has no 'list' renderer slot/);
   });
 
+  it("must name its object: no subjectId is refused, before any DB round trip", async () => {
+    for (const profileSlug of ["playbook", "view"] as const) {
+      await expect(
+        setProfileRenderer({ ...baseInput, profileSlug, subjectId: null })
+      ).rejects.toThrow(/pass its id as subjectId/);
+      await expect(
+        setProfileRenderer({ ...baseInput, profileSlug })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    }
+  });
+
   it("a capability is NOT a renderer_bindings per-object target (it has its own page-set door)", async () => {
     await expect(
       setProfileRenderer({

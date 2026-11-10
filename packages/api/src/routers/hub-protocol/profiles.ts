@@ -45,15 +45,10 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import {
   assertCellBindable,
-  assertRendererTargetVisible,
+  assertRendererBindingTarget,
   buildCellRendererRef,
   cellRendererRefFor,
 } from "../../services/renderers/renderer-target-checks.js";
-import {
-  isPerObjectBindingKind,
-  rendererTargetProblem,
-  type RendererTargetKind,
-} from "../../services/renderers/renderer-targets.js";
 import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
@@ -407,37 +402,16 @@ export const hubProfilesRouter = router({
       }
 
       // The target checks every renderer door runs BEFORE the gate, so a
-      // person never approves a binding that cannot serve. A `subjectId`
-      // names one object, which only a per-object target (a playbook, a
-      // view) has; for any other kind it is refused here rather than at
-      // approval.
-      if (input.subjectId !== undefined) {
-        if (!isPerObjectBindingKind(input.profileSlug)) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "Renderer bindings are whole-kind only — a per-object binding " +
-              "(subjectId) is not supported. See renderer-bindings.ts.",
-          });
-        }
-        await assertRendererTargetVisible(
-          {
-            kind: input.profileSlug as "playbook" | "view",
-            id: input.subjectId,
-          },
-          input.userId
-        );
-      }
-      if (isPerObjectBindingKind(input.profileSlug)) {
-        const problem = rendererTargetProblem(
-          input.profileSlug as RendererTargetKind,
-          input.slot,
-          scope
-        );
-        if (problem) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: problem });
-        }
-      }
+      // person never approves a binding that cannot serve: a per-object
+      // target (a playbook, a view) names one object the caller can open,
+      // any other kind is whole-kind only. The write door runs the same rule.
+      await assertRendererBindingTarget({
+        profileSlug: input.profileSlug,
+        slot: input.slot,
+        scope,
+        subjectId: input.subjectId,
+        userId: input.userId,
+      });
       let ref: RendererRef | null = null;
       if (input.cellKey) {
         await assertCellBindable({
