@@ -28,7 +28,7 @@
 
 import type { SessionOutcomesSection } from "./session-outputs.js";
 import type { ContinuationPacket } from "./continuation-packet.js";
-import { readRunCost, type RunCost } from "../runs/run-cost.js";
+import { readRunCost, type RunCostRead } from "../runs/run-cost.js";
 import type { PacketRoomSection } from "./room-messages.js";
 import type { PacketInboxSection } from "./session-inbox.js";
 
@@ -229,7 +229,7 @@ export async function readLeanSession(
   continuation: LeanContinuation;
   outcomes: LeanOutcomesSection;
   /** What the session's latest run spent (`readRunCost`); null = no run turn. */
-  cost: RunCost | null;
+  cost: RunCostRead | null;
 }> {
   const [
     { projectContinuationPacket },

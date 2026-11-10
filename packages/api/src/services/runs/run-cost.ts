@@ -116,16 +116,26 @@ export function parseRunCost(raw: unknown): RunCost | undefined {
   };
 }
 
+/** A run's cost as the session reads show it: which run it is, and its cost. */
+export type RunCostRead = RunCost & { runId: string };
+
 /**
- * The cost of the run whose ledger the session's metadata holds; null = the
- * session holds no run ledger (no run turn ever reported).
+ * The cost of the run whose ledger the session's metadata holds (a session
+ * keeps the ledger of its latest run only); null = the session holds no run
+ * ledger (no run turn ever reported).
  */
-export function readRunCost(metadata: unknown): RunCost | null {
-  return ledgerCost(
+export function readRunCost(metadata: unknown): RunCostRead | null {
+  const ledger =
     metadata && typeof metadata === "object"
       ? (metadata as Record<string, unknown>)[RUN_TURNS_META_KEY]
-      : undefined
-  );
+      : undefined;
+  const runId =
+    ledger && typeof ledger === "object"
+      ? (ledger as { runId?: unknown }).runId
+      : undefined;
+  if (typeof runId !== "string") return null;
+  const cost = ledgerCost(ledger);
+  return cost ? { runId, ...cost } : null;
 }
 
 /**

@@ -65,7 +65,7 @@ describe("readRunCost", () => {
       readRunCost({
         runTurns: { runId: "r", turns: [turn("z", 1, 0)], cost },
       })
-    ).toEqual(cost);
+    ).toEqual({ runId: "r", ...cost });
   });
 
   it("sums an older ledger's turns, the first turn once", () => {
@@ -79,6 +79,7 @@ describe("readRunCost", () => {
         },
       })
     ).toEqual({
+      runId: "r",
       turns: 2,
       freshInputTokens: 70,
       rawInputTokens: 110,

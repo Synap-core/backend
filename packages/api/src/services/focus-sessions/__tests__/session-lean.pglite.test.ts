@@ -274,7 +274,7 @@ describe("lean session read (C8)", () => {
       { ...row, metadata: { ...(row.metadata as object), runTurns: ledger } },
       { userId: OWNER }
     );
-    expect(lean.cost).toEqual(ledger.cost);
+    expect(lean.cost).toEqual({ runId: "run-1", ...ledger.cost });
   });
 });
 

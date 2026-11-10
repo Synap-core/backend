@@ -74,7 +74,7 @@ import {
 } from "./participants.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { isUuid } from "@synap-core/types/property-render";
-import { readRunCost, type RunCost } from "../runs/run-cost.js";
+import { readRunCost, type RunCostRead } from "../runs/run-cost.js";
 
 /** One capability (skill) the session ran, with how often and how recently. */
 export interface SessionUsageCapability {
@@ -140,7 +140,7 @@ export interface SessionUsage {
   playbook: { id: string; name: string | null } | null;
   agents: SessionParticipant[];
   /** What the session's latest run spent; null = no run turn reported. */
-  cost: RunCost | null;
+  cost: RunCostRead | null;
 }
 
 const EXECUTED_PROPOSAL_STATUSES = [

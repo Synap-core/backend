@@ -457,6 +457,7 @@ describe("readSessionUsage", () => {
       }),
     ]);
     expect((await usage()).cost).toEqual({
+      runId: "run-1",
       turns: 2,
       freshInputTokens: 60_000,
       rawInputTokens: 250_000,
