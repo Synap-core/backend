@@ -37,7 +37,10 @@ describe("draft words: a draft decided in place (one definition)", () => {
   });
 
   it("a draft is discarded through the API's reject, approved through its approve", () => {
-    expect(DRAFT_DECISION_API).toEqual({ approve: "approve", discard: "reject" });
+    expect(DRAFT_DECISION_API).toEqual({
+      approve: "approve",
+      discard: "reject",
+    });
     expect([...DRAFT_DECISIONS]).toEqual(["approve", "discard"]);
   });
 
@@ -45,9 +48,13 @@ describe("draft words: a draft decided in place (one definition)", () => {
     for (const decision of DRAFT_DECISIONS) {
       for (const locale of ["en", "fr"] as const) {
         const words = DRAFT_DECISION_WORDS[locale][decision];
-        expect(resolveActionLabel(decision, "imperative", locale)).toBe(words.imperative);
+        expect(resolveActionLabel(decision, "imperative", locale)).toBe(
+          words.imperative
+        );
         expect(resolveActionLabel(decision, "past", locale)).toBe(words.past);
-        expect(resolveActionProgressive(decision, locale)).toBe(words.progressive);
+        expect(resolveActionProgressive(decision, locale)).toBe(
+          words.progressive
+        );
         expect(draftDecisionWord(decision, "past", locale)).toBe(words.past);
       }
     }
@@ -56,7 +63,10 @@ describe("draft words: a draft decided in place (one definition)", () => {
   });
 
   it("the leaf imports nothing (the SDK vendors it byte for byte)", () => {
-    const source = readFileSync(new URL("./draft-words.ts", import.meta.url), "utf8");
+    const source = readFileSync(
+      new URL("./draft-words.ts", import.meta.url),
+      "utf8"
+    );
     expect(source).toContain("export function draftStateOf");
     expect(source).not.toMatch(/^\s*import\s/m);
     expect(source).not.toMatch(/\brequire\(/);
