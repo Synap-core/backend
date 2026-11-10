@@ -15,19 +15,23 @@ import {
 describe("playbookToolsSchema", () => {
   it("accepts run tools, intent slugs and capability names", () => {
     expect(
-      playbookToolsSchema.safeParse(["update_document", "send_message", "fireflies"])
-        .success
+      playbookToolsSchema.safeParse([
+        "update_document",
+        "send_message",
+        "fireflies",
+      ]).success
     ).toBe(true);
   });
 
   it("refuses a duplicate, an empty entry, and a list past the cap", () => {
-    expect(playbookToolsSchema.safeParse(["a", "a"]).error?.issues[0].message).toContain(
-      "repeats"
-    );
+    expect(
+      playbookToolsSchema.safeParse(["a", "a"]).error?.issues[0].message
+    ).toContain("repeats");
     expect(playbookToolsSchema.safeParse([" "]).success).toBe(false);
     expect(
-      playbookToolsSchema.safeParse(Array.from({ length: 65 }, (_, i) => `t${i}`))
-        .error?.issues[0].message
+      playbookToolsSchema.safeParse(
+        Array.from({ length: 65 }, (_, i) => `t${i}`)
+      ).error?.issues[0].message
     ).toContain("at most 64");
   });
 
@@ -79,7 +83,9 @@ describe("foldPlaybookTools — the one fold at the write door", () => {
       tools: ["update_document"],
       stages: [{ key: "draft", tools: ["update_document", "web_search"] }],
     });
-    expect(out.outside).toEqual([{ stageKey: "draft", outside: ["web_search"] }]);
+    expect(out.outside).toEqual([
+      { stageKey: "draft", outside: ["web_search"] },
+    ]);
     expect(describeStageToolsOutside(out.outside)).toMatch(
       /Stage "draft" lists "web_search".*Nothing was saved/
     );
@@ -88,14 +94,21 @@ describe("foldPlaybookTools — the one fold at the write door", () => {
   it("checks against the row's list when the input does not set one", () => {
     const stages = [{ key: "draft", tools: ["web_search"] }];
     expect(foldPlaybookTools({ stages }, ["web_search"]).outside).toEqual([]);
-    expect(foldPlaybookTools({ stages }, ["update_document"]).outside).toHaveLength(1);
+    expect(
+      foldPlaybookTools({ stages }, ["update_document"]).outside
+    ).toHaveLength(1);
   });
 });
 
 describe("capabilityEntriesOf — the names a package's governance grants come from", () => {
   it("keeps capabilities, drops run tools and intent slugs", () => {
     expect(
-      capabilityEntriesOf(["update_document", "search_external", "exa_search", "source-triage"])
+      capabilityEntriesOf([
+        "update_document",
+        "search_external",
+        "exa_search",
+        "source-triage",
+      ])
     ).toEqual(["exa_search", "source-triage"]);
   });
 });

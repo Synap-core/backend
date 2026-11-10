@@ -121,9 +121,10 @@ const deps = {
 };
 
 async function row(id: string) {
-  const { rows } = await q(`select tools, stages from playbooks where id = $1`, [
-    id,
-  ]);
+  const { rows } = await q(
+    `select tools, stages from playbooks where id = $1`,
+    [id]
+  );
   return rows[0] as {
     tools: string[];
     stages: Array<Record<string, unknown>>;
@@ -131,9 +132,10 @@ async function row(id: string) {
 }
 
 async function count(name: string): Promise<number> {
-  const { rows } = await q(`select count(*)::int as n from playbooks where name = $1`, [
-    name,
-  ]);
+  const { rows } = await q(
+    `select count(*)::int as n from playbooks where name = $1`,
+    [name]
+  );
   return (rows[0] as { n: number }).n;
 }
 
@@ -166,10 +168,7 @@ async function create(input: Record<string, unknown>): Promise<string> {
 }
 
 const run = (playbookId: string) =>
-  resolveRunToolProfile(
-    { playbookId, workspaceId: WS, userId: OWNER },
-    deps
-  );
+  resolveRunToolProfile({ playbookId, workspaceId: WS, userId: OWNER }, deps);
 
 describe("one tools field — the door stores it, the run gets floor plus only these", () => {
   it("a short playbook's run gets the 6 reads plus its declared tools, and nothing else", async () => {
@@ -197,7 +196,10 @@ describe("one tools field — the door stores it, the run gets floor plus only t
   });
 
   it("a one-shot (generate) playbook's run gets no tools", async () => {
-    const id = await create({ name: "Caption now", tools: ["update_document"] });
+    const id = await create({
+      name: "Caption now",
+      tools: ["update_document"],
+    });
     // The generate executor lands with its own PR; the row is written the way
     // that door writes it.
     await q(`update playbooks set executor = 'generate' where id = $1`, [id]);

@@ -927,7 +927,11 @@ export async function applyPackagePostWorkspace(
           if (existing) {
             // Reuse still ensures grants idempotently — a re-applied package
             // must not leave a pre-existing playbook's grants unwired.
-            await grantPlaybookLinks(existing.id, governanceGrantsOf(p), workspaceId);
+            await grantPlaybookLinks(
+              existing.id,
+              governanceGrantsOf(p),
+              workspaceId
+            );
             // A re-install / version update REACHES the reused row: converge its
             // managed fields to this definition (3-way merge; owner edits are
             // reported, never overwritten; an unstamped row is adopted). Before

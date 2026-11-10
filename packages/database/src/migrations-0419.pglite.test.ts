@@ -98,10 +98,10 @@ afterAll(async () => {
 });
 
 async function row(id: string) {
-  const { rows } = await pg.query<{ tools: string[]; stages: Array<Record<string, unknown>> }>(
-    `SELECT tools, stages FROM playbooks WHERE id = $1`,
-    [id]
-  );
+  const { rows } = await pg.query<{
+    tools: string[];
+    stages: Array<Record<string, unknown>>;
+  }>(`SELECT tools, stages FROM playbooks WHERE id = $1`, [id]);
   return rows[0]!;
 }
 
@@ -147,14 +147,18 @@ describe("migration 0419 — one tools field", () => {
 
   it("tools is never NULL; the baseline carries the column and the boot check names it", async () => {
     await expect(
-      pg.query(`INSERT INTO playbooks (id, tools) VALUES (gen_random_uuid(), NULL)`)
+      pg.query(
+        `INSERT INTO playbooks (id, tools) VALUES (gen_random_uuid(), NULL)`
+      )
     ).rejects.toThrow();
     const line =
       'ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "tools" jsonb NOT NULL DEFAULT \'[]\'::jsonb;';
     expect(M0419).toContain(line);
     expect(BASELINE).toContain(line);
     expect(
-      REQUIRED_COLUMNS.some((c) => c.table === "playbooks" && c.column === "tools")
+      REQUIRED_COLUMNS.some(
+        (c) => c.table === "playbooks" && c.column === "tools"
+      )
     ).toBe(true);
   });
 });

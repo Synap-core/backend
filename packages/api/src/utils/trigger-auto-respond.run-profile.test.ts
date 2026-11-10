@@ -73,6 +73,7 @@ describe("triggerAutoRespond carries a run's tool profile", () => {
   it("a run turn ⇒ the job carries `run` verbatim", async () => {
     const run = {
       playbookId: "pb-1",
+      tools: ["get_entity", "update_document"],
       intents: ["publish_post"],
       verbs: ["postiz_schedule_post"],
       capabilitiesRead: "ok" as const,

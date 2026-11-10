@@ -52,7 +52,8 @@ export function runClassOf(playbook: {
   const stages = Array.isArray(playbook.stages) ? playbook.stages : [];
   if (stages.length >= LONG_RUN_MIN_STAGES) return "long";
   const gated = stages.some(
-    (s) => !!s && typeof s === "object" && (s as { gate?: unknown }).gate != null
+    (s) =>
+      !!s && typeof s === "object" && (s as { gate?: unknown }).gate != null
   );
   if (gated) return "long";
   return IS_RUN_EXECUTORS.includes(playbook.executor ?? "is-agent")

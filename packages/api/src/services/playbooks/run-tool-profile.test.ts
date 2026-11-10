@@ -12,9 +12,8 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
   createLogger: () => ({ warn: () => {}, error: () => {}, info: () => {} }),
 }));
 
-const { resolveRunToolProfile, foldRunVerbs } = await import(
-  "./run-tool-profile.js"
-);
+const { resolveRunToolProfile, foldRunVerbs } =
+  await import("./run-tool-profile.js");
 const { LONG_RUN_FLOOR, SHORT_RUN_FLOOR } = await import("@synap/playbooks");
 type Deps = Parameters<typeof resolveRunToolProfile>[1] & object;
 type Registry = Awaited<ReturnType<Deps["readRegistry"]>>;
@@ -65,7 +64,12 @@ const capabilities: Registry["capabilities"] = [
     name: "ibis-decision-analysis",
     verbs: [{ id: "ibis-decision-analysis" }],
   },
-  { kind: "tool", id: "tool-misc", name: "misc", verbs: [{ id: "entity.create" }] },
+  {
+    kind: "tool",
+    id: "tool-misc",
+    name: "misc",
+    verbs: [{ id: "entity.create" }],
+  },
 ];
 const registry: Registry = { index, capabilities };
 
@@ -113,7 +117,11 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
       input,
       deps({ tools: ["update_document", "web_search"] })
     );
-    expect(p.tools).toEqual([...SHORT_RUN_FLOOR, "update_document", "web_search"]);
+    expect(p.tools).toEqual([
+      ...SHORT_RUN_FLOOR,
+      "update_document",
+      "web_search",
+    ]);
     expect(p.tools).not.toContain("create_entity");
   });
 
@@ -202,7 +210,10 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
       deps(
         {
           tools: ["update_document", "send_message"],
-          stages: [stage("draft", { tools: ["update_document"] }), stage("send")],
+          stages: [
+            stage("draft", { tools: ["update_document"] }),
+            stage("send"),
+          ],
         },
         { readCurrentStage: async () => "send" }
       )
@@ -217,7 +228,9 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
       deps(
         {
           tools: ["update_document"],
-          stages: [stage("draft", { tools: ["update_document", "web_search"] })],
+          stages: [
+            stage("draft", { tools: ["update_document", "web_search"] }),
+          ],
         },
         { readCurrentStage: async () => "draft" }
       )
@@ -253,9 +266,15 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
   });
 
   it("an unreadable playbook gets the short floor, said as failed", async () => {
-    const p = await resolveRunToolProfile(input, deps({}, {
-      readPlaybook: async () => null,
-    }));
+    const p = await resolveRunToolProfile(
+      input,
+      deps(
+        {},
+        {
+          readPlaybook: async () => null,
+        }
+      )
+    );
     expect(p).toMatchObject({ capabilitiesRead: "failed" });
     expect(p.tools).toEqual([...SHORT_RUN_FLOOR]);
   });

@@ -391,7 +391,9 @@ export function foldPlaybookTools(
   const stageGrantIds = (stage: Record<string, unknown>): string[] =>
     Array.isArray(stage.grants)
       ? stage.grants.flatMap((g) =>
-          g && typeof g === "object" && typeof (g as { id?: unknown }).id === "string"
+          g &&
+          typeof g === "object" &&
+          typeof (g as { id?: unknown }).id === "string"
             ? [(g as { id: string }).id]
             : []
         )
@@ -454,7 +456,9 @@ export function describeStageToolsOutside(
  * `grants` links from them (a follow's grant widening reads those links), so
  * a catalog playbook declares its capabilities ONCE, in `tools`.
  */
-export function capabilityEntriesOf(tools: readonly string[] | undefined): string[] {
+export function capabilityEntriesOf(
+  tools: readonly string[] | undefined
+): string[] {
   return readToolsList(tools ?? []).filter(
     (t) => !isRunToolName(t) && !isKnownIntent(t)
   );
