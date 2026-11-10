@@ -36,6 +36,18 @@ const h = vi.hoisted(() => ({
       ready: true,
     })
   ),
+  // The run in flight on (playbook, subject), if any (`run-in-flight.ts`).
+  inFlightMock: vi.fn(
+    async (_input: {
+      playbookId: string;
+      subjectId: string;
+    }): Promise<{ id: string; status: string; title: string | null } | null> =>
+      null
+  ),
+}));
+
+vi.mock("../../../utils/run-in-flight.js", () => ({
+  findInFlightRunSession: h.inFlightMock,
 }));
 
 function chain(result: unknown[]) {
@@ -106,6 +118,8 @@ beforeEach(() => {
   h.selectResults.length = 0;
   h.readinessMock.mockClear();
   h.readinessMock.mockResolvedValue({ ready: true });
+  h.inFlightMock.mockClear();
+  h.inFlightMock.mockResolvedValue(null);
   registerPlaybookRunner(h.runnerMock as never);
   registerPlaybookReadinessGate(h.readinessMock);
   registerSessionScheduler(h.schedulerMock as never);
@@ -300,5 +314,69 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
     );
     expect(h.runnerMock).toHaveBeenCalledTimes(1);
     expect(h.insertPendingProposalMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("propose mode — one run per (playbook, subject) at a time", () => {
+  // Live 9 Nov 2026: run 12dbd086 moved post Video 01 back to "Briefed"; the
+  // "enters Briefed" activator fired again and filed 100d7d65, a second
+  // Produce Content run for a post a run was still working on.
+  const PB = "368aae92-1562-4862-9d51-897918d98117";
+
+  it("a run still in flight on the subject → skipped / run_in_flight, NO proposal, naming the run", async () => {
+    h.inFlightMock.mockResolvedValue({
+      id: "sess-open",
+      status: "active",
+      title: "Produce Content · Video 01",
+    });
+    const out = await executePlaybookRun(
+      { playbookId: PB, mode: "propose" },
+      context({ subjectId: "ent-1" }),
+      "ws-1",
+      "user-1",
+      AUTOMATION as never,
+      null,
+      { nodeId: "n-1", stepRunId: "sr-1" }
+    );
+    expect(out).toEqual({
+      status: "skipped",
+      reason: "run_in_flight",
+      sessionId: "sess-open",
+    });
+    expect(h.inFlightMock).toHaveBeenCalledWith({
+      playbookId: PB,
+      subjectId: "ent-1",
+    });
+    expect(h.insertPendingProposalMock).not.toHaveBeenCalled();
+    expect(h.runnerMock).not.toHaveBeenCalled();
+  });
+
+  it("no run in flight → the proposal is filed as before", async () => {
+    h.selectResults.push([], [{ userType: "human" }]);
+    const out = await executePlaybookRun(
+      { playbookId: PB, mode: "propose" },
+      context({ subjectId: "ent-1" }),
+      "ws-1",
+      "user-1",
+      AUTOMATION as never,
+      null,
+      { nodeId: "n-1", stepRunId: "sr-1" }
+    );
+    expect(out).toEqual({ status: "proposed", proposalId: "prop-new" });
+    expect(h.insertPendingProposalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("no subject → nothing to ask (a run over nothing is not a duplicate)", async () => {
+    h.selectResults.push([], [{ userType: "human" }]);
+    await executePlaybookRun(
+      { playbookId: PB, mode: "propose" },
+      context({}),
+      "ws-1",
+      "user-1",
+      AUTOMATION as never,
+      null,
+      { nodeId: "n-1", stepRunId: "sr-1" }
+    );
+    expect(h.inFlightMock).not.toHaveBeenCalled();
   });
 });

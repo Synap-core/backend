@@ -24334,60 +24334,6 @@ export interface SessionTwinCandidate {
 	score: number;
 }
 /**
- * STAGE ↔ SUBJECT STATUS — the forward half (a run entering a stage writes the
- * subject's lifecycle value).
- *
- * A stage may declare `subjectStatus` (the value of the playbook's
- * `subjectProfile.statusProperty` it corresponds to). When a run advances INTO
- * such a stage, this writes that value onto the run's SUBJECT — through the
- * GOVERNED entity-update door (`entities.update`, which runs
- * `checkPermissionOrPropose`), never a raw UPDATE. An agent-driven advance may
- * therefore come back `proposed`: that is SUCCESS (the human reviews the status
- * change), not an error.
- *
- * Skips, each reported (never thrown — the stage already stands, and a status
- * write that could not happen must not un-advance the run):
- *  - no subject, or the stage declares no `subjectStatus`;
- *  - no status property: the process names none AND its subject kind (or
- *    role) declares no lifecycle. A process that names none follows the
- *    declared lifecycle — `loadSessionProcess` resolves it, once, for every
- *    reader (finding bfae3b84);
- *  - the subject ALREADY holds the value (`already_set`).
- * A caller's reply carries the outcome as `subjectMove`
- * ({@link reportedSubjectMove}) whenever the stage asked for a move.
- *
- * BIRTH (finding e100ddf6): a session born from a staged playbook is seeded
- * INTO its first stage (`create-session.ts`), so that stage's value is written
- * at birth by the same rule — {@link writeBirthStageSubjectStatus}.
- *
- * NOT called (by the advance door) when:
- *  - the advance FOLLOWS the subject (`skipSubjectWrite`, `@synap/jobs`
- *    `utils/process-sync.ts`): the subject is the source of truth there, and a
- *    follow that wrote back ping-ponged on stale events;
- *  - the stage is held by its gate — entering a gated stage is not agreed yet.
- *    A gate's PASS writes it: the stage-gate approval executor
- *    (`routers/proposals/executors/playbook-stage-gate.ts`) for a human gate,
- *    `resumeCheckGateIfMet` (`evaluations/evaluate.ts`) for a held check.
- *
- * STEP = STATUS (work model L5, 2026-10-12): for an ungated `"door"` advance
- * the subject leads, the advance door calls this FIRST and leaves
- * `current_stage` to process-sync's follow (`advance-stage.ts` header). Every
- * other path still calls it after the stage write, as described above.
- *
- * A value listed in `subjectProfile.humanOnlyStatuses` is written with
- * `forcePropose`: whoever drove the advance, a person decides it.
- *
- * A ROLE subject (`subjectProfile.profileSlug` is a role-profile, e.g. `lead`):
- * the status lives on the role's FACET, so the move names the role and goes
- * through the status door only. There is no plain-property fallback for a role
- * — writing `leadStage` into the parent entity's JSONB would be a status no
- * reader looks at, reported as `written`. A role move the door refuses
- * (role not attached, no declared lifecycle, unknown option) is `failed`.
- *
- * Source of the definition: `loadSessionProcess` (@synap/jobs) — the RUN's
- * frozen `definitionSnapshot` first, the live playbook second.
- */
-/**
  * `via: "status_door"` — the write went through `moveStatus` (a declared
  * lifecycle, kind or role), so it emits the transition the follow reads.
  * Absent — the legacy plain-property `entities.update` fallback.
@@ -24404,7 +24350,7 @@ export type StageSubjectStatusOutcome = {
 	value: string;
 	via?: "status_door";
 } | {
-	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_not_found";
+	reason: "already_set" | "no_process" | "no_status_property" | "no_subject" | "stage_has_no_subject_status" | "stage_not_found" | "subject_ahead" | "subject_not_found";
 	status: "skipped";
 } | {
 	reason: string;

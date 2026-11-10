@@ -29,6 +29,7 @@ import {
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { readBatchSubjectIds } from "@synap/jobs/utils/automation-governance.js";
+import { findInFlightRunSession } from "@synap/jobs/utils/run-in-flight.js";
 
 /** Register the playbook/* approve executors. */
 /**
@@ -810,6 +811,33 @@ export function registerPlaybookExecutors(): void {
               }
             : {}),
         });
+      // ONE RUN PER SUBJECT for a RULE's run (an activator's proposal): the
+      // filing step already files none while a run of this playbook is in
+      // flight on the subject (`steps/playbook-run.ts`); this is the same
+      // check at approval, for a proposal that was waiting when that run
+      // started (live: 100d7d65, filed while run 12dbd086 was open on Video
+      // 01). Approving it would start a DUPLICATE run, so nothing is started
+      // and the refusal names the open run. A person's own run proposal is
+      // theirs to repeat; a batch keeps its own per-subject receipt.
+      const singleSubject =
+        subjects.length <= 1 ? (subjects[0] ?? carriedSubjectId) : undefined;
+      if (raw.source === "automation" && singleSubject) {
+        const inFlight = await findInFlightRunSession({
+          playbookId,
+          subjectId: singleSubject,
+        });
+        if (inFlight) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              `"${playbook.name}" is already running on this record ` +
+              `(${inFlight.title ? `"${inFlight.title}", ` : ""}session ${inFlight.id}). ` +
+              "Approving would start a second run, so nothing was started. " +
+              "Open that run, or reject this proposal.",
+          });
+        }
+      }
+
       let batch: BatchRunReceipt | undefined;
       // What this approval started — EVERY approval, not only a batch: the
       // session is the door the person opens next, and a single run used to

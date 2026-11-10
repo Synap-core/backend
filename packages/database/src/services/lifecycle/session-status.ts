@@ -45,6 +45,8 @@ import {
   type FocusSession,
 } from "../../schema/focus-sessions.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
+import { expirePendingStageGatesOfEndedSessions } from "../../utils/stage-gate-wait.js";
+import type { ProposalStatusWriter } from "../../utils/proposal-transition.js";
 import {
   HoldRefusedError,
   assertHoldWaitRefOwned,
@@ -211,6 +213,19 @@ export async function setSessionStatus(
         });
       });
     await insertTransitionOutbox(tx, transitions);
+    // A session that ENDS takes its pending stage gates with it: an approval
+    // of a gate on a closed, failed or cancelled run could only lead nowhere
+    // (`stage-gate-wait.ts`). Same transaction, so the end and the expiry
+    // land together.
+    const ended = transitions
+      .filter((t) => t.category === "done" || t.category === "lost")
+      .map((t) => t.subjectId);
+    if (ended.length > 0) {
+      await expirePendingStageGatesOfEndedSessions(
+        tx as unknown as ProposalStatusWriter,
+        { sessionIds: ended, endedAs: input.to }
+      );
+    }
     return { rows, transitions };
   });
 }
