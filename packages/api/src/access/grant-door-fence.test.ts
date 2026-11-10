@@ -24,6 +24,7 @@ import {
   ownerWideDoorAllowed,
   packagePreflightReadable,
   restDoorAllowed,
+  runDetailReadable,
   sessionPacketReadable,
   TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
@@ -116,6 +117,53 @@ describe("restDoorAllowed", () => {
     ["DELETE", `/entities/${U}`, true],
   ] as const)("%s %s → %s", (method, path, ok) => {
     expect(restDoorAllowed(method, path, DOC_ONLY)).toBe(ok);
+  });
+});
+
+describe("GET /runs/:id (one run): admitted to a key that reads playbooks, narrowed by the route", () => {
+  const R = "11111111-1111-4111-8111-111111111111";
+  it("an app pinned to its space with playbook.read is admitted; the route narrows it", () => {
+    const app = key({
+      permissions: ["playbook.read", "entity.*.read"],
+      workspaceIds: ["w1"],
+    });
+    expect(restDoorAllowed("GET", `/runs/${R}`, app)).toBe(true);
+    expect(runDetailReadable(app)).toBe(false);
+  });
+  it("a key with no playbook read, or deny-all, stays refused", () => {
+    expect(restDoorAllowed("GET", `/runs/${R}`, DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("GET", `/runs/${R}`, key({ permissions: [] }))).toBe(
+      false
+    );
+  });
+  it("the run list and another run door are not admitted by it", () => {
+    const app = key({ permissions: ["playbook.read"], workspaceIds: ["w1"] });
+    expect(restDoorAllowed("GET", "/runs", app)).toBe(false);
+    expect(restDoorAllowed("GET", `/runs/${R}/activity`, app)).toBe(false);
+  });
+  it("the whole detail: unfenced, or one scope reading every subject unbounded", () => {
+    expect(runDetailReadable(null)).toBe(true);
+    expect(runDetailReadable(key({ permissions: ["*"] }))).toBe(true);
+    expect(
+      runDetailReadable(
+        key({
+          permissions: [
+            "playbook.read",
+            "session.read",
+            "channel.read",
+            "proposal.read",
+            "entity.*.read",
+            "link.read",
+            "event.*.read",
+            "agent.read",
+          ],
+        })
+      )
+    ).toBe(true);
+    // The same permissions pinned to a space: narrowed.
+    expect(
+      runDetailReadable(key({ permissions: ["*"], workspaceIds: ["w1"] }))
+    ).toBe(false);
   });
 });
 

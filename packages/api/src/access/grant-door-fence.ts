@@ -441,6 +441,36 @@ export function sessionPacketReadable(
 }
 
 /**
+ * What a playbook run's FULL detail (`getRun`, GET /runs/:id) reads beyond the
+ * run row: its session card, room activity and agents, the records it
+ * produced, its proposals, its turn ledger and telemetry events.
+ */
+export const RUN_DETAIL_SUBJECTS: readonly string[] = [
+  "playbook",
+  "session",
+  "channel",
+  "proposal",
+  "entity",
+  "link",
+  "event",
+  "agent",
+];
+
+/**
+ * May this request's key read a run's whole detail? Every unfenced caller
+ * may; a fenced key only when one scope reads every subject of it unbounded.
+ * Otherwise GET /runs/:id answers a ONE-SHOT run's record alone (its
+ * `generation`, about a subject the grant reaches) and says the rest was
+ * withheld (`run-record-for-key.ts`).
+ */
+export function runDetailReadable(grant: KeyGrant | null | undefined): boolean {
+  return (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...RUN_DETAIL_SUBJECTS), grant!)
+  );
+}
+
+/**
  * What `readWorkRelease` (services/dev-loop/work-release.ts) reads: the
  * `dev.repo_snapshot` events, the sessions the PRs belong to, and their
  * liveness (chat turns, events, proposals, room notes).
@@ -636,6 +666,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // The session row, narrowed by the route (`sessionPacketReadable`): the
   // packet is added only for a key that reads all of it.
   [route("/focus-sessions/:id"), NARROWED("session", SESSION_PACKET_SUBJECTS)],
+  // One run (`getRun`), narrowed by the route (`runDetailReadable`): a key
+  // that does not read every subject of the detail gets a ONE-SHOT run's
+  // record only (`readRunRecordForKey`: the run row through `scopedDb`,
+  // subject `playbook`, and its subject entity through `accessScopeWhere`,
+  // both with the grant ANDed), the rest said withheld. Admitted when one
+  // scope grants `playbook.read`: the app that ran a one-shot action reads
+  // what it cost and what it was made of (plan 08e4fba7 §3.5).
+  [route("/runs/:id"), NARROWED("playbook", RUN_DETAIL_SUBJECTS)],
   // The row + its `session_evaluations` (subject `session`, grant-read.ts).
   [route("/focus-sessions/:id/evaluations"), READS("session")],
   // `listSessionAnswers`: the row (sessionReadableWhere) + the room's messages.
