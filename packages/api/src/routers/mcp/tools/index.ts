@@ -409,7 +409,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     ),
     forEach: deriveJsonSchema(
       playbookStageSchema.shape.forEach.unwrap(),
-      "Advisory, not run yet: once per item, {over: '<param or dotted path>', as?, max? (1-200)}. Today the stage runs once; do not rely on a fan-out."
+      "Run the step once per batch of items, as child runs: {over: '<run param or subject.path holding a list>', as? (the child's param name, default 'item'), max? (1-200 items), batch? (1-50 items per child, default 1)}. At most 3 children run at once; they start under this run's approval; the run waits for all of them, then goes on and names any that failed."
     ),
     when: deriveJsonSchema(
       playbookStageSchema.shape.when.unwrap(),

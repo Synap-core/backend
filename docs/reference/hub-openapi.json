@@ -17373,6 +17373,11 @@
                                         "type": "integer",
                                         "minimum": 1,
                                         "maximum": 200
+                                      },
+                                      "batch": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 50
                                       }
                                     },
                                     "required": ["over"],
@@ -21600,6 +21605,11 @@
                                         "type": "integer",
                                         "minimum": 1,
                                         "maximum": 200
+                                      },
+                                      "batch": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 50
                                       }
                                     },
                                     "required": ["over"],
@@ -27695,6 +27705,11 @@
                               "type": "integer",
                               "minimum": 1,
                               "maximum": 200
+                            },
+                            "batch": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 50
                             }
                           },
                           "required": ["over"],

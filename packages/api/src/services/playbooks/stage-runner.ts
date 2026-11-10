@@ -64,6 +64,7 @@ import {
   type ExpectedOutput,
   type PlaybookRunner,
   type PlaybookStage,
+  type PlaybookStageForEach,
   type PlaybookStageUses,
   type SlotAsk,
 } from "@synap/playbooks";
@@ -104,6 +105,8 @@ export interface EnterStageResult {
   reason?: string;
   /** A step that `uses` a playbook: the child run's session that works it. */
   childSessionId?: string;
+  /** A `forEach` step: the child runs started on entry (the rest wait their turn). */
+  childSessionIds?: string[];
   /** The tools it waits on (`waiting_tools`), with their install asks. */
   waitingTools?: string[];
   /**
@@ -131,6 +134,8 @@ interface SnapshotStage {
   requires?: unknown;
   /** The step IS this playbook (slice 4): a child run works it. */
   uses?: PlaybookStageUses;
+  /** The step runs once per batch of items: child runs work it. */
+  forEach?: PlaybookStageForEach;
 }
 
 /** The label of the slot the person answers when nobody can take a step. */
@@ -672,12 +677,20 @@ async function enterStageUnsafe(p: {
   const stageRunId = row!.id;
   let reached: DispatchReach | undefined;
   let childSessionId: string | undefined;
+  let childSessionIds: string[] | undefined;
 
   // A step that IS a playbook (slice 4): its own run works it, handed to the
   // step's runner — never a turn on this session. Not while it waits on tools
   // (the re-check starts it) nor while nobody can take it (the person picks)
-  // or a hand-off waits for the person.
-  if (stage.uses && handOff !== "nobody" && handOff !== "proposed") {
+  // or a hand-off waits for the person. A step that runs once per batch of
+  // items (`forEach`) is worked by child runs, on the same conditions.
+  if (stage.forEach && handOff !== "nobody" && handOff !== "proposed") {
+    if (!waitsOnTools) {
+      const { startStageForEach } = await import("./stage-for-each.js");
+      const out = await startStageForEach({ session, stage, stageRunId });
+      if (out.status === "started") childSessionIds = out.childSessionIds;
+    }
+  } else if (stage.uses && handOff !== "nobody" && handOff !== "proposed") {
     if (!waitsOnTools) {
       const { startStageChild } = await import("./stage-child.js");
       const child = await startStageChild({
@@ -809,6 +822,7 @@ async function enterStageUnsafe(p: {
     ...(waitsOnTools ? { waitingTools: missingTools } : {}),
     ...(reached ? { reached } : {}),
     ...(childSessionId ? { childSessionId } : {}),
+    ...(childSessionIds ? { childSessionIds } : {}),
   };
 }
 
@@ -939,6 +953,16 @@ async function startWaitedStageChild(open: SessionStageRun): Promise<boolean> {
   const stage = readStages(run?.definitionSnapshot).find(
     (s) => s.key === open.stageKey
   );
+  if (stage?.forEach) {
+    const session = await db.query.focusSessions.findFirst({
+      columns: { id: true, userId: true, channelId: true, status: true },
+      where: eq(focusSessions.id, open.sessionId),
+    });
+    if (!session) return false;
+    const { startStageForEach } = await import("./stage-for-each.js");
+    await startStageForEach({ session, stage, stageRunId: open.id });
+    return true;
+  }
   if (!stage?.uses) return false;
   const session = await db.query.focusSessions.findFirst({
     columns: {

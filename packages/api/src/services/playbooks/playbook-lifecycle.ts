@@ -100,6 +100,7 @@ import {
 } from "../links/links-service.js";
 import { emitSideEffects } from "@synap/events";
 import { enqueueSessionRecall } from "../focus-sessions/session-recall.js";
+import { scopePlaybookToStage } from "./stage-of.js";
 import { logEvent } from "../../lib/event-helpers.js";
 import {
   recordConversion,
@@ -347,6 +348,11 @@ export interface InstantiateInput {
    * criteria, params and goal template. Absent ⇒ the live definition.
    */
   pinnedVersion?: number;
+  /**
+   * Born from ONE stage of the playbook (`scopePlaybookToStage`): a child run
+   * of a `forEach` step. Absent ⇒ every stage.
+   */
+  stageOnly?: string;
   /** The workspace the session runs in (verified membership upstream). */
   workspaceId: string;
   /** The human/agent starting the run. */
@@ -584,10 +590,13 @@ export async function instantiateSessionRow(
   if (!live) {
     throw new Error(`Playbook ${input.playbookId} not found`);
   }
-  const playbook =
+  const pinned =
     input.pinnedVersion !== undefined
       ? await playbookAtVersion(db, live, input.pinnedVersion)
       : live;
+  const playbook = input.stageOnly
+    ? scopePlaybookToStage(pinned, input.stageOnly)
+    : pinned;
 
   // PARAMS — validated HERE and nowhere else. This function is the single
   // funnel behind every run door (playbooks.run, the Hub run door, MCP
