@@ -2609,7 +2609,8 @@
                       "maxLength": 200
                     },
                     "body": { "type": "string", "maxLength": 100000 },
-                    "status": { "type": "string", "maxLength": 40 }
+                    "status": { "type": "string", "maxLength": 40 },
+                    "form": { "type": "string", "enum": ["heading"] }
                   },
                   "required": ["op", "id", "title", "body"]
                 },
@@ -16348,6 +16349,10 @@
                                         "maxLength": 200,
                                         "pattern": "^[^\\r\\n]+$"
                                       },
+                                      "owner": {
+                                        "type": "string",
+                                        "enum": ["ai", "person"]
+                                      },
                                       "examples": {
                                         "type": "object",
                                         "properties": {
@@ -21444,6 +21449,10 @@
                                         "minLength": 1,
                                         "maxLength": 200,
                                         "pattern": "^[^\\r\\n]+$"
+                                      },
+                                      "owner": {
+                                        "type": "string",
+                                        "enum": ["ai", "person"]
                                       },
                                       "examples": {
                                         "type": "object",
@@ -40663,6 +40672,10 @@
                               "maxLength": 200,
                               "pattern": "^[^\\r\\n]+$"
                             },
+                            "owner": {
+                              "type": "string",
+                              "enum": ["ai", "person"]
+                            },
                             "examples": {
                               "type": "object",
                               "properties": {
@@ -44667,6 +44680,10 @@
                               "minLength": 1,
                               "maxLength": 200,
                               "pattern": "^[^\\r\\n]+$"
+                            },
+                            "owner": {
+                              "type": "string",
+                              "enum": ["ai", "person"]
                             },
                             "examples": {
                               "type": "object",
