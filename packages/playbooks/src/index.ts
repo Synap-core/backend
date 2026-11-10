@@ -2819,7 +2819,9 @@ function mergeStages(
         Array.isArray(existing.grants)
           ? (existing.grants as CapabilityRef[])
           : undefined,
-        Array.isArray(stage.grants) ? (stage.grants as CapabilityRef[]) : undefined
+        Array.isArray(stage.grants)
+          ? (stage.grants as CapabilityRef[])
+          : undefined
       );
       const merged: Record<string, unknown> = { ...existing, ...stage };
       if (tools) merged.tools = tools;
