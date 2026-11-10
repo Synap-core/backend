@@ -502,7 +502,10 @@ export function refresherRewritesOnlyItsSections(
   );
   return (
     ops.length > 0 &&
-    ops.every((op) => op.op === "upsert_section" && own.has(op.id))
+    ops.every(
+      (op) =>
+        op.op === "upsert_section" && op.form !== "heading" && own.has(op.id)
+    )
   );
 }
 

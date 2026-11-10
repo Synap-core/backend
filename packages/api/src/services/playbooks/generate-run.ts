@@ -200,6 +200,7 @@ export function readGenerateLanding(
     lands: {
       target: "subject_document_section",
       section: output.lands!.section.trim(),
+      ...(output.lands!.owner === "person" ? { owner: "person" as const } : {}),
     },
     ...(examples && typeof examples === "object" ? { examples } : {}),
   };
@@ -748,9 +749,12 @@ export async function executeGenerateRun(
     record = { ...record, outputChars: body.length };
     if (!body) throw new Error("The model answered with no draft text.");
 
-    // The draft, filed as a PROPOSAL on the subject's document: an AI-owned
-    // section, always reviewed (`forReview`), through THE patch door.
+    // The draft, filed as a PROPOSAL on the subject's document, always
+    // reviewed (`forReview`), through THE patch door: an AI-owned section, or
+    // (`lands.owner: "person"`) the person's own plain `## <section>` block,
+    // whose body approval replaces: the one write.
     const sectionId = sectionIdFor(lands.section);
+    const personOwned = lands.owner === "person";
     const filed = await applyDocumentPatch({
       userId: input.userId,
       systemAuthor: GENERATE_RUN_AUTHOR,
@@ -764,6 +768,7 @@ export async function executeGenerateRun(
           id: sectionId,
           title: lands.section,
           body,
+          ...(personOwned ? { form: "heading" as const } : {}),
         },
       ],
       reasoning: `"${playbook.name}" drafted the "${lands.section}" of ${subject.title ?? "this record"}.`,
