@@ -48,7 +48,12 @@ import type {
 } from "@synap/database/schema";
 import { ProposalStatus } from "@synap/database/schema";
 import type { ExpectedOutput, OutputLanding } from "@synap/playbooks";
-import { readPlaybookParams, validatePlaybookParams } from "@synap/playbooks";
+import {
+  fillParamsFromSubject,
+  needsSubjectKinds,
+  readPlaybookParams,
+  validatePlaybookParams,
+} from "@synap/playbooks";
 import type { RunOn } from "@synap-core/types/agents";
 import {
   AiUsageCollector,
@@ -59,10 +64,10 @@ import {
   PlaybookParamsError,
   renderSubjectParamValues,
   resolveGoal,
-  subjectAnswersEntityParam,
   withDeclaredParamsDefaulted,
 } from "./playbook-lifecycle.js";
 import { loadRunMethodParts, renderPlaybookMethod } from "./playbook-method.js";
+import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import {
   applyDocumentPatch,
@@ -412,10 +417,41 @@ export async function executeGenerateRun(
   }
   const { lands } = readGenerateLanding(playbook);
 
+  // The subject: what the prompt reads, and what answers the params it
+  // declares it answers (`fillParamsFromSubject`, the run funnel's own fill).
+  const [subject] = await db
+    .select({
+      id: entities.id,
+      title: entities.title,
+      preview: entities.preview,
+      type: entities.type,
+      properties: entities.properties,
+      documentId: entities.documentId,
+    })
+    .from(entities)
+    .where(eq(entities.id, subjectId))
+    .limit(1);
+  if (!subject) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Subject not found." });
+  }
   const declaredParams = readPlaybookParams(playbook.params);
+  const subjectKinds = needsSubjectKinds(declaredParams)
+    ? ((await subjectKindSlugs({
+        subjectId,
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+      })) ?? [])
+    : [];
   const resolution = validatePlaybookParams(
     declaredParams,
-    subjectAnswersEntityParam(declaredParams, input.params, subjectId)
+    fillParamsFromSubject(declaredParams, input.params, {
+      id: subjectId,
+      title: subject.title ?? null,
+      preview: subject.preview ?? null,
+      properties:
+        (subject.properties as Record<string, unknown> | null) ?? null,
+      kinds: subjectKinds,
+    }).values
   );
   // Nobody to owe a param to: there is no session. A missing one refuses.
   if (
@@ -442,21 +478,7 @@ export async function executeGenerateRun(
     }
   }
 
-  // ── What the prompt reads: the subject and its document, as the person. ────
-  const [subject] = await db
-    .select({
-      id: entities.id,
-      title: entities.title,
-      type: entities.type,
-      properties: entities.properties,
-      documentId: entities.documentId,
-    })
-    .from(entities)
-    .where(eq(entities.id, subjectId))
-    .limit(1);
-  if (!subject) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Subject not found." });
-  }
+  // ── What the prompt reads: the subject's document, as the person. ─────────
   if (!subject.documentId) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
