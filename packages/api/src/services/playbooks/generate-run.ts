@@ -45,9 +45,14 @@ import type {
   Playbook,
   PlaybookRun,
   PlaybookRunGeneration,
+  PlaybookRunGenerationExamples,
 } from "@synap/database/schema";
 import { ProposalStatus } from "@synap/database/schema";
-import type { ExpectedOutput, OutputLanding } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  OutputLanding,
+  OutputLandingExamples,
+} from "@synap/playbooks";
 import {
   fillParamsFromSubject,
   needsSubjectKinds,
@@ -74,6 +79,12 @@ import {
   loadPatchDocument,
   readPatchDocumentContent,
 } from "../document-patch/apply-document-patch.js";
+import {
+  examplesAsked,
+  readPastOutcomes,
+  type PastOutcome,
+  type PastOutcomeWithoutText,
+} from "./generate-examples.js";
 
 const logger = createLogger({ module: "generate-run" });
 
@@ -89,6 +100,12 @@ export const GENERATE_PROMPT_MAX_CHARS = 22_000;
 
 /** One property value in the prompt is cut at this many characters. */
 const PROPERTY_VALUE_MAX_CHARS = 1_000;
+
+/** One past outcome's text in the prompt is cut at this many characters. */
+export const EXAMPLE_TEXT_MAX_CHARS = 1_500;
+
+/** A rejection reason in the prompt is cut at this many characters. */
+const EXAMPLE_REASON_MAX_CHARS = 300;
 
 /** The truncation point of the one call (a draft, never a long document). */
 const GENERATE_MAX_TOKENS = 2_000;
@@ -149,7 +166,12 @@ export function sectionIdFor(section: string): string {
  */
 export function readGenerateLanding(
   playbook: Pick<Playbook, "expectedOutputs" | "name">
-): { output: ExpectedOutput; lands: OutputLanding } {
+): {
+  output: ExpectedOutput;
+  lands: OutputLanding;
+  /** The past outcomes it asks for as examples (`lands.examples`), if any. */
+  examples?: OutputLandingExamples;
+} {
   const outputs = Array.isArray(playbook.expectedOutputs)
     ? (playbook.expectedOutputs as ExpectedOutput[])
     : [];
@@ -172,12 +194,14 @@ export function readGenerateLanding(
     });
   }
   const output = landing[0]!;
+  const examples = output.lands!.examples;
   return {
     output,
     lands: {
       target: "subject_document_section",
       section: output.lands!.section.trim(),
     },
+    ...(examples && typeof examples === "object" ? { examples } : {}),
   };
 }
 
@@ -222,6 +246,79 @@ export function draftBodyOf(output: unknown, section: string): string {
 interface PromptParts {
   text: string;
   context: PlaybookRunGeneration["context"];
+  /** The past outcomes given: those shown, and those left out for room. */
+  examples: {
+    used: Extract<PlaybookRunGenerationExamples, { used: unknown }>["used"];
+    overBound: PastOutcome[];
+  };
+}
+
+/** One past outcome as a prompt part: a heading line and its text. */
+function exampleText(o: PastOutcome): {
+  text: string;
+  truncated: boolean;
+  reason: boolean;
+} {
+  const where = o.subjectTitle ? ` for "${o.subjectTitle}"` : "";
+  const reason = o.reason
+    ? o.reason.replace(/\s+/g, " ").slice(0, EXAMPLE_REASON_MAX_CHARS)
+    : null;
+  const head =
+    o.outcome === "approved"
+      ? `### Approved${where}, as the person kept it`
+      : `### Rejected${where}${reason ? `. Their reason: ${reason}` : ""}`;
+  const truncated = o.text.length > EXAMPLE_TEXT_MAX_CHARS;
+  const body = truncated
+    ? `${o.text.slice(0, EXAMPLE_TEXT_MAX_CHARS)}…`
+    : o.text;
+  return { text: `${head}\n${body}`, truncated, reason: reason !== null };
+}
+
+/**
+ * The examples block, fitted into `room` characters: each past outcome in
+ * order (approved first, then rejected, most recent first) while it fits;
+ * one that does not is left out (`overBound`) and the next is tried. Null
+ * when none fits.
+ */
+function examplesBlock(
+  section: string,
+  outcomes: PastOutcome[],
+  room: number
+): {
+  text: string | null;
+  used: PromptParts["examples"]["used"];
+  overBound: PastOutcome[];
+} {
+  const head = [
+    `## Earlier "${section}" drafts the person decided`,
+    "Drafts this playbook wrote before, which the person approved or rejected. " +
+      "Write like the approved ones, as they kept them, and avoid what made them reject the others. " +
+      "They are examples for the voice and the shape: never copy one, and take no fact from them.",
+  ].join("\n");
+  const parts: string[] = [];
+  const used: PromptParts["examples"]["used"] = [];
+  const overBound: PastOutcome[] = [];
+  let size = head.length;
+  for (const o of outcomes) {
+    const part = exampleText(o);
+    const cost = part.text.length + 2;
+    if (size + cost > room) {
+      overBound.push(o);
+      continue;
+    }
+    size += cost;
+    parts.push(part.text);
+    used.push({
+      outcome: o.outcome,
+      proposalId: o.proposalId,
+      runId: o.runId,
+      chars: part.text.length,
+      ...(part.reason ? { reason: true as const } : {}),
+      ...(part.truncated ? { truncated: true as const } : {}),
+    });
+  }
+  if (parts.length === 0) return { text: null, used, overBound };
+  return { text: [head, ...parts].join("\n\n"), used, overBound };
 }
 
 /**
@@ -229,7 +326,9 @@ interface PromptParts {
  * goal, the subject's fields, the subject's document, and how to answer. Cut
  * to {@link GENERATE_PROMPT_MAX_CHARS}: the document first, then the fields;
  * the method and the goal are never cut (a playbook whose method alone
- * exceeds the bound is refused).
+ * exceeds the bound is refused). Past outcomes (`examples`) take only the room
+ * the subject leaves: they are left out first, the subject is never cut for
+ * them.
  */
 export function buildGeneratePrompt(input: {
   method: { contextSkill: string | null; guidance: string };
@@ -242,6 +341,8 @@ export function buildGeneratePrompt(input: {
     properties: Record<string, unknown>;
   };
   document: { id: string; title: string; content: string } | null;
+  /** Past outcomes to show as examples, in order (`readPastOutcomes`). */
+  examples?: PastOutcome[];
 }): PromptParts {
   const methodText = renderPlaybookMethod({
     contextSkill: input.method.contextSkill,
@@ -299,9 +400,24 @@ export function buildGeneratePrompt(input: {
 
   const subjectBlock = [subjectHead, fields].filter(Boolean).join("\n");
   const docBlock = docHead ? [docHead, docText].filter(Boolean).join("\n") : "";
-  const text = [methodText, input.goal.trim(), subjectBlock, docBlock, answer]
-    .filter(Boolean)
-    .join("\n\n");
+  const withoutExamples = [
+    methodText,
+    input.goal.trim(),
+    subjectBlock,
+    docBlock,
+    answer,
+  ].filter(Boolean);
+  // The examples take what the subject left, joins included.
+  const fitted = examplesBlock(
+    input.section,
+    input.examples ?? [],
+    GENERATE_PROMPT_MAX_CHARS - withoutExamples.join("\n\n").length - 2
+  );
+  const text = (
+    fitted.text
+      ? [...withoutExamples.slice(0, -1), fitted.text, answer]
+      : withoutExamples
+  ).join("\n\n");
 
   const context: PlaybookRunGeneration["context"] = [];
   if (methodText) context.push({ kind: "method", chars: methodText.length });
@@ -319,7 +435,18 @@ export function buildGeneratePrompt(input: {
       ...(docTruncated ? { truncated: true } : {}),
     });
   }
-  return { text, context };
+  if (fitted.text) {
+    context.push({
+      kind: "examples",
+      chars: fitted.text.length,
+      ...(fitted.overBound.length > 0 ? { truncated: true } : {}),
+    });
+  }
+  return {
+    text,
+    context,
+    examples: { used: fitted.used, overBound: fitted.overBound },
+  };
 }
 
 /** The pending proposal an earlier run of this playbook filed on this subject. */
@@ -415,7 +542,8 @@ export async function executeGenerateRun(
       message: `"${playbook.name}" drafts for one record: start it on its subject (subjectId).`,
     });
   }
-  const { lands } = readGenerateLanding(playbook);
+  const { lands, examples: examplesDeclared } = readGenerateLanding(playbook);
+  const asked = examplesAsked(examplesDeclared);
 
   // The subject: what the prompt reads, and what answers the params it
   // declares it answers (`fillParamsFromSubject`, the run funnel's own fill).
@@ -550,6 +678,29 @@ export async function executeGenerateRun(
       sessionId: null,
       warn: (obj, msg) => logger.warn(obj, `generate: ${msg}`),
     });
+    // Past outcomes, when the landing asks for them. A FAILED read is not
+    // "none": the run goes on without examples and its record says why.
+    let past: {
+      outcomes: PastOutcome[];
+      withoutText: PastOutcomeWithoutText[];
+    } | null = null;
+    let examplesError: string | null = null;
+    if (asked.approved > 0 || asked.rejected > 0) {
+      try {
+        past = await readPastOutcomes({
+          playbookId: playbook.id,
+          workspaceId: input.workspaceId,
+          userId: input.userId,
+          asked,
+        });
+      } catch (err) {
+        examplesError = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          { err, runId, playbookId: playbook.id },
+          "generate: reading past outcomes failed; drafting without examples"
+        );
+      }
+    }
     const prompt = buildGeneratePrompt({
       method: { contextSkill: method.contextSkill, guidance: method.guidance },
       goal,
@@ -561,9 +712,17 @@ export async function executeGenerateRun(
         properties: (subject.properties ?? {}) as Record<string, unknown>,
       },
       document: { id: doc.id, title: doc.title, content },
+      ...(past ? { examples: past.outcomes } : {}),
     });
+    const examplesRecord =
+      examplesError !== null
+        ? { asked, error: examplesError.slice(0, 500) }
+        : past
+          ? examplesRecordOf(asked, past.withoutText, prompt.examples)
+          : null;
     record = {
       ...record,
+      ...(examplesRecord ? { examples: examplesRecord } : {}),
       context: prompt.context,
       prompt: {
         system: GENERATE_SYSTEM,
@@ -648,6 +807,28 @@ export async function executeGenerateRun(
     }
     throw err;
   }
+}
+
+/** What the run's record says about the past outcomes it showed. */
+function examplesRecordOf(
+  asked: { approved: number; rejected: number },
+  withoutText: PastOutcomeWithoutText[],
+  shown: PromptParts["examples"]
+): PlaybookRunGenerationExamples {
+  const leftOut = [
+    ...withoutText.map((o) => ({ ...o, why: "no_text" as const })),
+    ...shown.overBound.map((o) => ({
+      outcome: o.outcome,
+      proposalId: o.proposalId,
+      runId: o.runId,
+      why: "over_bound" as const,
+    })),
+  ];
+  return {
+    asked,
+    used: shown.used,
+    ...(leftOut.length > 0 ? { leftOut } : {}),
+  };
 }
 
 /** The usage the one call reported, onto the record (NULL when unreported). */
