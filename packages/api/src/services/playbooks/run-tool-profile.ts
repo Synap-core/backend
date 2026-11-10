@@ -132,7 +132,7 @@ export const defaultDeps: RunToolProfileDeps = {
  * capability by id or by name (every verb of it is offered), or one verb by
  * its id. An entry the run's lens cannot see offers nothing.
  */
-function namedVerbs(
+export function namedVerbs(
   entries: readonly string[],
   capabilities: readonly GrantableCapability[],
   readsOnly = false
