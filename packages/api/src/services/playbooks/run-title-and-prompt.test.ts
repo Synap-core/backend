@@ -155,6 +155,7 @@ vi.mock("./executors/registry.js", () => ({
 
 const {
   buildRunSessionTitle,
+  runWorksOnLabel,
   runPromptFor,
   RUN_PROMPT_METADATA_KEY,
   promoteSessionToPlaybook,
@@ -191,6 +192,59 @@ describe("buildRunSessionTitle", () => {
   it("caps the title so a long subject name cannot restore the paragraph", () => {
     const title = buildRunSessionTitle("P", "x".repeat(2000));
     expect(title.length).toBe(300);
+  });
+});
+
+describe("runWorksOnLabel (a run with no subject is named by what it works on)", () => {
+  const RECIPE_ID = "1b91229e-f202-4a7a-9b57-1d6f5a48ec7c";
+  const names: Record<string, string> = { [RECIPE_ID]: "Consolidate findings" };
+  const nameOf = async (id: string) => names[id] ?? null;
+
+  it("names the pod object a param's id points at, by its title", async () => {
+    await expect(
+      runWorksOnLabel(
+        [
+          { name: "recipe", type: "text", required: true },
+          { name: "runs", type: "number" },
+        ],
+        { recipe: RECIPE_ID, runs: 10 },
+        nameOf
+      )
+    ).resolves.toBe("Consolidate findings");
+  });
+
+  it("an id that names nothing visible is skipped, never shown", async () => {
+    await expect(
+      runWorksOnLabel(
+        [{ name: "recipe", type: "text", required: true }],
+        { recipe: "00000000-0000-4000-8000-000000000000" },
+        nameOf
+      )
+    ).resolves.toBeNull();
+  });
+
+  it("else the first required text param's own value", async () => {
+    await expect(
+      runWorksOnLabel(
+        [
+          { name: "depth", type: "number" },
+          { name: "area", type: "text", required: true },
+        ],
+        { depth: 2, area: "governance" },
+        nameOf
+      )
+    ).resolves.toBe("governance");
+  });
+
+  it("else nothing: a boolean or number param does not name a run", async () => {
+    await expect(
+      runWorksOnLabel(
+        [{ name: "dryRun", type: "boolean", required: true }],
+        { dryRun: true },
+        nameOf
+      )
+    ).resolves.toBeNull();
+    await expect(runWorksOnLabel([], {}, nameOf)).resolves.toBeNull();
   });
 });
 
@@ -278,6 +332,35 @@ describe("runPlaybook seam: the row gets a title, the agent gets the prompt", ()
     expect(metadata.automationRunId).toBe("arun-1");
     expect(typeof metadata[RUN_PROMPT_METADATA_KEY]).toBe("string");
     // No subject bound ⇒ the title is the bare playbook name.
+    expect(session.goal).toBe("CRM hygiene");
+  });
+
+  it("a run with no subject is NAMED by what it works on; its goal is unchanged", async () => {
+    const RECIPE_ID = "1b91229e-f202-4a7a-9b57-1d6f5a48ec7c";
+    const withParam = {
+      ...PLAYBOOK,
+      params: [{ name: "recipe", type: "text", required: true }],
+    };
+    db.query.playbooks.findFirst = async () => withParam;
+    // The param's id resolves to a playbook the starter can see (no entity).
+    (db as unknown as Record<string, unknown>).select = () => ({
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () =>
+            table === playbooks ? [{ name: "Consolidate findings" }] : [],
+        }),
+      }),
+    });
+    await runPlaybook({
+      playbookId: PLAYBOOK.id,
+      workspaceId: "ws-1",
+      userId: "user-1",
+      params: { recipe: RECIPE_ID },
+    });
+
+    const session = inserted.filter((i) => i.table === focusSessions)[0].values;
+    expect(session.title).toBe("CRM hygiene · Consolidate findings");
+    // `goal` is the dedup/proposal key: it stays the bare playbook name.
     expect(session.goal).toBe("CRM hygiene");
   });
 
