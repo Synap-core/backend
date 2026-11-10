@@ -67,6 +67,12 @@ export const vocabularySentencesEn = {
   "vocabulary.title.noVerb": "Request: {Obj}",
   "vocabulary.title.noVerb.named": 'Request: {Obj} "{name}"',
   "vocabulary.title.lead": "{verb}: {name}",
+  // A capability asked for one of the person's computers
+  // (`buildInstallationTitle`): what, and on which computer.
+  "vocabulary.title.onComputer": '{verb} "{name}" on {computer}',
+  "vocabulary.title.fromComputer": '{verb} "{name}" from {computer}',
+  "vocabulary.title.addAndInstallOn":
+    'Add "{name}" from the marketplace and install it on {computer}',
   "vocabulary.title.verbOnly.named": '{verb} "{name}"',
   "vocabulary.title.imperative": "{verb} {Obj}",
   "vocabulary.title.imperative.named": '{verb} {Obj} "{name}"',
@@ -103,6 +109,14 @@ export const vocabularySentencesEn = {
   "vocabulary.membersDecide.unnamed": "Item members decide",
   // `resolveHandedToLabel`: a slot handed to an agent (past).
   "vocabulary.handedTo": "Handed to {name}",
+  // `resolveDoNotContactRefusal`: why the send door sent nothing to a person
+  // marked do not contact (founder, 2026-11-09). The reason, when the person
+  // gave one, is said as written.
+  "vocabulary.refusal.doNotContact":
+    "Nothing was sent: {name} is marked do not contact.",
+  "vocabulary.refusal.doNotContact.reason":
+    "Nothing was sent: {name} is marked do not contact ({reason}).",
+  "vocabulary.refusal.doNotContact.unnamed": "this person",
   // `resolveRunnerStateLabelFor`: a runner's wait read by someone other than
   // the person it waits on (a room member): never "your".
   "vocabulary.runner.needs_permission.named": "Waiting for {name}'s permission",

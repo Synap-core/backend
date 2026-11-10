@@ -11,6 +11,10 @@
  */
 
 import {
+  trialStampOf,
+  TRIAL_RUN_WRITE_REFUSED_REASON,
+} from "@synap/capability-gate";
+import {
   describeBoxDeclaration,
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
@@ -105,6 +109,7 @@ import { buildTrackStartSummary } from "../services/tracks/track-start-summary.j
 import { buildTrackParticipantSummary } from "../services/tracks/track-participant-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import { packageObjectCount } from "../services/package-contents-summary.js";
+import { installationTitleOf } from "../services/installations/installation-title.js";
 import {
   defaultApprovalSentence,
   isLikelyUUID,
@@ -307,6 +312,7 @@ async function loadSessionGovernanceContext(
     )?.governance as { forceProposeWrites?: unknown } | undefined;
     return {
       forceProposeWrites: governance?.forceProposeWrites === true,
+      trial: trialStampOf(session?.metadata) !== null,
       expectedOutputs: Array.isArray(session?.expectedOutputs)
         ? (session.expectedOutputs as ExpectedOutput[])
         : [],
@@ -316,13 +322,18 @@ async function loadSessionGovernanceContext(
       { err, sessionId },
       "Failed to load session governance context — proceeding without it"
     );
-    return { forceProposeWrites: false, expectedOutputs: [] };
+    return { forceProposeWrites: false, trial: false, expectedOutputs: [] };
   }
 }
 
 /** What the ONE session read above yields: a governance flag and the slots. */
 interface SessionGovernanceContext {
   forceProposeWrites: boolean;
+  /**
+   * A TRIAL run's session (the rule lab, design b199a3a4 slice 1b,
+   * `metadata.trial`): every AI write in it is refused.
+   */
+  trial: boolean;
   expectedOutputs: ExpectedOutput[];
 }
 
@@ -1170,15 +1181,13 @@ export interface PermissionCheckBaseOpts {
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
-   * / 2.86 (other moves: execute once attributed). `atSessionEnd`: a session
-   * END move, which skips 2.85; `atSessionBirth` + `outOfTerminal`: a session
-   * BIRTH move reopening a done/lost thing, which always proposes (2.076)
-   * (governance-policy `lifecycleMove`).
+   * / 2.86 (other moves: execute once attributed). `atSessionBirth` +
+   * `outOfTerminal`: a session BIRTH move reopening a done/lost thing, which
+   * always proposes (2.076) (governance-policy `lifecycleMove`).
    */
   lifecycleMove?: {
     intoTerminal: boolean;
     humanOnly: boolean;
-    atSessionEnd?: boolean;
     outOfTerminal?: boolean;
     atSessionBirth?: boolean;
   };
@@ -1356,7 +1365,6 @@ interface AnonymousPolicyFacts {
     | {
         intoTerminal: boolean;
         humanOnly: boolean;
-        atSessionEnd?: boolean;
         outOfTerminal?: boolean;
         atSessionBirth?: boolean;
       }
@@ -2002,6 +2010,20 @@ async function evaluatePermission(
       isAiWrite && sessionId
         ? await loadSessionGovernanceContext(sessionId)
         : null;
+    // A TRIAL run (the rule lab): nothing it writes may land, whatever a rule
+    // or a floor would say. Its session's OWN row (stage, progress, close) is
+    // its bookkeeping, not an output, and goes on. The capability gate and the
+    // send door refuse its runs and sends on their own read, which fails
+    // closed; this read stays best-effort like the stamp above.
+    if (
+      sessionGovernance?.trial &&
+      !(
+        subjectType === "focus_session" &&
+        (data as { id?: unknown } | undefined)?.id === sessionId
+      )
+    ) {
+      return { denied: true, reason: TRIAL_RUN_WRITE_REFUSED_REASON };
+    }
     // A LOOSENING settings change (raise a ceiling, widen a rule to auto,
     // guideline posture:auto, or revoke any guard) is a hard floor — it must
     // always be a human decision, so it can never auto-apply via DEFAULT_
@@ -2948,7 +2970,7 @@ function singularSubjectType(subjectType: string): string {
  * The cell a `renderer.set` payload actually binds, as a human word.
  *
  * `ref.cellKey` is NOT always the cell: `buildCellRendererRef`
- * (`routers/hub-protocol/profiles.ts`) wraps an iframe/native cell by rewriting
+ * (`services/renderers/renderer-target-checks.ts`) wraps an iframe/native cell by rewriting
  * `cellKey` to the shared host `"iframe-widget"` and moving the real typeKey
  * into `props.typeKey`. Reading `cellKey` alone would print the same word
  * ("Iframe widget") for every iframe cell ever proposed.
@@ -3324,6 +3346,14 @@ export function buildProposalSummary(
   action: string,
   data: Record<string, unknown>
 ): string {
+  // A capability asked for one of the person's computers: "Add ffmpeg and
+  // install it on Mac", never the door's "Request Installation". Stored, so
+  // activity, session titles and notifications read the same words as the
+  // card (`installation-title.ts`).
+  if (subjectType === "installation" && action === "request") {
+    const title = installationTitleOf(data);
+    if (title) return title;
+  }
   // A slug-idempotent define that CHANGES an existing kind/role's name,
   // description, icon or default values — "Update Role "X": description",
   // never the generic "Create Kind" of the define door it rides.

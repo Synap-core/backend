@@ -15,6 +15,7 @@
  * `requireScope`, and focus-session resolution helpers.
  */
 
+import { capReply } from "./reply-cap.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
 import {
@@ -50,6 +51,7 @@ import { ruleHandlers } from "./handlers/rule.js";
 import { trackHandlers } from "./handlers/track.js";
 import { trackParticipantHandlers } from "./handlers/track-participants.js";
 import { workerHandlers } from "./handlers/workers.js";
+import { installationHandlers } from "./handlers/installations.js";
 import { devApprovalHandlers } from "./handlers/dev-approval.js";
 import { askPersonHandlers } from "./handlers/ask-person.js";
 import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
@@ -82,6 +84,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...trackHandlers,
   ...trackParticipantHandlers,
   ...workerHandlers,
+  ...installationHandlers,
   ...devApprovalHandlers,
   ...askPersonHandlers,
 };
@@ -297,7 +300,9 @@ export async function executeMCPToolViaHubProtocol(
   // for the host's iframe. LAST, so it is read back from the final text block
   // — `link`, `attribution` and `proposalUpdates` included — and the two
   // copies never diverge.
-  return withUiStructuredContent(toolName, digested);
+  // THE reply cap, applied last on the text the agent reads (and so on what
+  // the structured copy is built from): one door for every tool.
+  return withUiStructuredContent(toolName, capReply(toolName, digested));
 }
 
 /**

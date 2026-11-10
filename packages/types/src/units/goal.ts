@@ -32,6 +32,10 @@ import type {
   PullRequestState,
 } from "../events/pr-state.js";
 import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
+import type {
+  ThingBlockerBlocks,
+  ThingBlockerClearedBy,
+} from "./thing-blocker.js";
 import {
   WAIT_BALLS,
   WAIT_KIND_BALL,
@@ -839,8 +843,34 @@ export type WaitingOnSource = (
       kind: "owed_slot";
       /** The slot's blocked reason; absent = a question, a param, an ask. */
       blockedReason?: string | null;
+      /**
+       * Whose slot: absent or `human` = owed to a person (a need-you card);
+       * `agent` = an agent's runnable blocker, which counts only because it
+       * declared `blocks` (plan e7f753db §9). Its ball is the agent's.
+       */
+      owner?: "human" | "agent";
+      /** The thing and status it holds up, as declared (`SlotBlocks`). */
+      blocks?: ThingBlockerBlocks | null;
+      /** The blocker's domain name (`not_connected`), as declared. */
+      blockerKey?: string | null;
+      /** What clears it, as declared (`SlotClearedBy`). */
+      clearedBy?: ThingBlockerClearedBy | null;
     }
-  | { kind: "pending_proposal" }
+  | {
+      kind: "pending_proposal";
+      /**
+       * A stable name for what holds the thing (a blocker key, as an owed
+       * slot's): the proposal's type (`messaging.external.send`: approve the
+       * draft), or, for a held send, why it cannot go yet (`not_connected`).
+       */
+      blockerKey?: string | null;
+      /**
+       * A send filed but HELD (`proposals.data.held`): it goes out once THEY
+       * act (accept the invitation). Approving it sends nothing, so it waits
+       * on them, not on a review.
+       */
+      held?: boolean;
+    }
   | { kind: "blocked_by" }
   | {
       kind: "hold";
@@ -860,6 +890,20 @@ export type WaitingOnSource = (
       on: HoldOn;
       waitKind?: WaitKind;
     }
+  | {
+      /**
+       * The thing stands in a step that REQUIRES something it lacks
+       * (`requires` on its lifecycle option: a lead in outreach needs a
+       * contact). Derived live from the thing's links and properties, never
+       * a stored flag. Whose move: the requirement's `owner`.
+       */
+      kind: "requirement";
+      owner: "you" | "agent";
+      /** The requirement's domain name (`no_contact`), as declared. */
+      blockerKey: string;
+      /** What clears it, as declared. */
+      clearedBy?: ThingBlockerClearedBy | null;
+    }
 ) & { ref?: WaitingOnRef };
 
 /** THE mapping from one source to its reason; `null` = it makes no mark. */
@@ -868,7 +912,7 @@ export function waitingOnReasonOf(
 ): WaitingOnReason | null {
   switch (source.kind) {
     case "pending_proposal":
-      return "approval";
+      return source.held ? "external" : "approval";
     case "blocked_by":
     case "child_session":
       return "another_work";
@@ -879,7 +923,12 @@ export function waitingOnReasonOf(
         : null;
     case "work_unit":
       return pullRequestWaitingOn(source);
+    case "requirement":
+      // A missing fact is an input the person owes; an agent's is its work.
+      return source.owner === "agent" ? "another_work" : "input";
     case "owed_slot": {
+      // An agent's runnable blocker: other work holds the thing, not a person.
+      if (source.owner === "agent") return "another_work";
       const r = source.blockedReason?.trim().toLowerCase();
       return r && Object.hasOwn(BLOCKED_REASON_WAITING_ON, r)
         ? BLOCKED_REASON_WAITING_ON[r as keyof typeof BLOCKED_REASON_WAITING_ON]
@@ -897,7 +946,9 @@ export function waitingOnReasonOf(
 export function waitKindOf(source: WaitingOnSource): WaitKind {
   switch (source.kind) {
     case "pending_proposal":
-      return WAIT_KIND_FROM.source.pending_proposal;
+      return source.held
+        ? WAIT_KIND_FROM.source.held_send
+        : WAIT_KIND_FROM.source.pending_proposal;
     case "blocked_by":
       return WAIT_KIND_FROM.source.blocked_by;
     case "child_session":
@@ -919,7 +970,12 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
       return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
         ? WAIT_KIND_FROM.hold[source.on]
         : WAIT_KIND_FROM.hold.unspecified;
+    case "requirement":
+      return source.owner === "agent"
+        ? WAIT_KIND_FROM.source.requirement_agent
+        : WAIT_KIND_FROM.source.requirement;
     case "owed_slot": {
+      if (source.owner === "agent") return WAIT_KIND_FROM.source.agent_blocker;
       const r = source.blockedReason?.trim().toLowerCase();
       return r && r !== "none" && Object.hasOwn(WAIT_KIND_FROM.blockedReason, r)
         ? WAIT_KIND_FROM.blockedReason[

@@ -76,8 +76,7 @@
  *                                    byte-identical — see below). An `auto`
  *                                    rule on a move INTO done/lost applies
  *                                    only if it names the write; else 2.85
- *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute;
- *        a session END move skips 2.85, its end being the guardrail)
+ *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute)
  *   2.88 NAMED_RULE_ONLY_EVENT_KEYS → propose (a capability run or a session's
  *                                    tool grant that no rule NAMING it widened
  *                                    at 2.8; ownership and the auto-approve
@@ -1443,16 +1442,6 @@ export interface AgentPolicyInput {
     intoTerminal: boolean;
     humanOnly: boolean;
     /**
-     * The move is a session END move (`subjectProfile.onEnd`, applied by the
-     * one close door after the session closed): the session having to END is
-     * the guardrail, so the done/lost default (2.85) and its named-rule-only
-     * widening do NOT apply — the move is governed like any other write of the
-     * closer (founder, 2026-11-05, plan b38e5e64 §7.2): a `propose` rule (an
-     * "ask first" agent) still proposes, and the humanOnly floor (2.075) still
-     * holds. Set ONLY by the close door's writer (`moveStatus.atSessionEnd`).
-     */
-    atSessionEnd?: boolean;
-    /**
      * The thing is CURRENTLY in a done or lost option and the move takes it
      * to an open/active/paused one (a reopen). A fact the `moveStatus` door
      * reads from the lifecycle's own option categories; on its own it decides
@@ -1887,7 +1876,7 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   // guarantees as 2.075. A session started into a playbook's first stage on a
   // thing already done or lost would take it back to that stage's status:
   // the person confirms the reopen, no rule widens it (finding 2d84febb).
-  // Stage advances and end moves never set `atSessionBirth`.
+  // Stage advances never set `atSessionBirth`.
   if (
     input.lifecycleMove?.atSessionBirth === true &&
     input.lifecycleMove.outOfTerminal === true
@@ -2130,11 +2119,9 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
     input.governanceRuleVerdict === "auto" &&
     isNamedRuleOnlyWrite(eventKey) &&
     input.governanceRuleNamesWrite !== true;
-  // The done/lost floor: a terminal move, unless it is a session END move
-  // (the session's end is its guardrail, `lifecycleMove.atSessionEnd`).
-  const terminalFloor =
-    input.lifecycleMove?.intoTerminal === true &&
-    input.lifecycleMove.atSessionEnd !== true;
+  // The done/lost floor: every terminal move (a session's end moves nothing,
+  // so none is exempt; decision 5e377b06).
+  const terminalFloor = input.lifecycleMove?.intoTerminal === true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
     terminalFloor &&
@@ -2382,6 +2369,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "channel/merge_branch": "disruptive", // destroy (merge)
   "channel/unbind": "disruptive", // scope
   "command/execute": "disruptive", // effect: a shell (2.06)
+  "installation/request": "disruptive", // effect: install steps run on a person's computer
   "context/link": "reversible",
   "document/create": "reversible",
   "document/section_update": "reversible", // version history restores it
@@ -2659,6 +2647,12 @@ export const GATE_WRITE_DOORS = {
   "channel/merge_branch": "gate",
   "channel/unbind": "gate",
   "command/execute": "gate",
+  // Ask for a capability on one of the person's computers: install, update
+  // or remove (reconciliation f75fbb48 §3.4). A person's ask applies; an
+  // agent's is a proposal the person approves, with a fresh sign-in
+  // (`routers/proposals/executors/installations.ts`). A verify or a repair at
+  // the approved version never reaches the gate.
+  "installation/request": "gate",
   "context/link": "gate",
   "document/create": "gate",
   // The session-document section write door (services/session-document). Two

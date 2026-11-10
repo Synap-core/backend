@@ -78,7 +78,10 @@
  * build a second index.
  */
 
-import { listIntentSlugs } from "./intent-registry.js";
+import type { CatalogPlacement } from "../installations/request-installation.js";
+import type { InstalledRecipes } from "../host-jobs/hosted-verbs.js";
+import { listIntentRows, type IntentRow } from "./intent-registry.js";
+import { intentText, rankIntentRows } from "./intent-ranking.js";
 
 import {
   rankByTerms,
@@ -104,13 +107,27 @@ import {
   type SessionPlaybookCandidates,
 } from "../focus-sessions/match-session-template.js";
 import type { SpaceCandidate } from "../discover/space-catalog.js";
+import {
+  OBJECT_CATALOGS,
+  searchObjectCatalogs,
+  type FindObjects,
+  type ObjectCatalog,
+} from "./find-objects.js";
 
-/** The catalogs this door searches. A caller may narrow to some of them. */
+/**
+ * The catalogs this door searches. A caller may narrow to some of them. The
+ * first four answer "what can DO this / where does it belong"; the object
+ * catalogs (`find-objects.ts`) answer "what already says how — and where is
+ * it": skills and rules, automations, sessions, goals, projects, views and
+ * documents, each row carrying how to open it. `find-coverage.test.ts` holds
+ * every kind `/open/<id>` can open to a catalog here or a reasoned exemption.
+ */
 export const FIND_CATALOGS = [
   "capabilities",
   "intents",
   "playbooks",
   "spaces",
+  ...OBJECT_CATALOGS,
 ] as const;
 export type FindCatalog = (typeof FIND_CATALOGS)[number];
 
@@ -172,19 +189,32 @@ export interface AbstractIntentMatch {
   intent: string;
   /** Verbs declaring it under this caller's lens. `[]` is a real answer. */
   verbs: IntentVerbMatch[];
+  /**
+   * "<recipe> on <computer>": the recipes of this intent's tools INSTALLED and
+   * checked on the person's computers, run with `computer.run_recipe`
+   * (hosted verbs). ABSENT when none of its tools is installed on a computer;
+   * `error` when that read failed. The catalog side (packages to install) is
+   * `marketplace`.
+   */
+  recipes?: InstalledRecipes;
   score: number;
   confidence: number;
   match: TermMatch;
   termCoverage: { hit: number; of: number };
 }
 
-/** One marketplace capability package a caller can install. */
-export interface MarketplaceCapabilityMatch {
+/**
+ * One marketplace capability package a caller can install, with where it
+ * runs (`catalogPlacementReader`, the same projection `market.search`
+ * applies): for a capability that runs on a computer, its systems, licence
+ * and the person's computers that can take it.
+ */
+export type MarketplaceCapabilityMatch = {
   slug: string;
   name: string;
   description: string | null;
   kind: string;
-}
+} & CatalogPlacement;
 
 /**
  * Marketplace follow-up for an intent the pod does not serve.
@@ -219,12 +249,7 @@ export interface SpaceIntentMatch {
 export type FindSpaces = { matches: SpaceIntentMatch[] } | { error: string };
 
 /** What each catalog's numbers mean. Named on the wire so they are never compared. */
-export interface FindScoring {
-  capabilities?: ScaleNote;
-  intents?: ScaleNote;
-  playbooks?: ScaleNote;
-  spaces?: ScaleNote;
-}
+export type FindScoring = Partial<Record<FindCatalog, ScaleNote>>;
 
 export interface ScaleNote {
   ranker: string;
@@ -259,7 +284,14 @@ export interface NoConfidentMatch {
   escalation: Array<{ when: string; door: string }>;
 }
 
-export interface FindByIntentResult {
+/**
+ * Each object catalog's block (`skills`, `automations`, `sessions`, `goals`,
+ * `projects`, `views`, `documents`): ABSENT when not searched, `matches`
+ * (possibly empty) when searched, `error` when that read failed.
+ */
+export interface FindByIntentResult extends Partial<
+  Record<ObjectCatalog, FindObjects>
+> {
   intent: string;
   lens: { workspaceId: string | null };
   /** ABSENT when not searched; `matches: []` when searched and nothing fit. */
@@ -268,9 +300,14 @@ export interface FindByIntentResult {
   /** The EXACT block `start_session` ships. ABSENT when not searched. */
   playbooks?: SessionPlaybookCandidates;
   /**
-   * Capability packages from the pod catalog cache. Present when a returned
+   * Capability packages from the pod catalog cache that serve the best intent
+   * (by their declared `provides` first, then by words). When a returned
    * intent has no installed verbs, or the best intent match is weak (it
-   * missed a query term). ABSENT when that lookup did not run.
+   * missed a query term): any package. Otherwise only packages that run on
+   * the person's computer (which of their computers can take one, and
+   * `synap_list_installations` says which already have it). ABSENT when no
+   * intent matched (the lookup did not run), or when a served intent has no
+   * such computer tool.
    */
   marketplace?: FindMarketplace;
   /** Member spaces to route the work to. ABSENT when not searched. */
@@ -318,11 +355,6 @@ function normalise(score: number, best: number): number {
   return Math.round((score / best) * 100) / 100;
 }
 
-/** Words for an abstract verb token, so "send a message" reaches `send_message`. */
-function intentText(verb: string): string {
-  return verb.replace(/_/g, " ");
-}
-
 /** How many marketplace packages an unserved intent offers. */
 const MARKETPLACE_LIMIT = 3;
 
@@ -338,29 +370,34 @@ const MARKETPLACE_LIMIT = 3;
  */
 function marketplaceSlugFor(
   matches: readonly AbstractIntentMatch[]
-): string | undefined {
+): { slug: string; computerOnly: boolean } | undefined {
   const unserved = matches.find((m) => m.verbs.length === 0);
-  if (unserved) return unserved.intent;
+  if (unserved) return { slug: unserved.intent, computerOnly: false };
   const best = matches[0];
-  if (best && best.termCoverage.hit < best.termCoverage.of) return best.intent;
-  return undefined;
-}
-
-/** "capture_into_pod" → "capture into pod capture_into_pod". */
-function marketplaceQueryFor(slug: string): string {
-  return `${intentText(slug)} ${slug}`;
+  if (!best) return undefined;
+  if (best.termCoverage.hit < best.termCoverage.of)
+    return { slug: best.intent, computerOnly: false };
+  // Served on the pod, and well matched: a tool that runs on the person's
+  // COMPUTER for it is still worth naming (a pod verb that sends the video to
+  // an outside service is not the same offer as ffmpeg on the Mac), so the
+  // lookup runs and keeps only those.
+  return { slug: best.intent, computerOnly: true };
 }
 
 /**
- * Catalog search is per word, so "post" alone hits unrelated packages.
- * Keep a row only when its slug, name, or description contains the raw slug
- * or the full spaced phrase. Fields are not joined. No survivor means
- * `matches: []` — never the loose hits.
+ * Does this catalog row serve the intent? FIRST by what it declares
+ * (`provides`, the fact: media-transcribe provides `transcribe_media`), then,
+ * for a row that declares nothing, by its words: catalog search is per word,
+ * so "post" alone hits unrelated packages, and a row is kept only when its
+ * slug, name, or description contains the raw slug or the full spaced phrase.
+ * Fields are not joined. No survivor means `matches: []`, never the loose hits.
  */
 function marketplaceEntryServesIntent(
   entry: { slug: string; name: string; description: string | null },
-  slug: string
+  slug: string,
+  declared: ReadonlySet<string>
 ): boolean {
+  if (declared.has(slug)) return true;
   const needles = [...new Set([slug, intentText(slug)])]
     .map((needle) => needle.toLowerCase())
     .filter((needle) => needle.length > 0);
@@ -375,24 +412,52 @@ function marketplaceEntryServesIntent(
  * Catalog-cache read. A throw becomes `error` and does not fail the find —
  * the intent matches are already on the result.
  */
-async function lookupMarketplace(slug: string): Promise<FindMarketplace> {
+async function lookupMarketplace(
+  slug: string,
+  userId: string,
+  opts: { computerOnly?: boolean } = {}
+): Promise<FindMarketplace> {
   try {
     const { queryCatalogCache } = await import("./catalog-cache-query.js");
-    const entries = await queryCatalogCache({
-      query: marketplaceQueryFor(slug),
-      kind: "capability",
-      limit: MARKETPLACE_LIMIT,
-    });
+    const { catalogPlacementReader } =
+      await import("../installations/request-installation.js");
+    const { declaredProvides } =
+      await import("./propose-intent-gap-install.js");
+    const placementOf = catalogPlacementReader(userId);
+    // EVERY capability row, kept by what it serves: a row that DECLARES the
+    // intent but shares no word with it must not be cut by a top-3 word
+    // ranking taken before the filter (media-transcribe says "transcript",
+    // never "transcribe media"). The official catalog is a few dozen
+    // capability rows; filtering them in memory is the whole cost.
+    const entries = await queryCatalogCache({ kind: "capability" });
+    const serving = entries
+      .map((entry) => ({
+        entry,
+        // The ONE reader of a cached definition's `provides` (the gap
+        // installer's); a definition that declares none is a word match only.
+        declared: new Set(declaredProvides(entry) ?? []),
+      }))
+      .filter(({ entry, declared }) =>
+        marketplaceEntryServesIntent(entry, slug, declared)
+      )
+      // A declared provider first: the fact outranks a word match.
+      .sort(
+        (a, b) => Number(b.declared.has(slug)) - Number(a.declared.has(slug))
+      );
+    const matches = await Promise.all(
+      serving.map(async ({ entry }) => ({
+        slug: entry.slug,
+        name: entry.name,
+        description: entry.description,
+        kind: entry.kind,
+        ...(await placementOf(entry)),
+      }))
+    );
     return {
-      matches: entries
-        .filter((entry) => marketplaceEntryServesIntent(entry, slug))
-        .slice(0, MARKETPLACE_LIMIT)
-        .map((entry) => ({
-          slug: entry.slug,
-          name: entry.name,
-          description: entry.description,
-          kind: entry.kind,
-        })),
+      matches: (opts.computerOnly
+        ? matches.filter((m) => m.runsOn?.includes("computer"))
+        : matches
+      ).slice(0, MARKETPLACE_LIMIT),
     };
   } catch (err) {
     return {
@@ -469,6 +534,57 @@ async function searchSpaces(
   };
 }
 
+const OBJECT_SCALE =
+  "confidence = score ÷ the best score in THIS catalog's block";
+const OBJECT_NOTE =
+  "Relative, not a probability; termCoverage is the absolute signal. Open a row with its `open` link (or diagnose/get by its id). Searched across everything you can read: the workspaceId lens is not a filter here. `error` means the read failed — not that nothing fits.";
+
+/** What each object catalog's numbers mean (see `find-objects.ts`). */
+const OBJECT_SCORING: Record<ObjectCatalog, ScaleNote> = {
+  skills: {
+    ranker:
+      "searchInstructionSkills (services/skills/search.ts) reads the candidates — SQL rarity over every skill and rule you can see, the space's linked skills first — then rankByTerms over title/slug+topics+tags/description",
+    scale: OBJECT_SCALE,
+    note: `kind "skill" or "rule". Read one with synap_load_skill({ ref }). ${OBJECT_NOTE}`,
+  },
+  automations: {
+    ranker:
+      "rankByTerms over the best-matching non-archived automations you can see (name / description)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  sessions: {
+    ranker:
+      "rankByTerms over the best-matching sessions you own (title / goal)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  goals: {
+    ranker:
+      "rankByTerms over the best-matching goals of projects you can see (name / project name)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  projects: {
+    ranker:
+      "rankByTerms over the best-matching projects you can see (name / description)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  views: {
+    ranker:
+      "rankByTerms over the best-matching saved views you can see (name / view type / description)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+  documents: {
+    ranker:
+      "rankByTerms over the best-matching documents you can read, by TITLE only (bodies are synap_ask's)",
+    scale: OBJECT_SCALE,
+    note: OBJECT_NOTE,
+  },
+};
+
 export async function findByIntent(
   input: FindByIntentInput
 ): Promise<FindByIntentResult> {
@@ -485,7 +601,24 @@ export async function findByIntent(
       ? (input.limit as number)
       : CATALOG_LIMIT;
   const terms = queryTerms(input.intent);
-  const vocabulary = catalogs.has("intents") ? await listIntentSlugs() : [];
+
+  // The object catalogs are independent reads: start them now, in parallel
+  // with everything below, and collect them at the end. Each failure is that
+  // catalog's own `{ error }` (searchObjectCatalogs never throws for one).
+  const objectCatalogs = OBJECT_CATALOGS.filter((c) => catalogs.has(c));
+  const objectsP = objectCatalogs.length
+    ? searchObjectCatalogs({
+        query: input.intent,
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        catalogs: objectCatalogs,
+        limit,
+      })
+    : Promise.resolve({});
+
+  const vocabulary: IntentRow[] = catalogs.has("intents")
+    ? await listIntentRows()
+    : [];
 
   const ctx: CapabilityRegistryContext = {
     workspaceId: input.workspaceId,
@@ -584,32 +717,55 @@ export async function findByIntent(
   if (catalogs.has("intents")) {
     const byIntent = foldVerbsByIntent(rows);
     // A SEPARATE rankByTerms call: the registry is its own rarity pool,
-    // and folding it into the action pool above would skew both.
-    const ranked = rankByTerms(
-      input.intent,
-      vocabulary,
-      (v) => ({ primary: [v, intentText(v)] }),
-      { primary: "intent", secondary: "-", tertiary: "-" }
-    );
+    // and folding it into the action pool above would skew both. The row's
+    // own words rank it too: "remove my background" is `edit_video` only
+    // through its synonym "remove background", never through its slug.
+    const ranked = rankIntentRows(input.intent, vocabulary);
     const best = ranked[0]?.score ?? 0;
+    const top = ranked.slice(0, limit);
+    // The installed side of each intent: the recipes its tools can run on
+    // the person's computers now (hosted verbs). ONE read for every intent.
+    const { installedRecipesFor } =
+      await import("../host-jobs/hosted-verbs.js");
+    const recipesByIntent = await installedRecipesFor({
+      userId: input.userId,
+      intents: top.map((r) => r.item.slug),
+      query: input.intent,
+      limit,
+    });
     result.intents = {
-      matches: ranked.slice(0, limit).map((r) => ({
-        intent: r.item,
-        verbs: byIntent.get(r.item) ?? [],
-        score: r.score,
-        confidence: normalise(r.score, best),
-        match: r.match,
-        termCoverage: coverageOf(r.match, terms),
-      })),
+      matches: top.map((r) => {
+        const recipes = recipesByIntent.get(r.item.slug);
+        return {
+          intent: r.item.slug,
+          verbs: byIntent.get(r.item.slug) ?? [],
+          ...(recipes ? { recipes } : {}),
+          score: r.score,
+          confidence: normalise(r.score, best),
+          match: r.match,
+          termCoverage: coverageOf(r.match, terms),
+        };
+      }),
     };
     scoring.intents = {
       ranker:
-        "rankByTerms over the intent registry (seed plus capability_intents rows)",
+        "rankByTerms over the intent registry (seed plus capability_intents rows): slug, then synonyms, then statement",
       scale: "confidence = score ÷ the best intent score in THIS result",
-      note: `Routing only — an intent resolves to CONCRETE verb ids that synap_run_capability then governs exactly as before. An intent with verbs: [] means nothing visible declares it; ${verbsDeclaringIntent} of ${verbs} verb catalog entries declare an intent at all, so this axis cannot see the rest. When a returned intent has no verbs, or the best intent missed a query term, marketplace lists up to 3 capability packages — or marketplace.error if that catalog read failed.`,
+      note: `Routing only — an intent resolves to CONCRETE verb ids that synap_run_capability then governs exactly as before. An intent with verbs: [] means nothing visible declares it; ${verbsDeclaringIntent} of ${verbs} verb catalog entries declare an intent at all, so this axis cannot see the rest. When a returned intent has no verbs, or the best intent missed a query term, marketplace lists up to 3 capability packages that serve it; otherwise only those that run on the person's computer (synap_list_installations({capabilityKey}) says which computers have one). marketplace.error means that catalog read failed.`,
     };
-    const slug = marketplaceSlugFor(result.intents.matches);
-    if (slug) result.marketplace = await lookupMarketplace(slug);
+    const pick = marketplaceSlugFor(result.intents.matches);
+    if (pick) {
+      const marketplace = await lookupMarketplace(pick.slug, input.userId, {
+        computerOnly: pick.computerOnly,
+      });
+      // A served intent with no computer tool for it adds nothing to say:
+      // no empty block on every well-served answer.
+      const nothingExtra =
+        pick.computerOnly &&
+        "matches" in marketplace &&
+        marketplace.matches.length === 0;
+      if (!nothingExtra) result.marketplace = marketplace;
+    }
   }
 
   // ── Catalog 3: the pod's own processes ────────────────────────────────────
@@ -650,7 +806,21 @@ export async function findByIntent(
     };
   }
 
+  // ── Catalogs 5+: the objects that say how, and where they are ─────────────
+  const objects: Partial<Record<ObjectCatalog, FindObjects>> = await objectsP;
+  for (const catalog of objectCatalogs) {
+    const block = objects[catalog];
+    if (!block) continue;
+    result[catalog] = block;
+    scoring[catalog] = OBJECT_SCORING[catalog];
+  }
+  const objectMatches = objectCatalogs.reduce((sum, c) => {
+    const block = result[c];
+    return sum + (block && "matches" in block ? block.matches.length : 0);
+  }, 0);
+
   const total =
+    objectMatches +
     (result.capabilities?.matches.length ?? 0) +
     (result.intents?.matches.length ?? 0) +
     (result.playbooks?.candidates.length ?? 0) +
@@ -670,4 +840,35 @@ export async function findByIntent(
   }
 
   return result;
+}
+
+/**
+ * `findByIntent` behind the caller's READ FLOOR — the ONE entry every door
+ * uses (MCP `synap_find`, tRPC `knowledge.find`), so the lens rule cannot fork.
+ *
+ * A lens still has to be a space the caller reads. `listCapabilities`' own
+ * contract says a non-null workspaceId is "a LENS, not an authorization"
+ * (`capability-registry.ts`), and its tools predicate is
+ * `isNull(workspaceId) OR eq(workspaceId, …)` with NO membership check; the
+ * skills door reads the lens as a visibility tier. So the floor is checked
+ * here, before anything is read: passing a workspace id you cannot read is
+ * `forbidden`, never an enumeration of that space's tools.
+ */
+export type FindForCallerResult =
+  { ok: true; result: FindByIntentResult } | { ok: false; forbidden: string };
+
+export async function findForCaller(
+  input: FindByIntentInput
+): Promise<FindForCallerResult> {
+  if (input.workspaceId) {
+    const { canRead, userPrincipal } = await import("../../access/door.js");
+    if (
+      !(await canRead(userPrincipal(input.userId), {
+        workspace: input.workspaceId,
+      }))
+    ) {
+      return { ok: false, forbidden: input.workspaceId };
+    }
+  }
+  return { ok: true, result: await findByIntent(input) };
 }

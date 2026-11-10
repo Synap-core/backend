@@ -35,11 +35,27 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 - Advice on colour (raw hex instead of `var(--synap-*)` tokens) and accessibility (an image with no `alt`, a clickable `div`) comes back as `advice` with the reply. It never blocks the cell; fix what it names.
 - No `<script src>`, no CDN stylesheet, no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only. Fonts and colours come from the host's tokens (`@synap/kit`).
 - An **HTML page** (a source that opens with `<`) is drawn as a page, not a module: it gets **no host modules**, so it can run inline script only and cannot `import` anything, not even `react`. To use React or `@synap/kit`, write the cell as an ES module that default-exports a component.
-- Phone frames (Relay, Telegram) are not the target: they show the snapshot of a cell and a link to open it on the web or desktop, so write the cell for the web and desktop frame.
+- Write the cell for the web and desktop frame. The phone (Relay) runs an ES-module cell bound as a kind's `detail` renderer, on that thing's page, with the same `SynapWidget` bridge (queries and the four governed writes); an HTML page, or a cell in another slot, shows the generic page there. The phone frame allows no approved outside host: a cell that needs one renders blank there.
 
-### Register a Cell via the Hub Protocol (canonical path)
+### Define a cell: the one recipe
 
-**Use `POST /api/hub/cells/define` — this is the canonical Hub Protocol path for AI-generated cells.**
+1. **Check what exists**: `synap_list_widgets` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
+2. **Write the source** as an **ES module** that default-exports a React component (drawn in the frame, with the host's React and `@synap/kit`), or as an **HTML page** (a source that opens with `<`: drawn as a page, inline script only, no `import`). You do not pick the mechanism: the pod reads it from the source.
+3. **Define it with `synap_create_cell`** `{ name, rendererSource, description?, workspaceId?, contentKind?, viewTypes?, placeOn? }`: the agent door. A client without MCP calls the same door over REST, `POST /api/hub/cells/define` (below); both run one write path.
+4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer` binds it as a renderer. Until it is placed or bound it shows nowhere. One tool binds every target:
+
+   | Target                        | Call                                                                              | Slots                                 |
+   | ----------------------------- | --------------------------------------------------------------------------------- | ------------------------------------- |
+   | a kind's records (every deal) | `{ profileSlug: "deal", slot, cellKey }` (or `target: { kind: "profile", slug }`) | `card`, `detail`, `list`, `dashboard` |
+   | one capability's page         | `{ target: { kind: "capability", id }, slot, cellKey }`                           | `detail`, `dashboard`                 |
+   | one playbook's page           | `{ target: { kind: "playbook", id }, slot: "detail", cellKey }`                   | `detail`                              |
+   | one view's page               | `{ target: { kind: "view", id }, slot: "detail", cellKey }`                       | `detail`                              |
+
+   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind it in the same breath). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
+
+5. An agent's define lands as a proposal: `status: "proposed"` is success; pass on `reviewUrl`, never retry.
+
+### The same door over REST: `POST /api/hub/cells/define`
 
 It is idempotent (upserts on typeKey) and pod-global by default (no workspaceId needed). **It IS governed for agent callers** — `POST /cells/define` runs `checkPermissionOrPropose({ resource: "cell", action: "define", trustLevel: "generated" })`; a `status: "proposed"` response is the normal outcome for AI-generated renderer source, not an error — surface `reviewUrl` and keep going. Only an operator-initiated define auto-applies.
 
@@ -90,10 +106,10 @@ synap://open/cell/{typeKey}
 
 The browser receives this deep link, looks the typeKey up in the cell registry (which polls `widget_definitions` every 10s), and opens it as a side panel tab with the cell's registered `meta.name` as the tab title.
 
-**Full AI artifact workflow:**
+**Full AI artifact workflow over REST** (an MCP agent does step 1 with `synap_create_cell`):
 
 ```
-// 1. Generate the HTML/React cell
+// 1. Define the cell (an ES module or an HTML page)
 POST /api/hub/cells/define
 { "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
 // → { "success": true, "typeKey": "generated:q2-revenue-report" }
@@ -168,13 +184,14 @@ All `query()` calls return a Promise. Entity shape: `{ id, title, profileSlug, p
 
 The same reads a kind's own page makes, so a frame can be that kind's dashboard. The host stamps the lens (the active space and project); a `workspaceId` / `projectId` you pass is ignored. `trackId` narrows to one goal.
 
-| Operation              | Params                                                                                                | Returns                                                                                                                                                                                                                              |
-| ---------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy` | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }` |
-| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                            |
-| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                     | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                      |
-| `attention.count`      | `profileSlug`, `trackId`                                                                              | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                   |
-| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`      | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                |
+| Operation              | Params                                                                                                                    | Returns                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lifecycle.board`      | `profileSlug` (required), `trackId`, `windowDays`, `firstN`, `column` + `cursor`, `limit`, `workedBy`                     | `{ lifecycle: { profileSlug, property, options }, columns: [{ key, category, count, stuck, items: [{ id, name, status, since, stuck, workedBy? }] }], live, total, doneWindowed, lostWindowed, suggestedShape, window, nextCursor }`                                                                                                                         |
+| `flow.of`              | `profileSlug` (a kind or a role, required), `trackId`, `windowDays`, `firstN` (cards per state, at most 50), `properties` | `{ profileSlug, profileKind, states: [{ key, label, category, owners: [{ playbookId, playbookName, stageKey, stageName }], count, stuck, cards: [{ id, name, since, stuck, workedBy, next }] }], unclassified, flows, totals, window, withheld }`: the states in declared order with the playbook stage that owns each. Draw a board from a playbook from it |
+| `lifecycle.throughput` | `profileSlug`, `trackId`, `bucket` (`day` · `week` · `month`), `count`                                                    | `{ bucket, since, buckets: [{ bucketStart, done, lost }] }`, oldest first, zeros included                                                                                                                                                                                                                                                                    |
+| `attention.needsYou`   | `profileSlug`, `trackId`, `limit`                                                                                         | `{ signals: [{ id, kind, title, count, occurredAt, target }] }`                                                                                                                                                                                                                                                                                              |
+| `attention.count`      | `profileSlug`, `trackId`                                                                                                  | `{ needsYou, decisions, blocked, review, captures, truncated, … }`                                                                                                                                                                                                                                                                                           |
+| `sessions.list`        | `profileSlug` (its things) or `entityId` (one thing), `status`, `kind` (default `work`), `limit`                          | `[{ id, title, goal, status, currentStage, progress, startedAt, … }]`                                                                                                                                                                                                                                                                                        |
 
 ```js
 const board = await SynapWidget.query("lifecycle.board", {
@@ -187,6 +204,41 @@ const month = await SynapWidget.query("lifecycle.throughput", {
   bucket: "month",
   count: 1,
 });
+```
+
+A board drawn from a playbook, in an HTML page (`window.synap.query`, the same ops): one column per state, in declared order, headed by the stage that owns it.
+
+```html
+<div id="board"></div>
+<script>
+  window.synap.query("flow.of", { profileSlug: "deal", firstN: 5 }).then(
+    (flow) => {
+      document.getElementById("board").replaceChildren(
+        ...flow.states.map((state) => {
+          const col = document.createElement("section");
+          const owner = state.owners[0];
+          col.append(
+            Object.assign(document.createElement("h3"), {
+              textContent: `${state.label} · ${state.count}`,
+            }),
+            Object.assign(document.createElement("p"), {
+              textContent: owner ? owner.stageName : "",
+            }),
+            ...state.cards.map((card) =>
+              Object.assign(document.createElement("div"), {
+                textContent: card.name ?? "",
+              })
+            )
+          );
+          return col;
+        })
+      );
+    },
+    (err) => {
+      document.getElementById("board").textContent = err.message; // a failure, never an empty board
+    }
+  );
+</script>
 ```
 
 A failed read returns `{ error }`. Show it as a failure, never as an empty board. Moves still go through `update_entity` (the lifecycle property), so the status door and governance apply.

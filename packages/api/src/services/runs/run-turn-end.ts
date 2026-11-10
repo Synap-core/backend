@@ -10,7 +10,10 @@
  * 45-minute idle flag (`diagnose/stall.ts`) and the 24-hour reaper
  * (`playbook-run-reaper.ts`) never saw it, because both only look at LIVE runs.
  *
- * NOW the IS says how the turn ended (`outcome`). `completed` is unchanged. A
+ * NOW the IS says how the turn ended (`outcome`). `completed` completes the
+ * run; a run with NO stages is then done, and its session is closed at once
+ * through the one close door unless something in it waits on the person
+ * (`closeStagelessRunSessionAtTurnEnd`, founder 9 Nov 2026). A
  * `stopped` turn — its token budget (`turn_budget`) or its step limit
  * (`max_steps`: the agent still had tool calls to make when the SDK's
  * `maxSteps` ended the turn) — leaves the run LIVE and:
@@ -60,7 +63,11 @@ import {
   playbookRuns,
 } from "@synap/database";
 import type { PlaybookRun } from "@synap/database/schema";
-import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  SlotAnswerValue,
+  SlotAsk,
+} from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import type { RunToolProfile } from "@synap/intelligence-client";
@@ -72,10 +79,12 @@ import {
   RUN_TURNS_META_KEY,
 } from "../focus-sessions/session-metadata.js";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
-import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
-import { blockExpectedOutput } from "../focus-sessions/block-output.js";
+import { raiseRunAsk } from "./run-ask.js";
+import { settleStageEndAsk, stageAskTurnEntries } from "./stage-end-ask.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
+import { closeStagelessRunSessionAtTurnEnd } from "../focus-sessions/session-lifecycle-sweep.js";
 import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
+import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
   TURN_CONTEXT_MAX_ARRAY_ITEMS,
   TURN_CONTEXT_MAX_STRING_LENGTH,
@@ -98,6 +107,11 @@ export const TURN_HISTORY_MAX = 10;
 export const RUN_CONTINUE_SLOT_LABEL = "Keep the run going";
 
 const count = z.number().int().nonnegative();
+
+/** Bounds of the first call's inventory (`firstCall.sections|tools|guidance`). */
+export const FIRST_CALL_SECTIONS_MAX = 24;
+export const FIRST_CALL_TOOLS_MAX = 200;
+export const FIRST_CALL_GUIDANCE_MAX = 12;
 
 /** Bounds of a run checkpoint, the IS's own (`run-profile.ts`). */
 export const CHECKPOINT_MAX_RECORDS = 60;
@@ -160,6 +174,32 @@ export const completeRunBodySchema = z
               history: count,
               message: count,
             }),
+            /**
+             * The inventory of what the agent was given (optional, added after
+             * the counts): the system prompt's sections by name and size, the
+             * tool names, and the guidance refs. Each one lenient: a bad value
+             * reads as absent, never a 400 that would drop the turn's outcome.
+             */
+            sections: z
+              .array(
+                z.object({
+                  name: z.string().trim().min(1).max(64),
+                  chars: count,
+                })
+              )
+              .max(FIRST_CALL_SECTIONS_MAX)
+              .optional()
+              .catch(undefined),
+            tools: z
+              .array(z.string().trim().min(1).max(128))
+              .max(FIRST_CALL_TOOLS_MAX)
+              .optional()
+              .catch(undefined),
+            guidance: z
+              .array(z.string().trim().min(1).max(160))
+              .max(FIRST_CALL_GUIDANCE_MAX)
+              .optional()
+              .catch(undefined),
           })
           .optional(),
         /**
@@ -176,6 +216,14 @@ export const completeRunBodySchema = z
          */
         cacheReadInputTokens: count.optional().catch(undefined),
         cacheWriteInputTokens: count.optional().catch(undefined),
+        /**
+         * What the turn's input COUNTED against `ceiling` (founder, 9 Nov
+         * 2026): `spentInputTokens` with each cache read weighed at its real
+         * price relative to an input token (the serving model's declared
+         * rates), so it can be lower than `spentInputTokens`. Absent from an
+         * IS that counts every token in full. Lenient like `model`.
+         */
+        chargedInputTokens: count.optional().catch(undefined),
       })
       .optional(),
     /**
@@ -250,6 +298,8 @@ export interface RunTurnRecord {
   /** Prompt-cache tokens the provider reported over the turn. */
   cacheReadInputTokens?: number;
   cacheWriteInputTokens?: number;
+  /** What counted against the ceiling (cache reads at their real price). */
+  chargedInputTokens?: number;
   /** What the pod decided for a stopped turn. */
   next?: "continue" | "ask";
   /** How many records the turn's checkpoint named (the ids ride in the room). */
@@ -271,6 +321,11 @@ export interface RunTurnsState {
    * hands the next turn, as the automatic continuation's notice does.
    */
   lastCheckpoint?: NonNullable<CompleteRunBody["checkpoint"]>;
+  /**
+   * The stages whose stage-end ask the pod already raised in THIS run
+   * (`stage-end-ask.ts`), by stage key: each is asked once per run.
+   */
+  stageAsks?: string[];
 }
 
 /**
@@ -303,6 +358,13 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
     turns: Array.isArray(s.turns) ? s.turns.slice(-TURN_HISTORY_MAX) : [],
     ...(s.lastCheckpoint && typeof s.lastCheckpoint === "object"
       ? { lastCheckpoint: s.lastCheckpoint }
+      : {}),
+    ...(Array.isArray(s.stageAsks)
+      ? {
+          stageAsks: s.stageAsks.filter(
+            (k): k is string => typeof k === "string"
+          ),
+        }
       : {}),
   };
 }
@@ -382,6 +444,9 @@ async function recordTurnEnd(
       ...(body.turn?.cacheWriteInputTokens !== undefined
         ? { cacheWriteInputTokens: body.turn.cacheWriteInputTokens }
         : {}),
+      ...(body.turn?.chargedInputTokens !== undefined
+        ? { chargedInputTokens: body.turn.chargedInputTokens }
+        : {}),
       ...(decision ? { next: decision.next } : {}),
       ...(body.checkpoint
         ? { checkpointRecords: body.checkpoint.records.length }
@@ -404,6 +469,7 @@ async function recordTurnEnd(
       firstTurn: state.firstTurn ?? record,
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
       ...(lastCheckpoint ? { lastCheckpoint } : {}),
+      ...(state.stageAsks ? { stageAsks: state.stageAsks } : {}),
     };
     await tx
       .update(focusSessions)
@@ -617,6 +683,8 @@ export async function runTurnForAnswer(p: {
   slotLabel?: string | null;
   /** The answer was a confirmed YES (a `confirm` value with `confirmed: true`). */
   approved: boolean;
+  /** The answer's typed value: a stage-end ask's chosen option rides on. */
+  value?: SlotAnswerValue;
 }): Promise<RunTurnForAnswer> {
   let live: { id: string; playbookId: string; workspaceId: string | null };
   try {
@@ -654,7 +722,40 @@ export async function runTurnForAnswer(p: {
     p.approved &&
     normalizeExpectedLabel(p.slotLabel) ===
       normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
-  if (!continues) return { liveRun: "found", run };
+  if (!continues) {
+    // An answer to a stage-end ask the pod raised: the run goes on from the
+    // next stage (`stage-end-ask.ts`). Best effort: a failed read wakes the
+    // run turn without it, and says so.
+    try {
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, p.sessionId),
+        columns: { metadata: true, stages: true },
+      });
+      const entries = await stageAskTurnEntries({
+        runId: live.id,
+        sessionStages: session?.stages,
+        raised: readRunTurns(session?.metadata, live.id).stageAsks ?? [],
+        slotLabel: p.slotLabel,
+        ...(p.value ? { value: p.value } : {}),
+      });
+      if (entries.length > 0) {
+        return { liveRun: "found", run, turnContext: { entries } };
+      }
+    } catch (err) {
+      logger.error(
+        { err, sessionId: p.sessionId, runId: live.id },
+        "run-turn-end: the stage-end ask's next stage could not be read — the run turn goes on without it"
+      );
+      return {
+        liveRun: "found",
+        run,
+        turnContext: {
+          entries: [{ key: "run.stageAsk.read", value: "failed" }],
+        },
+      };
+    }
+    return { liveRun: "found", run };
+  }
   try {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, p.sessionId),
@@ -766,59 +867,80 @@ async function askToKeepGoing(p: {
     yes: { description: "The agent picks up where it stopped" },
     no: { description: "The agent is told to stop" },
   };
-  const wanted = normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
-  try {
-    const declared = await updateExpectedOutputsLocked(
-      p.session.id,
-      (current) => [
-        ...current.filter((o) => normalizeExpectedLabel(o?.label) !== wanted),
-        {
-          kind: "decision",
-          label: RUN_CONTINUE_SLOT_LABEL,
-          status: "pending",
-          // What the answer unblocks (decision E): the room question below is
-          // refused for a slot that does not say it.
-          unblocks: "The run goes on",
-        } satisfies ExpectedOutput,
-      ]
-    );
-    if (!declared) return false;
+  return raiseRunAsk({
+    runId: p.run.id,
+    session: p.session,
+    askingAgentUserId: p.askingAgentUserId,
+    slot: {
+      kind: "decision",
+      label: RUN_CONTINUE_SLOT_LABEL,
+      status: "pending",
+      // What the answer unblocks (decision E): the room question is refused
+      // for a slot that does not say it.
+      unblocks: "The run goes on",
+    } satisfies ExpectedOutput,
+    blockedReason: "decision",
+    why: facts,
+    question,
+    ask,
+    idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
+  });
+}
 
-    if (p.askingAgentUserId && p.session.channelId) {
-      const posted = await postChannelMessage({
-        channelId: p.session.channelId,
-        content: question,
-        userId: p.session.userId,
-        role: "assistant",
-        agentUserId: p.askingAgentUserId,
-        kind: "question",
-        slotLabel: RUN_CONTINUE_SLOT_LABEL,
-        ask,
-        idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
-      });
-      if (posted.slot?.status === "blocked") return true;
-      logger.warn(
-        { runId: p.run.id, slot: posted.slot?.status ?? null },
-        "run-turn-end: the question did not file on the slot; handing it over directly"
-      );
-    }
-    const blocked = await blockExpectedOutput({
-      sessionId: p.session.id,
-      userId: p.session.userId,
-      expectedLabel: RUN_CONTINUE_SLOT_LABEL,
-      blockedReason: "decision",
-      why: facts,
-      ask,
-      agentUserId: p.askingAgentUserId,
-      askCause: { kind: "run", ref: { kind: "run", id: p.run.id } },
-    });
-    return blocked.status === "blocked";
+/**
+ * The turn's `firstCall.guidance`, filled by the POD from what the run
+ * stamped on its definition snapshot (`recordRunGuidance`): the refs of the
+ * rules it used. The IS never has to report them, and the pod's stamp wins
+ * over anything it sent. Best effort: an unreadable or absent stamp leaves
+ * the body as it came, never failing the turn's report.
+ */
+async function withStampedGuidance(
+  runId: string,
+  body: CompleteRunBody
+): Promise<CompleteRunBody> {
+  const firstCall = body.turn?.firstCall;
+  if (!body.turn || !firstCall) return body;
+  try {
+    const [row] = await db
+      .select({ snapshot: playbookRuns.definitionSnapshot })
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, runId))
+      .limit(1);
+    const stamp = stampedGuidanceOf(row?.snapshot);
+    if (stamp?.status !== "ok" || stamp.used.length === 0) return body;
+    const refs = stamp.used
+      .map((u) => (typeof u.ref === "string" ? u.ref.slice(0, 160) : ""))
+      .filter(Boolean)
+      .slice(0, FIRST_CALL_GUIDANCE_MAX);
+    if (refs.length === 0) return body;
+    return {
+      ...body,
+      turn: { ...body.turn, firstCall: { ...firstCall, guidance: refs } },
+    };
   } catch (err) {
-    logger.error(
-      { err, runId: p.run.id, sessionId: p.session.id },
-      "run-turn-end: could not ask the person whether to keep the run going"
+    logger.warn(
+      { err, runId },
+      "run-turn-end: reading the run's guidance stamp failed (non-fatal)"
     );
-    return false;
+    return body;
+  }
+}
+
+/**
+ * A run with no stages whose turn completed is done: close its session now,
+ * through the ONE close door, unless something in it waits on the person
+ * (`closeStagelessRunSessionAtTurnEnd`, founder 9 Nov 2026). Best effort: the
+ * run is already completed and the hourly sweep closes the session anyway, so
+ * a failed close is logged, never a failed turn report.
+ */
+async function closeOneTurnRun(sessionId: string): Promise<void> {
+  try {
+    await closeStagelessRunSessionAtTurnEnd(sessionId);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "run-turn-end: closing the one-turn run's session failed (the hourly sweep retries)"
+    );
   }
 }
 
@@ -830,14 +952,37 @@ export async function settleRunTurnEnd(p: {
   /** The agent from the request's VERIFIED auth context, if any. */
   askingAgentUserId: string | null;
 }): Promise<CompleteRunStatus> {
-  const { run, session, body } = p;
+  const { run, session } = p;
+  const body = await withStampedGuidance(run.id, p.body);
   const recorded = await recordTurnEnd(session.id, run.id, body);
 
   // Completing is idempotent (only a LIVE run completes), so a retried
   // `completed` report still settles a run its first attempt failed to.
   if (body.outcome === "completed") {
+    // A retried report of a turn whose end already parked the run on the
+    // person (a stage-end ask) never completes it under them.
+    if (recorded?.duplicate && run.status === "waiting_on_you") {
+      return "duplicate";
+    }
+    // A staged run whose stage declares an ask: the POD raises it and the
+    // run waits for the answer instead of completing (`stage-end-ask.ts`).
+    const staged = await settleStageEndAsk({
+      run,
+      session,
+      askingAgentUserId: p.askingAgentUserId,
+      raised: recorded?.state.stageAsks ?? [],
+    });
+    if (staged === "waiting_on_you") return "waiting_on_you";
+    if (staged === "left_running") {
+      if (run.status !== "running") {
+        await applyRunCapture({ run, status: "running" });
+      }
+      return "left_running";
+    }
     const updated = await applyRunCapture({ run, status: "completed" });
-    return updated ? "completed" : "no-running-run";
+    if (!updated) return "no-running-run";
+    await closeOneTurnRun(session.id);
+    return "completed";
   }
 
   // Stopped (budget or step limit): the run stays LIVE whatever happens

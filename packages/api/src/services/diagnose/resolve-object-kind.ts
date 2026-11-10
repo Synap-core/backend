@@ -54,6 +54,7 @@ import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { AccessContext } from "../../access/context.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   userVisibleWhere,
@@ -411,10 +412,13 @@ export async function resolveObjectKind(
           // `workspace` with NULL = pod-wide config — exactly
           // `userVisibleWhere` with no lens, the floor the sibling
           // `automation_run` probe uses.
+          // `userVisibleWhere` carries no key grant: AND it here, as
+          // `scopedDb` would (the `automation` subject).
           .where(
             and(
               eq(automations.id, id),
-              userVisibleWhere(automations.workspaceId, userId)
+              userVisibleWhere(automations.workspaceId, userId),
+              grantReadPredicate(automations)
             )
           )
           .limit(1);
@@ -470,10 +474,12 @@ export async function resolveObjectKind(
           // membership, a pod-personal (NULL-workspace) project keeps an owner
           // floor, plus the project-member branch. No lens: this prober is
           // user-wide, like every other probe here.
+          // `projectVisibleWhere` carries no key grant: AND it here.
           .where(
             and(
               eq(projects.id, id),
-              projectVisibleWhere(AccessContext.operator({ userId }))
+              projectVisibleWhere(AccessContext.operator({ userId })),
+              grantReadPredicate(projects)
             )
           )
           .limit(1);
@@ -501,10 +507,14 @@ export async function resolveObjectKind(
           // `project_tracks` VisibilityRule (access/registry.ts) is this same
           // `projectVisibleWhere`, so the prober never names a goal
           // `tracks.get` would refuse.
+          // ...and the calling key's grant on the goal and its project
+          // (`projectVisibleWhere` carries none).
           .where(
             and(
               eq(projectTracks.id, id),
-              projectVisibleWhere(AccessContext.operator({ userId }))
+              projectVisibleWhere(AccessContext.operator({ userId })),
+              grantReadPredicate(projectTracks),
+              grantReadPredicate(projects)
             )
           )
           .limit(1);

@@ -134,6 +134,12 @@ export async function createPlaybookDoor(
     humanOnlyStatuses?: PlaybookDefinition["humanOnlyStatuses"];
     /** Playbook-level output slots (`playbookExpectedOutputSchema`). */
     expectedOutputs?: PlaybookDefinition["expectedOutputs"];
+    /** The rules it follows, by ref (`playbookGuidanceSchema`, validated by `playbooks.create`). */
+    guidance?: PlaybookDefinition["guidance"];
+    /** Who runs it by default (`playbookRunnerSchema`, validated by `playbooks.create`). */
+    runner?: PlaybookDefinition["runner"];
+    /** The tools every step needs (`requiresSchema`, validated by `playbooks.create`). */
+    requires?: PlaybookDefinition["requires"];
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -176,6 +182,9 @@ export async function createPlaybookDoor(
     ...(input.expectedOutputs !== undefined
       ? { expectedOutputs: input.expectedOutputs }
       : {}),
+    ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
+    ...(input.runner !== undefined ? { runner: input.runner } : {}),
+    ...(input.requires !== undefined ? { requires: input.requires } : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }
@@ -267,6 +276,11 @@ export async function runPlaybookDoor(
      * (`playbooks.run` `remember`). Refused for an agent.
      */
     remember?: boolean;
+    /**
+     * A TRIAL of draft rules (`playbooks.run` `trial`, the rule lab): the
+     * drafts render in place, nothing is written. A person's act.
+     */
+    trial?: { guidanceOverride: Record<string, string> };
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -383,6 +397,7 @@ export async function runPlaybookDoor(
     ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
     ...(input.runOn ? { runOn: input.runOn } : {}),
     ...(input.remember ? { remember: true } : {}),
+    ...(input.trial ? { trial: input.trial } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,

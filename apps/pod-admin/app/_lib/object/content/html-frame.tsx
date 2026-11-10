@@ -23,6 +23,7 @@ import { Maximize2 } from "lucide-react";
 import {
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
+  createCellBridgeHost,
   frameNetworkCodeRefusal,
   wrapHtmlForFrame,
 } from "@synap-core/types/cell-bridge";
@@ -41,7 +42,6 @@ import { humanizeBytes } from "../../../../lib/format";
 import { SectionCard } from "../../../(admin)/components/section-card";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
-import { createHtmlBridgeHost } from "./html-bridge-host";
 import { readForPage } from "./html-bridge-reads";
 import { frameT } from "./frame-copy";
 import type { PreparedContent } from "./markdown-model";
@@ -149,7 +149,7 @@ export function HtmlFrame({
 
   useEffect(() => {
     if (left || refusal) return;
-    const host = createHtmlBridgeHost({
+    const host = createCellBridgeHost({
       frameWindow: () => frameRef.current?.contentWindow ?? null,
       read: (op, params) => readForPage(client, op, params, { workspaceId }),
     });

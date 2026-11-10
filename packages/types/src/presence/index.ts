@@ -74,6 +74,11 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   "agent/updateCapabilities": "setup",
   "app/connect": "setup",
   "tool/create": "setup",
+  // An approved automation or playbook lands ACTIVE unless its author stated
+  // draft (founder, 9 Nov 2026: "add both"): approving it turns work on, the
+  // same class as a tool or skill.
+  "automation/create": "setup",
+  "playbook/create": "setup",
   // A skill created or changed by approval may turn a verb ON (founder, 4 Nov:
   // turning a tool or skill on is sensitive).
   "skill/create": "setup",
@@ -319,7 +324,7 @@ export function presenceActorLabel(parts: {
     parts.method === "passkey"
       ? "approved with a passkey"
       : parts.method === "totp"
-        ? "approved with a code from a 2FA app"
+        ? "approved with a code from an authenticator app"
         : parts.method === "recovery_code"
           ? "approved with a recovery code"
           : `approved with Face ID or the passcode on ${parts.deviceLabel ?? "a device"}`;
@@ -379,7 +384,7 @@ export const presenceProofSchema = z.discriminatedUnion("kind", [
 export type PresenceProofKind = PresenceProof["kind"];
 
 /**
- * The proofs a person TYPES instead of signing (a 2FA app code, a recovery
+ * The proofs a person TYPES instead of signing (an authenticator app code, a recovery
  * code). Accepted only from a person's browser session (pod admin's dialog),
  * never from a key or a Synap app's device session, and limited to
  * `PRESENCE_TYPED_FAILURES_MAX` wrong codes per person in
@@ -472,6 +477,11 @@ export const PRESENCE_REQUEST_KINDS = {
    * new factor. The id is the person's own user id.
    */
   recovery_codes: "setup",
+  /**
+   * presence.deviceLink.approve: a device the person already uses approves a
+   * NEW device (founder, 9 Nov 2026). The id is the device-link request id.
+   */
+  device_link: "setup",
 } as const satisfies Record<string, SensitiveReason>;
 
 export type PresenceRequestKind = keyof typeof PRESENCE_REQUEST_KINDS;
@@ -551,9 +561,12 @@ export const SENSITIVE_ACTIONS = {
   "intelligenceRegistry.update": "setup",
   "intelligenceRegistry.rotateKey": "setup",
   "intelligence.registerCustomService": "setup",
-  // A computer's key: how long it lives, whether it runs scripts, whose it is.
+  // A computer's key: how long it lives, whether it runs scripts or installs
+  // from the pod, whose it is.
   "machines.setKeyTtl": "setup",
   "machines.setRunsScripts": "setup",
+  "machines.setHostsServices": "setup",
+  "machines.setWakesAgents": "setup",
   "machines.setBelongsTo": "setup",
   // A secret's value, shown to the session.
   "secretsVault.reveal": "setup",
@@ -626,6 +639,8 @@ export const SENSITIVE_ACTION_TOKENS = {
   },
   "machines.setKeyTtl": { action: "update", objectKind: "machine" },
   "machines.setRunsScripts": { action: "update", objectKind: "machine" },
+  "machines.setHostsServices": { action: "update", objectKind: "machine" },
+  "machines.setWakesAgents": { action: "update", objectKind: "machine" },
   "machines.setBelongsTo": { action: "update", objectKind: "machine" },
   "secretsVault.reveal": { action: "see", objectKind: "secret" },
   "agentUsers.create": { action: "create", objectKind: "agent" },
@@ -725,6 +740,95 @@ export const PRESENCE_RECOVERY_DELAY_SECONDS = 24 * 3600;
 export type PresenceRecoveryStatus = "pending" | "cancelled" | "completed";
 
 /**
+ * "Add this device" (founder decision of 9 Nov 2026, session 84c74a23): a
+ * person who already holds a proof factor brings a NEW device in by asking
+ * from it and approving from a device they already use. The new device shows
+ * a two-digit number; the approving device picks it among three
+ * (`presence.deviceLink.*`) and proves presence with an existing factor
+ * (`device_link:<request id>`). The new device then adds its own passkey or
+ * device key with no further proof, redeemed ONCE, by the session that asked.
+ *
+ * How long a request may wait for its approval, and how long an approval may
+ * be redeemed after it was given.
+ */
+export const DEVICE_LINK_TTL_SECONDS = 300;
+
+/** What the new device will add once approved. */
+export type DeviceLinkKind = "passkey" | "device_key";
+export const DEVICE_LINK_KINDS = [
+  "passkey",
+  "device_key",
+] as const satisfies readonly DeviceLinkKind[];
+
+/**
+ * A request's stored status. `replaced`: the person asked again (one pending
+ * request per person). `redeemed`: the approved device added its factor.
+ */
+export const DEVICE_LINK_STATUSES = [
+  "pending",
+  "approved",
+  "declined",
+  "redeemed",
+  "replaced",
+] as const;
+export type DeviceLinkStatus = (typeof DEVICE_LINK_STATUSES)[number];
+
+/**
+ * A request's status as a reader sees it: `expired` is DERIVED (a pending
+ * request past its wait, or an approval nobody redeemed in time), never stored.
+ */
+export type DeviceLinkReadStatus = DeviceLinkStatus | "expired";
+
+/**
+ * The refusals of "Add this device". None is a presence refusal (no proof
+ * would change it): they are never in `PRESENCE_REFUSAL_CODES`.
+ *  - MISMATCH: the number picked is not the one the new device shows; the
+ *    request is declined, so a request an attacker started cannot be retried.
+ *  - GONE: unknown, expired, declined, already used, or replaced.
+ *  - SELF: a device cannot approve its own request.
+ *  - NO_SESSION: the caller's sign-in has no session to bind the request to.
+ *  - RATE: too many requests (`DEVICE_LINK_REQUESTS_MAX` per
+ *    `DEVICE_LINK_RATE_WINDOW_SECONDS`).
+ */
+export const PRESENCE_DEVICE_LINK_MISMATCH =
+  "PRESENCE_DEVICE_LINK_MISMATCH" as const;
+export const PRESENCE_DEVICE_LINK_GONE = "PRESENCE_DEVICE_LINK_GONE" as const;
+export const PRESENCE_DEVICE_LINK_SELF = "PRESENCE_DEVICE_LINK_SELF" as const;
+export const PRESENCE_DEVICE_LINK_NO_SESSION =
+  "PRESENCE_DEVICE_LINK_NO_SESSION" as const;
+export const PRESENCE_DEVICE_LINK_RATE = "PRESENCE_DEVICE_LINK_RATE" as const;
+
+export const DEVICE_LINK_REFUSAL_CODES = [
+  PRESENCE_DEVICE_LINK_MISMATCH,
+  PRESENCE_DEVICE_LINK_GONE,
+  PRESENCE_DEVICE_LINK_SELF,
+  PRESENCE_DEVICE_LINK_NO_SESSION,
+  PRESENCE_DEVICE_LINK_RATE,
+] as const;
+export type DeviceLinkRefusalCode = (typeof DEVICE_LINK_REFUSAL_CODES)[number];
+
+/** At most this many device-link requests per person in the window. */
+export const DEVICE_LINK_REQUESTS_MAX = 5;
+export const DEVICE_LINK_RATE_WINDOW_SECONDS = 15 * 60;
+
+/**
+ * The key that binds a grant to ONE signed-in session (founder decision of
+ * 9 Nov 2026): a `passkey_change` grant and an approved device link are
+ * redeemed only by the session that asked for them, never by another session
+ * of the same person. `kratos:<Kratos session id>` for a browser (pod admin;
+ * Kratos' settings guard derives the same key from the session cookie), and
+ * `device:<person_devices id>` for a Synap app's device token. Null when there
+ * is no id: such a caller can neither ask nor redeem.
+ */
+export function presenceSessionKey(
+  kind: "kratos" | "device",
+  id: string | null | undefined
+): string | null {
+  const value = typeof id === "string" ? id.trim() : "";
+  return value ? `${kind}:${value}` : null;
+}
+
+/**
  * The ONE wording of proof of presence that every client shows (pod admin,
  * Relay, the desktop app), as a catalog of the i18n door: English is the
  * source and the type.
@@ -748,7 +852,7 @@ export const presenceWordsEn = {
   "presence.lost": "I lost my passkey",
   "presence.useCode": "Use a code instead",
   "presence.twoWays":
-    "Keep two ways in, so losing one never locks you out: a passkey and a 2FA app, or a passkey and recovery codes.",
+    "Keep two ways in, so losing one never locks you out: a passkey and an authenticator app, or a passkey and recovery codes.",
 } as const;
 
 export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
@@ -763,7 +867,7 @@ export const presenceWordsFr: Catalog<typeof presenceWordsEn> = {
   "presence.lost": "J’ai perdu ma clé d’accès",
   "presence.useCode": "Utiliser un code",
   "presence.twoWays":
-    "Gardez deux moyens d’accès, pour qu’en perdre un ne vous bloque jamais : une clé d’accès et une app de double authentification, ou une clé d’accès et des codes de récupération.",
+    "Gardez deux moyens d’accès, pour qu’en perdre un ne vous bloque jamais : une clé d’accès et une app d’authentification, ou une clé d’accès et des codes de récupération.",
 };
 
 /** The shared presence words, per catalog language (`useT` / `createT`). */

@@ -17,6 +17,7 @@ import {
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
+import { buildAskWireSchema } from "./ask-wire-schema.js";
 import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import {
@@ -39,13 +40,16 @@ import {
   SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
 } from "@synap-core/types/focus-sessions";
-// View types an agent may CREATE — the renderables catalog's creation door
-// (the same list the browser's "New view" chooser offers), never a local enum.
+// View types an agent may CREATE — the renderables catalog's agent creation
+// list (the person's "New view" catalogue plus the lifecycle pipeline), never
+// a local enum.
 import {
   CONTENT_KINDS,
-  CREATABLE_VIEW_DEFINITIONS,
+  AGENT_CREATABLE_VIEW_DEFINITIONS,
 } from "@synap-core/types/renderables";
-const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
+const CREATABLE_VIEW_TYPE_KEYS = AGENT_CREATABLE_VIEW_DEFINITIONS.map(
+  (d) => d.key
+);
 import {
   PROJECT_TRACK_STATUSES,
   PROJECT_TRACK_UNCERTAINTY_LEVELS,
@@ -65,6 +69,8 @@ import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../../../services/profiles/renderer-slots.js";
+// What a renderer can be bound to — the ONE target vocabulary.
+import { RENDERER_TARGET_KINDS } from "../../../services/renderers/renderer-targets.js";
 // The catalog names `synap_find` accepts — SPREAD from the service that owns
 // them, never re-typed, so a fourth catalog cannot be advertised without
 // existing (and vice versa). Same idiom as ABSTRACT_VERBS above.
@@ -86,7 +92,6 @@ import {
 import {
   ASK_LIMITS,
   ASK_URGENCIES,
-  AskSchema,
   RELAY_SURFACE_MAX_CHARS,
 } from "@synap-core/types/ask";
 import { RELAY_DISPOSITIONS } from "../../../services/focus-sessions/session-answer.js";
@@ -96,7 +101,6 @@ import { playbookStageSchema } from "../../../schemas/playbook-stage.js";
 import {
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
-  playbookOnEndSchema,
   playbookSubjectProfileSchema,
 } from "../../../schemas/playbook-process.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -114,11 +118,12 @@ import {
 } from "../tool-profiles.js";
 import { loadKeyToolAccess, unlockKeyToolGroups } from "../tool-access.js";
 import {
+  callToolNote,
   loadSkillCall,
-  RECONNECT_NOTE,
   toolGroupList,
   yourToolsBlock,
 } from "../tool-guidance.js";
+import { CALL_TOOL_NAME } from "../call-tool-name.js";
 import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
@@ -331,24 +336,8 @@ function buildRuleSentenceJsonSchema(): Record<string, unknown> {
 
 const RULE_SENTENCE_JSON_SCHEMA = buildRuleSentenceJsonSchema();
 
-/**
- * JSON Schema for a declared slot's `ask`, DERIVED from `AskSchema` — the very
- * schema `expectedOutputWireSchema` parses `ask` with. Same reasoning as the two
- * builders above: the advertised shape and the parse that refuses a bad ask
- * cannot drift apart. `$schema` stripped for a deterministic manifest.
- */
-function buildAskJsonSchema(): Record<string, unknown> {
-  const derived = z.toJSONSchema(AskSchema, { io: "input" }) as Record<
-    string,
-    unknown
-  >;
-  delete derived.$schema;
-  derived.description =
-    'Only with owner=\'human\': HOW the person can answer, so they resolve it in one tap instead of writing back. mode \'confirm\' (yes/no: `prompt` IS the question; `yes` / `no` may each carry a one-line `description` of what that answer does, and ONE may be `recommended`), \'choose\' (1-8 options, at most ONE recommended, each with a one-line `description` of its consequence; the person may always answer in their own words instead unless allowOther:false), \'form\' (a small FLAT form; credential field types are dropped — never ask for a secret in a form), \'act\' (something to DO: optional http(s) url + up to 7 steps; the person answers \'I did this\'), \'provide\' (connection {service} | file {accept} | secret {name} — handed over through the vault, never typed into a message). PREFER confirm/choose for any decision (mark exactly ONE answer `recommended` when you have a view: their pick vs your recommendation is recorded, and every answered confirm/choose files a `decision` entity); use act ONLY for a physical/world task with steps. Example: {"mode":"choose","options":[{"label":"Ship now","recommended":true,"description":"Publishes today"},{"label":"Wait a week"}]}. A choose option may open ONE follow-up the person answers next, {"prompt":"Which environment?","options":[2-4 plain options]} (one level only: a follow-up option opening its own is refused), and may carry a `caution` (one short fact to weigh, max 60 chars, e.g. \'Skips 1,284 tests\'). Omit for a plain free-text answer. null clears a stored ask. Any mode may carry `risk` (\'high\' | \'medium\' | \'low\': how much is at stake in the answer). Any mode may carry `lookedAt`: up to 8 {kind, id} (entity | document | view | automation | playbook) you actually read before asking, so the person sees what you based the question on — refs they cannot see are refused, and any title you send is ignored (the pod names them).';
-  return derived;
-}
-
-const ASK_JSON_SCHEMA = buildAskJsonSchema();
+/** The ONE compact wire `ask` (tools/ask-wire-schema.ts); the server parses with `AskSchema`. */
+const ASK_JSON_SCHEMA = buildAskWireSchema();
 
 /**
  * The PROCESS contract on `synap_create_playbook`, DERIVED from the schemas
@@ -420,12 +409,22 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     ),
     forEach: deriveJsonSchema(
       playbookStageSchema.shape.forEach.unwrap(),
-      "DECLARED, advisory until the executor lands: run this stage once per item of a collection, {over: '<param or dotted path>', as?: '<item name>', max?: n (1-200)}. Today a run executes the stage ONCE and ignores it; do not rely on a fan-out."
+      "Advisory, not run yet: once per item, {over: '<param or dotted path>', as?, max? (1-200)}. Today the stage runs once; do not rely on a fan-out."
     ),
     when: deriveJsonSchema(
       playbookStageSchema.shape.when.unwrap(),
-      "DECLARED, advisory until the executor lands: run this stage only when {param: '<param or dotted path>', equals?: string|number|boolean|null, exists?: boolean} holds. Today a run executes the stage unconditionally and ignores it; do not rely on a skip."
+      "Advisory, not run yet: only when {param: '<param or dotted path>', equals? | exists?} holds. Today the stage always runs; do not rely on a skip."
     ),
+  },
+  // Kept minimal (token budget): the shapes are taught on demand in
+  // `system/synap/processes` ("Who runs it"); `playbooks.create` / `.update`
+  // validate them for real (`playbookRunnerSchema`, `requiresSchema`).
+  runner: {
+    description: "Who runs it (shapes: load_skill system/synap/processes).",
+  },
+  requires: {
+    type: "array",
+    items: { type: "string" },
   },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
@@ -434,10 +433,6 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
   activators: deriveJsonSchema(
     playbookActivatorsSchema,
     "Workers: when the process starts on its subject: [{ on: 'created' | 'enters_status' | 'count' (status+min, one run over the set) | 'schedule' (cron) | 'manual', status?, size?: 'per_thing' (default) | 'per_moment' (count/schedule always are), mode: 'propose' (default) | 'run', maxPendingApprovals? (default 20, throttles) }]. `run` only when cheap and safe. Needs subjectProfileSlug; compiled to a governed rule the owner can pause, fired once per thing per transition."
-  ),
-  onEnd: deriveJsonSchema(
-    playbookOnEndSchema,
-    "What a session END moves the subject (and every target still open) to, per terminal status: { closed?, cancelled?, failed? }, each an EXISTING option of the subject's lifecycle (e.g. { cancelled: 'open', failed: 'open' }). A status left out moves nothing. Applied through the status door as the session: an agent's move into a done/lost or humanOnly option is a proposal the person approves. Needs subjectProfileSlug."
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
@@ -458,7 +453,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when? } (forEach and when are declared, advisory until the executor lands). `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -475,7 +470,7 @@ const PLAYBOOK_STAGES_PROPERTY = {
           "canceled",
         ],
         description:
-          "Which rollup bucket this stage belongs to: backlog (not committed) · planned (committed, not begun) · started (work under way) · paused (on hold) · completed (terminal, succeeded) · canceled (terminal, abandoned).",
+          "Rollup bucket: backlog (not committed) · planned (committed, not begun) · started (under way) · paused (on hold) · completed (terminal, succeeded) · canceled (terminal, abandoned).",
       },
       description: { type: "string" },
       goal: { type: "string" },
@@ -530,6 +525,14 @@ const PLAYBOOK_PARAMS_PROPERTY = {
   },
 };
 
+/** The rules a playbook follows (design b199a3a4), parsed by `playbookGuidanceSchema`. */
+const PLAYBOOK_GUIDANCE_PROPERTY = {
+  type: "array",
+  description:
+    "Rules every run follows, in order: [{ ref: 'kind:<slug>'|'skill:<slug>', label?, when?, where?: { <prop>: [values] } }]. Person-approved versions only.",
+  items: { type: "object" },
+};
+
 const PLAYBOOK_CRITERIA_PROPERTY = {
   type: "array",
   description:
@@ -548,7 +551,7 @@ const SESSION_OUTCOMES_PROPERTY = {
   type: "array",
   maxItems: 40,
   description:
-    "What this session must YIELD — one list, each outcome verifiable. A deliverable (`kind`: document, report, code, decision…) is checked by EVIDENCE by default: when you finish it, call `completeOutput` with its key (your CLAIM) and make sure the evidence is there — the object produced inside this session, or its `ref` — and the pod marks it met; with no evidence the claim waits for review. Use `kind: 'fact'` for an outcome whose thing is a fact (e.g. 'Typecheck passes'), checked by `verify` (default judge) through synap_evaluate_session. `owner: 'human'` (+ `blockedReason`, `why`, an `ask`) declares one only the person can yield — it shows as an INPUT the work needs. On update_session outcomes UPSERT by key (nothing unnamed is removed). Replaces `expectedOutputs` + `criteria` (still accepted, deprecated).",
+    "What this session must YIELD, each outcome verifiable. A deliverable (`kind`: document, report, code, decision…) is checked by EVIDENCE: when done, call `completeOutput` with its key (your claim) with the evidence in place (an object produced in this session, or its `ref`); with none the claim waits for review. `kind: 'fact'` = a checked statement (e.g. 'Typecheck passes'), judged by `verify` via synap_evaluate_session. `owner: 'human'` (+ `blockedReason`, `why`, an `ask`) = only the person can yield it. On update_session outcomes UPSERT by key. Replaces `expectedOutputs` + `criteria` (deprecated, still accepted). Ask shapes: system/synap/asks.",
   items: {
     type: "object",
     properties: {
@@ -599,23 +602,35 @@ const SESSION_OUTCOMES_PROPERTY = {
       },
       ref: {
         description:
-          'WHERE it lives — {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} or {"url":"https://..."}. A ref is evidence for a claimed deliverable.',
-        type: "object",
+          'WHERE it lives (evidence for a claimed deliverable): {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} of something you can see, or {"url":"https://..."}.',
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              kind: { type: "string", enum: [...OUTPUT_REF_KINDS] },
+              id: { type: "string" },
+            },
+            required: ["kind", "id"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: { url: { type: "string", format: "uri" } },
+            required: ["url"],
+            additionalProperties: false,
+          },
+        ],
       },
       ask: ASK_JSON_SCHEMA,
+      // A blocker (plan e7f753db §9). Shapes and meaning are taught on
+      // demand (skill system/synap/asks, "Blockers"), not here: the token
+      // budget ratchet. The pod checks them strictly.
+      blocks: { type: "object" },
+      blockerKey: { type: "string" },
+      clearedBy: { type: "object" },
     },
     required: ["label"],
   },
-};
-
-/**
- * The same derived `ask` on `synap_post_message` — the question's typed ask,
- * filed on the `slotLabel` output. Only the prose differs.
- */
-const ROOM_QUESTION_ASK_JSON_SCHEMA = {
-  ...buildAskJsonSchema(),
-  description:
-    "With kind 'question' + slotLabel: HOW the person answers — 'confirm' (yes/no), 'choose' (1-8 options, ≤1 recommended; an option may open ONE follow-up {prompt, 2-4 options} and carry a `caution`), 'form' (small flat form; never a secret), 'act' (a physical/world task only; they answer 'I did this'), 'provide' (connection {service} | file {accept} | secret {name}, via the vault). Prefer confirm/choose for any decision. Any mode may carry `risk` ('high' | 'medium' | 'low'). Omit for a free-text answer.",
 };
 
 /**
@@ -662,7 +677,7 @@ export interface ToolsListContext {
   door?: CapabilityBriefDoor;
 }
 
-/** Above this many newly listed tools, the unlock reply names them instead of inlining schemas. */
+/** Above this many newly listed tools, the unlock reply gives each one line instead of its schema. */
 const UNLOCK_INLINE_SCHEMA_MAX = 15;
 
 /** `synap_load_skill`'s ref: `ref`, else its aliases `skill` / `name`. */
@@ -680,7 +695,7 @@ function loadSkillRefArg(args: Record<string, unknown>): string {
  * unlocks more — in a tool RESULT, which every client shows its model (some
  * drop the MCP `instructions`). Tool names are this door's (`pod__*` for the
  * claude.ai connector's key). A failed profile read is said, never guessed;
- * an error or non-object result passes through untouched.
+ * an error or non-object result, and a reply the cap cut, pass through untouched.
  */
 async function withYourTools(
   result: CallToolResult,
@@ -698,6 +713,10 @@ async function withYourTools(
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
     return result;
+  // A reply the cap already cut (`reply-cap.ts`) keeps its envelope's shape and
+  // budget: adding a block to it made `{yourTools, truncated, head}`, over the
+  // cap and no longer the envelope a caller recognises.
+  if ("truncated" in parsed && "head" in parsed) return result;
   let yourTools: Record<string, unknown>;
   try {
     const [access, door] = await Promise.all([
@@ -710,7 +729,7 @@ async function withYourTools(
   } catch (err) {
     yourTools = {
       unavailable: `Could not read this key's tool list: ${err instanceof Error ? err.message : String(err)}`,
-      unlock: `${loadSkillCall("synap_load_skill")} unlocks more tools. ${RECONNECT_NOTE}`,
+      unlock: `${loadSkillCall("synap_load_skill")} unlocks more tools. ${callToolNote(CALL_TOOL_NAME)}`,
     };
   }
   const { startHere, ...rest } = parsed as Record<string, unknown>;
@@ -724,12 +743,14 @@ async function withYourTools(
 
 /**
  * `synap_load_skill`'s tool-depth half (V1 D4). Persists `groups` on an ENTRY
- * key, pings `list_changed`, and returns a short note for the reply — with the
- * new tools' schemas inline when the set is small, because the HTTP door
- * cannot deliver the notification (see `mcp/index.ts`). `text` is "" when
- * there is nothing to say. `isGroupRef`: the caller asked for tools by name
- * (`tools:<group>`), so every outcome is worth a sentence; a skill load only
- * mentions an unlock that happened.
+ * key, pings `list_changed`, and returns a short note for the reply: the new
+ * tools with their schemas (one line each above the cap), runnable at once
+ * through `synap_call_tool`, because the HTTP door cannot deliver the
+ * notification and most clients never list again mid-conversation (see
+ * `mcp/index.ts`, `call-tool.ts`). `text` is "" when there is nothing to
+ * say. `isGroupRef`: the caller asked for tools by name (`tools:<group>`), so
+ * every outcome is worth a sentence; a skill load only mentions an unlock that
+ * happened.
  */
 async function unlockToolGroupsForSkill(
   groups: ToolGroup[],
@@ -767,20 +788,28 @@ async function unlockToolGroupsForSkill(
     added.flatMap((g) => [...TOOL_GROUPS[g]] as string[])
   );
   const defs = (await tools.list()).filter((t) => names.has(t.name));
-  // Honest about delivery: this door answers with plain JSON, so the
-  // `list_changed` ping above does not reach the client — the tools show up
-  // in its list only when it lists again (reconnect / a new session).
-  const lead =
-    `Unlocked tool group${added.length > 1 ? "s" : ""}: ${added.join(", ")} (${defs.map((t) => t.name).join(", ")}). ` +
-    `They appear in your tool list after you reconnect the Synap MCP server or start a new session (Claude Code: /mcp); this connection cannot refresh it for you.`;
-  if (defs.length > UNLOCK_INLINE_SCHEMA_MAX) return { text: lead };
+  // The note opens with these words: the claude.ai connector strips it by
+  // them (`POD_UNLOCK_NOTE_RE`, control plane `routes/mcp.ts`).
+  const head = `Unlocked tool group${added.length > 1 ? "s" : ""}: ${added.join(", ")}`;
+  const oneLine = (t: Tool) => (t.description ?? "").split("\n")[0];
+  if (defs.length > UNLOCK_INLINE_SCHEMA_MAX) {
+    // One line each: the description's first sentence, cut at 140 chars.
+    const brief = (t: Tool) => {
+      const sentence = oneLine(t).split(/(?<=\.)\s/)[0] ?? "";
+      return sentence.length > 140 ? `${sentence.slice(0, 139)}…` : sentence;
+    };
+    const lines = defs.map((t) => `- ${t.name}: ${brief(t)}`).join("\n");
+    return {
+      text: `${head}. ${callToolNote(CALL_TOOL_NAME)} For a tool's input schema, call ${CALL_TOOL_NAME} with the tool name and no arguments.\n\n${lines}`,
+    };
+  }
   const schemas = defs.map((t) => ({
     name: t.name,
-    description: (t.description ?? "").split("\n")[0],
+    description: oneLine(t),
     inputSchema: t.inputSchema,
   }));
   return {
-    text: `${lead} Their schemas, for reference:\n\n\`\`\`json\n${JSON.stringify(schemas)}\n\`\`\``,
+    text: `${head} (${defs.map((t) => t.name).join(", ")}). ${callToolNote(CALL_TOOL_NAME)} Their schemas:\n\n\`\`\`json\n${JSON.stringify(schemas)}\n\`\`\``,
   };
 }
 
@@ -818,7 +847,7 @@ export const tools = {
               type: "string",
               enum: [...ASK_DETAILS],
               description:
-                "How much answer you want. full (default) = the provenance-rich answer. brief = a few sentences, no capture suggestions — use it for lookups (who/what/where). sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity.",
+                "How much answer you want. brief (default) = a few sentences, no capture suggestions — enough for lookups (who/what/where). full = the provenance-rich answer, longer; ask for it only when you need the detail. sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity.",
             },
             workspaceId: {
               type: "string",
@@ -859,7 +888,7 @@ export const tools = {
               type: "string",
               enum: ["lean", "full"],
               description:
-                "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, with no marker inside, and `truncated` names it with its full length); `omitted` lists the property keys left out. full = unprojected rows.",
+                "lean (default) = id, title, kind, status/statusCategory/statusLabel, workspaceId, updatedAt and at most 8 of the kind's properties (select/enum, entity references and dates first; a string over 120 chars or a list over 10 items is cut, `truncated` names it with its full length); `omitted` lists the keys left out. full = unprojected rows.",
             },
             fields: {
               type: "array",
@@ -883,7 +912,7 @@ export const tools = {
             projectId: {
               type: "string",
               description:
-                "Optional: narrow to a project (its entity id) — only entities belonging to it. Orthogonal to workspaceId; usually pre-set by the connection URL.",
+                "Optional: narrow to a project (entity id). Orthogonal to workspaceId; usually pre-set by the connection URL.",
             },
             facetSlug: {
               type: "string",
@@ -905,7 +934,7 @@ export const tools = {
             lastInteractionBefore: {
               type: "string",
               description:
-                "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Who haven't I spoken to in a month' = facetSlug 'lead' or 'client', lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting that happened, sent outreach, a dated conversation.",
+                "ISO-8601. Only entities we last spoke to BEFORE this (exclusive). 'Not spoken to in a month' = lastInteractionBefore <now - 30 days>, includeNever true, sortBy lastInteractionAt, sortDir asc. Spoke to = a meeting, outreach sent, a dated conversation.",
             },
             lastInteractionAfter: {
               type: "string",
@@ -916,6 +945,16 @@ export const tools = {
               type: "boolean",
               description:
                 "With a lastInteraction window: also return the people never contacted (no interaction recorded). Default false.",
+            },
+            filters: {
+              type: "array",
+              items: { type: "object" },
+              description:
+                "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading.",
+            },
+            includeFacets: {
+              type: "boolean",
+              description: "Rows also carry their role facets.",
             },
             limit: {
               type: "number",
@@ -950,6 +989,14 @@ export const tools = {
               enum: ["raw", "readable"],
               description:
                 "raw (default) = the stored markdown, embeds as directives (what you edit). readable = embeds replaced by their fallback text (what you quote or summarise).",
+            },
+            limit: {
+              type: "number",
+              description: "Max content chars (slice)",
+            },
+            offset: {
+              type: "number",
+              description: "Chars to skip (nextOffset)",
             },
           },
           required: ["documentId"],
@@ -1015,7 +1062,15 @@ export const tools = {
               ],
               default: "pending",
             },
-            limit: { type: "number", default: 20 },
+            limit: {
+              type: "number",
+              default: 20,
+              description: "Page size, default 20",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
+            },
             detail: {
               type: "string",
               enum: ["summary", "full"],
@@ -1240,6 +1295,14 @@ export const tools = {
               description:
                 "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
             },
+            limit: {
+              type: "number",
+              description: "Page size, default 40",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
+            },
           },
           required: [],
         },
@@ -1263,6 +1326,11 @@ export const tools = {
             workspaceId: {
               type: "string",
               description: "Workspace ID (optional)",
+            },
+            limit: {
+              type: "number",
+              description:
+                "Max relations returned, newest first (default 50, max 100).",
             },
           },
           required: ["entityId"],
@@ -1353,6 +1421,14 @@ export const tools = {
               type: "string",
               description:
                 "Narrow a name lookup (entity profileSlug, view type, tool/skill kind). Optional.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 50, max 200",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -1611,7 +1687,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity. To retire knowledge or a decision that stopped being true, set supersededBy with synap_update_entity (reversible, no review); delete only what was never true.",
+          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity. To retire knowledge or a decision that stopped being true, set supersededBy with synap_update_entity (reversible, no review); delete only what was never true. On an error, do not retry the same id: the error says why.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2402,7 +2478,7 @@ export const tools = {
               type: "string",
               enum: ["light", "full"],
               description:
-                "light (default) = startHere + names/ids/domain/counts + onboarding goal, empty domains and the entity-type inventory omitted; full = every workspace, descriptions, full onboarding spec, per-workspace profiles, and the lens-model explanation in `note`.",
+                "light (default) or full, as the tool description says.",
             },
             explain: {
               type: "boolean",
@@ -2445,6 +2521,12 @@ export const tools = {
               description:
                 "Optional, with statusOf: what each answer carries beyond its status. moves = a thing's next moves; history = its status moves, holds and steps; links = a goal's or session's `serves` edges; rollup = a goal's tree down `serves` (work by category, stuck, waits by kind); signals = its open status signals. An unknown part is refused.",
             },
+            only: {
+              type: "string",
+              enum: ["handedToYou"],
+              description:
+                "Agent keys: answer only `{ handedToYou }` (a worker's poll).",
+            },
           },
           required: [],
         },
@@ -2458,7 +2540,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work toward one of a project's GOALS (tracks in tool and field names) is born inside it: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. When the goal cannot proceed until a prerequisite is built, start THAT prerequisite with parentSessionId of the goal session AND suspendedIntent — that blocks the parent; work the child to completion, then resume the parent. Do not fold the prerequisite into the parent session. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into THIS conversation's session automatically even if you never call this — one per project (another conversation's session is joined only by passing its id as `sessionId`); a write reply names it in `attribution.filed` when you did not name it. Calling this when you begin a unit of work names your session (if one was auto-opened for you in this session's project it is ADOPTED — `adopted: true`, same id; other projects' writes stay where they are). A session you start takes all your later writes; when one is about another project the reply carries `attribution.filed.topicHint` — start a new session if it is new work. PLAYBOOKS BIND ON FACTS, never on words: the one you name with templateId; else the one active playbook for the subject's kind; else the one the parent session follows; else the main-red playbook for a `main red:` title. The result's `binding` line says which and why (or offers the few it could not choose between). With no templateId, its `playbooks` block also ranks the pod's playbooks against your title+goal, each with its `reason`: suggestions, NOTHING applied. Follow one later, or release one the pod bound, with synap_update_session followPlaybookId (null releases). Pass templateId: null to skip the ranked suggestions (facts still bind). The result's `offers` block (suggestions, NOTHING applied) lists `goals` — the project's open goals when you named no trackId: if the work serves one, file it with synap_update_session trackId — and `sessions` — open sessions on close work in the same goal or project: if one is the same work, continue it instead; a start that landed in NO project gets `homes` instead — up to 3 projects or goals it may belong in, each with its `reasons`: file it with synap_update_session projectId or trackId, or ask the person. SIZE it from the work: one session per thing when each needs its own thinking (a post, a feature), one per batch when items are interchangeable. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion — or an outcome with `verify` — on a new session: without one the start is refused (status 'refused', reasonCode NO_CRITERIA, nothing created); continuing an existing session needs none. Propose two to five binary, observable statements and let the person validate or rewrite them. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBySessionIds (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2543,6 +2625,7 @@ export const tools = {
             outcomes: SESSION_OUTCOMES_PROPERTY,
             criteria: {
               ...SESSION_CRITERIA_PROPERTY,
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes` with kind 'fact'. Binary acceptance criteria, each observable; written to the same storage.",
             },
@@ -2557,7 +2640,7 @@ export const tools = {
               items: { type: "string", format: "uuid" },
               maxItems: 100,
               description:
-                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped, and moved by the playbook's onEnd if it declares one. Each must be an entity you can see. Reported on `targets` (added | already).",
+                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already).",
             },
             blockedBySessionIds: {
               type: "array",
@@ -2574,73 +2657,7 @@ export const tools = {
             },
             expectedOutputs: {
               type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  kind: { type: "string" },
-                  label: { type: "string" },
-                  icon: { type: "string" },
-                  // `status` and the other receipts (attestedBy, retiredAt,
-                  // satisfiedByProposalId, delegatedTo, owedSince…) are NOT
-                  // advertised, on purpose: a field a model is told about is a
-                  // field it will try to send, and each of these is stamped by
-                  // exactly one server door. The wire still ACCEPTS them so a
-                  // caller echoing a stored slot back does not lose them at the
-                  // parse; CHANGING one is refused (`mergeExpectedOutputs`).
-                  owner: {
-                    type: "string",
-                    enum: ["human", "agent"],
-                    description:
-                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them. Always add an `ask` (confirm / choose / ...): without one the person sees only a bare 'I did this'.",
-                  },
-                  blockedReason: {
-                    type: "string",
-                    enum: [...BLOCKED_REASONS],
-                    description:
-                      "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
-                  },
-                  why: {
-                    type: "string",
-                    maxLength: 500,
-                    description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
-                  },
-                  unblocks: {
-                    type: "string",
-                    maxLength: 200,
-                    description:
-                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
-                  },
-                  ref: {
-                    description:
-                      'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          kind: {
-                            type: "string",
-                            enum: [...OUTPUT_REF_KINDS],
-                          },
-                          id: { type: "string" },
-                        },
-                        required: ["kind", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          url: { type: "string", format: "uri" },
-                        },
-                        required: ["url"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
-                  ask: ASK_JSON_SCHEMA,
-                },
-                required: ["kind", "label"],
-              },
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes`. The concrete deliverables the session should produce, so the goal can stay one line.",
             },
@@ -2696,6 +2713,7 @@ export const tools = {
             outcomes: SESSION_OUTCOMES_PROPERTY,
             criteria: {
               ...SESSION_CRITERIA_PROPERTY,
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes` (kind 'fact'), which upserts by key. Replaces the session's acceptance criteria wholesale — the full list, not a delta.",
             },
@@ -2731,135 +2749,12 @@ export const tools = {
             },
             expectedOutputs: {
               type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  kind: { type: "string" },
-                  label: { type: "string" },
-                  icon: { type: "string" },
-                  // `status` and the other receipts (attestedBy, retiredAt,
-                  // satisfiedByProposalId, delegatedTo, owedSince…) are NOT
-                  // advertised, on purpose: a field a model is told about is a
-                  // field it will try to send, and each of these is stamped by
-                  // exactly one server door. The wire still ACCEPTS them so a
-                  // caller echoing a stored slot back does not lose them at the
-                  // parse; CHANGING one is refused (`mergeExpectedOutputs`).
-                  owner: {
-                    type: "string",
-                    enum: ["human", "agent"],
-                    description:
-                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them. Always add an `ask` (confirm / choose / ...): without one the person sees only a bare 'I did this'.",
-                  },
-                  blockedReason: {
-                    type: "string",
-                    enum: [...BLOCKED_REASONS],
-                    description:
-                      "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
-                  },
-                  why: {
-                    type: "string",
-                    maxLength: 500,
-                    description:
-                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. Context the question does not already say: never a repeat of the label or the prompt.",
-                  },
-                  unblocks: {
-                    type: "string",
-                    maxLength: 200,
-                    description:
-                      "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
-                  },
-                  ref: {
-                    description:
-                      'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
-                    oneOf: [
-                      {
-                        type: "object",
-                        properties: {
-                          kind: {
-                            type: "string",
-                            enum: [...OUTPUT_REF_KINDS],
-                          },
-                          id: { type: "string" },
-                        },
-                        required: ["kind", "id"],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: "object",
-                        properties: {
-                          url: { type: "string", format: "uri" },
-                        },
-                        required: ["url"],
-                        additionalProperties: false,
-                      },
-                    ],
-                  },
-                  ask: ASK_JSON_SCHEMA,
-                },
-                required: ["kind", "label"],
-              },
+              items: { type: "object" },
               description:
                 "DEPRECATED alias — prefer `outcomes` (upserts by key). Adds or updates the listed deliverables (matched by key, then label); a deliverable you leave out is KEPT, never deleted. To drop one, use `retireOutput`.",
             },
             addOutput: {
               type: "object",
-              properties: {
-                kind: { type: "string" },
-                label: { type: "string" },
-                icon: { type: "string" },
-                owner: {
-                  type: "string",
-                  enum: ["human", "agent"],
-                  description:
-                    "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take.",
-                },
-                blockedReason: {
-                  type: "string",
-                  enum: [...BLOCKED_REASONS],
-                  description:
-                    "Only with owner='human'. The class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world.",
-                },
-                why: {
-                  type: "string",
-                  maxLength: 500,
-                  description:
-                    "Only with owner='human'. ONE line naming WHICH thing is missing, not its class; never a repeat of the label or the prompt.",
-                },
-                unblocks: {
-                  type: "string",
-                  maxLength: 200,
-                  description:
-                    "Only with owner='human', and expected then: ONE line saying what MOVES when the person answers — the next step, session or PR that waits on the answer ('the EU launch deploy', 'session Pricing page starts'). A hand-over without it lands with 'The agent goes on with this work' and a warning.",
-                },
-                ref: {
-                  description:
-                    'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
-                  oneOf: [
-                    {
-                      type: "object",
-                      properties: {
-                        kind: {
-                          type: "string",
-                          enum: [...OUTPUT_REF_KINDS],
-                        },
-                        id: { type: "string" },
-                      },
-                      required: ["kind", "id"],
-                      additionalProperties: false,
-                    },
-                    {
-                      type: "object",
-                      properties: {
-                        url: { type: "string", format: "uri" },
-                      },
-                      required: ["url"],
-                      additionalProperties: false,
-                    },
-                  ],
-                },
-                ask: ASK_JSON_SCHEMA,
-              },
-              required: ["kind", "label"],
               description:
                 "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable). Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
             },
@@ -2871,7 +2766,7 @@ export const tools = {
             completeOutput: {
               type: "string",
               description:
-                "CLAIM the deliverable with this key (or exact label) as done — your claim, not the verdict. If evidence is attached (the object produced inside this session, or the slot's `ref`) the pod verifies it at once; otherwise it waits for review. REFUSED for a slot you declared owner='human'. The reply always carries `completeOutput.result`: 'completed' (claimed AND verified by evidence), 'claimed' (recorded, no evidence yet — attach it; do not report it as delivered), 'refused' (human-owned; nothing changed), or 'no_match' (no deliverable has that key/label; nothing changed). Read the field, not just the session.",
+                "CLAIM the deliverable with this key (or exact label) as done — your claim, not the verdict. With evidence attached (an object produced in this session, or the slot's `ref`) the pod verifies at once; otherwise it waits for review. Refused for an owner='human' slot. Read `completeOutput.result`: completed (verified) | claimed (no evidence yet: attach it, do not report it delivered) | refused (nothing changed) | no_match (nothing changed).",
             },
             addAgentId: {
               type: "string",
@@ -3283,8 +3178,6 @@ export const tools = {
             },
             ask: {
               ...ASK_JSON_SCHEMA,
-              description:
-                "HOW the person answers: confirm (yes/no; mark the one you recommend), choose (1-8 options, at most ONE recommended, each with a one-line consequence), form (a small flat form; never a secret), act (a task in the world, with steps and a url; they answer 'I did this'), provide (connection | file | secret, through the vault — never typed in chat). Prefer confirm/choose for a decision. May carry `risk`, `stakes` ('commitment' for deploy, spend, publish, delete: their own tap is then required) and `lookedAt`.",
             },
             why: {
               type: "string",
@@ -3396,6 +3289,41 @@ export const tools = {
               description: "Rows per fold (default 100, max 200).",
             },
           },
+        },
+      },
+      {
+        name: "synap_get_flow",
+        annotations: {
+          title: "Get the flow of a kind or role",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "How a kind's or role's work flows in a space, in ONE read — read-only. `states` in declared order, each with the flow stage(s) that own it (`owners`: playbook, stage, gate, executor; [] = no flow moves things there; two = a conflict to fix), its count and `cards` (who works each, `next` step + the stage owning it); `unclassified` things; `flows` (active playbooks working it: stages with the status each owns, workers, open runs and `onOlderVersion`); `space.primaryOutput`; `withheld` = parts your grant does not reach (not 'none'). A role (e.g. lead) reads people and companies together; each card names its kind. Use it to see where things stand and which flow to run next, instead of reading the board and the playbooks apart.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            profileSlug: {
+              type: "string",
+              description:
+                "The kind or role (synap_list_profiles), e.g. deal or lead.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional: the space. Omitted = every space you see.",
+            },
+            projectId: {
+              type: "string",
+              description: "Optional: only this project's things.",
+            },
+            firstN: {
+              type: "number",
+              description:
+                "Cards per state (default 10, max 50); counts are exact.",
+            },
+          },
+          required: ["profileSlug"],
         },
       },
       {
@@ -3595,7 +3523,16 @@ export const tools = {
           "Who can take the person's work, and on which COMPUTER — read-only. `computers[]` are theirs (match their words, e.g. 'my devbox', against these names first, then agent names/types; 2+ fit → ask). Each agent: `computer`, `canTakeYourWork` (else `whyNot`), `live`, `paused`, `lastSeenAt`, `servedAt` (when a process running it last called; null = never measured), `nobodyRuns` (true = nothing on its computer runs it now; false = a runner served it in the live window; null = not measured, or not a pull agent on a computer), and `handOff` — what YOUR hand-off would do now: `direct`, `asks_you` (the person approves it first: give them the reply's review link), `blocked` (`handOffReason`); ready ones come first. Hand NEW work: `synap_start_session` with `agentIds:[agentUserId]`, a goal and 2-5 criteria; work in flight ('this session'): `synap_update_session` `addAgentId`. Then follow its room (`synap_get_thread_context` on the session's `channelId`; outcomes via `synap_get_session`) and report back. Paused, not live or `nobodyRuns: true`: say so, never hand off silently. How: `load_skill` `system/synap/hand-off`.",
         inputSchema: {
           type: "object",
-          properties: {},
+          properties: {
+            limit: {
+              type: "number",
+              description: "Page size, default 50, max 200",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
+            },
+          },
           required: [],
         },
       },
@@ -3609,7 +3546,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates the definition ONLY: the cell is not surfaced anywhere until it is bound as a renderer for a kind, which is a separate step — ask the user to do it in the Synap app.',
+          'Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a tile; else it shows nowhere until placed or bound (synap_promote_cell_to_renderer).',
         inputSchema: {
           type: "object",
           properties: {
@@ -3641,7 +3578,14 @@ export const tools = {
               type: "string",
               enum: [...CONTENT_KINDS],
               description:
-                "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want.",
+                "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. Only a slot other than 'widget' is offered as a profile renderer.",
+            },
+            placeOn: {
+              type: "object",
+              properties: { viewId: { type: "string" } },
+              required: ["viewId"],
+              description:
+                "Bento view (synap_list_views) to add the cell to as a tile, in the same act.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -3666,24 +3610,38 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Escalation L4 — crystallize AFTER a cell has succeeded once as a good recurring presentation. Bind that cell as a profile's renderer for a slot (list | detail | card | dashboard). Durable/consequential → governed like any write (may propose). scope 'workspace' (default) = per-workspace overlay; scope 'pod' = profile system default. Never promote a speculative or unproven one-off.",
+          "Escalation L4: bind a cell that already proved itself as a renderer. For a kind's records (profileSlug; slots list|detail|card|dashboard) or ONE capability, playbook or view (target {kind,id}; slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
         inputSchema: {
           type: "object",
           properties: {
             profileSlug: {
               type: "string",
-              description: "Slug of the profile to bind the renderer on.",
+              description: "A kind's records (profile slug).",
+            },
+            target: {
+              type: "object",
+              description:
+                "One capability, playbook or view: {kind, id} (or {kind:'profile', slug}).",
+              properties: {
+                kind: { type: "string", enum: [...RENDERER_TARGET_KINDS] },
+                id: { type: "string" },
+                slug: { type: "string" },
+              },
+              required: ["kind"],
             },
             slot: {
               type: "string",
               enum: [...RENDERER_SLOTS],
               description:
-                "Which renderer slot to set. 'card' = the entity's small embeddable block (this is the ONLY door that reaches it besides Renderer Studio in Builder mode — most personalization requests from a user are this slot, not 'detail').",
+                "'card' = the entity's small embeddable block (most personalization asks are this slot).",
             },
             cellKey: {
               type: "string",
-              description:
-                "The cell typeKey to bind (e.g. from synap_create_cell).",
+              description: "Cell typeKey (synap_create_cell).",
+            },
+            clear: {
+              type: "boolean",
+              description: "Unbind the slot (no cellKey).",
             },
             props: {
               type: "object",
@@ -3693,11 +3651,11 @@ export const tools = {
               type: "string",
               enum: [...RENDERER_SCOPES],
               description:
-                "'workspace' (default) = per-workspace overlay; 'pod' = profile system default. Workspace scope requires workspaceId.",
+                "'workspace' (default, needs workspaceId); 'pod' = everywhere; 'user' = only you.",
             },
             workspaceId: {
               type: "string",
-              description: "Workspace UUID (required for scope 'workspace').",
+              description: "Workspace UUID.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -3710,7 +3668,7 @@ export const tools = {
                 "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
-          required: ["profileSlug", "slot", "cellKey"],
+          required: ["slot"],
         },
       },
       {
@@ -3769,7 +3727,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size (1–100, default 50).",
+              description: "Page size (1–100, default 25).",
+            },
+            cursor: {
+              type: "string",
+              description: "nextCursor of the prior reply",
             },
             playbookId: {
               type: "string",
@@ -3794,7 +3756,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal template') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, description, scope, templateKind, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. `scope: 'project'` (templateKind 'Goal template') is a method a project runs as a GOAL (a track) — start it with synap_start_track; `'session'` ('Work template') is one working session. Pass projectId (or name the project/track in intentText) and a track template ranks above its same-name session twin. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). Each of your words is weighted by how rare it is among the candidates, so a specific word outranks one most playbooks share. A playbook is returned only with a reason about THIS request (one of your words, the entity's kind, or one of its roles): a playbook with no subject (e.g. Plan Next Content) comes back only when your words match it. When profileSlug is omitted, every active visible playbook is a candidate.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3827,7 +3789,7 @@ export const tools = {
               type: "number",
               default: 5,
               description:
-                "Candidates to return, 1–20 (default 5). Rows carried only by a word many playbooks share are dropped; `goalTemplate` is cut at 200 chars (`synap_list_playbooks` has the whole).",
+                "Candidates to return, 1–20 (default 5). Rows carried only by a word many playbooks share are dropped; `description` and `goalTemplate` are cut (`synap_list_playbooks` has the whole).",
             },
           },
           required: [],
@@ -3842,7 +3804,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
+          'Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may reference a declared param as {name} — a playbook run fills it; an undeclared name, or {{name}}, is refused. The default scope "session" is a template for one focus session; scope "project" (a staged method a track runs) is LEGACY — a new track needs none. Declare params to make the method self-onboarding: required params become questions for the person when the track starts. A PROCESS on a kind or role: set subjectProfileSlug; it FOLLOWS the lifecycle the profile declares (omit statusProperty, or name that same property — never a second status field). Give each stage the subjectStatus it moves the thing to (an existing option), gates at the commitments, onFail loops, typed expectedOutputs, plus workers (activators: on, size, mode) — load_skill system/synap/processes (model: system/synap/work-model) first. On a clock: a schedule activator, or a cron synap_create_automation with a playbook_run node. An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.',
         inputSchema: {
           type: "object",
           properties: {
@@ -3875,7 +3837,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             scope: {
               type: "string",
@@ -3885,6 +3846,9 @@ export const tools = {
             },
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
+            guidance: PLAYBOOK_GUIDANCE_PROPERTY,
+            runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
+            requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             sessionId: {
               type: "string",
               description:
@@ -3903,7 +3867,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3925,6 +3889,9 @@ export const tools = {
             stages: PLAYBOOK_STAGES_PROPERTY,
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
+            guidance: PLAYBOOK_GUIDANCE_PROPERTY,
+            runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
+            requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
             subjectProfileSlug: {
               type: "string",
               description:
@@ -3933,7 +3900,6 @@ export const tools = {
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
-            onEnd: PLAYBOOK_PROCESS_JSON_SCHEMA.onEnd,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
             status: {
               type: "string",
@@ -4096,16 +4062,10 @@ export const tools = {
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
           "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap, and re-sending a capped write through another door is how the same playbook lands in the pod twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person can see what is still owed instead of being told a percentage.\n" +
-          'PLAN EXAMPLE — a project, a root session with two children (one blocked by the other), a spec document:\n{ "entities": [ { "ref": "acme", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "projects": [ { "ref": "p1", "name": "Acme onboarding", "subjectRef": "acme", "evidenceRefs": ["acme"] } ], "sessions": [ { "ref": "s0", "title": "Onboard Acme", "goal": "Acme is live on the platform", "projectRef": "p1", "subjectRef": "acme" }, { "ref": "s1", "title": "Write the spec", "goal": "Spec signed off by Acme", "parentRef": "s0", "projectRef": "p1" }, { "ref": "s2", "title": "Build the import", "goal": "Acme data imported", "parentRef": "s0", "projectRef": "p1", "blockedByRefs": ["s1"] } ], "documents": [ { "ref": "spec", "title": "Acme onboarding spec", "content": "# Spec\\n…", "sessionRef": "s1" } ] }\n' +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
           "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n" +
           "\n" +
-          'EXAMPLE 1 — raw text:\n{ "text": "Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March." }\n' +
-          "\n" +
-          'EXAMPLE 2 — one structured entity, with properties + a long body:\n{ "entities": [ { "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com", "role": "Head of Data" }, "content": "## Notes\\nOwns the data platform. Wants a March demo." } ] }\n' +
-          "\n" +
-          'EXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
-          "\n" +
+          'EXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill("system/synap/multi-entity-capture").\n' +
           'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\n' +
           'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
         inputSchema: {
@@ -4457,7 +4417,7 @@ export const tools = {
               type: "string",
               enum: ["auto", "ask", "locked"],
               description:
-                "How much latitude the backend resolver has over the AI's workspace GUESS (rung 5) specifically — it does NOT gate the deterministic rungs above it (ontology role-routing, focus-session context, relational gravity), which still run and place the capture regardless of this setting. An AI guess NEVER moves a capture through this door, in any mode: 'auto' and 'ask' now do the SAME thing — the capture stays where it would have landed and the guess comes back as `pendingWorkspaceSwitch` ({ suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence }) for you to confirm with the user; there is no `movedToWorkspace` on the response any more. To ACT on a suggestion, re-call synap_capture with `workspaceId` set to `pendingWorkspaceSwitch.suggestedWorkspaceId` (that pin is recorded as the user accepting it). 'locked' = suppress the AI guess entirely, so no suggestion is returned; it does NOT freeze the capture onto the caller's/session workspace by itself. To pin an EXACT workspace and skip resolution altogether (deterministic rungs included), pass an explicit `workspaceId` (rung-1 placement) instead of relying on this setting.",
+                "Latitude over the AI's workspace GUESS only (the deterministic rungs always run). A guess NEVER moves a capture: 'auto' and 'ask' both keep it where it landed and return `pendingWorkspaceSwitch` {suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence} to confirm with the user; to accept, re-call with `workspaceId` = its suggestedWorkspaceId. 'locked' suppresses the guess. To pin an exact workspace, pass `workspaceId`.",
             },
             sessionId: {
               type: "string",
@@ -4584,6 +4544,14 @@ export const tools = {
             appId: {
               type: "string",
               description: "Optional filter by settings.appId",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 50, max 200",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -4713,6 +4681,14 @@ export const tools = {
               type: "boolean",
               description:
                 "Also list archived tracks. Default false. Ignored with trackId.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 50, max 200",
+            },
+            offset: {
+              type: "number",
+              description: "nextOffset of the prior reply",
             },
           },
           required: [],
@@ -5444,6 +5420,48 @@ export const tools = {
         },
       },
       {
+        name: "synap_set_start_page",
+        annotations: {
+          title: "Set space start page",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Set what a Space opens on: a cell (cellKey, from synap_list_widgets for that workspace: e.g. an app cell made with synap_create_cell), a website (url; with podAppClientId when it is a pod app signing in with Synap), or clear:true for the space's own home. Exactly one. A cell that cannot open in that space is refused before anything is filed. Governed: an agent always proposes — `proposed` is success.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            workspaceId: { type: "string", description: "Workspace UUID" },
+            cellKey: {
+              type: "string",
+              description:
+                "The cell to open on, e.g. 'cell:crm:pipeline' or 'generated:lead-desk'.",
+            },
+            url: {
+              type: "string",
+              description: "An http(s) website to open on.",
+            },
+            podAppClientId: {
+              type: "string",
+              description:
+                "With url: the pod app's Client ID Metadata Document URL, so the site opens signed in to this pod.",
+            },
+            clear: {
+              type: "boolean",
+              description: "true = open on the space's own home again.",
+            },
+            title: { type: "string", description: "Label for the start page." },
+            reasoning: {
+              type: "string",
+              description:
+                "Why, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: ["workspaceId"],
+        },
+      },
+      {
         name: "synap_update_space_brief",
         annotations: {
           title: "Edit space brief",
@@ -5699,7 +5717,7 @@ export const tools = {
           destructiveHint: false,
           openWorldHint: false,
         },
-        description: `Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of ${CREATABLE_VIEW_TYPE_KEYS.join(", ")} (sheet is the table door). profileId scopes to one entity type. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes \`link\` (\`\${PUBLIC_URL}/open/<id>\`) — surface that URL to the user.`,
+        description: `Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of ${CREATABLE_VIEW_TYPE_KEYS.join(", ")} (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. To edit a view after create (a bento's blocks, its name): synap_update_view. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes \`link\` (\`\${PUBLIC_URL}/open/<id>\`) — surface that URL to the user.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -5759,7 +5777,7 @@ export const tools = {
           destructiveHint: false,
           openWorldHint: false,
         },
-        description: `Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance.`,
+        description: `Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance. Whiteboards only: to rename a view or change its config (a bento's blocks, a kanban's grouping) use synap_update_view.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -5799,6 +5817,35 @@ export const tools = {
         },
       },
       {
+        name: "synap_update_view",
+        annotations: {
+          title: "Edit view",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Edit an existing view you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every widget you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the widget catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_update_view_content.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            viewId: { type: "string", description: "View UUID to edit" },
+            name: { type: "string", description: "New name (1-100 chars)." },
+            config: {
+              type: "object",
+              description:
+                "The view's WHOLE new config (it replaces the stored one), e.g. a bento's { blocks: [...] }.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["viewId"],
+        },
+      },
+      {
         name: "synap_list_views",
         annotations: {
           title: "List views",
@@ -5831,6 +5878,14 @@ export const tools = {
               description:
                 "Optional profile UUID to filter views scoped to that entity type.",
             },
+            limit: {
+              type: "number",
+              description: "Page size, default 50",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
+            },
           },
         },
       },
@@ -5856,6 +5911,14 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace UUID. Include it so workspace-scoped generated cells appear.",
+            },
+            limit: {
+              type: "number",
+              description: "Page size, default 15",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
         },
@@ -5947,7 +6010,7 @@ export const tools = {
               description:
                 "With kind 'question': the label of the session output the question is about. The question is filed ON that output (it becomes the person's, with your question as its why), so it shows as a card they can answer; their answer is recorded as its `answer` and hands it back to you.",
             },
-            ask: ROOM_QUESTION_ASK_JSON_SCHEMA,
+            ask: ASK_JSON_SCHEMA,
             toSessionId: {
               type: "string",
               description:
@@ -6202,7 +6265,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What can do this, and where does it belong? Searches the pod's runnable verbs, the abstract-intent axis, the user's playbooks and their spaces (with the kinds to write there) in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+          "What can do this, what already says how, and where does it belong? ONE call searches runnable verbs (with argument schemas), the intent axis, playbooks, spaces (with the kinds to write there) and every object you can open by its words: skills and rules (`ref` for synap_load_skill), automations, sessions, goals, projects, views, documents (by title). Each object row has an `open` link. Pass `intent` as free text. An absent block was not searched; `matches: []` = searched, nothing fit; `error` = that read failed. Matching is lexical, so a miss is never proof of absence: read `coverage`, and `noConfidentMatch` for the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
         inputSchema: {
           type: "object",
           properties: {
@@ -6270,8 +6333,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description:
-                "Max entries to return (default 20 when `query` is set; unset otherwise).",
+              description: "Page size, default 20 (browse or query).",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
           // workspaceId is OPTIONAL — "what can this pod do?" is almost always
@@ -6283,6 +6349,68 @@ export const tools = {
           // the call does not use — on the DISCOVERY path, which is the path
           // taken by an agent that is already lost.
           required: [],
+        },
+      },
+      {
+        name: "synap_list_installations",
+        annotations: {
+          title: "List installations",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "What is installed on the person's computers: one row per capability on a computer (a `tool` such as media-transcribe, or a `service`). Each row: the computer, the capability key, its kind, its `status` (planned, installing, installed, updating, removing, failed), what was asked (`desiredState`, `desiredVersion`, `approvedAt`), what the computer observed (`observedVersion`, `observedOs`, `observedArch`, `verifiedAt`) and `health`, derived at read: ok, degraded (a service reported unhealthy), drifted (not the approved version), stale (a check is due), unknown (not checked yet, or the computer has not reported: offline, not broken) or failed. Pass `computerId` for one computer's installations (synap_list_agents names each agent's computer), `capabilityKey` for the computers that have one capability, or neither for all. Read-only; to install, update, check or remove, ask with synap_request_installation.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            computerId: {
+              type: "string",
+              description: "One computer's id (its users id).",
+            },
+            capabilityKey: {
+              type: "string",
+              description:
+                "A capability's catalog slug, e.g. media-transcribe: which computers have it.",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "synap_request_installation",
+        annotations: {
+          title: "Request installation",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: true,
+        },
+        description:
+          'Ask to install a capability on one of the person\'s computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person\'s computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            capabilityKey: {
+              type: "string",
+              description:
+                "The capability's catalog slug, e.g. media-ffmpeg (market.search `slug`).",
+            },
+            computer: {
+              type: "string",
+              description:
+                'One of the person\'s computers (market.search `computers`) by id, name, a word of it, or "mac"/"linux"/"windows" for their only one; or "pod" for a pod capability.',
+            },
+            action: {
+              type: "string",
+              enum: ["install", "update", "verify", "remove"],
+              description:
+                "Default install. update = another version; verify = run its check now; remove = uninstall from that computer.",
+            },
+            version: {
+              type: "string",
+              description: "For update: the version to move to.",
+            },
+          },
+          required: ["capabilityKey", "computer"],
         },
       },
       {
@@ -6398,7 +6526,11 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Max entries to return (default 50).",
+              description: "Page size, default 25, max 99.",
+            },
+            offset: {
+              type: "number",
+              description: "From nextOffset",
             },
           },
         },
@@ -6453,7 +6585,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron). Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6910,6 +7042,40 @@ export const tools = {
           required: [],
         },
       },
+      {
+        // Unwrapped by the tools/call door before anything judges the call
+        // (`mcp/index.ts`, `call-tool.ts`): the fence, governance and every
+        // limit apply to the tool it names, as to a direct call of that tool.
+        name: CALL_TOOL_NAME,
+        annotations: {
+          title: "Call a tool",
+          // It may run any write: a client approves it as one.
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description: `Run a tool this key has unlocked but your client does not list yet, in this turn: \`tool\` = its name, \`arguments\` = its input. Leave \`arguments\` out to get its input schema. Unlock a group first with ${loadSkillCall("synap_load_skill")}.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            tool: {
+              type: "string",
+              description: "The tool to run, e.g. 'synap_create_document'.",
+            },
+            arguments: {
+              type: "object",
+              description:
+                "The tool's input. Omit it to get the tool's input schema instead of running it.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "Optional: passed to the tool as its `sessionId` when `arguments` has none.",
+            },
+          },
+          required: ["tool"],
+        },
+      },
     ];
 
     // W-C1: every attributed tool declares `sessionId`, derived here so a new
@@ -6996,6 +7162,8 @@ export const tools = {
           keyWorkspaceId,
           signal
         );
+        // The narrow read (`only`) is a machine's poll: the block it asked for, nothing added.
+        if (args.only !== undefined) return result;
         return await withYourTools(result, agentUserId, toolAccess?.keyId);
       }
       if (name === "synap_load_skill") {

@@ -1,0 +1,178 @@
+/**
+ * `installation/request` — an agent asked for a capability on one of the
+ * person's computers (`POST /installations/request`; reconciliation f75fbb48
+ * §3.4, decision 168f34db §2). Approving records the asked state AS the
+ * approver, who must own the computer (the computer is the row's target, set
+ * at filing), and the reconciler queues the one job it calls for. The
+ * computer's runner then leases and runs it. Re-approving does nothing.
+ *
+ * When the ask named a capability the pod did not have yet (MCP
+ * `synap_request_installation`), the proposal carries `catalog`: approving
+ * adds it from Synap's catalog, then records the installation. One card.
+ *
+ * The ask sits where the gate files it: NESTED under the request envelope
+ * (`proposal.data.data`; `checkPermissionOrPropose`). Reading it at the top
+ * of `proposal.data` found no action, so every agent's ask failed on
+ * approval (live, 2026-11-09: proposal 55928891).
+ *
+ * Approval needs a fresh sign-in (installing on a person's machine is a
+ * commitment: the default the reconciliation §3.4 names, overridable):
+ * `widensCredential` makes the dispatch refuse a Synap app's device session
+ * (`assertFreshAuthentication`), so it is approved on the console. It mints
+ * no key today; a `service` installation will (plan 64072312 U6).
+ */
+
+import { TRPCError } from "@trpc/server";
+import { db, proposals, eq, transitionProposal } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
+import {
+  applyInstallationRequest,
+  INSTALLATION_REQUEST_ACTIONS,
+  installRefusal,
+  isInstallationRequestApproved,
+  loadInstallableCapability,
+  loadPersonsComputer,
+  whyNotPersonsComputer,
+} from "../../../services/installations/installations.js";
+import {
+  addCatalogCapability,
+  loadCatalogCapability,
+  type CatalogAddition,
+} from "../../../services/installations/request-installation.js";
+import {
+  registerProposalExecutor,
+  attachFailureMeta,
+} from "../execution-registry.js";
+import { reportApproved } from "./shared.js";
+
+function cannotApply(message: string) {
+  return attachFailureMeta(
+    new TRPCError({ code: "PRECONDITION_FAILED", message }),
+    { errorClass: "conflict" }
+  );
+}
+
+const asRecord = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+
+/** The catalog addition an agent's ask carried, when well formed. */
+function catalogAdditionOf(raw: unknown): CatalogAddition | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const c = raw as Record<string, unknown>;
+  if (typeof c.slug !== "string" || !c.slug) return null;
+  const text = (v: unknown) => (typeof v === "string" ? v : null);
+  return {
+    slug: c.slug,
+    name: text(c.name) ?? c.slug,
+    version: text(c.version),
+    licence: text(c.licence),
+  };
+}
+
+export function registerInstallationExecutors(): void {
+  registerProposalExecutor({
+    key: "installation/request",
+    widensCredential: true,
+    async execute({ proposal, payload, userId, input, deps }) {
+      if (await isInstallationRequestApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const stored = asRecord(payload);
+      // The ask, as the gate filed it (`requestInstallation`'s `data`).
+      const data = asRecord(stored.data);
+      const computerId = String(proposal.targetId ?? data.computerId ?? "");
+      const action = data.action;
+      const capabilityKey =
+        typeof data.capabilityKey === "string" ? data.capabilityKey : "";
+      if (
+        !(INSTALLATION_REQUEST_ACTIONS as readonly unknown[]).includes(
+          action
+        ) ||
+        action === "verify"
+      ) {
+        throw cannotApply(
+          "Couldn't apply — the request does not say to install, update or remove anything. Nothing was asked of the computer."
+        );
+      }
+      // The same read the ask named the computer through (the roster).
+      const computer = computerId
+        ? await loadPersonsComputer(userId, computerId)
+        : null;
+      if (!computer) {
+        const why = computerId
+          ? await whyNotPersonsComputer(userId, computerId)
+          : "the request names no computer";
+        throw cannotApply(`Couldn't apply — ${why}. Nothing was asked of it.`);
+      }
+      let capability = await loadInstallableCapability(capabilityKey);
+      // An agent asked for a capability the pod did not have yet: approving
+      // adds it from Synap's catalog first (the same applier as an approved
+      // `market.install`), after checking the computer against the catalog
+      // definition as it is NOW, so a computer that no longer fits gets
+      // nothing added.
+      const catalog = catalogAdditionOf(data.catalog);
+      if (
+        !capability &&
+        catalog?.slug === capabilityKey &&
+        action === "install"
+      ) {
+        const current = await loadCatalogCapability(catalog.slug);
+        if (!current?.installable)
+          throw cannotApply(
+            `Couldn't apply — ${capabilityKey} is no longer in Synap's marketplace as something to install on a computer. Nothing was added.`
+          );
+        // The person approves the version the card showed, never another.
+        if (catalog.version && current.version !== catalog.version)
+          throw cannotApply(
+            `Couldn't apply — ${capabilityKey} changed in the marketplace since it was asked for (${catalog.version} → ${current.version ?? "unknown"}). Nothing was added: ask again.`
+          );
+        const refusal = installRefusal(current.installable, computer);
+        if (refusal)
+          throw cannotApply(`Couldn't apply — ${refusal} Nothing was added.`);
+        capability = await addCatalogCapability(catalog, userId);
+      }
+      if (!capability)
+        throw cannotApply(
+          `Couldn't apply — ${capabilityKey} is no longer a capability this pod can install. Nothing was asked of the computer.`
+        );
+      if (action !== "remove") {
+        const refusal = installRefusal(capability, computer);
+        if (refusal) throw cannotApply(`Couldn't apply — ${refusal}`);
+      }
+      const out = await applyInstallationRequest({
+        computer,
+        capability,
+        action: action as "install" | "update" | "remove",
+        version: typeof data.version === "string" ? data.version : null,
+        approverId: userId,
+        proposalId: input.proposalId,
+      });
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          data: {
+            ...stored,
+            applied: {
+              installationId: out.installation.id,
+              jobId: out.jobId,
+            },
+          } as unknown as typeof payload,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+}

@@ -157,7 +157,6 @@ export interface ResolveAgentGovernanceInput {
   lifecycleMove?: {
     intoTerminal: boolean;
     humanOnly: boolean;
-    atSessionEnd?: boolean;
     outOfTerminal?: boolean;
     atSessionBirth?: boolean;
   };

@@ -584,7 +584,8 @@ interface AutomationMaterializationInput {
     nodes: Array<Record<string, unknown>>;
     edges: Array<Record<string, unknown>>;
   };
-  status: "draft" | "active" | "paused" | "error";
+  /** Absent = the author stated none: `draft` unless an approval activates it. */
+  status?: "draft" | "active" | "paused" | "error";
   metadata?: Record<string, unknown>;
   state?: Record<string, unknown>;
   source?: "user" | "ai" | "intelligence" | "system" | "agent";
@@ -889,7 +890,7 @@ async function insertAutomationAfterGovernance(
    */
   forceDraft = false
 ): Promise<string | null> {
-  const status = forceDraft ? "draft" : input.status;
+  const status = forceDraft ? "draft" : (input.status ?? "draft");
   // After governance (every caller of this door has passed it): a declared
   // inbound webhook source binds here — `webhookSource.name` → this space's
   // source of that name, when it exists (services/webhooks/inbound-source.ts;
@@ -981,8 +982,14 @@ export async function materializeAutomationForPrincipal(input: {
   definition: AutomationMaterializationInput;
   /** The row's `createdBy` — the runtime principal. */
   createdBy: string;
-  /** Present ⇒ an AGENT authored this ⇒ forced `draft`. */
+  /** Present ⇒ an AGENT authored this ⇒ forced `draft`, unless `approved`. */
   agentUserId?: string | undefined;
+  /**
+   * A person APPROVED this exact definition (proposal approval): the approval
+   * is the review the draft floor stands in for, so the author's status is
+   * kept. Set only by `materializeApprovedAutomation`.
+   */
+  approved?: boolean | undefined;
   /** Converge retries on a caller-owned id (proposal target, rule id). */
   stableId?: string | undefined;
 }): Promise<string | null> {
@@ -996,7 +1003,7 @@ export async function materializeAutomationForPrincipal(input: {
     input.definition,
     input.createdBy,
     input.stableId,
-    Boolean(input.agentUserId)
+    Boolean(input.agentUserId) && !input.approved
   );
 }
 
@@ -1020,6 +1027,7 @@ export async function materializeApprovedAutomation(input: {
     definition: input.definition,
     createdBy: input.agentUserId,
     agentUserId: input.agentUserId,
+    approved: true,
     stableId: input.stableId,
   });
 }
@@ -2001,6 +2009,7 @@ export const automationsRouter = router({
             .enum(["event", "cron", "webhook", "manual"])
             .optional(),
           limit: z.number().min(1).max(100).optional(),
+          offset: z.number().int().min(0).optional(),
         })
         .optional()
     )
@@ -2032,7 +2041,8 @@ export const automationsRouter = router({
           )
         )
         .orderBy(desc(automations.updatedAt), asc(automations.id))
-        .limit(input?.limit ?? 50);
+        .limit(input?.limit ?? 50)
+        .offset(input?.offset ?? 0);
 
       return { automations: rows };
     }),
@@ -2437,9 +2447,10 @@ export const automationsRouter = router({
             nodes: z.array(z.record(z.string(), z.unknown())),
             edges: z.array(z.record(z.string(), z.unknown())),
           }),
-          status: z
-            .enum(["draft", "active", "paused", "error"])
-            .default("draft"),
+          // No schema default: an unstated status stays unstated in a
+          // proposal's stored data so approval can activate it; the direct
+          // insert lands `draft` (`insertAutomationAfterGovernance`).
+          status: z.enum(["draft", "active", "paused", "error"]).optional(),
           metadata: z.record(z.string(), z.unknown()).optional(),
           /** Per-automation persistent config/state — resolves {{automation.state.*}}. */
           state: z.record(z.string(), z.unknown()).optional(),
@@ -2576,7 +2587,7 @@ export const automationsRouter = router({
         status: "created" as const,
         id: automationId,
         message: `Automation "${input.name}" created as ${
-          forceDraft ? "draft" : input.status
+          forceDraft ? "draft" : (input.status ?? "draft")
         }`,
         proposalId: null as string | null,
         ...(source

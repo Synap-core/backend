@@ -314,6 +314,114 @@ describe("machines.setRunsScripts", () => {
   });
 });
 
+describe("machines.setWakesAgents", () => {
+  const meta = async () =>
+    (
+      await q<{ agent_metadata: Record<string, unknown> | null }>(
+        `select agent_metadata from users where id = $1`,
+        [computerId]
+      )
+    )[0]?.agent_metadata ?? {};
+
+  it("records the switch on the computer and shows it; off removes it", async () => {
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      wakesAgents: false,
+      waker: null,
+    });
+    await expect(
+      caller(HUMAN).setWakesAgents({ machineId: computerId, enabled: true })
+    ).resolves.toMatchObject({ status: "updated", wakesAgents: true });
+    expect((await meta()).wakesAgents).toBe(true);
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      wakesAgents: true,
+    });
+    await caller(HUMAN).setWakesAgents({
+      machineId: computerId,
+      enabled: false,
+    });
+    expect("wakesAgents" in (await meta())).toBe(false);
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      wakesAgents: false,
+    });
+  });
+
+  it("a stranger gets NOT_FOUND; a key is refused", async () => {
+    await expect(
+      caller(STRANGER).setWakesAgents({ machineId: computerId, enabled: true })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller(HUMAN, false).setWakesAgents({
+        machineId: computerId,
+        enabled: true,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("machines.setHostsServices", () => {
+  const liveScopes = async () =>
+    (
+      await q<{ scope: string[] }>(
+        `select scope from api_keys where user_id = $1 and revoked_at is null`,
+        [computerId]
+      )
+    ).map((r) => r.scope);
+
+  it("puts host.runner on the computer's live key and records it; off takes it away", async () => {
+    expect((await liveScopes()).length).toBeGreaterThan(0);
+    expect((await liveScopes()).every((s) => !s.includes("host.runner"))).toBe(
+      true
+    );
+    await expect(
+      caller(HUMAN).setHostsServices({ machineId: computerId, enabled: true })
+    ).resolves.toMatchObject({ status: "updated", hostsServices: true });
+    await caller(HUMAN).setHostsServices({
+      machineId: computerId,
+      enabled: true,
+    });
+    for (const s of await liveScopes()) {
+      expect(s.filter((x) => x === "host.runner")).toHaveLength(1);
+      // Its own scope: "Installs from the pod" never turns "Runs scripts" on.
+      expect(s).not.toContain("box.runner");
+      expect(s).toContain("hub-protocol.write");
+    }
+    const meta = await q<{ m: Record<string, unknown> }>(
+      `select agent_metadata as m from users where id = $1`,
+      [computerId]
+    );
+    expect(meta[0]!.m).toMatchObject({ hostsServices: true });
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      hostsServices: true,
+      runsScripts: false,
+    });
+    await caller(HUMAN).setHostsServices({
+      machineId: computerId,
+      enabled: false,
+    });
+    expect((await liveScopes()).every((s) => !s.includes("host.runner"))).toBe(
+      true
+    );
+    expect((await caller(HUMAN).list())[0]).toMatchObject({
+      hostsServices: false,
+    });
+  });
+
+  it("a stranger gets NOT_FOUND; a key is refused", async () => {
+    await expect(
+      caller(STRANGER).setHostsServices({
+        machineId: computerId,
+        enabled: true,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller(HUMAN, false).setHostsServices({
+        machineId: computerId,
+        enabled: true,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
 describe("machines.revoke", () => {
   it("a stranger and a key cannot revoke", async () => {
     await expect(
@@ -431,5 +539,59 @@ describe("machineKeyState", () => {
         now
       )
     ).toBe("revoked");
+  });
+});
+
+describe("machines.revoke — the installations on the computer (0409)", () => {
+  /** A key held by `userId`, live. */
+  const keyFor = async (userId: string) =>
+    (
+      await q<{ id: string }>(
+        `insert into api_keys (user_id, scope, is_active) values ($1, '{hub-protocol.read}', true) returning id`,
+        [userId]
+      )
+    )[0]!.id;
+  const revokedAt = async (keyId: string) =>
+    (
+      await q<{ r: Date | null }>(
+        `select revoked_at as r from api_keys where id = $1`,
+        [keyId]
+      )
+    )[0]!.r;
+
+  it("revokes each installation's and each binding's own key; another computer's stay live", async () => {
+    const box = (await connectComputer("host-box")).computer.id;
+    const other = (await connectComputer("other-box")).computer.id;
+    const instKey = await keyFor("installation-agent-1");
+    const bindKey = await keyFor("binding-agent-1");
+    const elsewhere = await keyFor("installation-agent-2");
+    const [inst] = await q<{ id: string }>(
+      `insert into installations (user_id, kind, capability_key, machine_user_id, agent_user_id, api_key_id, status)
+       values ($1, 'service', 'hyperframes', $2, 'installation-agent-1', $3, 'installed') returning id`,
+      [HUMAN, box, instKey]
+    );
+    await q(
+      `insert into installation_bindings (installation_id, user_id, need_key, intent, agent_user_id, api_key_id)
+       values ($1, $2, 'studio_url', 'expose_http', 'binding-agent-1', $3)`,
+      [inst!.id, HUMAN, bindKey]
+    );
+    await q(
+      `insert into installations (user_id, kind, capability_key, machine_user_id, agent_user_id, api_key_id, status)
+       values ($1, 'service', 'hyperframes', $2, 'installation-agent-2', $3, 'installed')`,
+      [HUMAN, other, elsewhere]
+    );
+
+    const res = await caller(HUMAN).revoke({ machineId: box });
+    // The computer's key, its agent's, the installation's and the binding's.
+    expect(res).toMatchObject({ status: "revoked", revokedKeys: 4 });
+    expect(await revokedAt(instKey)).not.toBeNull();
+    expect(await revokedAt(bindKey)).not.toBeNull();
+    expect(await revokedAt(elsewhere)).toBeNull();
+    // The installation stays as history.
+    const left = await q<{ n: number }>(
+      `select count(*)::int as n from installations where machine_user_id = $1`,
+      [box]
+    );
+    expect(left[0]!.n).toBe(1);
   });
 });

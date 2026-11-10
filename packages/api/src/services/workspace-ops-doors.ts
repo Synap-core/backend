@@ -4,6 +4,7 @@
  *
  *   archive / restore  → `workspacesRouter.archive`        (DESTRUCTIVE / ADMIN floor)
  *   rename             → `workspacesRouter.update`         (ADMIN floor)
+ *   start page         → `workspacesRouter.setPrimarySurface` (ADMIN floor)
  *   move entities      → `entitiesRouter.moveToWorkspace`  (per-entity gate)
  *   grant kind access  → `profilesRouter.grantAccess`      (ADMIN floor)
  *   file into project  → `projectsRouter.fileEntities`     (ACCESS: agent proposes;
@@ -20,7 +21,12 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, eq, profiles } from "@synap/database";
+import {
+  db,
+  eq,
+  profiles,
+  type WorkspacePrimarySurface,
+} from "@synap/database";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
 import { workspacesRouter } from "../routers/workspaces.js";
 import { entitiesRouter } from "../routers/entities.js";
@@ -81,6 +87,27 @@ export async function renameWorkspaceDoor(
     ...(input.description !== undefined
       ? { description: input.description }
       : {}),
+  });
+}
+
+/**
+ * Set what a space opens on (its start page), or `null` for the space's own
+ * home → `workspacesRouter.setPrimarySurface` (checks the surface opens in the
+ * space, then the ADMIN-floored `workspace/update` gate: an agent proposes).
+ */
+export async function setStartPageDoor(
+  actor: WorkspaceOpsActor,
+  input: {
+    workspaceId: string;
+    primarySurface: WorkspacePrimarySurface | null;
+    reasoning?: string;
+  }
+) {
+  const ctx = await callerCtx(actor, input.workspaceId);
+  return workspacesRouter.createCaller(ctx).setPrimarySurface({
+    workspaceId: input.workspaceId,
+    primarySurface: input.primarySurface,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
   });
 }
 

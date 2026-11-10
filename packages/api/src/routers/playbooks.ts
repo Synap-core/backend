@@ -16,6 +16,7 @@
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.2)
  */
 
+import { trialRunInputSchema } from "../services/playbooks/trial-run.js";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import { z } from "zod";
@@ -64,7 +65,6 @@ import {
   links,
   loadFacetSlugsBatch,
   isUniqueViolation,
-  canonicalLifecycleOptionKey,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -73,7 +73,6 @@ import type {
   Automation,
 } from "@synap/database/schema";
 import {
-  readSubjectLifecycle,
   resolveStageCategory,
   type PlaybookStageCategory,
 } from "@synap/playbooks";
@@ -98,7 +97,14 @@ import {
   playbookScopeSchema,
   playbookExpectedOutputSchema,
   playbookRequiredIntentsSchema,
+  playbookGuidanceSchema,
 } from "../schemas/playbook-definition.js";
+import {
+  playbookRunnerSchema,
+  requiresSchema,
+} from "../schemas/playbook-runner.js";
+import { recordPlaybookVersion } from "../services/playbooks/playbook-versions.js";
+import { resolveStageUses } from "../services/playbooks/stage-uses.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
@@ -114,6 +120,7 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { definitionVersionChanged } from "../services/playbooks/definition-version.js";
+import { playbookSearchText } from "../services/playbooks/playbook-search-text.js";
 import {
   PINNED_ENTITY_IDS_KEY,
   explainPinnedIdRejection,
@@ -335,7 +342,13 @@ export const createInputSchema = playbookDefinitionSchema.extend({
    */
   proposedPlaybookId: z.string().uuid().optional(),
   executor: executorRefSchema.default("is-agent"),
-  status: playbookStatusSchema.default("draft"),
+  /**
+   * NO schema default: an unstated status must stay unstated in a PROPOSAL's
+   * stored data, so approval can tell "the author asked for draft" (kept) from
+   * "the author said nothing" (an approval IS the activation, `playbook/create`
+   * executor). A direct, ungated create still lands `draft` (insert below).
+   */
+  status: playbookStatusSchema.optional(),
   /**
    * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
    * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
@@ -408,6 +421,8 @@ export const updateInputSchema = z.object({
    * change cannot make the patch and the create accept different slugs.
    */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
+  /** See `playbookGuidanceSchema` — REPLACES the declared list, same schema. */
+  guidance: playbookGuidanceSchema.optional(),
   /** See `playbookDefinitionSchema.subjectProfile` — the same schema. */
   subjectProfile: playbookSubjectProfileSchema.optional(),
   /** See `playbookDefinitionSchema.activators` — folded into `subjectProfile`. */
@@ -420,6 +435,10 @@ export const updateInputSchema = z.object({
   status: playbookStatusSchema.optional(),
   /** See `createInputSchema.scope`. */
   scope: playbookScopeSchema.optional(),
+  /** See `playbookDefinitionSchema.runner` — REPLACES it; `null` clears. */
+  runner: playbookRunnerSchema.nullable().optional(),
+  /** See `playbookDefinitionSchema.requires` — REPLACES the set. */
+  requires: requiresSchema.optional(),
   /**
    * A PATCH shallow-merged onto the row's `metadata` bag (keys not named are
    * kept) — the same contract views/skills/automations `.update` honour. It is
@@ -1266,68 +1285,6 @@ async function assertSubjectProfileResolves(
 }
 
 /**
- * `subjectProfile.onEnd` names statuses of the subject's lifecycle: each value
- * must be an OPTION of the lifecycle its profile declares (the status door's
- * own normaliser: case and separator only), or the write is refused with the
- * options — a value no move could reach would only fail at every close.
- * Refused too: an `onEnd` with no subject kind, and one on a kind that
- * declares no lifecycle and names no `statusProperty` (nothing to move). A
- * kind with no declared lifecycle but a `statusProperty` keeps the legacy
- * plain-property path, whose values no declaration lists: not checked.
- *
- * On an update, only an `onEnd` this write CHANGES is checked (`previousOnEnd`
- * = the stored one): a patch that carries the stored one over unchanged is not
- * refused for a value it did not introduce.
- */
-async function assertOnEndOptionsDeclared(
-  subjectProfile: unknown,
-  workspaceId: string | null,
-  previousOnEnd: unknown
-): Promise<void> {
-  if (!subjectProfile || typeof subjectProfile !== "object") return;
-  const { onEnd, profileSlug, statusProperty } =
-    readSubjectLifecycle(subjectProfile);
-  const values = Object.entries(onEnd);
-  if (values.length === 0) return;
-  if (
-    previousOnEnd !== undefined &&
-    JSON.stringify(readSubjectLifecycle({ onEnd: previousOnEnd }).onEnd) ===
-      JSON.stringify(onEnd)
-  ) {
-    return;
-  }
-  if (!profileSlug) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "subjectProfile.onEnd needs subjectProfile.profileSlug — an end move moves the subject's status",
-    });
-  }
-  const { readSubjectProfile } =
-    await import("../services/playbooks/playbook-activators.js");
-  const subject = await readSubjectProfile(profileSlug, workspaceId);
-  if (!subject.lifecycleOptions) {
-    if (statusProperty) return;
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `subjectProfile.onEnd: ${profileSlug} declares no lifecycle — declare one (or name the statusProperty the process moves) before saying what a session end moves it to`,
-    });
-  }
-  const options = subject.lifecycleOptions;
-  const decl = { options: options.map((key) => ({ key })) } as Parameters<
-    typeof canonicalLifecycleOptionKey
-  >[0];
-  for (const [status, value] of values) {
-    if (!options.includes(canonicalLifecycleOptionKey(decl, value))) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `subjectProfile.onEnd.${status}: "${value}" is not a status of ${profileSlug} (${options.join(", ")})`,
-      });
-    }
-  }
-}
-
-/**
  * The ONE definition check a playbook write gets BEFORE the governance gate,
  * shared by `create`, `update` (every door: browser, MCP `synap_create_playbook`
  * / `synap_update_playbook`, Hub `POST`/`PATCH /playbooks`) and a revision of a
@@ -1342,30 +1299,11 @@ async function assertOnEndOptionsDeclared(
  */
 export async function assertPlaybookDefinitionWritable(
   database: Parameters<typeof assertKnownProfileSlug>[0],
-  write: {
-    goalTemplate?: unknown;
-    params?: unknown;
-    subjectProfile?: unknown;
-    /** The space the playbook lives in (picks its profile of a slug). */
-    workspaceId?: string | null;
-  },
-  previous?: {
-    goalTemplate: unknown;
-    params: unknown;
-    subjectProfile?: unknown;
-    workspaceId?: string | null;
-  }
+  write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
+  previous?: { goalTemplate: unknown; params: unknown }
 ): Promise<void> {
   if (write.subjectProfile !== undefined) {
     await assertSubjectProfileResolves(database, write.subjectProfile);
-    await assertOnEndOptionsDeclared(
-      write.subjectProfile,
-      write.workspaceId ?? previous?.workspaceId ?? null,
-      previous
-        ? ((previous.subjectProfile as { onEnd?: unknown } | null)?.onEnd ??
-            null)
-        : undefined
-    );
   }
   if (!previous) {
     assertGoalPlaceholdersDeclared({
@@ -1542,7 +1480,8 @@ export async function matchPlaybooks(
       kind: "playbook" as const,
       id: p.id,
       name: p.name,
-      text: [p.goalTemplate],
+      // The SAME words synap_find's playbook arm ranks (one definition).
+      text: playbookSearchText(p),
       subjectProfileSlug:
         (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
         null,
@@ -1567,6 +1506,9 @@ export async function matchPlaybooks(
       name: candidate.row.name,
       scope,
       templateKind,
+      // When to use it, in full: the agent door cuts it
+      // (`compactPlaybookMatches`), a UI strip may show it whole.
+      description: candidate.row.description ?? null,
       goalTemplate: candidate.row.goalTemplate,
       subjectProfileSlug: candidate.subjectProfileSlug,
       // The workers it declares ("How often?" offers these; [] when none or
@@ -1985,7 +1927,15 @@ export const playbooksRouter = router({
         goalTemplate: input.goalTemplate,
         params: input.params,
         subjectProfile: input.subjectProfile,
+      });
+      // A step that IS a playbook is checked and PINNED here, before the gate,
+      // so the proposal, its approval replay and the row carry the version.
+      input.stages = await resolveStageUses({
+        stages: input.stages,
+        selfId: input.proposedPlaybookId ?? null,
         workspaceId: ctx.workspaceId ?? null,
+        visibility: () =>
+          scopedDb(AccessContext.from(ctx)).predicate(playbooks),
       });
       // The id this playbook lands under, minted BEFORE the gate and handed to
       // it as `data.id`, so a proposal's `targetId` IS the playbook's id once it
@@ -2044,12 +1994,15 @@ export const playbooksRouter = router({
           stages: input.stages,
           criteria: input.criteria,
           requiredIntents: input.requiredIntents,
+          guidance: input.guidance,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
           metadata: input.metadata,
           executor: input.executor,
           status: input.status,
           scope: input.scope,
+          runner: input.runner,
+          requires: input.requires,
           contextSkill: input.contextSkill,
         },
       };
@@ -2149,34 +2102,45 @@ export const playbooksRouter = router({
       let created: Playbook;
       let reused = false;
       try {
-        const [row] = await database
-          .insert(playbooks)
-          .values({
-            id: playbookId,
-            workspaceId: ctx.workspaceId,
-            createdBy: input.agentUserId ?? ctx.userId,
-            name: input.name,
-            description: input.description ?? null,
-            goalTemplate: input.goalTemplate,
-            params: input.params ?? [],
-            inputStrategy: input.inputStrategy ?? { kind: "none" },
-            channelSpec: input.channelSpec ?? {},
-            expectedOutputs: input.expectedOutputs ?? [],
-            stages: input.stages ?? [],
-            criteria: input.criteria ?? [],
-            requiredIntents: input.requiredIntents ?? [],
-            subjectProfile: input.subjectProfile ?? null,
-            schedule: input.schedule ?? null,
-            metadata: input.metadata ?? {},
-            executor: input.executor,
-            status: input.status,
-            // NULL, not a defaulted 'session': the column's documented reading
-            // is "NULL means session", and writing the default eagerly would
-            // make an unstated scope indistinguishable from a chosen one.
-            scope: input.scope ?? null,
-          })
-          .returning();
-        created = row as Playbook;
+        created = await database.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(playbooks)
+            .values({
+              id: playbookId,
+              workspaceId: ctx.workspaceId,
+              createdBy: input.agentUserId ?? ctx.userId,
+              name: input.name,
+              description: input.description ?? null,
+              goalTemplate: input.goalTemplate,
+              params: input.params ?? [],
+              inputStrategy: input.inputStrategy ?? { kind: "none" },
+              channelSpec: input.channelSpec ?? {},
+              expectedOutputs: input.expectedOutputs ?? [],
+              stages: input.stages ?? [],
+              criteria: input.criteria ?? [],
+              requiredIntents: input.requiredIntents ?? [],
+              guidance: input.guidance ?? [],
+              subjectProfile: input.subjectProfile ?? null,
+              schedule: input.schedule ?? null,
+              metadata: input.metadata ?? {},
+              executor: input.executor,
+              status: input.status ?? "draft",
+              // NULL, not a defaulted 'session': the column's documented reading
+              // is "NULL means session", and writing the default eagerly would
+              // make an unstated scope indistinguishable from a chosen one.
+              scope: input.scope ?? null,
+              runner: input.runner ?? null,
+              requires: input.requires ?? [],
+            })
+            .returning();
+          // Version 1 is kept with the row (0416): a step may pin it.
+          await recordPlaybookVersion(
+            tx,
+            row as Playbook,
+            input.agentUserId ?? ctx.userId
+          );
+          return row as Playbook;
+        });
       } catch (err) {
         if (!isUniqueViolation(err)) throw err;
         const winner = await findNonArchivedPlaybookByName(
@@ -2346,6 +2310,15 @@ export const playbooksRouter = router({
         },
         existing
       );
+      // 2c'. A step that IS a playbook: checked and PINNED before the gate
+      // (same reason as the create door).
+      input.stages = await resolveStageUses({
+        stages: input.stages,
+        selfId: existing.id,
+        workspaceId: existing.workspaceId,
+        visibility: () =>
+          scopedDb(AccessContext.from(ctx)).predicate(playbooks),
+      });
 
       // 2d. A pin list is an ordered whitelist on metadata. The request's
       // strategy wins over the stored one: writing ids onto a playbook that
@@ -2432,6 +2405,7 @@ export const playbooksRouter = router({
           ...(input.requiredIntents !== undefined
             ? { requiredIntents: input.requiredIntents }
             : {}),
+          ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
             : {}),
@@ -2439,6 +2413,8 @@ export const playbooksRouter = router({
           ...(input.executor !== undefined ? { executor: input.executor } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.scope !== undefined ? { scope: input.scope } : {}),
+          ...(input.runner !== undefined ? { runner: input.runner } : {}),
+          ...(input.requires !== undefined ? { requires: input.requires } : {}),
           ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
         },
       });
@@ -2476,12 +2452,15 @@ export const playbooksRouter = router({
       if (input.criteria !== undefined) set.criteria = input.criteria;
       if (input.requiredIntents !== undefined)
         set.requiredIntents = input.requiredIntents;
+      if (input.guidance !== undefined) set.guidance = input.guidance;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;
       if (input.schedule !== undefined) set.schedule = input.schedule;
       if (input.executor !== undefined) set.executor = input.executor;
       if (input.status !== undefined) set.status = input.status;
       if (input.scope !== undefined) set.scope = input.scope;
+      if (input.runner !== undefined) set.runner = input.runner;
+      if (input.requires !== undefined) set.requires = input.requires;
       if (input.metadata !== undefined)
         set.metadata = {
           ...((existing.metadata as Record<string, unknown> | null) ?? {}),
@@ -2504,12 +2483,23 @@ export const playbooksRouter = router({
 
       let updated: Playbook;
       try {
-        const [row] = await database
-          .update(playbooks)
-          .set(set)
-          .where(eq(playbooks.id, input.id))
-          .returning();
-        updated = row as Playbook;
+        updated = await database.transaction(async (tx) => {
+          const [row] = await tx
+            .update(playbooks)
+            .set(set)
+            .where(eq(playbooks.id, input.id))
+            .returning();
+          // A new version is kept in the same transaction (0416): a step
+          // pinned at it can run it after the next edit.
+          if (set.version !== undefined) {
+            await recordPlaybookVersion(
+              tx,
+              row as Playbook,
+              input.agentUserId ?? ctx.userId
+            );
+          }
+          return row as Playbook;
+        });
       } catch (err) {
         // Name/status transition collided with another non-archived playbook
         // under playbooks_workspace_name_active_uq — surface as CONFLICT, not 500.
@@ -2894,9 +2884,35 @@ export const playbooksRouter = router({
          * run's own grant (`playbook.run`) covers it.
          */
         remember: z.boolean().optional(),
+        /**
+         * TRIAL (the rule lab, design b199a3a4 slice 1b): render each draft in
+         * place of the current version it names, on Synap AI, writing
+         * nothing; the drafted text is the agent's last reply
+         * (`GET /runs/:runId?flowType=playbook` → `playbookDetail.trial`).
+         * A person's act: refused for an agent, with `remember` or with
+         * `handToAgentId`.
+         */
+        trial: trialRunInputSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.trial) {
+        if (input.agentUserId || ctx.agentUserId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only a person can try a draft rule (a trial run) — an agent cannot.",
+            cause: { reasonCode: "PERSON_ONLY" },
+          });
+        }
+        if (input.remember || input.handToAgentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId.",
+          });
+        }
+      }
       // The playbook must be on the caller's USER FLOOR (every member
       // workspace + pod-wide rows) — unchanged predicate, pod-wide as it
       // always was.
@@ -3149,6 +3165,8 @@ export const playbooksRouter = router({
             ? { handToAgentId: input.handToAgentId }
             : {}),
           ...(input.runOn ? { runOn: input.runOn } : {}),
+          // A gated trial stays a trial once approved.
+          ...(input.trial ? { trial: input.trial } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -3213,6 +3231,7 @@ export const playbooksRouter = router({
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
         ...(input.runOn ? { runOn: input.runOn } : {}),
+        ...(input.trial ? { trial: input.trial } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });

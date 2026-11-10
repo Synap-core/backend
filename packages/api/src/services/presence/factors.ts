@@ -44,6 +44,7 @@ import {
   presenceRequiredError,
   recordMissing,
 } from "./gate.js";
+import { redeemDeviceLink } from "./device-link.js";
 import { readPresenceMode } from "./mode.js";
 import {
   hasProofFactor,
@@ -75,6 +76,12 @@ export { hasProofFactor, presenceFactorCounts };
  * of the new key>` (refused under `enforce` without it, recorded in
  * `report`). A proof sent is checked and spent before the lock is taken.
  *
+ * "Add this device" (founder decision of 9 Nov 2026, session 84c74a23): a
+ * device link a device the person already uses approved for THIS session
+ * and THIS key (`device-link.ts`) stands for that proof. It is redeemed in
+ * the same transaction, under the lock, so a refused or failed enrolment
+ * gives it back.
+ *
  * Throws `PresenceError` (the router maps it) or the gate's refusal.
  * Not covered: a first PASSKEY added in Kratos' settings flow at the same
  * moment as a first device key (Kratos writes it outside this lock).
@@ -86,7 +93,11 @@ export async function enrollDeviceKey(args: {
   publicKey: string;
   signature: string;
   proof?: PresenceProof | null;
-}): Promise<{ id: string }> {
+  /** The enrolling session (`callerSessionKey`): the one an approved device link is redeemed by. */
+  sessionKey?: string | null;
+  /** The approved device link the client names, when it has one. */
+  deviceLinkId?: string | null;
+}): Promise<{ id: string; viaDeviceLink: boolean }> {
   const challenge = await db.query.presenceChallenges.findFirst({
     where: and(
       eq(presenceChallenges.id, args.challengeId),
@@ -137,7 +148,20 @@ export async function enrollDeviceKey(args: {
       drizzleSql`select pg_advisory_xact_lock(hashtextextended(${`presence-factor:${args.userId}`}, 0))`
     );
     const held = await hasProofFactor(args.userId, tx);
-    if (held && !verdict && mode === "enforce") {
+    // An approved device link of this session, for this very key, is the
+    // proof an existing factor gave from another device.
+    const viaDeviceLink =
+      held && !verdict
+        ? await redeemDeviceLink({
+            userId: args.userId,
+            sessionKey: args.sessionKey ?? null,
+            kind: "device_key",
+            keyFingerprint: fingerprint,
+            id: args.deviceLinkId ?? null,
+            tx,
+          })
+        : false;
+    if (held && !verdict && !viaDeviceLink && mode === "enforce") {
       return { kind: "refused" as const };
     }
     const [spent] = await tx
@@ -151,7 +175,10 @@ export async function enrollDeviceKey(args: {
         )
       )
       .returning({ id: presenceChallenges.id });
-    if (!spent) return { kind: "used" as const };
+    // Thrown, not returned: the rollback gives a redeemed device link back.
+    if (!spent) {
+      throw new PresenceError(PRESENCE_USED, "This challenge was used.");
+    }
     const [row] = await tx
       .insert(presenceDeviceKeys)
       .values({
@@ -163,7 +190,8 @@ export async function enrollDeviceKey(args: {
     return {
       kind: "enrolled" as const,
       id: row!.id,
-      unproved: held && !verdict,
+      viaDeviceLink,
+      unproved: held && !verdict && !viaDeviceLink,
     };
   });
 
@@ -172,9 +200,6 @@ export async function enrollDeviceKey(args: {
       userId: args.userId,
       subject: presenceRequestSubject(subject.kind, subject.id),
     });
-  }
-  if (outcome.kind === "used") {
-    throw new PresenceError(PRESENCE_USED, "This challenge was used.");
   }
   if (outcome.unproved) {
     await recordMissing({
@@ -185,7 +210,7 @@ export async function enrollDeviceKey(args: {
       door,
     });
   }
-  return { id: outcome.id };
+  return { id: outcome.id, viaDeviceLink: outcome.viaDeviceLink };
 }
 
 /**
@@ -244,7 +269,7 @@ export async function notifyFactorChanged(args: {
 
 /** The refusal of a removal that would leave fewer than two ways in under `enforce`. */
 export const PRESENCE_NEEDS_TWO_WAYS_MESSAGE =
-  "Approvals need you in person on this pod, so keep two ways to confirm it is you. Add another one first (a 2FA app or recovery codes), or, if you lost it, use “I lost my passkey”.";
+  "Approvals need you in person on this pod, so keep two ways to confirm it is you. Add another one first (an authenticator app or recovery codes), or, if you lost it, use “I lost my passkey”.";
 
 /**
  * "Two ways in" (the recovery ladder, founder, 6 Nov 2026): under `enforce`,

@@ -15,6 +15,13 @@
  * it stores it. Pure, no zod (the types package keeps zod a peer).
  */
 
+import {
+  MCP_TOOL_GROUP_NAMES,
+  MCP_TOOL_PROFILES,
+  type McpToolGroupName,
+  type McpToolProfile,
+} from "./tool-surface.js";
+
 /** Kebab-case, the way `users.agent_type` is stored. */
 export const AGENT_TEMPLATE_SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 /** A bare program name found on PATH: no path separator, no whitespace. */
@@ -53,6 +60,13 @@ export interface AgentTemplateSpec {
   wake: AgentTemplateWake | null;
   /** Base practices: the skill slugs its agents get. */
   practices: { skills: string[] };
+  /**
+   * The MCP tool surface its agents' FIRST key lists, when the connect asks
+   * for none (`/setup/agent`). null = the pod's default (`entry`).
+   */
+  toolProfile: McpToolProfile | null;
+  /** Groups unlocked on that first key from the start; only with `entry`. */
+  toolGroups: McpToolGroupName[];
 }
 
 export type AgentTemplateParse =
@@ -128,7 +142,17 @@ function parseWake(raw: unknown): AgentTemplateWake | string {
 export function parseAgentTemplateSpec(raw: unknown): AgentTemplateParse {
   const no = (reason: string): AgentTemplateParse => ({ ok: false, reason });
   if (!isRecord(raw)) return no("an agent template is an object");
-  const { harness, aliases, worker, tried, detect, wake, practices } = raw;
+  const {
+    harness,
+    aliases,
+    worker,
+    tried,
+    detect,
+    wake,
+    practices,
+    toolProfile,
+    toolGroups,
+  } = raw;
   if (typeof harness !== "string" || !AGENT_TEMPLATE_SLUG.test(harness)) {
     return no("harness must be a kebab-case slug (the agent_type spelling)");
   }
@@ -185,6 +209,32 @@ export function parseAgentTemplateSpec(raw: unknown): AgentTemplateParse {
     }
     skills = [...practices.skills];
   }
+  let parsedProfile: McpToolProfile | null = null;
+  if (toolProfile !== undefined && toolProfile !== null) {
+    if (!(MCP_TOOL_PROFILES as readonly unknown[]).includes(toolProfile)) {
+      return no(`toolProfile is one of ${MCP_TOOL_PROFILES.join(", ")}`);
+    }
+    parsedProfile = toolProfile as McpToolProfile;
+  }
+  let groups: McpToolGroupName[] = [];
+  if (toolGroups !== undefined && toolGroups !== null) {
+    if (
+      !isStringArray(toolGroups) ||
+      !toolGroups.every((g) =>
+        (MCP_TOOL_GROUP_NAMES as readonly string[]).includes(g)
+      )
+    ) {
+      return no(
+        `toolGroups are tool group names (${MCP_TOOL_GROUP_NAMES.join(", ")})`
+      );
+    }
+    groups = [...new Set(toolGroups as McpToolGroupName[])];
+  }
+  if (groups.length > 0 && parsedProfile !== "entry") {
+    return no(
+      "toolGroups go with toolProfile: entry (builder lists every tool)"
+    );
+  }
   return {
     ok: true,
     spec: {
@@ -195,6 +245,8 @@ export function parseAgentTemplateSpec(raw: unknown): AgentTemplateParse {
       detect: parsedDetect,
       wake: parsedWake,
       practices: { skills },
+      toolProfile: parsedProfile,
+      toolGroups: groups,
     },
   };
 }

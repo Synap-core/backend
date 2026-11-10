@@ -94,6 +94,7 @@ describe("synap_get_relations — workspace resolution", () => {
     expect(listRelationsPodWide).toHaveBeenCalledWith({
       userId: "user-1",
       entityId: "entity-1",
+      limit: 50, // the schema's stated default page
     });
     expect(listRelations).not.toHaveBeenCalled();
     expect(getUserMemberWorkspaceIds).not.toHaveBeenCalled();

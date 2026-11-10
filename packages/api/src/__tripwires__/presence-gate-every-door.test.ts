@@ -233,6 +233,35 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     ).toMatch(/kind: "oauth_consent"/);
   });
 
+  it("presence.deviceLink.approve (nested, so the scan above cannot name it) gates in its service before it approves", () => {
+    // "Add this device" (founder decision of 9 Nov 2026): the approve door is
+    // `presenceRouter.deviceLink.approve`, indented one router deeper than
+    // `decisionProcedures` reads, so it is pinned here by name. Its body
+    // hands off to `approveDeviceLink`, which must call the gate for
+    // `device_link` BEFORE the write that marks the request approved.
+    const router = FILES.find((f) => f.path === "routers/presence.ts")!.src;
+    const approve = router.slice(
+      router.indexOf("    approve: protectedProcedure")
+    );
+    expect(router.indexOf("    approve: protectedProcedure")).toBeGreaterThan(
+      0
+    );
+    expect(approve.slice(0, approve.indexOf("    decline:"))).toMatch(
+      /\bapproveDeviceLink\(/
+    );
+    const service = FILES.find(
+      (f) => f.path === "services/presence/device-link.ts"
+    )!.src;
+    const body = service.slice(
+      service.indexOf("export async function approveDeviceLink(")
+    );
+    const gateAt = body.search(/\bassertPresenceForRequest\(\{/);
+    const approveAt = body.indexOf('status: "approved"');
+    expect(gateAt).toBeGreaterThan(0);
+    expect(body.slice(gateAt, gateAt + 200)).toMatch(/kind: "device_link"/);
+    expect(approveAt).toBeGreaterThan(gateAt);
+  });
+
   it("every request kind is gated by a door, and the skip hooks are held by their one door each", () => {
     // The account-recovery doors (new recovery codes) live in the server app.
     const appDoors = walk(APP_API_SRC);
@@ -438,6 +467,8 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
       "a workspace/template proposal's own tools and skills, applied on its (person's) approval",
     "routers/proposals/executors/skill.ts":
       "the skill/create executor: skill/create is a sensitive approval",
+    "routers/automations.ts":
+      "not a skill, tool or MCP column: `approved: true` is the flag `materializeApprovedAutomation` passes so a person-approved automation keeps its STATED status instead of the agent draft floor. Its callers are the automation/create executor, which runs only after applyProposalApproval's presence step (apply-approval.ts, assertPresenceForApproval; automation/create is a SENSITIVE_APPROVALS key, so it demands a proof), and the rule-loop automationCaller, which states `status: draft`",
     "routers/hub-protocol/rest/mcp-servers.ts":
       "selects the column (a read: `columns: { approved: true }`), writes nothing",
     "connectors/materialize-tools.ts":

@@ -17,6 +17,8 @@ import {
 import { createLinks } from "../../../services/links/links-service.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
+import type { GuidanceDeclaration } from "@synap-core/types/guidance";
+import type { PlaybookRunner } from "@synap/playbooks";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import {
@@ -166,6 +168,10 @@ export function registerPlaybookExecutors(): void {
         // materializes with an empty requirement list — the agent's declaration
         // is silently dropped on the one path a human explicitly approved.
         requiredIntents: innerData.requiredIntents as string[] | undefined,
+        // The rules the playbook follows. Re-validated by `playbooks.create`
+        // (`playbookGuidanceSchema`); read back so an approved playbook keeps
+        // the guidance its proposal declared.
+        guidance: innerData.guidance as GuidanceDeclaration[] | undefined,
         subjectProfile: innerData.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: innerData.schedule,
@@ -174,7 +180,12 @@ export function registerPlaybookExecutors(): void {
         // when a human approves it.
         metadata: innerData.metadata as Record<string, unknown> | undefined,
         executor: innerData.executor,
-        status: innerData.status,
+        // An approval IS the activation: the approver saw this playbook and said
+        // yes, so an author who did not state a status gets `active`. An author
+        // who asked for `draft` (or paused) keeps exactly that — the proposal's
+        // stored data holds a status only when the author stated one
+        // (`playbooks.create` has no schema default).
+        status: innerData.status ?? "active",
         // 0240: a project-scoped BLUEPRINT approved without its scope would
         // materialize as a session template — the one field that decides what
         // the template even is.
@@ -187,6 +198,10 @@ export function registerPlaybookExecutors(): void {
         // approval genuinely covers it, and the executor will inject it.
         contextSkill: innerData.contextSkill as
           { name?: string; body: string } | undefined,
+        // Who runs it and the tools it needs (0416). Re-validated by
+        // `playbooks.create`; read back so an approved playbook keeps them.
+        runner: innerData.runner as PlaybookRunner | null | undefined,
+        requires: innerData.requires as string[] | undefined,
       };
       // The replay must APPLY, never re-propose — see `assertApplied`.
       const created = await playbookCaller.create(
@@ -296,6 +311,7 @@ export function registerPlaybookExecutors(): void {
         "stages",
         "criteria",
         "requiredIntents",
+        "guidance",
         "subjectProfile",
         // The process declarations. The update door FOLDS them into
         // `subjectProfile` before its gate, so a proposal carries them there;
@@ -306,6 +322,8 @@ export function registerPlaybookExecutors(): void {
         "executor",
         "status",
         "scope",
+        "runner",
+        "requires",
         "metadata",
       ] as const;
       const patch: Record<string, unknown> = { id: playbookId };
@@ -782,6 +800,15 @@ export function registerPlaybookExecutors(): void {
             : {}),
           // Synap AI asked for this run stays Synap AI once approved.
           ...(inner.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+          // A trial (the rule lab) stays a trial once approved: re-validated
+          // by the run door's own schema.
+          ...(inner.trial && typeof inner.trial === "object"
+            ? {
+                trial: inner.trial as {
+                  guidanceOverride: Record<string, string>;
+                },
+              }
+            : {}),
         });
       let batch: BatchRunReceipt | undefined;
       // What this approval started — EVERY approval, not only a batch: the

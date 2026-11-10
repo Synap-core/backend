@@ -145,10 +145,10 @@ const CREDENTIAL_TABLES_UNWRITTEN: Record<string, string> = {
  * why. They stop the propagation to the doors that call them.
  */
 const EXEMPT_WRITERS: Record<string, string> = {
-  ensureAgentUser:
-    "the pod's own built-in agent joins the space a person talks to it in; it adds no person and no key, and is a no-op once the agent is a member",
   materializePodAdminsIntoWorkspace:
     "adds only the people who already administer the whole pod to a space they could already administer; it gives no one access they did not hold",
+  ensureSynapAiKey:
+    "makes the person's own Synap AI the pod-held key the Keys page edits: its secret is discarded, its scope empty and it holds no grant, so it authenticates nothing and gives no one access; only the person, on the step-up Keys page, adds grants to it",
   resolveCaptureActorUserId:
     "enrolls only the pod's own built-in Capture agent (`getCaptureAgentUserId`) into the space the caller's own write targets, so its governed capture writes reach the ladder; it adds no person and no key",
 };

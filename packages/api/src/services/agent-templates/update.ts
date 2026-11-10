@@ -37,6 +37,8 @@ export const AGENT_TEMPLATE_FIELDS = [
   "detect",
   "wake",
   "practices",
+  "toolProfile",
+  "toolGroups",
 ] as const;
 
 /** Changed only by a person: an agent's write of one always proposes. */
@@ -66,6 +68,8 @@ function assertValidAfter(name: string, next: Record<string, unknown>): void {
     detect: next.detect ?? undefined,
     wake: next.wake ?? undefined,
     practices: next.practices,
+    toolProfile: next.toolProfile ?? undefined,
+    toolGroups: next.toolGroups ?? undefined,
   });
   if (!parsed.ok) {
     throw new TRPCError({

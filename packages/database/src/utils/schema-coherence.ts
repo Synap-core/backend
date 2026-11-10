@@ -178,6 +178,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "ref_key",
     addedBy: "0386_status_wait_episode.sql",
   },
+  // The status a thing waited in and the blocker's name (0408). The episode
+  // writer inserts both, so without them every watcher tick fails its write.
+  {
+    table: "status_wait_episode",
+    column: "status",
+    addedBy: "0408_wait_episode_blocker.sql",
+  },
+  {
+    table: "status_wait_episode",
+    column: "blocker_key",
+    addedBy: "0408_wait_episode_blocker.sql",
+  },
   // A living document's scope and refresher (0387). Every document read
   // selects the row, so without them every document get and list 500s.
   {
@@ -763,6 +775,31 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbooks",
     column: "required_intents",
     addedBy: "0291_playbook_required_intents.sql",
+  },
+  // The rules a playbook follows (0411): without it every playbook read and
+  // write that selects the column fails.
+  {
+    table: "playbooks",
+    column: "guidance",
+    addedBy: "0411_playbook_guidance.sql",
+  },
+  // Who runs a playbook, the tools it needs, and its kept versions (0416):
+  // every playbook read selects `runner` / `requires` (absence 500s every
+  // playbook list), and every definition write records a version.
+  {
+    table: "playbooks",
+    column: "runner",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
+  {
+    table: "playbooks",
+    column: "requires",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
+  {
+    table: "playbook_versions",
+    column: "definition",
+    addedBy: "0416_playbook_runner_and_versions.sql",
   },
 
   // Backup run ledger (0295). The backup container writes it with psql and
@@ -1407,6 +1444,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "presence_disowned_passkeys",
     column: "credential_id",
     addedBy: "0405_presence_recovery.sql",
+  },
+  // "Add this device" (0412, founder decision of 9 Nov 2026): every
+  // device-link request reads the table, and Kratos' settings guard reads
+  // `grant_session` on every passkey change; absence means each would 42P01 /
+  // 42703.
+  {
+    table: "presence_device_links",
+    column: "choices",
+    addedBy: "0412_presence_device_links.sql",
+  },
+  {
+    table: "presence_challenges",
+    column: "grant_session",
+    addedBy: "0412_presence_device_links.sql",
   },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
@@ -2119,6 +2170,30 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0356_box_runs.sql",
   },
 
+  // Installations (0409) — capabilities installed on the person's computers.
+  // Absence means every host-job lease, report and installation read would
+  // throw (42P01).
+  {
+    table: "installations",
+    column: "manifest",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "installation_bindings",
+    column: "auth_applied",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "host_jobs",
+    column: "lease_id",
+    addedBy: "0409_installations.sql",
+  },
+  {
+    table: "intent_defaults",
+    column: "constraints_hash",
+    addedBy: "0409_installations.sql",
+  },
+
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every
   // passage job and sweep tick would fail (42P01).
@@ -2334,6 +2409,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "agent_templates",
     column: "metadata",
     addedBy: "0404_agent_templates.sql",
+  },
+  {
+    table: "agent_templates",
+    column: "tool_groups",
+    addedBy: "0407_agent_template_tool_surface.sql",
   },
   {
     table: "automation_runs",

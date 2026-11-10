@@ -21,6 +21,16 @@
 
 import { z } from "zod";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
+import {
+  renderText,
+  type TextTemplateMiss,
+} from "@synap-core/types/text-template";
+import {
+  describeParamTypeError,
+  isAbsentParamValue,
+  readPlaybookParams,
+  validatePlaybookParams,
+} from "@synap/playbooks";
 import { playbookParamsInputSchema } from "../../schemas/playbook-definition.js";
 import { TRPCError } from "@trpc/server";
 // Static, NOT part of the dynamic `submit-capture-graph` import below: it is a
@@ -56,6 +66,7 @@ import {
   getActingAgentUserId,
   messagingAccounts,
   profiles,
+  users,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
@@ -2285,7 +2296,7 @@ const marketSearchParams = z.object({
   source: z.string().min(1).max(100).optional(),
 });
 
-const marketSearchHandler: BuiltinVerbHandler = async (params) => {
+const marketSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketSearchParams.parse(params);
   const { queryCatalogCache } = await import("./catalog-cache-query.js");
   const { listMarketSources } = await import("./market-sources.js");
@@ -2324,6 +2335,13 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
     };
   }
 
+  // Where a capability runs (the pod, or a computer: which systems, its
+  // licence) and, for one that runs on a computer, which of the person's
+  // computers can take it: what synap_request_installation needs to choose.
+  const { catalogPlacementReader } =
+    await import("../installations/request-installation.js");
+  const placementOf = catalogPlacementReader(ctx.userId);
+
   const compact = await Promise.all(
     entries.map(async (e) => {
       const source = bySourceKey.get(e.source);
@@ -2336,6 +2354,7 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
           version: e.version,
           tier: e.tier,
           installed: await resolveInstalledFlag(e.kind, e.slug),
+          ...(await placementOf(e)),
         };
       }
       // From an added source: say so, and how it installs (pass `source`).
@@ -2433,6 +2452,44 @@ const toolRequestHandler: BuiltinVerbHandler = async (params, ctx) => {
     source: input.source ?? "market_search_miss",
     ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
   });
+};
+
+/**
+ * computer.run_recipe — run a recipe of a tool INSTALLED on one of the
+ * person's computers, there, with nobody at the keyboard (hosted verbs, plan
+ * b647769e §3.2, plan 64072312 U8). POST-gate: the outer capability gate
+ * decided this run (an agent's ask is reviewed unless granted). The ONE door
+ * is `queueRecipeRun`: the computer is one where the tool is installed and
+ * checked, the recipe and its values come from the approved manifest, each
+ * input file is one the person can read. It QUEUES a host job and answers
+ * `{status: "queued", hostJobId}`; the run's files come back on that job and in
+ * the asking session's room. A refusal throws its sentence (the next step).
+ */
+const runRecipeParams = z
+  .object({
+    capability: z.string().trim().min(1).max(200),
+    recipe: z.string().trim().min(1).max(100),
+    params: z.record(z.string(), z.unknown()).default({}),
+    computer: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = runRecipeParams.parse(params);
+  const { queueRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const out = await queueRecipeRun({
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.automationRun?.sessionId ?? ctx.sessionId ?? null,
+    workspaceId: ctx.workspaceId,
+    skillId: ctx.verbId ?? null,
+    capabilityKey: input.capability,
+    recipe: input.recipe,
+    values: input.params,
+    computer: input.computer ?? null,
+  });
+  if (!out.ok) throw new Error(`${out.code}: ${out.error}`);
+  return out.result;
 };
 
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
@@ -4414,6 +4471,199 @@ const webSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * snippet.render: render a stored snippet (text with variables) once and
+ * return `{ text, misses }`. READ-ONLY: it mutates nothing, so it is in
+ * READ_ONLY_BUILTIN_VERBS; sending the text stays governed (`messaging.send`).
+ *
+ * The snippet is an entity of kind `snippet` read through the caller's access
+ * floor (`scoped.findFirst`), so a snippet the caller cannot read does not
+ * exist for them. Properties: `body` (the text) and `variables` (PlaybookParam
+ * shape, with its optional `from: "subject.<field>"`). A snippet whose
+ * lifecycle status is `retired` is refused. Whether only `current` snippets
+ * reach a playbook run is the guidance's rule (`kind:snippet`), not this
+ * verb's: a direct call renders a draft too.
+ *
+ * Values: explicit `values` win; else a variable's `from: "subject.<field>"`
+ * fills from `subjectEntityId` (`title`, `preview` or a property), read
+ * through the SAME access floor, never around it: a subject the caller cannot
+ * read fills nothing and is recorded as a miss; else the declared default.
+ * A required variable with no value blocks the render and is named.
+ *
+ * The grammar and the miss policy are `renderText`
+ * (`@synap-core/types/text-template`), the one implementation.
+ */
+const snippetRenderParams = z.object({
+  snippetId: z.string().uuid(),
+  /** Variable values by name. */
+  values: z.record(z.string(), z.unknown()).optional(),
+  /** The entity the `from: "subject.<field>"` variables read from. */
+  subjectEntityId: z.string().uuid().optional(),
+  /** Optional workspace lens; omit for the caller's full floor. */
+  workspaceId: z.string().uuid().optional(),
+});
+
+const SNIPPET_KIND = "snippet";
+const SNIPPET_RETIRED = "retired";
+
+/** `variables` is a json property: an array, or a JSON string of one. */
+function readSnippetVariables(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+/** The field of a `from: "subject.<field>"` param, else null. */
+function subjectFieldOf(p: { from?: string }): string | null {
+  return p.from?.startsWith("subject.") && p.from.length > "subject.".length
+    ? p.from.slice("subject.".length)
+    : null;
+}
+
+const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = snippetRenderParams.parse(params);
+  const lens = input.workspaceId ?? ctx.workspaceId ?? undefined;
+  const scoped = await getReadScope(ctx.userId, lens);
+
+  // The kind is read through the polymorphic door (kind branch OR role-facet
+  // EXISTS), never a bare match on the entity's primary type: a snippet worn
+  // as a role by another kind is a snippet too. An unknown `snippet` kind
+  // fails closed.
+  const snippetRows = await assertKnownProfileSlug(db, SNIPPET_KIND);
+  const snippetScope = profileSlugScopeConditionFromRows(
+    db,
+    SNIPPET_KIND,
+    snippetRows,
+    await resolveFacetVisibilityScope(ctx.userId, lens)
+  );
+
+  const snippet = await scoped.findFirst<{
+    id: string;
+    status: string | null;
+    properties: Record<string, unknown> | null;
+  }>(entities, {
+    where: and(eq(entities.id, input.snippetId), snippetScope),
+    columns: { id: true, status: true, properties: true },
+  });
+  if (!snippet) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Snippet not found." });
+  }
+  if (snippet.status === SNIPPET_RETIRED) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This snippet is retired and can no longer be used.",
+    });
+  }
+  const props = snippet.properties ?? {};
+  const body = props.body;
+  if (typeof body !== "string" || body === "") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This snippet has no body to render.",
+    });
+  }
+
+  const declared = readPlaybookParams(readSnippetVariables(props.variables));
+  const supplied: Record<string, unknown> = { ...(input.values ?? {}) };
+
+  // Subject fill: only for variables the caller left blank (the param
+  // validator's own blank rule), through the floor.
+  const subjectMisses: TextTemplateMiss[] = [];
+  const wanted = declared.filter(
+    (p) =>
+      subjectFieldOf(p) !== null &&
+      isAbsentParamValue(
+        Object.prototype.hasOwnProperty.call(supplied, p.name)
+          ? supplied[p.name]
+          : undefined
+      )
+  );
+  if (wanted.length > 0) {
+    const subject = input.subjectEntityId
+      ? await scoped.findFirst<{
+          title: string | null;
+          preview: string | null;
+          properties: Record<string, unknown> | null;
+        }>(entities, {
+          where: eq(entities.id, input.subjectEntityId),
+          columns: { title: true, preview: true, properties: true },
+        })
+      : undefined;
+    for (const p of wanted) {
+      const field = subjectFieldOf(p)!;
+      const raw =
+        field === "title"
+          ? subject?.title
+          : field === "preview"
+            ? subject?.preview
+            : (subject?.properties ?? {})[field];
+      const filled =
+        typeof raw === "string"
+          ? raw
+          : typeof raw === "number" || typeof raw === "boolean"
+            ? String(raw)
+            : "";
+      if (isAbsentParamValue(filled)) {
+        // Unreadable subject, no subject, or an empty field: fills nothing.
+        subjectMisses.push({
+          name: `subject.${field}`,
+          kind: "unresolved-context",
+          count: 1,
+        });
+      } else {
+        supplied[p.name] = filled;
+      }
+    }
+  }
+
+  // Defaults, coercion and type errors: the ONE param validator.
+  const resolution = validatePlaybookParams(declared, supplied);
+  if (resolution.typeErrors.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: resolution.typeErrors.map(describeParamTypeError).join(" "),
+    });
+  }
+  const values: Record<string, string> = {};
+  for (const p of declared) {
+    if (Object.prototype.hasOwnProperty.call(resolution.values, p.name)) {
+      values[p.name] = String(resolution.values[p.name]);
+    }
+  }
+
+  const [me] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, ctx.userId))
+    .limit(1);
+  const now = new Date();
+  const rendered = renderText(body, {
+    variables: declared.map((p) => ({
+      name: p.name,
+      ...(p.required ? { required: true } : {}),
+    })),
+    values,
+    builtins: {
+      today: now.toISOString().slice(0, 10),
+      now: now.toISOString(),
+      ...(me?.name ? { me: me.name } : {}),
+    },
+  });
+  if (!rendered.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Missing required variable${rendered.missing.length > 1 ? "s" : ""}: ${rendered.missing.join(", ")}.`,
+    });
+  }
+  return {
+    text: rendered.text,
+    misses: [...rendered.misses, ...subjectMisses],
+  };
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -4462,6 +4712,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "market.scaffold": marketScaffoldHandler,
   // Tool demand — a tool the user needs that Synap cannot connect yet.
   "tool.request": toolRequestHandler,
+  // Hosted verbs — a recipe of a tool installed on the person's computer.
+  "computer.run_recipe": runRecipeHandler,
   // Connection health — probe a connector + nudge the operator if it's dead, so
   // a config feed doesn't go silently dead on an expired token.
   "connector.health_check": connectorHealthCheckHandler,
@@ -4519,6 +4771,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "web.read": webReadHandler,
   // Search the web through a named installed provider (its own gate + meter).
   "web.search": webSearchHandler,
+  // Render a stored snippet (text with variables) once: { text, misses }.
+  "snippet.render": snippetRenderHandler,
 };
 
 /**
@@ -4565,6 +4819,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "market.install": marketInstallParams,
   "market.scaffold": marketScaffoldParams,
   "tool.request": toolRequestParams,
+  "computer.run_recipe": runRecipeParams,
   "connector.health_check": connectorHealthCheckParams,
   "capability.rotate_key": capabilityRotateKeyParams,
   "channel.ingest": channelIngestParams,
@@ -4592,6 +4847,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "property_def.propose_retire": propertyDefProposeRetireParams,
   "web.read": webReadParams,
   "web.search": webSearchParams,
+  "snippet.render": snippetRenderParams,
 };
 
 /**
@@ -4693,4 +4949,8 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // channel.history — a person's channels' messages and proposed messages,
   // read through the channel floor and the proposal floor. Writes nothing.
   "channel.history",
+  // snippet.render — reads a snippet (and a subject's fields) through the
+  // caller's floor and RETURNS text; it writes nothing. Sending is governed
+  // separately (messaging.send).
+  "snippet.render",
 ]);

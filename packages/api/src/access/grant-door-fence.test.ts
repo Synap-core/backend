@@ -95,11 +95,16 @@ describe("restDoorAllowed", () => {
     ["GET", "/playbooks/promote-from-session", false],
     ["POST", "/playbooks/11111111-1111-4111-8111-111111111111/run", true], // a write — bounded by the gate
     ["GET", `/projects/${U}/path`, false], // userVisibleWhere sessions — not migrated
-    ["GET", "/search", false],
     // The list door: seamed; its ?q= (Typesense) branch is refused by the
     // route itself for a limited key (entities.scoped-key-list.pglite.test.ts).
     ["GET", "/entities", true],
     ["GET", "/entities/", true],
+    // The search door reads through the entity floor for a fenced grant (withinGrantSearchHits); its siblings do not.
+    ["GET", "/search", true],
+    ["GET", "/search/", true],
+    ["GET", "/search/collection", false],
+    ["GET", "/search/documents", false],
+    ["GET", "/vector-search", false],
     ["GET", "/knowledge", false],
     ["GET", "/compacted-states/latest", false],
     ["POST", "/knowledge/ask", false],
@@ -1013,7 +1018,6 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
     ],
     ["/discover", ["entity.read", "relation_def.read"]],
     ["/memory", ["entity.read", "preference.read"]],
-    ["/cells", ["widget.read"]],
     ["/widget-definitions", ["widget.read"]],
   ];
   it.each(AGGREGATE)("GET %s is open to the computer's key", (path) => {
@@ -1049,6 +1053,44 @@ describe("read doors a scoped key met unclassified (findings 3122ba42, cce86e6b,
       expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
     }
   );
+  // The cells a pod app hosts (design b199a3a4, slice 4): the route reads
+  // through the `widget` grant clause, so a key pinned to spaces is admitted
+  // on `widget.read` and reads its spaces' cells
+  // (cells.app-reads.pglite.test.ts).
+  it.each(["/cells", "/cells/", "/cells/generated%3Ahealth", "/cells/x/"])(
+    "GET %s: a pinned key with widget.read is admitted, without it refused",
+    (path) => {
+      expect(restDoorAllowed("GET", path, COMPUTER)).toBe(true);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({ permissions: ["widget.read"], workspaceIds: ["w1"] })
+        )
+      ).toBe(true);
+      expect(
+        restDoorAllowed(
+          "GET",
+          path,
+          key({
+            permissions: ["view.read", "entity.*.read"],
+            workspaceIds: ["w1"],
+          })
+        )
+      ).toBe(false);
+      expect(restDoorAllowed("GET", path, DOC_ONLY)).toBe(false);
+      expect(restDoorAllowed("GET", path, DENY_ALL)).toBe(false);
+    }
+  );
+  it("GET /cells/:typeKey is one segment: a deeper path is not admitted", () => {
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/cells/a/b",
+        key({ permissions: ["widget.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(false);
+  });
   it("GET /memory reads what POST /memory/search reads: one declaration", () => {
     for (const k of [COMPUTER, PINNED, DENY_ALL, DOC_ONLY])
       expect(restDoorAllowed("GET", "/memory", k)).toBe(
@@ -1193,5 +1235,24 @@ describe("Raycast's REST twins of MCP read tools: one rule per reader", () => {
       "/briefs",
     ])
       expect(restDoorAllowed("GET", path, COMPUTER), path).toBe(false);
+  });
+});
+
+describe("a computer's waker poll: GET /computers/me/wakes", () => {
+  // The key `machine-connect.ts` mints at the device flow: a `user_pat` held
+  // by the computer, carrying the AI read & propose grant. It is fenced, so a
+  // REFUSED door refused every real computer's waker (backend#909).
+  const COMPUTER = key({ permissions: aiDefaultCapabilities() });
+  it("the computer's own key passes the fence: the route admits only it", () => {
+    expect(isFencedGrant(COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", "/computers/me/wakes", COMPUTER)).toBe(true);
+    expect(restDoorAllowed("GET", "/computers/me/wakes/", COMPUTER)).toBe(true);
+    expect(hubRouteClass("GET", "/computers/me/wakes")).toBe("read");
+  });
+  it("opens the poll only, never a sibling", () => {
+    expect(restDoorAllowed("GET", "/computers/me", COMPUTER)).toBe(false);
+    expect(restDoorAllowed("GET", "/computers/me/wakes/x", COMPUTER)).toBe(
+      false
+    );
   });
 });

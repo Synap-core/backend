@@ -198,7 +198,7 @@ const MESSAGES: Record<AccountRecoveryErrorCode, string> = {
   owner_needs_pod_sign_in:
     "An owner signs in to this pod only with Synap Cloud. Turning Synap Cloud sign-in off would lock them out: each owner needs a password or a passkey on this pod first.",
   presence_required:
-    "Confirm it is you: new recovery codes need your passkey, Face ID, your 2FA app or one of your current recovery codes.",
+    "Confirm it is you: new recovery codes need your passkey, Face ID, your authenticator app or one of your current recovery codes.",
 };
 
 function fail(

@@ -47,6 +47,7 @@ import {
   type HubRateLimitCause,
 } from "../../utils/hub-protocol-rate-limit.js";
 import { tools, openWorldToolNames } from "./tools/index.js";
+import { effectiveToolCall } from "./call-tool-name.js";
 import {
   classifyMcpToolCall,
   REQUEST_TIMEOUT,
@@ -583,7 +584,10 @@ mcpHttpApp.post("/", async (c) => {
     (parsedBody as { method?: string } | null)?.method === "initialize";
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: isInitialize ? () => randomUUID() : undefined,
-    enableJsonResponse: true, // prefer SSE when client accepts it, fall back to JSON otherwise
+    // Always a JSON answer, never an SSE stream, whatever the client's Accept.
+    // It also DROPS request-related notifications (`list_changed` from
+    // `synap_load_skill`): `synap_call_tool` runs an unlocked tool instead.
+    enableJsonResponse: true,
   });
   // A LOCAL agent's client (the synap stdio bridge) names its OWN conversation
   // (`X-Synap-Conversation`, e.g. `claude-code:<id>`) — the one a person can
@@ -728,16 +732,18 @@ mcpHttpApp.post("/", async (c) => {
   // The Hub request guard (`middleware/hub-request-guard.ts`): a call still
   // running after 30 s answers 503 REQUEST_TIMEOUT, and a key already running
   // 32 calls gets 429. A long-poll tool, a model call and an open-world tool
-  // are never timed out.
+  // are never timed out. A `synap_call_tool` call is judged, and labelled, by
+  // the tool it runs (`effectiveToolCall`), as the tools/call door does.
   const rpc = parsedBody as {
     id?: unknown;
     method?: string;
-    params?: { name?: unknown };
+    params?: { name?: unknown; arguments?: unknown };
   } | null;
-  const toolName =
-    rpc?.method === "tools/call" && typeof rpc.params?.name === "string"
-      ? rpc.params.name
+  const calledName =
+    rpc?.method === "tools/call"
+      ? effectiveToolCall(rpc.params?.name, rpc.params?.arguments).name
       : undefined;
+  const toolName = typeof calledName === "string" ? calledName : undefined;
   const rpcId = rpc?.id ?? null;
   return runGuarded(
     {

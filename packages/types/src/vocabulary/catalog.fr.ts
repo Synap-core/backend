@@ -354,6 +354,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.plan_approval.past": "Plan approuvé",
   "action.deploy_approval.imperative": "Approuver le déploiement",
   "action.deploy_approval.past": "Déploiement approuvé",
+  "action.stage_gate.imperative": "Approuver l’étape",
+  "action.stage_gate.past": "Étape approuvée",
   "action.section_update.imperative": "Modifier la section",
   "action.section_update.past": "Section modifiée",
   "action.session_narrative_update.imperative": "Mettre à jour le récit",
@@ -575,6 +577,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "vocabulary.title.noVerb": "Demande\u00a0: {obj}",
   "vocabulary.title.noVerb.named": "Demande\u00a0: {obj} «\u00a0{name}\u00a0»",
   "vocabulary.title.lead": "{verb}\u00a0: {name}",
+  "vocabulary.title.onComputer": "{verb} «\u00a0{name}\u00a0» sur {computer}",
+  "vocabulary.title.fromComputer": "{verb} «\u00a0{name}\u00a0» de {computer}",
+  "vocabulary.title.addAndInstallOn":
+    "Ajouter «\u00a0{name}\u00a0» depuis la marketplace et l’installer sur {computer}",
   "vocabulary.title.verbOnly.named": "{verb} «\u00a0{name}\u00a0»",
   "vocabulary.title.imperative":
     "{verb} {objG, select, f {{objV, select, yes {l’{obj}} other {la {obj}}}} m {{objV, select, yes {l’{obj}} other {le {obj}}}} other {l’élément {Obj}}}",
@@ -629,6 +635,11 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
     "Les membres {objG, select, f {{objV, select, yes {de l’{obj}} other {de la {obj}}}} m {{objV, select, yes {de l’{obj}} other {du {obj}}}} other {de l’élément {Obj}}} décident",
   "vocabulary.membersDecide.unnamed": "Ses membres décident",
   "vocabulary.handedTo": "Confié à {name}",
+  "vocabulary.refusal.doNotContact":
+    "Rien n’a été envoyé\u00a0: {name} ne doit pas être contacté.",
+  "vocabulary.refusal.doNotContact.reason":
+    "Rien n’a été envoyé\u00a0: {name} ne doit pas être contacté ({reason}).",
+  "vocabulary.refusal.doNotContact.unnamed": "cette personne",
   "vocabulary.runner.needs_permission.named": "Attend l’autorisation de {name}",
   "vocabulary.runner.needs_permission.unnamed": "Attend une autorisation",
   "vocabulary.runner.needs_answer.named": "Attend la réponse de {name}",

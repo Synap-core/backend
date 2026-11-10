@@ -1,19 +1,32 @@
 "use client";
 
 /**
- * Security — your sign-in methods and your way back in, for THIS pod.
+ * Security — your ways to confirm it's you, and how you sign in, for THIS
+ * pod. Two sections (founder, 7 Nov 2026, session 539e519b; finding
+ * 020455d5: they were spread over four places under two names):
  *
- *   1. Recovery codes — the pod-held way back in (shown once, copy/download).
- *   2. Password — the Kratos settings flow's password group.
- *   3. Your passkeys — the ONE passkeys card (`app/_lib/passkeys/`, shared
- *      with pod admin Security, W5): the list, add and remove. The invite
- *      page's Done screen sends a Synap-Cloud-only joiner here (`#passkeys`).
- *   4. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`, the CP's
- *      claim-access hop), for a member who joined another way. OMITTED when
- *      Cloud sign-in is not wired here or the owner turned it off.
- *   5. Signed-in devices — your other sessions; "Sign out other devices".
- *   6. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
- *      sign-in is not wired on this pod).
+ *   Ways to confirm it's you (`WaysInSection`, also the onboarding step's
+ *   body): how many the person holds out of the two `enforce` keeps, then
+ *   each way with its own Add and Remove.
+ *     1. Your passkeys — the ONE passkeys card (`app/_lib/passkeys/`). The
+ *        invite page's Done screen sends a Synap-Cloud-only joiner here
+ *        (`#passkeys`).
+ *     2. Phones and computers — Face ID and Touch ID keys, removable here.
+ *     3. Authenticator app (`#two-factor`).
+ *     4. Recovery codes — the pod-held way back in (shown once, copy or
+ *        download); they also confirm it's you.
+ *   Signing in:
+ *     5. Password — the Kratos settings flow's password group.
+ *     6. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`), for
+ *        a member who joined another way. OMITTED when Cloud sign-in is not
+ *        wired here or the owner turned it off.
+ *     7. Signed-in devices — your other sessions; "Sign out other devices".
+ *     8. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
+ *        sign-in is not wired on this pod).
+ *
+ * At the top: the new devices asking to confirm it's you ("Add this
+ * device", founder decision of 9 Nov 2026), each with its numbers to pick;
+ * a failed read of them is said here, with Try again.
  *
  * Every refusal is shown as what it is: a sign-in that is too old
  * (`reauth_required` → "Sign in again"), a Cloud-only session that may not
@@ -70,6 +83,9 @@ import { trpc } from "../../../lib/trpc";
 import { PresenceDeclined } from "../../_lib/presence/presence-model";
 import { useGenerateRecoveryCodes } from "../../_lib/presence/use-factor-doors";
 import { TwoFactorCard } from "./two-factor-card";
+import { WaysInHeader } from "../../_lib/presence/ways-in/ways-in-header";
+import { DeviceKeysCard } from "../../_lib/presence/ways-in/device-keys-card";
+import { DeviceLinkRequests } from "../../_lib/presence/device-link/DeviceLinkRequests";
 
 const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/security")}`;
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
@@ -101,30 +117,9 @@ export function SecurityView({
   initialFlowId: string | null;
   email: string | null;
 }) {
-  const [status, setStatus] = useState<Load<AccountRecoveryStatus>>({
-    kind: "loading",
-  });
+  const { status, setStatus, loadStatus } =
+    useAccountRecoveryStatus("/settings/security");
   const [recovered, setRecovered] = useState(false);
-
-  const loadStatus = useCallback(async () => {
-    setStatus({ kind: "loading" });
-    const r = await recoveryApi.status();
-    if (!r.ok && r.status === 401) {
-      window.location.assign(
-        `/login?return=${encodeURIComponent("/settings/security")}`
-      );
-      return;
-    }
-    setStatus(
-      r.ok
-        ? { kind: "ready", data: r.data }
-        : { kind: "failed", detail: recoveryCallDetail(r) }
-    );
-  }, []);
-
-  useEffect(() => {
-    void loadStatus();
-  }, [loadStatus]);
 
   const s = status.kind === "ready" ? status.data : null;
   const onRecovered = useCallback(() => setRecovered(true), []);
@@ -153,6 +148,8 @@ export function SecurityView({
         </p>
       </header>
 
+      <DeviceLinkRequests placement="page" />
+
       {recovered ? (
         <div
           className="mb-5 flex items-start gap-2 rounded-medium bg-success/10 p-3 text-[13px] text-foreground/85 ring-1 ring-inset ring-success/30"
@@ -163,37 +160,40 @@ export function SecurityView({
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-5">
-        {/* Keyed so a reorder MOVES the cards instead of remounting the flow. */}
-        {securityCardOrder(recovered).map((card) =>
-          card === "password" ? (
-            <PasswordCard
-              key="password"
-              initialFlowId={initialFlowId}
-              onRecovered={onRecovered}
-              focus={recovered}
-            />
+      <div className="flex flex-col gap-10">
+        {/* Keyed so a reorder MOVES the sections instead of remounting the flow. */}
+        {securitySectionOrder(recovered).map((section) =>
+          section === "sign-in" ? (
+            <section key="sign-in" className="flex flex-col gap-5">
+              <h2 className="text-[15px] font-semibold text-foreground">
+                Signing in
+              </h2>
+              <PasswordCard
+                initialFlowId={initialFlowId}
+                onRecovered={onRecovered}
+                focus={recovered}
+              />
+              {s && s.cloud.available && s.cloud.trust !== "off" ? (
+                <LinkCloudCard />
+              ) : null}
+              <DevicesCard />
+              {s && s.cloud.available ? (
+                <CloudTrustCard
+                  status={s}
+                  onChanged={(next) => setStatus({ kind: "ready", data: next })}
+                />
+              ) : null}
+            </section>
           ) : (
-            <RecoveryCodesCard
-              key="codes"
+            <WaysInSection
+              key="ways-in"
+              returnTo="/settings/security"
               status={status}
-              onChanged={loadStatus}
+              onCodesChanged={loadStatus}
               email={email}
             />
           )
         )}
-        <PasskeysCard returnTo="/settings/security#passkeys" />
-        <TwoFactorCard />
-        {s && s.cloud.available && s.cloud.trust !== "off" ? (
-          <LinkCloudCard />
-        ) : null}
-        <DevicesCard />
-        {s && s.cloud.available ? (
-          <CloudTrustCard
-            status={s}
-            onChanged={(next) => setStatus({ kind: "ready", data: next })}
-          />
-        ) : null}
       </div>
     </div>
   );
@@ -205,11 +205,74 @@ export function SecurityView({
 export const RECOVERED_COPY =
   "You're back in. Set a new password within 15 minutes.";
 
-/** Just recovered ⇒ the password comes first: it is the one job left. */
-export function securityCardOrder(
+/**
+ * Just recovered ⇒ signing in comes first: a new password is the one job
+ * left. Otherwise the ways to confirm it's you lead the page.
+ */
+export function securitySectionOrder(
   recovered: boolean
-): Array<"password" | "codes"> {
-  return recovered ? ["password", "codes"] : ["codes", "password"];
+): Array<"sign-in" | "ways-in"> {
+  return recovered ? ["sign-in", "ways-in"] : ["ways-in", "sign-in"];
+}
+
+/**
+ * The person's account recovery status (`recoveryApi.status`): the recovery
+ * codes card and the Cloud cards read it. A 401 sends them to sign in and
+ * back to `returnTo`; a failed read is its own state.
+ */
+export function useAccountRecoveryStatus(returnTo: string) {
+  const [status, setStatus] = useState<Load<AccountRecoveryStatus>>({
+    kind: "loading",
+  });
+  const loadStatus = useCallback(async () => {
+    setStatus({ kind: "loading" });
+    const r = await recoveryApi.status();
+    if (!r.ok && r.status === 401) {
+      window.location.assign(`/login?return=${encodeURIComponent(returnTo)}`);
+      return;
+    }
+    setStatus(
+      r.ok
+        ? { kind: "ready", data: r.data }
+        : { kind: "failed", detail: recoveryCallDetail(r) }
+    );
+  }, [returnTo]);
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus]);
+  return { status, setStatus, loadStatus };
+}
+
+/**
+ * "Ways to confirm it's you": the count, then each way with its own Add and
+ * Remove. The person's Security page and the onboarding step
+ * (`/start/access`) draw this same section; `returnTo` is where a sign-in
+ * brings them back.
+ */
+export function WaysInSection({
+  returnTo,
+  status,
+  onCodesChanged,
+  email,
+}: {
+  returnTo: string;
+  status: Load<AccountRecoveryStatus>;
+  onCodesChanged: () => Promise<void>;
+  email: string | null;
+}) {
+  return (
+    <section className="flex flex-col gap-5">
+      <WaysInHeader />
+      <PasskeysCard returnTo={`${returnTo}#passkeys`} />
+      <DeviceKeysCard />
+      <TwoFactorCard />
+      <RecoveryCodesCard
+        status={status}
+        onChanged={onCodesChanged}
+        email={email}
+      />
+    </section>
+  );
 }
 
 function LoadFailed({
@@ -251,7 +314,7 @@ function refusalSentence(error: string): string {
     case "forbidden":
       return "Only the pod owner can change this.";
     case "presence_required":
-      return "Not changed: new recovery codes need you to confirm it is you, with your passkey, Face ID, your 2FA app or one of your current recovery codes.";
+      return "Not changed: new recovery codes need you to confirm it is you, with your passkey, Face ID, your authenticator app or one of your current recovery codes.";
     case "owner_needs_pod_sign_in":
       return "An owner signs in only with Synap Cloud. Each owner needs a password or passkey on this pod before Synap Cloud sign-in can be turned off.";
     default:
@@ -315,6 +378,7 @@ function RecoveryCodesCard({
   const [fresh, setFresh] = useState<GeneratedRecoveryCodes | null>(null);
 
   const generateCodes = useGenerateRecoveryCodes();
+  const utils = trpc.useUtils();
   const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const generate = async () => {
     const userId = me.data?.id;
@@ -339,8 +403,10 @@ function RecoveryCodesCard({
     setBusy(false);
     if (r.ok) {
       setFresh(r.data);
-      // The top bar's ⚠ and the Overview nudge read a cached status.
+      // The top bar's ⚠ and the Overview nudge read a cached status, and the
+      // count of ways in reads `presence.factors`: codes are one way.
       invalidateRecoveryCodesState();
+      void utils.presence.factors.invalidate();
     } else setRefusal(refusalOf(r));
   };
 
@@ -351,7 +417,7 @@ function RecoveryCodesCard({
     <div id="recovery-codes">
       <SectionCard
         title="Recovery codes"
-        hint="One-time codes that get you back in without email, Synap Cloud or the server"
+        hint="One-time codes that get you back in without email, Synap Cloud or the server, and confirm it’s you when an approval needs you in person"
         actions={
           mark ? (
             <StatusPill kind={TONE_TO_PILL[mark.tone]} label={mark.label} />

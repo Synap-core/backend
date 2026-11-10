@@ -889,6 +889,52 @@ export function pageOffset(raw: unknown): number {
     : 0;
 }
 
+/**
+ * ONE page of an in-memory list, in the paging shape the list doors share:
+ * `total`, `offset`, and `nextOffset` ONLY while another page exists. For the
+ * doors whose underlying read has no database paging (workspaces, goals,
+ * agents, a graph's neighbours); the DB-paged doors fetch `limit + 1` instead.
+ */
+export function pageSlice<T>(
+  items: readonly T[],
+  args: Record<string, unknown>,
+  fallback: number,
+  max: number
+): {
+  page: T[];
+  paging: { total: number; offset: number; nextOffset?: number };
+} {
+  const limit = pageLimit(args.limit, fallback, max);
+  const offset = pageOffset(args.offset);
+  const next = offset + limit;
+  return {
+    page: items.slice(offset, next),
+    paging: {
+      total: items.length,
+      offset,
+      ...(next < items.length ? { nextOffset: next } : {}),
+    },
+  };
+}
+
+/** Default and max page for the unbounded list doors. */
+export const LIST_PAGE_DEFAULT = 50;
+export const LIST_PAGE_MAX = 200;
+
+/**
+ * Default pages of the heavier list doors, sized so one default page fits the
+ * 16,000-char reply cap at the row size measured on the founder's pod
+ * (digest rows: profile ~270 chars, view ~230, automation ~480, playbook
+ * ~480, widget ~1,100, capability ~600): a caller that sends no `limit` gets a
+ * page that arrives whole, with `nextOffset` (or `nextCursor`) to continue.
+ */
+export const PROFILES_PAGE_DEFAULT = 40;
+export const VIEWS_PAGE_DEFAULT = 50;
+export const AUTOMATIONS_PAGE_DEFAULT = 25;
+export const PLAYBOOKS_PAGE_DEFAULT = 25;
+export const WIDGETS_PAGE_DEFAULT = 15;
+export const CAPABILITIES_PAGE_DEFAULT = 20;
+
 export const REASONING_MAX_CHARS = 2000;
 
 export function readReasoning(

@@ -559,7 +559,7 @@ export function assertPodWideReadsOnly(
   if (beyond.length > 0) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Only a read of one kind can be given everywhere in your pod (entity.<kind>.read); every other permission is given in a space: ${beyond
+      message: `Only a read of one kind, or of a subject on the pod-wide list, can be given everywhere in your pod; every other permission is given in a space: ${beyond
         .map((r) => r.permission)
         .join(", ")}.`,
     });

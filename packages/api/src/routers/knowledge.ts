@@ -17,6 +17,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { ask } from "../services/knowledge/index.js";
 import {
@@ -27,6 +28,10 @@ import {
 // `search` and `answer` here, and every other door, agree on what a caller may
 // see AND on the vocabulary a pod-wide question is type-inferred against.
 import { resolveKnowledgeLens } from "../services/knowledge/resolve-lens.js";
+import {
+  FIND_CATALOGS,
+  findForCaller,
+} from "../services/capabilities/find-intent.js";
 
 export const knowledgeRouter = router({
   /**
@@ -68,6 +73,49 @@ export const knowledgeRouter = router({
         catalog,
         parseOnly: input.parseOnly || undefined,
       });
+    }),
+
+  /**
+   * FIND — "what is there for this?", by its words: runnable verbs, intents,
+   * playbooks, spaces, and every object that can be OPENED (skills and rules,
+   * automations, sessions, goals, projects, views, documents), each row with
+   * its `open` link. The SAME service `synap_find` (MCP) calls, through the
+   * same read floor (`findForCaller`), so the UI search doors (browser ⌘K,
+   * relay) and agents get one answer. `search`/`answer` above recall CONTENT
+   * (entities, runbooks, captures, the Library); this finds THINGS.
+   *
+   * ABSENT ≠ EMPTY per catalog: a block missing from the result was not
+   * searched; `matches: []` was searched and nothing fit; `error` means that
+   * catalog's read failed.
+   */
+  find: protectedProcedure
+    .input(
+      z.object({
+        query: z.string().trim().min(1).max(2000),
+        /** Lens. Null/absent = pod altitude. A space you cannot read is FORBIDDEN. */
+        workspaceId: z.string().uuid().nullable().optional(),
+        /** Which catalogs to search. Omit for all. */
+        catalogs: z.array(z.enum(FIND_CATALOGS)).min(1).optional(),
+        /** Max matches per catalog (default 5). */
+        limit: z.number().int().min(1).max(25).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const found = await findForCaller({
+        intent: input.query,
+        workspaceId: input.workspaceId ?? null,
+        userId: ctx.userId,
+        ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+        ...(input.catalogs ? { catalogs: input.catalogs } : {}),
+        ...(input.limit ? { limit: input.limit } : {}),
+      });
+      if (!found.ok) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `No access to workspace ${found.forbidden}`,
+        });
+      }
+      return found.result;
     }),
 
   /**

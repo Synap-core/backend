@@ -25,8 +25,10 @@
  * a declared read, owner-wide, a write whose handler names a write gate, a
  * write that calls a hub tRPC mutation the fence classifies `gated`
  * (TRPC_KEY_MUTATION_DOORS), a write gated by a named helper
- * (`GATED_ELSEWHERE`, whose own source must name a gate), or in the
- * shrink-only baseline of routes nobody has classified yet
+ * (`GATED_ELSEWHERE`, whose own source must name a gate), a write only a
+ * computer's own runner may make (`COMPUTER_RUNNER_WRITES`: a privileged
+ * scope no grant carries, and a refusal of every principal that is not the
+ * computer), or in the shrink-only baseline of routes nobody has classified yet
  * (`grant-door-write-baseline.ts`). A NEW route in none of them fails, a
  * baseline row that is now classified or gone fails, and the baseline's cap
  * only goes down. The fence still lets a baselined POST through at run time:
@@ -71,6 +73,11 @@ import {
   UNCLASSIFIED_READ_ROUTES_CAP,
 } from "./grant-door-read-baseline.js";
 import { GRANT_READ_SPECS } from "../access/grant-read.js";
+import {
+  HOST_RUNNER_SCOPE,
+  PRIVILEGED_MINT_SCOPES,
+} from "@synap/database/schema";
+import { KEY_SCOPES_NOT_DERIVED } from "@synap-core/types/grants";
 import { hubProtocolRestApp } from "../routers/hub-protocol-rest.js";
 
 describe("MCP read-tool classification (derived from the live tool list)", () => {
@@ -155,8 +162,12 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
 
 /**
  * The write gates a handler can name: the door's write checks, governance,
- * the gate's rung 0 itself (`grantWriteDenial`) and the channel and facet
- * write checks that run it (`assertChannelWrite`, `canWriteFacet`).
+ * the gate's rung 0 itself (`grantWriteDenial`), the channel and facet
+ * write checks that run it (`assertChannelWrite`, `canWriteFacet`), and the
+ * revise core's key check (`assertMayReviseProposal`: a key revising a
+ * proposal it did not file needs the approve right on that proposal's own
+ * space, project or object), which `mergeProposalRevision` runs on every
+ * revision.
  */
 const GATES = [
   "checkPermissionOrPropose",
@@ -166,6 +177,7 @@ const GATES = [
   "grantWriteDenial",
   "assertChannelWrite",
   "canWriteFacet",
+  "assertMayReviseProposal",
 ] as const;
 type Gate = (typeof GATES)[number];
 
@@ -345,6 +357,11 @@ const GATED_ELSEWHERE: Readonly<
     }
   >
 > = {
+  "POST /installations/request": {
+    via: "requestInstallation",
+    load: () => import("../services/installations/request-installation.js"),
+    why: "installation.request through checkPermissionOrPropose (an agent's install, update or removal is a proposal), shared with MCP synap_request_installation",
+  },
   "PUT /playbooks/:id/run-choice": {
     via: "setPlaybookRunChoiceGoverned",
     load: () => import("../services/playbooks/set-run-choice.js"),
@@ -425,6 +442,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../connectors/external-dispatch.js"),
     why: "the person's send: filed through the send door (grant verdict, gate), then the approve door",
   },
+  "PUT /channels/:channelId/drafts/:draftId": {
+    via: "mergeProposalRevision",
+    load: () => import("../services/proposals/proposals-service.js"),
+    why: "the person saves a draft's words: one revision through the revise core (review authority, the key's approve right on the draft's space, a space key rewords a message's body and subject only); nothing is sent",
+  },
   "POST /packages/apply": {
     via: "proposeTemplateApply",
     load: () => import("../services/template-apply/propose.js"),
@@ -436,6 +458,44 @@ const GATED_ELSEWHERE: Readonly<
     why: "the free-form proposal runs rung 0 itself (fenced-proposal.ts)",
   },
 };
+
+/**
+ * Writes only a computer's OWN runner may make: the host-job wire
+ * (`rest/host-jobs.ts`). No grant bounds them, and none can open them: the
+ * handler resolves its caller through `via`, whose source checks `scope` (a
+ * scope privileged at mint and derived from no key use, so no preset, app or
+ * agent key carries it) and refuses every principal that is not the computer
+ * itself (`NOT_A_COMPUTER`, an agent hosted on it included). Each row is
+ * checked below: served, its handler calls `via`, `via` names the scope's
+ * constant and the refusal, and the scope is privileged and not derived.
+ */
+const COMPUTER_RUNNER_WRITES: Readonly<
+  Record<
+    string,
+    {
+      via: string;
+      scope: { name: string; value: string };
+      load: () => Promise<Record<string, unknown>>;
+    }
+  >
+> = Object.fromEntries(
+  [
+    "POST /host-jobs/lease",
+    "POST /host-jobs/:id/heartbeat",
+    "POST /host-jobs/:id/report",
+    "POST /host-jobs/:id/finish",
+    // A hosted verb run's output files: tickets minted for the job's
+    // requester, only while this computer holds the verb job's lease.
+    "POST /host-jobs/:id/uploads",
+  ].map((key) => [
+    key,
+    {
+      via: "resolveHostRunner",
+      scope: { name: "HOST_RUNNER_SCOPE", value: HOST_RUNNER_SCOPE },
+      load: () => import("../routers/hub-protocol/rest/host-jobs.js"),
+    },
+  ])
+);
 
 /** `router.procedure` names a handler calls (`caller.entities.createEntity(`). */
 function trpcCallsOf(source: string): string[] {
@@ -450,6 +510,7 @@ type NonGetClass =
   | "gated"
   | "gated-trpc"
   | "gated-elsewhere"
+  | "computer-runner"
   | "unclassified";
 
 /** How a served non-GET route is bounded, from the fence and its own code. */
@@ -466,6 +527,8 @@ export function nonGetRouteClass(r: ServedRoute): NonGetClass {
   const elsewhere = GATED_ELSEWHERE[`${r.method} ${r.path}`];
   if (elsewhere && callOf(elsewhere.via).test(r.source))
     return "gated-elsewhere";
+  const runner = COMPUTER_RUNNER_WRITES[`${r.method} ${r.path}`];
+  if (runner && callOf(runner.via).test(r.source)) return "computer-runner";
   return "unclassified";
 }
 
@@ -488,6 +551,9 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     expect(count("gated")).toBeGreaterThanOrEqual(20);
     expect(count("gated-trpc")).toBeGreaterThanOrEqual(30);
     expect(count("gated-elsewhere")).toBe(Object.keys(GATED_ELSEWHERE).length);
+    expect(count("computer-runner")).toBe(
+      Object.keys(COMPUTER_RUNNER_WRITES).length
+    );
   });
 
   it("a new non-GET route is classified: a declared read or a named gate", () => {
@@ -496,7 +562,8 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
       unclassified.filter((k) => !baseline.has(k)),
       "Name the write gate in the handler (checkPermissionOrPropose, canWrite, …), " +
         "call a `gated` hub tRPC mutation, add a GATED_ELSEWHERE row (its helper " +
-        "must name a gate), or declare the route a read in GRANT_REST_POST_READS " +
+        "must name a gate), a COMPUTER_RUNNER_WRITES row (a computer's own " +
+        "runner only), or declare the route a read in GRANT_REST_POST_READS " +
         "(access/grant-door-fence.ts). Never add it to the baseline."
     ).toEqual([]);
   });
@@ -532,6 +599,39 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     expect(broken).toEqual([]);
   });
 
+  it("every COMPUTER_RUNNER_WRITES row is served, resolves the computer, and its scope no grant carries", async () => {
+    const byKey = new Map(nonGet.map((r) => [keyOf(r), r]));
+    const broken: string[] = [];
+    for (const [key, row] of Object.entries(COMPUTER_RUNNER_WRITES)) {
+      const r = byKey.get(key);
+      if (!r || !callOf(row.via).test(r.source)) {
+        broken.push(`${key}: handler does not call ${row.via}`);
+        continue;
+      }
+      const helper = (await row.load())[row.via];
+      const src = typeof helper === "function" ? String(helper) : "";
+      // The CHECK, not a mention (the refusal text names the scope too):
+      // `hasScope(scopes, HOST_RUNNER_SCOPE)`, as the test transform writes
+      // it: `(0,__vite_ssr_import_6__.hasScope)(scopes,
+      // (0,__vite_ssr_import_3__.HOST_RUNNER_SCOPE))` (read 2026-11-08).
+      if (
+        !new RegExp(
+          `\\bhasScope\\)?\\s*\\(\\s*[^,()]+,\\s*(?:\\(0,\\s*)?(?:[\\w$]+\\.)?${row.scope.name}\\b`
+        ).test(src)
+      )
+        broken.push(`${key}: ${row.via} does not check ${row.scope.name}`);
+      if (!src.includes('"NOT_A_COMPUTER"'))
+        broken.push(`${key}: ${row.via} refuses no principal (NOT_A_COMPUTER)`);
+      if (
+        !(PRIVILEGED_MINT_SCOPES as readonly string[]).includes(row.scope.value)
+      )
+        broken.push(`${key}: ${row.scope.value} is not privileged at mint`);
+      if (!(row.scope.value in KEY_SCOPES_NOT_DERIVED))
+        broken.push(`${key}: ${row.scope.value} is derived from a key use`);
+    }
+    expect(broken).toEqual([]);
+  });
+
   it("self-check: the classifier sees gates, gated tRPC mutations and helpers", () => {
     const write = (source: string, path = "/zz-not-a-route"): ServedRoute => ({
       method: "POST",
@@ -560,6 +660,15 @@ describe("Hub REST non-GET routes name their gate (closed by default)", () => {
     ).toBe("gated-elsewhere");
     expect(
       nonGetRouteClass(write("await somethingElse(input)", "/projects"))
+    ).toBe("unclassified");
+    // A COMPUTER_RUNNER_WRITES row counts only while its handler resolves the computer.
+    expect(
+      nonGetRouteClass(
+        write("const who = await resolveHostRunner(c)", "/host-jobs/lease")
+      )
+    ).toBe("computer-runner");
+    expect(
+      nonGetRouteClass(write("return c.json({ ok: true })", "/host-jobs/lease"))
     ).toBe("unclassified");
     // A declared read is a read, whatever its source.
     expect(nonGetRouteClass(write("", "/packages/preflight"))).toBe("read");

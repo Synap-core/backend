@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
@@ -24,10 +25,30 @@ import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
+import {
+  CellPlacementSchema,
+  checkCellPlacement,
+} from "../../../services/cells/place-cell-on-view.js";
 import type {
   RendererSlot,
   RendererScope,
 } from "../../../services/profiles/renderer-slots.js";
+import type { RendererRef } from "@synap/database";
+import {
+  RENDERER_TARGETS,
+  readRendererTarget,
+  rendererTargetProblem,
+} from "../../../services/renderers/renderer-targets.js";
+import {
+  assertCellBindable,
+  assertRendererTargetVisible,
+  cellRendererRefFor,
+  readBoundRenderer,
+} from "../../../services/renderers/renderer-target-checks.js";
+import {
+  bindCapabilityRenderer,
+  withCapabilityPage,
+} from "../../../services/capabilities/bind-capability-renderer.js";
 import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
@@ -50,8 +71,14 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
+  pageSlice,
+  LIST_PAGE_MAX,
+  VIEWS_PAGE_DEFAULT,
+  WIDGETS_PAGE_DEFAULT,
+  PLAYBOOKS_PAGE_DEFAULT,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import { ON_END_RETIRED_MESSAGE } from "../../../schemas/playbook-process.js";
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
@@ -170,6 +197,8 @@ export const buildHandlers: McpHandlerMap = {
          * Enum built from the `CONTENT_KINDS` runtime SSOT, never retyped.
          */
         contentKind: z.enum(CONTENT_KINDS).optional(),
+        /** Place the cell as a tile on this bento view when it is defined. */
+        placeOn: CellPlacementSchema.optional(),
       })
       .safeParse(args);
     if (!parsed.success) {
@@ -190,6 +219,17 @@ export const buildHandlers: McpHandlerMap = {
       rendererSource: parsed.data.rendererSource,
       workspaceId: cellWorkspaceId,
     });
+    // A placement that cannot land is refused now, before it becomes a
+    // proposal a person approves and then sees fail. The view's name rides in
+    // the proposal so the reviewer sees where the tile lands; whether the
+    // APPROVER may write that view is checked again when it is approved.
+    const placeOn = parsed.data.placeOn
+      ? await checkCellPlacement(parsed.data.placeOn, {
+          cellWorkspaceId,
+          userId,
+          permission: "read",
+        })
+      : undefined;
     // Route through the governance gate — it owns RBAC (workspace membership +
     // role, or the agent-join proposal for a non-member) AND the agent
     // propose/execute decision. No manual membership check: that would
@@ -220,6 +260,9 @@ export const buildHandlers: McpHandlerMap = {
         ...(parsed.data.contentKind
           ? { contentKind: parsed.data.contentKind }
           : {}),
+        // Where approving places the cell: the executor defines it AND adds
+        // its tile to this view, in one act.
+        ...(placeOn ? { placeOn } : {}),
       },
     });
     if ("denied" in perm && perm.denied) {
@@ -255,6 +298,7 @@ export const buildHandlers: McpHandlerMap = {
       description: parsed.data.description,
       viewTypes: parsed.data.viewTypes,
       contentKind: parsed.data.contentKind,
+      placeOn: parsed.data.placeOn,
       userId,
     });
     return ok({ status: result.changeType, ...result });
@@ -264,23 +308,76 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    // Governed: for an AI agent this returns `status: 'proposed'` (binding an
-    // AI-generated cell as a durable renderer is consequential); an operator
-    // auto-applies.
-    const result = await caller.profiles.setRenderer({
+    // ONE door for every renderer target (`renderer-targets.ts`): a kind's
+    // records (profileSlug, or target {kind:'profile', slug}), or one
+    // capability, playbook or view (target {kind, id}).
+    const target = readRendererTarget(args);
+    if (typeof target === "string") return toolError(target);
+    const slot = args.slot as RendererSlot;
+    const scope = (args.scope as RendererScope | undefined) ?? "workspace";
+    const workspaceId = (args.workspaceId as string | undefined) ?? null;
+    const clear = args.clear === true;
+    const cellKey = typeof args.cellKey === "string" ? args.cellKey : undefined;
+    if (clear ? cellKey !== undefined : !cellKey) {
+      return toolError(
+        `Tool '${toolName}': pass cellKey to bind a cell, or clear: true (and no cellKey) to unbind the slot.`
+      );
+    }
+    const problem = rendererTargetProblem(target.kind, slot, scope);
+    if (problem) return toolError(`Tool '${toolName}': ${problem}`);
+    const reasoning = readReasoning(args);
+    const props = args.props as Record<string, unknown> | undefined;
+
+    // Governed: for an AI agent each door returns `status: 'proposed'`
+    // (binding an AI-generated cell as a durable renderer is consequential);
+    // an operator auto-applies.
+    let result: { status: string; proposalId: string | null };
+    if (RENDERER_TARGETS[target.kind].store === "capability_pages") {
+      // The capability page-set's ONE door, shared with the desktop's
+      // `capabilities.setRenderer`. Same checks as the Hub door runs.
+      await assertRendererTargetVisible(target, userId);
+      let ref: RendererRef | null = null;
+      if (cellKey) {
+        await assertCellBindable({ cellKey, workspaceId, userId });
+        ref = await cellRendererRefFor(cellKey, props, workspaceId);
+      }
+      result = await bindCapabilityRenderer({
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        source: "intelligence",
+        capabilityId: (target as { id: string }).id,
+        workspaceId,
+        // A capability's `pod` renderer is its own default, seen everywhere.
+        scope: scope === "pod" ? "capability" : "workspace",
+        pages: (stored) => withCapabilityPage(stored, slot, ref),
+        ...(reasoning ? { reasoning } : {}),
+      });
+    } else {
+      result = await caller.profiles.setRenderer({
+        userId,
+        workspaceId: workspaceId ?? undefined,
+        profileSlug: target.kind === "profile" ? target.slug : target.kind,
+        ...(target.kind === "profile" ? {} : { subjectId: target.id }),
+        slot,
+        ...(clear ? { clear: true } : { cellKey }),
+        props,
+        scope,
+        ...(agentUserId ? { agentUserId } : {}),
+        // `profiles.setRenderer` has declared `reasoning` since it was written
+        // and forwards it into the gate; this door never sent one.
+        ...(reasoning ? { reasoning } : {}),
+      });
+    }
+    if (result.status !== "applied") return ok({ ...result, target, slot });
+    // Read back through the store's reader — what the target's page shows
+    // now — so "applied" is a fact the agent can see, not a claim.
+    const nowBound = await readBoundRenderer({
+      target,
+      slot,
       userId,
-      workspaceId: args.workspaceId as string | undefined,
-      profileSlug: args.profileSlug as string,
-      slot: args.slot as RendererSlot,
-      cellKey: args.cellKey as string,
-      props: args.props as Record<string, unknown> | undefined,
-      scope: args.scope as RendererScope | undefined,
-      ...(agentUserId ? { agentUserId } : {}),
-      // `profiles.setRenderer` has declared `reasoning` since it was written
-      // and forwards it into the gate; this door never sent one.
-      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+      workspaceId: scope === "workspace" ? workspaceId : null,
     });
-    return ok(result);
+    return ok({ ...result, target, slot, nowBound });
   },
   synap_promote_session_to_playbook: async (
     ctx: McpToolContext
@@ -327,7 +424,8 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: confinedWorkspaceId ?? null,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
-      limit: typeof args.limit === "number" ? args.limit : undefined,
+      limit:
+        typeof args.limit === "number" ? args.limit : PLAYBOOKS_PAGE_DEFAULT,
       cursor: typeof args.cursor === "string" ? args.cursor : undefined,
     });
     // How each of these has actually gone for this person — two queries for
@@ -459,6 +557,7 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     // WRITE: confined/explicit lens or advisory focus only — never membership[0].
     const outcome = await createPlaybookDoor(playbookDoorIdentity(ctx), {
       workspaceId: requestedWorkspaceId,
@@ -484,9 +583,6 @@ export const buildHandlers: McpHandlerMap = {
         if (args.statusProperty !== undefined) {
           subjectProfile.statusProperty = args.statusProperty;
         }
-        // What a session end moves the subject to: validated with the ONE
-        // schema and the definition check's option test by `playbooks.create`.
-        if (args.onEnd !== undefined) subjectProfile.onEnd = args.onEnd;
         return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
       })(),
       // `project` = a METHOD a project runs as a track. Any other value is
@@ -533,6 +629,27 @@ export const buildHandlers: McpHandlerMap = {
             >[1]["expectedOutputs"],
           }
         : {}),
+      // The rules it follows, by ref: validated by `playbooks.create` with
+      // `playbookGuidanceSchema`, so a bad ref is refused, never dropped.
+      ...(args.guidance !== undefined
+        ? {
+            guidance: args.guidance as Parameters<
+              typeof createPlaybookDoor
+            >[1]["guidance"],
+          }
+        : {}),
+      // Who runs it and the tools it needs: validated by `playbooks.create`
+      // (`playbookRunnerSchema`, `requiresSchema`), refused, never dropped.
+      ...(args.runner !== undefined
+        ? {
+            runner: args.runner as Parameters<
+              typeof createPlaybookDoor
+            >[1]["runner"],
+          }
+        : {}),
+      ...(args.requires !== undefined
+        ? { requires: args.requires as string[] }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -547,6 +664,7 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     type Patch = Parameters<typeof updatePlaybookDoor>[1]["patch"];
     // `subjectProfile` is ONE stored record the patch REPLACES (process keys
     // are carried over by `playbooks.update`), so a `statusProperty` alone
@@ -556,12 +674,9 @@ export const buildHandlers: McpHandlerMap = {
       args.subjectProfileSlug.trim()
         ? args.subjectProfileSlug.trim()
         : undefined;
-    if (
-      (args.statusProperty !== undefined || args.onEnd !== undefined) &&
-      !slug
-    ) {
+    if (args.statusProperty !== undefined && !slug) {
       return ok({
-        error: `${args.statusProperty !== undefined ? "statusProperty" : "onEnd"} needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
+        error: `statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
       });
     }
     const patch: Record<string, unknown> = {};
@@ -575,8 +690,11 @@ export const buildHandlers: McpHandlerMap = {
       "expectedOutputs",
       "activators",
       "humanOnlyStatuses",
+      "guidance",
       "status",
       "scope",
+      "runner",
+      "requires",
     ] as const satisfies ReadonlyArray<keyof Patch>) {
       if (args[key] !== undefined) patch[key] = args[key];
     }
@@ -586,7 +704,6 @@ export const buildHandlers: McpHandlerMap = {
         ...(args.statusProperty !== undefined
           ? { statusProperty: args.statusProperty }
           : {}),
-        ...(args.onEnd !== undefined ? { onEnd: args.onEnd } : {}),
       };
     }
     const reasoning = readReasoning(args);
@@ -667,9 +784,17 @@ export const buildHandlers: McpHandlerMap = {
       profileId:
         typeof args.profileId === "string" ? args.profileId : undefined,
     });
-    if (args.detail === "full" || !Array.isArray(result)) return ok(result);
+    if (!Array.isArray(result)) return ok(result);
+    const { page, paging } = pageSlice(
+      result as Array<Record<string, unknown>>,
+      args,
+      VIEWS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
+    if (args.detail === "full") return ok({ views: page, ...paging });
     return ok({
-      views: (result as Array<Record<string, unknown>>).map(toViewDigest),
+      views: page.map(toViewDigest),
+      ...paging,
       note: VIEWS_DIGEST_NOTE,
     });
   },
@@ -722,6 +847,64 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  /**
+   * Edit an existing view's name and/or config through the Hub's governed
+   * `updateView` (the same door as `PATCH /api/hub/views/:id`): it checks the
+   * config against the view's type and, for a bento, the widget catalog,
+   * BEFORE the gate, then files `view.update` (a proposal for an agent).
+   */
+  synap_update_view: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      caller,
+      confinedWorkspaceId,
+    } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const viewId =
+      typeof args.viewId === "string" && args.viewId.trim()
+        ? args.viewId.trim()
+        : undefined;
+    if (!viewId) {
+      return ok({
+        error: "viewId is required — the UUID of the view to edit.",
+      });
+    }
+    const name =
+      typeof args.name === "string" && args.name.trim()
+        ? args.name.trim()
+        : undefined;
+    const config =
+      args.config &&
+      typeof args.config === "object" &&
+      !Array.isArray(args.config)
+        ? (args.config as Record<string, unknown>)
+        : undefined;
+    if (args.config !== undefined && !config) {
+      return ok({
+        error:
+          "config must be an object: the view's whole new config, e.g. { blocks: [...] } for a bento.",
+      });
+    }
+    if (!name && !config) {
+      return ok({ error: "Provide name and/or config to change." });
+    }
+    const result = await caller.views.updateView({
+      userId,
+      viewId,
+      // A service key confined to one space edits only that space's views:
+      // the door refuses a view of another space (FORBIDDEN).
+      ...(confinedWorkspaceId ? { workspaceId: confinedWorkspaceId } : {}),
+      ...(name ? { name } : {}),
+      ...(config ? { config } : {}),
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+    });
+    return ok(result);
+  },
   synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -734,9 +917,16 @@ export const buildHandlers: McpHandlerMap = {
     // The hub door returns the ONE catalog: built-ins (in-process) ∪ this
     // pod's installed / AI-defined cells (services/cells/renderables.ts).
     const rows = await caller.widgetDefinitions.listWidgetDefs({ workspaceId });
+    const { page: widgetPage, paging: widgetPaging } = pageSlice(
+      discoverRenderables(rows, surface),
+      args,
+      WIDGETS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     return ok({
       surface,
-      widgets: discoverRenderables(rows, surface),
+      widgets: widgetPage,
+      ...widgetPaging,
       // Content languages (```mermaid, ```math, code) are fences, not
       // directives — the catalog's fence rows, a document-only answer.
       ...(surface === "document" ? { fences: discoverFences() } : {}),
@@ -856,7 +1046,7 @@ export const buildHandlers: McpHandlerMap = {
       const parsedAsk = AskSchema.safeParse(args.ask);
       if (!parsedAsk.success) {
         return toolError(
-          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.`
+          `Tool '${toolName}': invalid ask — ${parsedAsk.error.issues[0]?.message ?? "does not match the ask schema"}.${ASK_SKILL_HINT}`
         );
       }
       ask = parsedAsk.data as SlotAsk;

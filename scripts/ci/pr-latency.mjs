@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * pr-latency.mjs — how long a backend PR waits for its 4 required checks, from
+ * pr-latency.mjs — how long a backend PR waits for its required checks (5 from 2026-11-09), from
  * the push to the last of them green, measured from GitHub's own records
  * (read-only: `gh api`). Lane L8, 2026-10-29: the founder's target is 8-10
  * minutes for a typical change.
@@ -52,6 +52,7 @@ export const REQUIRED = [
   "Full suite",
   "API e2e",
   "Reference docs are current",
+  "Dependent repos typecheck",
 ];
 
 export const median = (xs) => quantile(xs, 0.5);
@@ -218,7 +219,7 @@ async function main() {
       .map(([k, n]) => `${k} ×${n}`)
       .join("; ")}.`,
     "",
-    "| tier | runs | push → 4 required green, median | p90 | shards (median) |",
+    "| tier | runs | push → required checks green, median | p90 | shards (median) |",
     "|---|---|---|---|---|",
     ...[["all", ok], ...Object.entries(byScope)].map(
       ([k, rs]) =>

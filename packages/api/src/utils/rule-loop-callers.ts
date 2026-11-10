@@ -128,9 +128,10 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
         // validator (services/automations/validate-flow.ts). An invalid
         // flowDefinition throws here.
         //
-        // It also forces `status: "draft"` unconditionally, which IS the
-        // "materialize DISABLED" guarantee: `automations.status` (not an
-        // `enabled` column) is what decides whether a trigger can fire.
+        // The `status: "draft"` stated below IS the "materialize DISABLED"
+        // guarantee: `automations.status` (not an `enabled` column) decides
+        // whether a trigger can fire. `materializeApprovedAutomation` keeps a
+        // STATED status (it no longer forces draft), so this call must state it.
         const flow = automationOp.flowDefinition as {
           nodes?: unknown;
           edges?: unknown;

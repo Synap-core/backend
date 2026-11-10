@@ -21,9 +21,10 @@ import {
   conversationCwdPatch,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
-  isProbeWriteContext,
-  stampProbeMarker,
   startedByAgentPatch,
+  insertFocusSessionRow,
+  sessionDefinitionColumns,
+  derivedSessionTitle,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -56,7 +57,10 @@ import {
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
 import { stampAskProvenance } from "./slot-asked-event.js";
-import { stampSlotKeys } from "./slot-keys.js";
+import {
+  withBirthStageSlots,
+  writeSessionBirthSubjectMove,
+} from "./session-birth.js";
 import { playbookSlotsMissingFrom } from "./playbook-slots.js";
 import {
   guidanceForBlockedSlots,
@@ -102,41 +106,17 @@ import {
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { readStartOffers, type StartOffersRead } from "./start-offers.js";
-// Types only, statically: the writer is loaded where it runs (below). A static
-// import puts `move-status` → `permission-check` on this module's graph and
-// closes an import cycle through `permission-check` (see complete-session.ts).
+// Types only: the writer is loaded lazily by `session-birth.ts`.
 import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
   titleSourcePatch,
   canAutoRetitle,
-  buildDerivedSessionTitle,
 } from "@synap-core/types/focus-sessions";
 import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
-
-/**
- * The key of a playbook's first stage, or null for a stageless playbook.
- * Stages are stored as JSONB, so this stays defensive about shape rather than
- * trusting the row to be well-formed.
- */
-/**
- * The stage list to COPY onto a new session. Anything that is not an array is
- * no stages — a jsonb column can hold whatever was last written to it, and a
- * session is not the place to discover that.
- */
-export function readStages(stages: unknown): unknown[] {
-  return Array.isArray(stages) ? stages : [];
-}
-
-export function firstStageKey(stages: unknown): string | null {
-  if (!Array.isArray(stages) || stages.length === 0) return null;
-  const first = stages[0] as { key?: unknown } | null;
-  const key = first && typeof first === "object" ? first.key : undefined;
-  return typeof key === "string" && key.length > 0 ? key : null;
-}
 
 /**
  * The goal a sub-session inherits (structural plan S5, Q6): its parent's
@@ -1161,11 +1141,12 @@ export async function createFocusSession(
     // title given, the pod derives one from the goal (or the playbook) and
     // marks it `derived`, so the background titler may still improve it and a
     // person's or agent's own title always wins.
-    const derivedTitle = title
-      ? null
-      : playbook
-        ? buildDerivedSessionTitle({ kind: "run", name: playbook.name })
-        : buildDerivedSessionTitle({ kind: "goal", goal });
+    const derivedTitle = title ? null : derivedSessionTitle({ goal, playbook });
+    const birthSlots = [
+      // An agent declaring a slot the person owes from birth asked it.
+      ...withBirthStageSlots(playbook, [...declaredSlots, ...playbookSlots]),
+      ...paramSlots,
+    ];
 
     const fields = {
       workspaceId,
@@ -1176,43 +1157,19 @@ export async function createFocusSession(
       title: title ?? derivedTitle,
       goal,
       templateId,
-      playbookId: playbook?.id ?? null,
-      // `focus_sessions.current_stage` is documented as "seeded from the
-      // playbook's first stage on instantiation" — but this door only ever
-      // wired playbookId, so a session started from a staged playbook opened
-      // with a NULL stage and every stage-aware surface read it as stageless.
-      // Seed it here so the column matches its contract from birth; stageless
-      // playbooks (stages: []) correctly stay NULL.
-      currentStage: firstStageKey(playbook?.stages),
-      // The session's OWN copy of the phases (0270). SNAPSHOTTED at birth, for
-      // the same reason `criteria` and `expectedOutputs` are: editing the
-      // playbook afterwards must not silently rewrite what an in-flight
-      // session says it is doing. A session with no playbook gets `[]` and is
-      // free to declare its own.
-      stages: readStages(playbook?.stages),
-      // `owedSince` is present IFF `owner === 'human'`, and that invariant has
-      // to hold from BIRTH: a session created with an already-blocked slot
-      // would otherwise carry the human's ownership with no clock, and the
-      // owed feed has nothing to order or age it by.
+      // The playbook's definition, snapshotted by THE row writer's rule
+      // (`insert-focus-session.ts`): playbookId, the session's own copy of
+      // the stages, the first stage as `currentStage`, every slot keyed.
       //
-      // The SAME door the merge uses, never a second answer here — and it is
-      // the whole write-authority floor, not just the clock. This was
-      // `reconcileOwedSince` alone, which meant a caller could declare a slot
-      // already carrying `attestedBy` (a forged human confirmation) or
-      // `retiredAt` (born invisible to the owed board). The update door had
-      // refused both for as long as the floor existed; this one had not.
-      // The param slots are appended AFTER the floor, deliberately: they are
-      // server-minted, not client-declared, and `sanitizeDeclaredOutputs`
+      // `owedSince` is present IFF `owner === 'human'`, and that invariant has
+      // to hold from BIRTH, so the caller's slots went through the whole
+      // write-authority floor (`sanitizeDeclaredOutputs`: no forged
+      // `attestedBy`, no `retiredAt`) above. The param slots are appended
+      // AFTER the floor, deliberately: they are server-minted, and the floor
       // exists to strip exactly the `owner`/`owedSince` a caller must not
-      // forge. Running them through it would erase the ownership this door is
-      // the authority on.
-      // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
-      expectedOutputs: stampSlotKeys([
-        // An agent declaring a slot the person owes from birth asked it.
-        ...declaredSlots,
-        ...playbookSlots,
-        ...paramSlots,
-      ]),
+      // forge. The first stage's own outputs are owed from birth too
+      // (`withBirthStageSlots`), the rule every later advance applies.
+      ...sessionDefinitionColumns(playbook, birthSlots),
       criteria: sessionCriteria,
     };
 
@@ -1286,65 +1243,52 @@ export async function createFocusSession(
     // Not adopting — or the auto-opened row went away since the lookup.
     const adopted = !!session;
     if (!session) {
-      const [inserted] = await tx
-        .insert(focusSessions)
-        .values({
-          id: sessionId,
-          ...fields,
-          userId,
-          correlationId: correlationId ?? null,
-          // Binds the session to the calling client (write attribution); an
-          // explicit title is its author's (agent or person), which automation
-          // never renames. D8: conditional, so an untitled human session keeps
-          // the column default.
-          ...(clientKey ||
-          agentUserId ||
-          title ||
-          derivedTitle ||
-          paramResolution ||
-          params.governance ||
-          isProbeWriteContext()
-            ? {
-                metadata: stampProbeMarker({
-                  ...(clientKey
-                    ? { clientKey, ...conversationCwdPatch(clientKey) }
-                    : {}),
-                  // The agent that starts it (orient's `handedToYou` leaves it out).
-                  ...startedByAgentPatch(agentUserId),
-                  ...(params.governance
-                    ? { governance: params.governance }
-                    : {}),
-                  ...(title
-                    ? titleSourcePatch(agentUserId ? "agent" : "human")
-                    : derivedTitle
-                      ? titleSourcePatch("derived")
-                      : {}),
-                  // @see the adopt branch above.
-                  ...(paramResolution
-                    ? {
-                        [RUN_PARAMS_METADATA_KEY]:
-                          paramResolution.declaredValues,
-                      }
-                    : {}),
-                }),
-              }
+      // THE ONE row writer (`insert-focus-session.ts`).
+      session = await insertFocusSessionRow(tx as unknown as typeof db, {
+        id: sessionId,
+        userId,
+        goal,
+        // No title ⇒ the writer derives one (the same `derivedSessionTitle`).
+        title,
+        correlationId: correlationId ?? null,
+        workspaceId,
+        projectId,
+        trackId,
+        trackStage,
+        subjectEntityId,
+        templateId,
+        playbook,
+        expectedOutputs: birthSlots,
+        criteria: sessionCriteria,
+        // Binds the session to the calling client (write attribution); an
+        // explicit title is its author's (agent or person), which automation
+        // never renames.
+        metadata: {
+          ...(clientKey
+            ? { clientKey, ...conversationCwdPatch(clientKey) }
             : {}),
-          // Typed origin (migration 0240) — stamped from what this door already
-          // resolved, never re-sniffed from metadata. A session created here is
-          // a playbook run exactly when `templateId` resolved to a real
-          // playbook; automation-origin sessions never come through here, they
-          // come through `openRunSession`. Otherwise the discriminator is
-          // `agentUserId` — the SAME fact the governance membrane above already
-          // used to decide whether this write needs a proposal. An agent
-          // identity means an agent opened the session ("agent"); its absence
-          // means a person did ("human").
-          origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
-          channelId,
-          agentIds: directAgentIds,
-          status: "active",
-        })
-        .returning();
-      session = inserted;
+          // The agent that starts it (orient's `handedToYou` leaves it out).
+          ...startedByAgentPatch(agentUserId),
+          ...(params.governance ? { governance: params.governance } : {}),
+          ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
+          // @see the adopt branch above.
+          ...(paramResolution
+            ? { [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues }
+            : {}),
+        },
+        // Typed origin (migration 0240) — stamped from what this door already
+        // resolved, never re-sniffed from metadata. A session created here is
+        // a playbook run exactly when `templateId` resolved to a real
+        // playbook; automation-origin sessions never come through here, they
+        // come through `openRunSession`. Otherwise the discriminator is
+        // `agentUserId` — the SAME fact the governance membrane above already
+        // used to decide whether this write needs a proposal. An agent
+        // identity means an agent opened the session ("agent"); its absence
+        // means a person did ("human").
+        origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
+        channelId,
+        agentIds: directAgentIds,
+      });
     }
 
     // The playbook_runs ledger row (status "running") so the runs feed sees the
@@ -1352,7 +1296,7 @@ export async function createFocusSession(
     // definition snapshot), minus the executor dispatch — starting a session is
     // "I'm working on this playbook", not a full executor run. The snapshot is
     // THE shared one (`buildDefinitionSnapshot`): a hand-written copy here
-    // froze no `subjectProfile` (so no lifecycle, no end moves), criteria or
+    // froze no `subjectProfile` (so no lifecycle), criteria or
     // requiredIntents, and a later edit of the playbook then decided this run.
     if (playbook) {
       await tx.insert(playbookRuns).values({
@@ -1395,35 +1339,11 @@ export async function createFocusSession(
   // the advance's own rule and writer (ungated writes, gated holds). After the
   // commit, never inside it: a subject write that fails is reported on the
   // reply, and never fails a session that already exists.
-  let subjectMove: StageSubjectStatusOutcome | undefined;
-  if (sessionOut.currentStage && sessionOut.subjectEntityId) {
-    try {
-      const { writeBirthStageSubjectStatus, reportedSubjectMove } =
-        await import("./stage-subject-status.js");
-      subjectMove = reportedSubjectMove(
-        await writeBirthStageSubjectStatus({
-          session: {
-            id: sessionOut.id,
-            playbookId: sessionOut.playbookId ?? null,
-            subjectEntityId: sessionOut.subjectEntityId,
-            workspaceId: sessionOut.workspaceId ?? null,
-          },
-          toStage: sessionOut.currentStage,
-          userId,
-          agentUserId: agentUserId ?? null,
-        })
-      );
-    } catch (err) {
-      logger.warn(
-        { err, sessionId: sessionOut.id },
-        "birth stage subject-status not written — session kept"
-      );
-      subjectMove = {
-        status: "failed",
-        reason: err instanceof Error ? err.message : String(err),
-      };
-    }
-  }
+  const subjectMove = await writeSessionBirthSubjectMove({
+    session: sessionOut,
+    userId,
+    agentUserId: agentUserId ?? null,
+  });
 
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
   // parent). AFTER the session exists, and never inside the transaction — a bad

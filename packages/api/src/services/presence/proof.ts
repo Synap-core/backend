@@ -49,6 +49,7 @@ import {
   type PresenceProof,
   type PresenceProofKind,
   type PresenceRefusalCode,
+  type DeviceLinkRefusalCode,
   type PasskeyAssertionJSON,
 } from "@synap-core/types/presence";
 import { normalizeRecoveryCode } from "@synap-core/types/account-recovery";
@@ -81,7 +82,9 @@ import { acceptTotpCode } from "./totp-code.js";
 
 export class PresenceError extends Error {
   constructor(
-    readonly code: PresenceRefusalCode,
+    // A device-link refusal ("Add this device", 9 Nov 2026) rides the same
+    // typed error; the router maps it by code.
+    readonly code: PresenceRefusalCode | DeviceLinkRefusalCode,
     message: string
   ) {
     super(message);
@@ -467,7 +470,7 @@ async function verifyTypedCode(
     throw new PresenceError(
       PRESENCE_INVALID,
       proof.kind === "totp"
-        ? "This code doesn't match your 2FA app, or it was already used. Type the code it shows now."
+        ? "This code doesn't match your authenticator app, or it was already used. Type the code it shows now."
         : "This recovery code doesn't match one of yours, or it was already used."
     );
   }

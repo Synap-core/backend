@@ -29,6 +29,14 @@
  * no passkey it opens on the code). A code is typed only here, in pod admin.
  * "I lost my passkey" opens the ONE recovery door
  * (`CONSOLE_PAGES.presenceRecovery`) in a new tab.
+ *
+ * "Add this device" (founder decision of 9 Nov 2026): when this browser
+ * cannot prove (no passkey of this pod reaches it), "Set up this device"
+ * switches the body to the device-link panel: a device the person already
+ * uses approves this one, which creates its own passkey; the dialog then
+ * reads a new challenge and Confirm runs again with it. A proof signed with
+ * a passkey here is remembered (`rememberThisDevicePasskey`): this browser
+ * holds one, so the "set up this device" offer stops.
  */
 
 import {
@@ -67,6 +75,7 @@ import {
   PasskeyCancelled,
   getPasskeyAssertion,
   isPasskeyAssertionSupported,
+  isPasskeySupported,
   otherRoute,
   planAssertion,
   webauthnErrorDetail,
@@ -79,6 +88,8 @@ import { proposalHeading } from "../../proposal/[id]/proposal-heading";
 import { PASSKEYS_PATH } from "../../settings/security/passkeys-path";
 import { presenceT } from "./copy";
 import { failedPromptWord, presenceDialogView } from "./dialog-model";
+import { DeviceLinkPanel } from "./device-link/DeviceLinkPanel";
+import { rememberThisDevicePasskey } from "./device-link/use-this-device";
 import {
   PresenceDeclined,
   challengeInput,
@@ -130,6 +141,8 @@ type Phase =
       fallback?: PasskeyRoute | null;
       /** The failed prompt's error, for "Copy details". */
       copyDetail?: string | null;
+      /** The passkey prompt ran and did not sign: "Set up this device" is offered. */
+      promptFailed?: boolean;
     }
   | { kind: "signing"; challenge: PresenceChallenge };
 
@@ -165,6 +178,19 @@ function devicePasskeyName(challenge: PresenceChallenge): string | null {
   const named = (holder: string) =>
     credentials.find((c) => c.holder === holder && c.name)?.name ?? null;
   return named("device") ?? named("unknown");
+}
+
+/**
+ * May this ask offer "Set up this device"? Never while approving a new
+ * device itself, nor for a passkey change (the passkeys card offers its own
+ * "Approve from another device" there).
+ */
+function mayOfferSetUp(subject: PresenceSubject): boolean {
+  return !(
+    "request" in subject &&
+    (subject.request.kind === "device_link" ||
+      subject.request.kind === "passkey_change")
+  );
 }
 
 /** Why the pod asks again, in words; null for a first ask. */
@@ -255,24 +281,37 @@ function PresenceDialog({
   // What the person opened in this ask's dialog: the "Why?" and the passkey
   // tab. Each belongs to one ask, like its phase.
   // `codeMode`: the person types a code instead; `code`: what they typed.
+  // `setUp`: the "Add this device" panel is the body.
   const [opened, setOpened] = useState<{
     ask: Ask | null;
     why: boolean;
     addPasskey: boolean;
     codeMode: boolean;
     code: string;
-  }>({ ask: null, why: false, addPasskey: false, codeMode: false, code: "" });
+    setUp: boolean;
+  }>({
+    ask: null,
+    why: false,
+    addPasskey: false,
+    codeMode: false,
+    code: "",
+    setUp: false,
+  });
   const ours = opened.ask === ask;
   const whyOpen = ours && opened.why;
   const codeMode = ours && opened.codeMode;
   const typedCode = ours ? opened.code : "";
-  const toggle = (part: "why" | "addPasskey" | "codeMode", value: boolean) =>
+  const toggle = (
+    part: "why" | "addPasskey" | "codeMode" | "setUp",
+    value: boolean
+  ) =>
     setOpened((prev) => ({
       ask,
       why: prev.ask === ask ? prev.why : false,
       addPasskey: prev.ask === ask ? prev.addPasskey : false,
       codeMode: prev.ask === ask ? prev.codeMode : false,
       code: prev.ask === ask ? prev.code : "",
+      setUp: prev.ask === ask ? prev.setUp : false,
       [part]: value,
     }));
   const setTypedCode = (code: string) =>
@@ -282,6 +321,7 @@ function PresenceDialog({
       addPasskey: prev.ask === ask ? prev.addPasskey : false,
       codeMode: true,
       code,
+      setUp: false,
     }));
   // The last proof this dialog handed over was a typed code: a refusal of it
   // reopens on the code field, saying why.
@@ -343,6 +383,7 @@ function PresenceDialog({
         addPasskey: false,
         codeMode: true,
         code: "",
+        setUp: false,
       });
     }
     const note = codeRefused
@@ -378,6 +419,9 @@ function PresenceDialog({
     setPhase(ask, { kind: "signing", challenge });
     try {
       const credential = await getPasskeyAssertion(challenge.passkey, route);
+      // This browser reaches a passkey of this pod: remembered, so it is
+      // not offered to set one up here.
+      rememberThisDevicePasskey();
       settle({
         proof: {
           kind: "passkey",
@@ -402,6 +446,7 @@ function PresenceDialog({
         challenge,
         note: name ? t(word, { name }) : t(word),
         fallback: offer,
+        promptFailed: true,
         // A closed prompt too: an extension's "no passkey found" is the
         // evidence that tells it from a person closing the prompt.
         copyDetail:
@@ -432,6 +477,7 @@ function PresenceDialog({
             note: phase.kind === "ready" ? phase.note : null,
             fallback: phase.kind === "ready" ? phase.fallback : null,
             copyDetail: phase.kind === "ready" ? phase.copyDetail : null,
+            promptFailed: phase.kind === "ready" && phase.promptFailed === true,
           }
         : phase,
     passkeySupported: isPasskeyAssertionSupported(),
@@ -440,7 +486,15 @@ function PresenceDialog({
     addPasskeyOpened: ours && opened.addPasskey,
     typed: challenge ? canType(challenge) : false,
     codeMode,
+    setUpAllowed:
+      ask !== null && mayOfferSetUp(ask.subject) && isPasskeySupported(),
+    setUpOpen: ours && opened.setUp,
   });
+  /** This device now holds its passkey: back to Confirm, on a new challenge. */
+  const setUpDone = () => {
+    toggle("setUp", false);
+    if (ask) void read.current(ask, t("setUp.done"));
+  };
   const reread = () => ask && void read.current(ask, null);
   const status = !view.status
     ? ""
@@ -467,120 +521,139 @@ function PresenceDialog({
             : t("title")}
         </ModalHeader>
         <ModalBody className="gap-3 text-[13px] text-foreground/85">
-          {doing ? (
-            <p>{t("act", { doing })}</p>
-          ) : challenge ? (
-            <ApprovingWhat
-              proposalId={challenge.proposalId}
-              label={ask?.subject.label}
+          {view.panel ? (
+            <DeviceLinkPanel
+              onDone={setUpDone}
+              onCancel={() => toggle("setUp", false)}
             />
           ) : (
-            <p>{t("action.unnamed")}</p>
-          )}
-          <div className="flex flex-col items-start gap-1">
-            <button
-              type="button"
-              aria-expanded={whyOpen}
-              aria-controls="presence-dialog-why"
-              onClick={() => toggle("why", !whyOpen)}
-              className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
-            >
-              {t("whyToggle")}
-            </button>
-            {whyOpen && (
-              <p id="presence-dialog-why" className="text-foreground/65">
-                {t(doing ? "why.act" : "why")}
+            <>
+              {doing ? (
+                <p>{t("act", { doing })}</p>
+              ) : challenge ? (
+                <ApprovingWhat
+                  proposalId={challenge.proposalId}
+                  label={ask?.subject.label}
+                />
+              ) : (
+                <p>{t("action.unnamed")}</p>
+              )}
+              <div className="flex flex-col items-start gap-1">
+                <button
+                  type="button"
+                  aria-expanded={whyOpen}
+                  aria-controls="presence-dialog-why"
+                  onClick={() => toggle("why", !whyOpen)}
+                  className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  {t("whyToggle")}
+                </button>
+                {whyOpen && (
+                  <p id="presence-dialog-why" className="text-foreground/65">
+                    {t(doing ? "why.act" : "why")}
+                  </p>
+                )}
+              </div>
+              {view.notice && (
+                <div className="flex flex-col gap-1 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
+                  {view.notice === "noPasskey" && (
+                    <p className="font-medium">
+                      {t(doing ? "noPasskey.title.act" : "noPasskey.title")}
+                    </p>
+                  )}
+                  <p>
+                    {view.notice === "noPasskey"
+                      ? t("noPasskey.body")
+                      : t("unsupported.body")}
+                  </p>
+                </div>
+              )}
+              {/* ONE status line, always mounted, so a screen reader hears each
+              change of what the dialog is doing. */}
+              <p role="status" aria-live="polite" className={TONE[view.tone]}>
+                {status}
               </p>
-            )}
-          </div>
-          {view.notice && (
-            <div className="flex flex-col gap-1 rounded-lg bg-warning/[0.06] px-3 py-2 ring-1 ring-inset ring-warning/25">
-              {view.notice === "noPasskey" && (
-                <p className="font-medium">
-                  {t(doing ? "noPasskey.title.act" : "noPasskey.title")}
+              {view.detail && (
+                <p className="-mt-2 text-[12px] text-foreground/45">
+                  {view.detail}
                 </p>
               )}
-              <p>
-                {view.notice === "noPasskey"
-                  ? t("noPasskey.body")
-                  : t("unsupported.body")}
-              </p>
-            </div>
+              {view.copyDetail && (
+                <div className="-mt-2">
+                  <CopyButton
+                    text={view.copyDetail}
+                    label={t("copyDetails")}
+                    variant="light"
+                    ariaLabel={t("copyDetailsA11y")}
+                  />
+                </div>
+              )}
+              {view.codeField && challenge && (
+                <Input
+                  autoFocus
+                  size="sm"
+                  label={t("code.label")}
+                  description={t("code.help")}
+                  value={typedCode}
+                  onValueChange={setTypedCode}
+                  autoComplete="one-time-code"
+                  isDisabled={view.busy}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void submitCode(challenge);
+                  }}
+                  data-presence-code=""
+                />
+              )}
+              {view.relayDevice !== null && (
+                <p className="text-foreground/55">
+                  {view.relayDevice
+                    ? t("relay.device", { device: view.relayDevice })
+                    : t("relay.any")}
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                {view.useCode && (
+                  <button
+                    type="button"
+                    onClick={() => toggle("codeMode", true)}
+                    className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    {t("presence.useCode")}
+                  </button>
+                )}
+                {view.codeField && challenge?.passkey && (
+                  <button
+                    type="button"
+                    onClick={() => toggle("codeMode", false)}
+                    className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    {t("usePasskey")}
+                  </button>
+                )}
+                {phase.kind !== "reading" && (
+                  <a
+                    href={RECOVERY_PATH}
+                    target="_blank"
+                    rel="noopener"
+                    className="inline-flex min-h-8 items-center text-[12.5px] text-foreground/60 underline-offset-2 hover:text-foreground hover:underline"
+                    data-presence-lost=""
+                  >
+                    {t("presence.lost")}
+                  </a>
+                )}
+                {view.setUp && (
+                  <button
+                    type="button"
+                    onClick={() => toggle("setUp", true)}
+                    className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
+                    data-presence-set-up=""
+                  >
+                    {t("setUp")}
+                  </button>
+                )}
+              </div>
+            </>
           )}
-          {/* ONE status line, always mounted, so a screen reader hears each
-              change of what the dialog is doing. */}
-          <p role="status" aria-live="polite" className={TONE[view.tone]}>
-            {status}
-          </p>
-          {view.detail && (
-            <p className="-mt-2 text-[12px] text-foreground/45">
-              {view.detail}
-            </p>
-          )}
-          {view.copyDetail && (
-            <div className="-mt-2">
-              <CopyButton
-                text={view.copyDetail}
-                label={t("copyDetails")}
-                variant="light"
-                ariaLabel={t("copyDetailsA11y")}
-              />
-            </div>
-          )}
-          {view.codeField && challenge && (
-            <Input
-              autoFocus
-              size="sm"
-              label={t("code.label")}
-              description={t("code.help")}
-              value={typedCode}
-              onValueChange={setTypedCode}
-              autoComplete="one-time-code"
-              isDisabled={view.busy}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void submitCode(challenge);
-              }}
-              data-presence-code=""
-            />
-          )}
-          {view.relayDevice !== null && (
-            <p className="text-foreground/55">
-              {view.relayDevice
-                ? t("relay.device", { device: view.relayDevice })
-                : t("relay.any")}
-            </p>
-          )}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            {view.useCode && (
-              <button
-                type="button"
-                onClick={() => toggle("codeMode", true)}
-                className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
-              >
-                {t("presence.useCode")}
-              </button>
-            )}
-            {view.codeField && challenge?.passkey && (
-              <button
-                type="button"
-                onClick={() => toggle("codeMode", false)}
-                className="inline-flex min-h-8 items-center text-[12.5px] font-medium text-primary underline-offset-2 hover:underline"
-              >
-                {t("usePasskey")}
-              </button>
-            )}
-            {phase.kind !== "reading" && (
-              <a
-                href={RECOVERY_PATH}
-                target="_blank"
-                rel="noopener"
-                className="inline-flex min-h-8 items-center text-[12.5px] text-foreground/60 underline-offset-2 hover:text-foreground hover:underline"
-                data-presence-lost=""
-              >
-                {t("presence.lost")}
-              </a>
-            )}
-          </div>
         </ModalBody>
         <ModalFooter>
           <Button
@@ -590,6 +663,7 @@ function PresenceDialog({
           >
             {t(view.decline)}
           </Button>
+          {/* With the panel open, its own actions lead; the way out stays. */}
           {view.secondary === "tryAgain" && (
             <Button variant="flat" onPress={reread}>
               {t("tryAgain")}

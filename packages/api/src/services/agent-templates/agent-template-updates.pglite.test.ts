@@ -24,6 +24,8 @@
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -277,7 +279,7 @@ describe("the update plan of an agent template", () => {
       comparedBy: "field",
       installedVersion: "h-1",
       latestVersion: "h-2",
-      counts: { updates: 2, yours: 1, both: 1, same: 4 },
+      counts: { updates: 2, yours: 1, both: 1, same: 6 },
       needs: "choice",
     });
     expect(plan.rows[0]).toMatchObject({ rowKind: "agent", rowId: CLAUDE_ID });
@@ -290,6 +292,8 @@ describe("the update plan of an agent template", () => {
       detect: "both",
       wake: "updates",
       practices: "yours",
+      toolProfile: "same",
+      toolGroups: "same",
     });
     const wake = plan.rows[0]!.fields.find((f) => f.key === "wake")!;
     expect(wake.label).toBe("How a computer starts it");
@@ -370,6 +374,98 @@ describe("the start-up pass", () => {
       (u) => u.slug === "hermes"
     );
     expect(listed).toMatchObject({ counts: { updates: 1 } });
+  });
+
+  it("a catalog that gives Hermes a tool surface: applied at start-up, as an untouched field (d812debd)", async () => {
+    h.catalogs = {
+      ...h.catalogs,
+      hermes: catalog(
+        "h-2",
+        hermes({ toolProfile: "entry", toolGroups: ["read"] })
+      ),
+    };
+    const report = await reconcileStandaloneConfigsToTemplates({
+      packageSlugs: ["hermes"],
+    });
+    expect(report.updated).toEqual([
+      expect.objectContaining({
+        id: HERMES_ID,
+        reason: "updated: [toolGroups,toolProfile]",
+      }),
+    ]);
+    const { rows } = await q<{ tool_profile: string; tool_groups: unknown }>(
+      `select tool_profile, tool_groups from agent_templates where id = $1`,
+      [HERMES_ID]
+    );
+    expect(rows[0]).toEqual({ tool_profile: "entry", tool_groups: ["read"] });
+  });
+
+  it("applying the surface to the template writes no key: existing agents' keys list what they listed (d812debd)", async () => {
+    const hermesAgent = randomUUID();
+    await q(
+      `insert into users (id, email, agent_type) values ($1, $2, 'hermes')`,
+      [hermesAgent, `${hermesAgent}@x.test`]
+    );
+    await q(
+      `insert into api_keys (id, user_id, key_type, tool_profile, tool_groups)
+       values ($1, $2, 'hub_inbound', 'entry', '{}'), ($3, $2, 'hub_inbound', null, '{}')`,
+      [randomUUID(), hermesAgent, randomUUID()]
+    );
+    const keys = () =>
+      q(`select * from api_keys order by id`).then((r) => r.rows);
+    const before = await keys();
+    expect(before.length).toBeGreaterThanOrEqual(2);
+
+    h.catalogs = {
+      ...h.catalogs,
+      hermes: catalog(
+        "h-2",
+        hermes({ toolProfile: "entry", toolGroups: ["read"] })
+      ),
+    };
+    const report = await reconcileStandaloneConfigsToTemplates({
+      packageSlugs: ["hermes"],
+    });
+    // The template row did change…
+    expect(report.updated.map((e) => e.reason)).toEqual([
+      "updated: [toolGroups,toolProfile]",
+    ]);
+    // …and not one key did.
+    expect(await keys()).toEqual(before);
+  });
+
+  it("a template installed before 0407: its baseline lacks the surface; 0407 fills it, and the same update applies", async () => {
+    // The row as an earlier build installed it: no surface in the baseline.
+    await q(
+      `update agent_templates
+       set metadata = metadata #- '{marketSource,baseline,toolProfile}' #- '{marketSource,baseline,toolGroups}'
+       where id = $1`,
+      [HERMES_ID]
+    );
+    h.catalogs = {
+      ...h.catalogs,
+      hermes: catalog(
+        "h-2",
+        hermes({ toolProfile: "entry", toolGroups: ["read"] })
+      ),
+    };
+    const sql = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../../../database/migrations/0407_agent_template_tool_surface.sql",
+          import.meta.url
+        )
+      ),
+      "utf8"
+    );
+    await h.client!.exec(sql.slice(sql.indexOf("UPDATE")));
+    const report = await reconcileStandaloneConfigsToTemplates({
+      packageSlugs: ["hermes"],
+    });
+    expect(report.ownerOwnedSkipped).toEqual([]);
+    expect(report.updated.map((e) => e.reason)).toEqual([
+      "updated: [toolGroups,toolProfile]",
+    ]);
   });
 
   it("the dry run says the same as the plan, wake held (PARITY)", async () => {

@@ -75,6 +75,7 @@ import {
   kindVisibilityConditions,
   roleVisibilityConditions,
   stuckAfterDaysOf,
+  stuckForDays,
   type StatusGroup,
 } from "./status-groups.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
@@ -699,8 +700,7 @@ async function readProducedKind(
         ? g.items
             .filter(
               (i) =>
-                Date.parse(i.since) <
-                now - stuckDays.get(g.status!)! * 86_400_000
+                stuckForDays(i.since, stuckDays.get(g.status!), now) !== null
             )
             .map((i) => ({ ...i, status: g.status }))
         : []

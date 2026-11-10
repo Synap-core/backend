@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { WORK_CLOCK, WORK_CLOCK_RUNGS, workClockIn } from "./index.js";
+import {
+  SESSION_GONE_QUIET_MS,
+  WORK_CLOCK,
+  WORK_CLOCK_RUNGS,
+  workClockIn,
+} from "./index.js";
 import { SESSION_WORKING_WINDOW_MS } from "../run-activity/live.js";
 import { DEFAULT_STUCK_THRESHOLD_HOURS } from "../run-activity/thresholds.js";
-import { SESSION_GONE_QUIET_MS } from "../units/stuck.js";
 import { NEEDS_YOU_STOPPED_AFTER_MS } from "../needs-you/rule.js";
 import { NEXT_MOVE_STUCK_DAYS } from "../lens/next-moves.js";
 import { LENS_KPI_STATED_OLD_AFTER_MS } from "../lens/header.js";

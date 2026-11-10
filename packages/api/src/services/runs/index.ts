@@ -11,6 +11,8 @@
  * `proposals.list` / `activity.summary` use), so no cross-workspace run leaks.
  */
 
+import { readTrialDraft } from "../playbooks/trial-run.js";
+import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
   db,
   and,
@@ -98,6 +100,11 @@ import { loadSessionActivity } from "./session-activity.js";
 import { withRunWhere } from "./run-where.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import {
+  isQueuedHostVerbResult,
+  listHostVerbRunsForFeed,
+  loadHostVerbRunDetail,
+} from "../host-jobs/hosted-verbs.js";
+import {
   listBoxRunsForFeed,
   loadBoxRunDetail,
 } from "../box-runs/box-run-reads.js";
@@ -147,6 +154,16 @@ function byStartedAtDesc(
  * a huge payload never bloats the detail response.
  */
 /** The slim summary a mirror read's `capability_run` event carries instead of a payload. */
+
+/**
+ * A capability run that only QUEUED work on a computer (a box script, a hosted
+ * verb): its own row (box run, host job) is the run, so the proposal or event
+ * that queued it is not listed a second time as a "completed" run.
+ */
+function isQueuedRun(result: unknown): boolean {
+  return isQueuedBoxRunResult(result) || isQueuedHostVerbResult(result);
+}
+
 export function isSlimRunSummary(
   value: unknown
 ): value is { itemCount: number | null; bytes: number } {
@@ -785,10 +802,7 @@ async function listCapabilityRuns(
   // a second time as a "completed" run.
   const proposalRuns: UnifiedRun[] = rows
     .filter(
-      (r) =>
-        !isQueuedBoxRunResult(
-          ((r.data ?? {}) as Record<string, unknown>).runResult
-        )
+      (r) => !isQueuedRun(((r.data ?? {}) as Record<string, unknown>).runResult)
     )
     .map((r) => {
       const data = (r.data ?? {}) as Record<string, unknown>;
@@ -864,7 +878,7 @@ async function listCapabilityRuns(
             // box run row is the run (see the proposal filter above).
             .filter(
               (e) =>
-                !isQueuedBoxRunResult(
+                !isQueuedRun(
                   ((e.data ?? {}) as Record<string, unknown>).runResult
                 )
             )
@@ -962,12 +976,22 @@ async function listCapabilityRuns(
     status,
     exactRunId
   );
+  // HOSTED VERB runs (0415): a recipe run on a computer lives in `host_jobs`,
+  // as a box run lives in `box_runs`.
+  const hostVerbRows = await listHostVerbRunsForFeed(
+    userId,
+    scope,
+    limit,
+    status,
+    exactRunId
+  );
   const merged = [
     ...proposalRuns,
     ...eventRuns.filter(
       (r) => !r.correlationId || !seenCorrelation.has(r.correlationId)
     ),
     ...boxRunRows,
+    ...hostVerbRows,
   ];
   merged.sort(byStartedAtDesc);
   return merged.slice(0, limit).filter((r) => !status || r.status === status);
@@ -2257,6 +2281,37 @@ async function getRunDetail(
         boxRun: box.boxRun,
       };
     }
+    // A HOSTED VERB run answers with its host job: its steps as activity,
+    // its evidence (files, log, verdict) as the output.
+    const hosted = await loadHostVerbRunDetail(userId, id);
+    if (hosted) {
+      const steps = hosted.job.evidence?.steps ?? [];
+      return {
+        run: { ...hosted.run, flowType: "capability" },
+        activity: steps.map((st, i) => ({
+          id: `${hosted.job.id}:${i}`,
+          at: hosted.job.finishedAt ?? hosted.job.queuedAt,
+          kind: "host_job_step",
+          status: st.ok ? "completed" : "failed",
+          label: st.name,
+          hint: st.detail ?? null,
+          detail: st as unknown as Record<string, unknown>,
+        })),
+        trigger: null,
+        outputSummary: {
+          computer: hosted.computerName,
+          recipe: (hosted.job.spec as { recipe?: string }).recipe ?? null,
+          capabilityKey:
+            (hosted.job.spec as { capabilityKey?: string }).capabilityKey ??
+            null,
+          parameters: hosted.job.parameters,
+          evidence: hosted.job.evidence,
+        },
+        playbookDetail: null,
+        definitionSnapshot: null,
+        pathTaken: null,
+      };
+    }
     const [run] = await listCapabilityRuns(userId, {}, 1, undefined, id);
     if (!run) return null;
     // A PROPOSAL-backed run stores its output in `data.runResult` on approval
@@ -2561,6 +2616,8 @@ async function loadPlaybookRunDetail(
       expectedOutputs: focusSessions.expectedOutputs,
       verificationReport: focusSessions.verificationReport,
       channelId: focusSessions.channelId,
+      metadata: focusSessions.metadata,
+      runSnapshot: playbookRuns.definitionSnapshot,
     })
     .from(playbookRuns)
     .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
@@ -2587,9 +2644,14 @@ async function loadPlaybookRunDetail(
     };
   }
 
-  const [produced, proposalResult] = await Promise.all([
+  const [produced, proposalResult, trial] = await Promise.all([
     loadRunProduced([sess.id], userId),
     loadRunProposals(sess.id, userId),
+    // A trial run's drafted text (the rule lab). THROWS on a failed read.
+    readTrialDraft({
+      metadata: sess.metadata,
+      channelId: sess.channelId ?? null,
+    }),
   ]);
   const agents = await loadRunAgents(
     sess.channelId ?? null,
@@ -2611,6 +2673,8 @@ async function loadPlaybookRunDetail(
     produced,
     proposals: proposalResult.items,
     agents,
+    guidance: stampedGuidanceOf(sess.runSnapshot),
+    ...(trial ? { trial } : {}),
   };
 }
 

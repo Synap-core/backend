@@ -25,6 +25,7 @@ import type {
 } from "@synap/database";
 import type { SessionActivityWire } from "@synap-core/types/run-activity";
 import type { RunWhere } from "@synap-core/types/computers";
+import type { GuidanceSnapshot } from "@synap-core/types/guidance";
 import type {
   BoxRunEvidence,
   BoxRunRow,
@@ -372,6 +373,26 @@ export interface PlaybookRunDetail {
   proposals: RunProposalItem[];
   /** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
   agents: RunAgent[];
+  /**
+   * The rules the run was given, as the POD stamped them on its definition
+   * snapshot when it rendered the method (`recordRunGuidance`): the refs used
+   * (with label, content hash, row ids + versions), those left out of the
+   * prompt for budget (`demoted`), those with no approved version (`missing`),
+   * or `status: "unavailable"` when they could not be read. `null` = the run
+   * carries no stamp (declared none, or an older run): never "no rules were
+   * checked". Absent when the session is private.
+   */
+  guidance?: GuidanceSnapshot | null;
+  /**
+   * A TRIAL run (the rule lab, design b199a3a4 slice 1b): the drafts it
+   * rendered in place of current versions, and what it drafted (the agent's
+   * last reply in its room; null until it answers). Absent on any other run.
+   */
+  trial?: {
+    guidanceOverride: Record<string, string>;
+    draftedText: string | null;
+    draftedAt: string | null;
+  };
 }
 
 /** The session card behind a playbook run. */

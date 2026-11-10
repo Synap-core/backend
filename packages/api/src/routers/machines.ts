@@ -4,8 +4,9 @@
  * A computer is an agent user of type `machine` that the person approved on
  * `/device`. This router is the person's view of THEIR computers (and, for a
  * pod admin, `adminList` — everyone's) and the acts on one: rename, set its
- * key lifetime, "Runs scripts", whose computer it is, revoke (which revokes
- * the keys of every agent it hosts — `revokeMachine`, the one door).
+ * key lifetime, "Runs scripts", "Installs from the pod", whose computer it is,
+ * revoke (which revokes the keys of every agent it hosts and of every
+ * installation on it — `revokeMachine`, the one door).
  *
  * Every mutation is a PERSON's, signed in: a key — a computer's own, or an
  * agent's — never renames, re-times or revokes a computer (the same rule as
@@ -41,8 +42,10 @@ import {
   listMachines,
   loadManageableMachine,
   renameMachine,
+  setMachineHostsServices,
   setMachineOwnKeyTtlDays,
   setMachineRunsScripts,
+  setMachineWakesAgents,
 } from "../services/machine-roster.js";
 
 const MANAGE_COMPUTER_SIGNED_IN = "Manage a computer while signed in.";
@@ -162,6 +165,94 @@ export const machinesRouter = router({
         },
       });
       return { status: "updated" as const, runsScripts: input.enabled };
+    }),
+
+  /**
+   * "Wakes agents" (plan v2 slice 4): the pod may count on this computer's
+   * waker (`synap waker`) to start its agents when work is handed to them. A
+   * person's act, signed in, like "Runs scripts": turning it on lets a
+   * process on this computer start programs for the pod, so it rides the same
+   * gate. Off takes effect at the waker's next poll.
+   */
+  setWakesAgents: credentialProcedure
+    .input(presenceInput)
+    .input(z.object({ machineId: MachineIdShape, enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
+      const machine = await loadManageableMachine(
+        input.machineId,
+        ctx.userId,
+        await isPodAdmin(ctx.userId)
+      );
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        subjectType: "apiKey",
+        action: "update",
+        data: { machineUserId: machine.id, wakesAgents: input.enabled },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      await setMachineWakesAgents(machine.id, input.enabled);
+      void auditLog({
+        subjectType: "apiKey",
+        action: "update",
+        phase: "completed",
+        subjectId: machine.id,
+        userId: ctx.userId,
+        workspaceId: null,
+        data: { kind: "machine_wakes_agents", enabled: input.enabled },
+      });
+      return { status: "updated" as const, wakesAgents: input.enabled };
+    }),
+
+  /**
+   * "Installs from the pod" (installations, 0409): this computer may lease the host
+   * jobs of the installations on itself (`/host-jobs/*`, scope `host.runner`
+   * on its key): install, update and remove software, run provider ops and
+   * hosted verbs. The sibling of "Runs scripts", governed the same way: a
+   * person's act, signed in; turning it on widens what the computer's key may
+   * do, so it rides the same gate.
+   */
+  setHostsServices: credentialProcedure
+    .input(presenceInput)
+    .input(z.object({ machineId: MachineIdShape, enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
+      const machine = await loadManageableMachine(
+        input.machineId,
+        ctx.userId,
+        await isPodAdmin(ctx.userId)
+      );
+      const perm = await checkPermissionOrPropose({
+        userId: ctx.userId,
+        subjectType: "apiKey",
+        action: "update",
+        data: { machineUserId: machine.id, hostsServices: input.enabled },
+      });
+      if ("denied" in perm && perm.denied)
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if ("proposalId" in perm)
+        return { status: "proposed" as const, proposalId: perm.proposalId };
+      const { keysUpdated } = await setMachineHostsServices(
+        machine.id,
+        input.enabled
+      );
+      void auditLog({
+        subjectType: "apiKey",
+        action: "update",
+        phase: "completed",
+        subjectId: machine.id,
+        userId: ctx.userId,
+        workspaceId: null,
+        data: {
+          kind: "machine_hosts_services",
+          enabled: input.enabled,
+          keysUpdated,
+        },
+      });
+      return { status: "updated" as const, hostsServices: input.enabled };
     }),
 
   /**

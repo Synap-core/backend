@@ -240,7 +240,8 @@ describe("hub auth door enters the request write facts", () => {
           headers: { authorization: "Bearer synap_test" },
         })
       ).status;
-    expect(await status("/api/hub/search")).toBe(403);
+    // /search is a bounded read since backend#927 (it filters by the key's reach): an aggregate door still refused is /knowledge.
+    expect(await status("/api/hub/knowledge")).toBe(403);
     expect(await status(ENTITY_PATH)).toBe(200);
     // A static sibling of a seamed door is not admitted (uuid-only ids).
     expect(await status("/api/hub/entities/abc")).toBe(403);
@@ -257,8 +258,8 @@ describe("hub auth door enters the request write facts", () => {
       { permissions: [] },
     ]);
     const status = await fencedStatus([]);
+    // Not /api/hub/search: the fence admits it since backend#927 and the route returns nothing to a key with no grant.
     for (const path of [
-      "/api/hub/search",
       "/api/hub/knowledge",
       "/api/hub/memory",
       "/api/hub/graph/entity/x",

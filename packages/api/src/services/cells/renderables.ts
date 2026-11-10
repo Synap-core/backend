@@ -229,6 +229,81 @@ export function placeableInstalledKeys(
   );
 }
 
+/**
+ * The arrange gate over a STORED bento config (`config.blocks`): every
+ * `kind: "widget"` block's `widgetType` is checked by `renderableArrangeError`
+ * against this workspace's catalog, exactly as `/views/:id/arrange` checks a
+ * widget. View and entity blocks carry no widget key and pass (their shape is
+ * the view-config schema's job). One line per bad block, naming its index and
+ * id, so the author can fix and re-send; `[]` when every block is placeable.
+ *
+ * A block carried over UNCHANGED from `stored` (same id, same widget, same
+ * config) is not re-judged: the person may have placed a widget agents may not
+ * place, and an agent editing the bento must be able to keep it.
+ */
+export async function bentoBlockArrangeErrors(
+  config: Record<string, unknown>,
+  workspaceId: string | null,
+  stored?: Record<string, unknown> | null
+): Promise<string[]> {
+  const blocks = Array.isArray(config.blocks) ? config.blocks : [];
+  const storedBlocks = new Map<string, string>();
+  for (const s of Array.isArray(stored?.blocks) ? stored.blocks : []) {
+    if (
+      s &&
+      typeof s === "object" &&
+      typeof (s as { id?: unknown }).id === "string"
+    ) {
+      const b = s as Record<string, unknown>;
+      storedBlocks.set(b.id as string, widgetFingerprint(b));
+    }
+  }
+  const widgets = blocks
+    .map((block, index) => ({ block, index }))
+    .filter(
+      (b): b is { block: Record<string, unknown>; index: number } =>
+        !!b.block &&
+        typeof b.block === "object" &&
+        (b.block as Record<string, unknown>).kind === "widget"
+    )
+    .filter(
+      ({ block }) =>
+        typeof block.id !== "string" ||
+        storedBlocks.get(block.id) !== widgetFingerprint(block)
+    );
+  if (widgets.length === 0) return [];
+  const installed = placeableInstalledKeys(await listRenderables(workspaceId));
+  const errors: string[] = [];
+  for (const { block, index } of widgets) {
+    const key = typeof block.widgetType === "string" ? block.widgetType : "";
+    const config =
+      block.config && typeof block.config === "object"
+        ? (block.config as Record<string, unknown>)
+        : undefined;
+    const error = renderableArrangeError(key, config, installed);
+    if (error) {
+      const id = typeof block.id === "string" ? ` "${block.id}"` : "";
+      errors.push(`blocks[${index}]${id}: ${error}`);
+    }
+  }
+  return errors;
+}
+
+/** A widget block's identity for "unchanged": its key and its config, keys sorted. */
+function widgetFingerprint(block: Record<string, unknown>): string {
+  const sorted = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(sorted)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.keys(value as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, sorted((value as Record<string, unknown>)[k])])
+          )
+        : value;
+  return JSON.stringify([block.widgetType ?? null, sorted(block.config ?? {})]);
+}
+
 // ─── AI discovery (MCP synap_list_widgets) ───────────────────────────────────
 
 export type RenderableSurface = "document" | "bento";

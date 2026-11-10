@@ -307,6 +307,20 @@ describe("activityLine", () => {
         "your"
       )
     ).toBe("Stopped running your scripts");
+    expect(
+      activityLine(
+        ev({ kind: "machine_hosts_services", enabled: true }),
+        humanize,
+        "your"
+      )
+    ).toBe("Set to install from the pod");
+    expect(
+      activityLine(
+        ev({ kind: "machine_hosts_services", enabled: false }),
+        humanize,
+        "your"
+      )
+    ).toBe("Stopped installing from the pod");
   });
 });
 

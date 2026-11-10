@@ -43,6 +43,7 @@ import {
   profileScopeConditions,
   loadFacetSlugsBatch,
   ViewFilterCompiler,
+  type StatusFilterSubject,
   PropertyMergingService,
   ViewDefaultColumnsService,
   getDb,
@@ -349,7 +350,50 @@ export function describeViewConfigErrors(error: unknown): string {
   return `Invalid view config — ${parts.join("; ")}${more}`;
 }
 
-function assertValidRendererRef(config: Record<string, unknown>): void {
+/**
+ * A PIPELINE view is a kind's (or role's) declared lifecycle drawn as columns:
+ * it stores only `config.profileSlug`, and the board reads its statuses from
+ * the declaration at render time (`resolveProfileLifecycle`, the ONE
+ * resolution the board uses). A kind with no declared lifecycle has no columns,
+ * so its pipeline is refused here, before the gate, with the next step —
+ * never filed as a proposal that would approve into an empty board. Run on
+ * CREATE and on every UPDATE that writes a pipeline's config or switches a
+ * view to `pipeline` (this router's `update`, Hub `views.updateView` and so
+ * MCP `synap_update_view`).
+ */
+export async function assertPipelineHasLifecycle(
+  config: Record<string, unknown> | undefined,
+  workspaceId: string | null
+): Promise<void> {
+  const profileSlug =
+    typeof config?.profileSlug === "string" ? config.profileSlug.trim() : "";
+  if (!profileSlug) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        'Invalid view config — "profileSlug" is required: a pipeline draws one kind or role that declares a lifecycle (config: { profileSlug: "deal" }).',
+    });
+  }
+  const { resolveProfileLifecycle } =
+    await import("../services/lifecycle/board-lens.js");
+  try {
+    await resolveProfileLifecycle(profileSlug, workspaceId);
+  } catch (err) {
+    if (err instanceof TRPCError && err.code === "PRECONDITION_FAILED") {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          `"${profileSlug}" declares no lifecycle, so a pipeline of it would have no columns. ` +
+          `Declare its lifecycle first (agents: synap_declare_lifecycle { profileId: <the "${profileSlug}" profile id>, property, options: [{ key, category }] }), ` +
+          `then save the pipeline view.`,
+        cause: err,
+      });
+    }
+    throw err;
+  }
+}
+
+export function assertValidRendererRef(config: Record<string, unknown>): void {
   const nested = config.render;
   const candidates: unknown[] = [config.rendererRef];
   if (nested && typeof nested === "object" && !Array.isArray(nested)) {
@@ -659,6 +703,10 @@ export const viewsRouter = router({
             });
           }
           assertValidRendererRef(input.config);
+        }
+
+        if (input.type === "pipeline") {
+          await assertPipelineHasLifecycle(input.config, effectiveWorkspaceId);
         }
 
         const perm = await checkPermissionOrPropose(gateOpts);
@@ -1403,6 +1451,10 @@ export const viewsRouter = router({
       // per-id kind lookup + polymorphic helper rather than a blanket
       // inArray(entities.profileId, …). The facet branch is lensed by the
       // view's own owner (ctx.userId) + workspace (lensWorkspaceId).
+      // Whose status a `status` / `statusCategory` filter reads: a role in
+      // the scope reads its facet (under the scope's own lens), a kind the
+      // entity column (`StatusFilterSubject`).
+      let statusSubject: StatusFilterSubject | undefined;
       if (view.scopeProfileIds && view.scopeProfileIds.length > 0) {
         const scopeProfiles = await db.query.profiles.findMany({
           where: inArray(profiles.id, view.scopeProfileIds),
@@ -1416,6 +1468,21 @@ export const viewsRouter = router({
         // All scope ids resolved to nothing (deleted profiles) → match no rows
         // rather than leaving the scope unfiltered.
         conditions.push(scopeCondition ?? pgSql`false`);
+        const roleIds = scopeProfiles
+          .filter((p) => p.profileKind === "role")
+          .map((p) => p.id);
+        const kindIds = scopeProfiles
+          .filter((p) => p.profileKind !== "role")
+          .map((p) => p.id);
+        if (roleIds.length > 0) {
+          statusSubject = {
+            roleProfileIds: roleIds,
+            facetScope: facetVisibilityScope,
+            ...(kindIds.length > 0
+              ? { kindScope: inArray(entities.profileId, kindIds) }
+              : {}),
+          };
+        }
       }
 
       // Pre-resolve property definitions (avoid N+1), scoped to the
@@ -1451,7 +1518,8 @@ export const viewsRouter = router({
             filters,
             view.scopeProfileIds,
             propertyMetaMap,
-            ctx.workspaceId
+            ctx.workspaceId,
+            statusSubject
           );
 
           if (compiledFilters) {
@@ -1787,6 +1855,15 @@ export const viewsRouter = router({
           });
         }
         assertValidRendererRef(input.config);
+      }
+      // A pipeline draws its kind's declared lifecycle: an update that writes
+      // its config, or turns a view into a pipeline, is held to the same rule
+      // as create (the config it will have: the new one, else the stored one).
+      if (viewType === "pipeline" && (input.config || input.type)) {
+        await assertPipelineHasLifecycle(
+          (input.config ?? view.config) as Record<string, unknown> | undefined,
+          view.workspaceId
+        );
       }
 
       // Direct DB update via ViewRepository

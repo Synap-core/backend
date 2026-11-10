@@ -10,6 +10,7 @@
  * `status: 'proposed'`, operators get the executed result.
  */
 
+import { trialRunInputSchema } from "../../../services/playbooks/trial-run.js";
 import { z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 
@@ -81,6 +82,8 @@ export const CreatePlaybookBodySchema = playbookDefinitionSchema
     scope: true,
     params: true,
     criteria: true,
+    runner: true,
+    requires: true,
   })
   .extend({
     workspaceId: z.string().uuid().describe("The playbook's home workspace."),
@@ -156,6 +159,11 @@ const RunPlaybookBodySchema = z.object({
     .optional()
     .describe(
       "Remember this run's choice (runOn or handToAgentId) as yours for this playbook, so the next launch does not ask (GET /playbooks/{id}/run-choice). A person's act: refused for an agent."
+    ),
+  trial: trialRunInputSchema
+    .optional()
+    .describe(
+      "Try draft rules without making them current: { guidanceOverride: { <current version id>: <draft id> } }. The drafts render in place of those versions, the run is on Synap AI, and every write, send and save in it is refused. The drafted text is the agent's last reply: GET /runs/{runId}?flowType=playbook, playbookDetail.trial.draftedText. A person's act: refused for an agent, with remember or with handToAgentId."
     ),
 });
 
@@ -600,6 +608,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           ...(body.scope ? { scope: body.scope } : {}),
           ...(body.params ? { params: body.params } : {}),
           ...(body.criteria ? { criteria: body.criteria } : {}),
+          ...(body.runner !== undefined ? { runner: body.runner } : {}),
+          ...(body.requires ? { requires: body.requires } : {}),
         }
       );
       return renderOutcome(c, outcome);
@@ -612,7 +622,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
    * PATCH /playbooks/:id
    * Body: { agentUserId?, source?, reasoning?, name?, description?, goalTemplate?,
    *         params?, inputStrategy?, channelSpec?, expectedOutputs?, stages?,
-   *         criteria?, subjectProfile?, schedule?, executor?, status?, scope? }
+   *         criteria?, subjectProfile?, schedule?, executor?, status?, scope?,
+   *         runner?, requires? }
    *
    * Governed mirror of `playbooks.update` — the door the
    * analyzer persona uses to submit an evidence-backed definition diff. Never
@@ -672,6 +683,12 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         // for real by `playbooks.update`'s zod enum; this only types the body.
         // It was dropped here, so no Hub caller could make a playbook a method.
         scope: body.scope as "session" | "project" | undefined,
+        // Who runs it and the tools it needs (0416). Validated for real by
+        // `playbooks.update` (`playbookRunnerSchema`, `requiresSchema`).
+        runner: body.runner as Parameters<
+          typeof caller.playbooks.update
+        >[0]["runner"],
+        requires: body.requires as string[] | undefined,
       });
       return jsonGoverned(c, result);
     } catch (err) {
@@ -763,6 +780,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           handToAgentId: body.handToAgentId,
           runOn: body.runOn,
           remember: body.remember,
+          ...(body.trial ? { trial: body.trial } : {}),
           source: "hub-rest",
         }
       );

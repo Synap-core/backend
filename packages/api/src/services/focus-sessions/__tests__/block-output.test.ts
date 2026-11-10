@@ -28,9 +28,12 @@ import {
   type NeedsYouSlotFacts,
 } from "@synap-core/types/needs-you";
 import {
+  addOutputWireSchema,
   applyOutputMutations,
+  CLIENT_DECLARABLE_OUTPUT_FIELDS,
   reconcileOwedSince,
   withEvidenceVerdict,
+  type AddOutputParams,
 } from "../update-session.js";
 
 const AT = new Date("2026-09-08T09:00:00.000Z");
@@ -181,6 +184,51 @@ describe("stampUnblocked — the agent takes it back", () => {
     expect(sibling).toEqual(slots()[0]);
     expect(reclaimed.label).toBe("Signed NDA");
     expect(reclaimed).not.toHaveProperty("status");
+  });
+});
+
+describe("stampUnblocked — the blocker on the hand-back (plan e7f753db §9)", () => {
+  const THING = "33333333-3333-4333-8333-333333333333";
+  const withBlocker = (clearedBy: ExpectedOutput["clearedBy"]) =>
+    stampBlocked(
+      [
+        {
+          kind: "decision",
+          label: "Send the invite?",
+          blocks: { entityId: THING, to: "contacted" },
+          blockerKey: "not_connected",
+          ...(clearedBy ? { clearedBy } : {}),
+        },
+      ],
+      "Send the invite?",
+      "decision",
+      "Ada is not a LinkedIn contact yet",
+      AT
+    );
+
+  it("a blocker the answer clears goes with the ownership", () => {
+    for (const clearedBy of [{ answer: true as const }, undefined]) {
+      const [back] = stampUnblocked(withBlocker(clearedBy), "Send the invite?");
+      expect(back).not.toHaveProperty("blocks");
+      expect(back).not.toHaveProperty("blockerKey");
+      expect(back).not.toHaveProperty("clearedBy");
+    }
+  });
+
+  it("a blocker an agent's run clears STAYS: the thing is still blocked until the run delivers", () => {
+    for (const clearedBy of [
+      { intent: "request_connection" },
+      { playbookId: "11111111-1111-4111-8111-111111111111" },
+      { capability: "linkedin.invite" },
+    ]) {
+      const [back] = stampUnblocked(withBlocker(clearedBy), "Send the invite?");
+      expect(back).not.toHaveProperty("owner");
+      expect(back).toMatchObject({
+        blocks: { entityId: THING, to: "contacted" },
+        blockerKey: "not_connected",
+        clearedBy,
+      });
+    }
   });
 });
 
@@ -340,6 +388,76 @@ describe("addOutput — declaring a blocked slot stamps its clock", () => {
     }).outputs;
     expect(added).not.toHaveProperty("owner");
     expect(added).not.toHaveProperty("owedSince");
+  });
+
+  // Finding 7bf164fd: the wire accepted `blocks`/`blockerKey`/`clearedBy` and
+  // the merge, listing fields by hand, dropped them — while the same slot
+  // declared through `outcomes` kept them.
+  it("keeps the slot's blocker: what it holds up, its key and what clears it", () => {
+    const THING = "33333333-3333-4333-8333-333333333333";
+    const [added] = applyOutputMutations([], {
+      addOutput: {
+        kind: "decision",
+        label: "Send the invite?",
+        owner: "human",
+        blockedReason: "decision",
+        why: "Ada is not a LinkedIn contact yet",
+        unblocks: "the outreach step",
+        blocks: { entityId: THING, to: "contacted" },
+        blockerKey: "not_connected",
+        clearedBy: { intent: "request_connection" },
+      },
+    }).outputs;
+    expect(added).toMatchObject({
+      status: "pending",
+      blocks: { entityId: THING, to: "contacted" },
+      blockerKey: "not_connected",
+      clearedBy: { intent: "request_connection" },
+    });
+  });
+
+  // `Required<AddOutputParams>` makes a newly declarable field a type error
+  // here until it has a sample, so the round-trip below covers it by existing.
+  it("carries EVERY declarable field from the wire into the stored slot", () => {
+    const every: Required<AddOutputParams> = {
+      kind: "decision",
+      label: "Send the invite?",
+      icon: "send",
+      owner: "human",
+      blockedReason: "decision",
+      why: "Ada is not a LinkedIn contact yet",
+      unblocks: "the outreach step",
+      ref: { kind: "entity", id: "44444444-4444-4444-8444-444444444444" },
+      ask: {
+        mode: "choose",
+        options: [
+          { label: "Invite now", value: "now", recommended: true },
+          { label: "Wait", value: "wait" },
+        ],
+      },
+      relationToSubject: "produced_for",
+      optional: true,
+      blocks: { entityId: "33333333-3333-4333-8333-333333333333" },
+      blockerKey: "not_connected",
+      clearedBy: { answer: true },
+    };
+    // The MCP door and the approval executor both parse through this schema
+    // before `applyOutputMutations`: the path under test is wire → store.
+    const parsed = addOutputWireSchema.parse(every);
+    const [added] = applyOutputMutations([], { addOutput: parsed }).outputs;
+    for (const field of CLIENT_DECLARABLE_OUTPUT_FIELDS) {
+      expect(parsed[field], `wire kept ${field}`).toBeDefined();
+      expect(added[field], `stored ${field}`).toEqual(parsed[field]);
+    }
+    expect(added.status).toBe("pending");
+  });
+
+  it("a null ref/ask clears nothing on a new slot: it carries no key", () => {
+    const [added] = applyOutputMutations([], {
+      addOutput: { kind: "document", label: "Notes", ref: null, ask: null },
+    }).outputs;
+    expect(added).not.toHaveProperty("ref");
+    expect(added).not.toHaveProperty("ask");
   });
 });
 

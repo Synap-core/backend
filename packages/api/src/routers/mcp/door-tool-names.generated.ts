@@ -26,6 +26,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_attach_facet",
     "cp-connector": "pod__attach_facet",
   },
+  synap_call_tool: {
+    "pod-mcp": "synap_call_tool",
+    "cp-connector": "pod__call_tool",
+  },
   synap_capture: { "pod-mcp": "synap_capture", "cp-connector": "pod__capture" },
   synap_change_kind_scope: {
     "pod-mcp": "synap_change_kind_scope",
@@ -144,6 +148,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_get_entity",
     "cp-connector": "pod__get_entity",
   },
+  synap_get_flow: {
+    "pod-mcp": "synap_get_flow",
+    "cp-connector": "pod__get_flow",
+  },
   synap_get_graph: {
     "pod-mcp": "synap_get_graph",
     "cp-connector": "pod__get_graph",
@@ -203,6 +211,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_list_capabilities: {
     "pod-mcp": "synap_list_capabilities",
     "cp-connector": "pod__list_capabilities",
+  },
+  synap_list_installations: {
+    "pod-mcp": "synap_list_installations",
+    "cp-connector": "pod__list_installations",
   },
   synap_list_playbooks: {
     "pod-mcp": "synap_list_playbooks",
@@ -305,6 +317,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_request_deploy_approval",
     "cp-connector": "pod__request_deploy_approval",
   },
+  synap_request_installation: {
+    "pod-mcp": "synap_request_installation",
+    "cp-connector": "pod__request_installation",
+  },
   synap_request_upload: {
     "pod-mcp": "synap_request_upload",
     "cp-connector": null,
@@ -348,6 +364,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_set_project_focus: {
     "pod-mcp": "synap_set_project_focus",
     "cp-connector": "pod__set_project_focus",
+  },
+  synap_set_start_page: {
+    "pod-mcp": "synap_set_start_page",
+    "cp-connector": "pod__set_start_page",
   },
   synap_set_track_params: {
     "pod-mcp": "synap_set_track_params",
@@ -432,6 +452,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_update_track: {
     "pod-mcp": "synap_update_track",
     "cp-connector": "pod__update_track",
+  },
+  synap_update_view: {
+    "pod-mcp": "synap_update_view",
+    "cp-connector": "pod__update_view",
   },
   synap_update_view_content: {
     "pod-mcp": "synap_update_view_content",

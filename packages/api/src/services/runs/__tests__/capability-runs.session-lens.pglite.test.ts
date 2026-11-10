@@ -55,6 +55,7 @@ import {
   users,
   projectMembers,
   boxRuns,
+  hostJobs,
 } from "@synap/database/schema";
 import { listRuns } from "../index.js";
 
@@ -188,6 +189,8 @@ beforeAll(async () => {
     users,
     projectMembers,
     boxRuns,
+    // Hosted verb runs (0415) are a ledger of the runs feed too.
+    hostJobs,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -427,5 +430,63 @@ describe("RunScope.sessionId — the capability-run session lens", () => {
       scope: { sessionId: SESSION_B },
     });
     expect(ids(inB)).not.toContain(BOX);
+  });
+
+  // A HOSTED VERB run (0415) is a capability run read from `host_jobs`: it
+  // answers the session lens on its own column, and the approved proposal that
+  // only QUEUED it (`{status:"queued", hostJobId}`) is not a second run.
+  // Runs after the box case: its rows are still there.
+  it("a hosted verb run answers the session lens, and its queuing proposal is not a second run", async () => {
+    const HOST = randomUUID();
+    const QUEUING = randomUUID();
+    const at = new Date(Date.UTC(2026, 0, 1, 0, 10)).toISOString();
+    await h.client!.query(
+      `insert into host_jobs (id, kind, installation_id, user_id, machine_user_id, session_id, spec, parameters, status, attempt, queued_at, created_at, updated_at)
+       values ($1, 'verb', $2, $3, 'machine-x', $4, $5::jsonb, '{}'::jsonb, 'queued', 0, $6, now(), now())`,
+      [
+        HOST,
+        randomUUID(),
+        USER,
+        SESSION_A,
+        JSON.stringify({
+          op: "verb",
+          capabilityKey: "media-ffmpeg",
+          recipe: "loudness-normalize",
+        }),
+        at,
+      ]
+    );
+    await h.client!.query(
+      `insert into proposals (id, proposal_type, target_type, target_id, status,
+         correlation_id, session_id, workspace_id, project_id, created_at, reviewed_at, data)
+       values ($1,'capability.run','capability','t','approved',$2,$3,null,null,$4,$4,$5::jsonb)`,
+      [
+        QUEUING,
+        randomUUID(),
+        SESSION_A,
+        at,
+        JSON.stringify({
+          verbId: "computer.run_recipe",
+          runResult: { status: "queued", hostJobId: HOST, message: "Queued" },
+        }),
+      ]
+    );
+    const inA = await listRuns({
+      userId: USER,
+      flowType: "capability",
+      scope: { sessionId: SESSION_A },
+    });
+    expect(ids(inA)).toContain(HOST);
+    expect(ids(inA)).not.toContain(QUEUING);
+    expect(inA.find((r) => r.id === HOST)).toMatchObject({
+      flowName: "loudness-normalize (media-ffmpeg)",
+      status: "running",
+    });
+    const inB = await listRuns({
+      userId: USER,
+      flowType: "capability",
+      scope: { sessionId: SESSION_B },
+    });
+    expect(ids(inB)).not.toContain(HOST);
   });
 });

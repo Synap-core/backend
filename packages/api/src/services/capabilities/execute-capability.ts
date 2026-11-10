@@ -122,7 +122,10 @@ import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.j
 import { emitAiDecision } from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 // Straight from the package, not the shim: the shim is what unit tests mock.
-import { approvalRefusesRun } from "@synap/capability-gate";
+import {
+  approvalRefusesRun,
+  TRIAL_RUN_WRITE_REFUSED,
+} from "@synap/capability-gate";
 import { DENIED_BY_RULE } from "@synap/governance-policy";
 import { runSkill } from "../skills/run-skill.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
@@ -166,6 +169,7 @@ import {
 } from "./propose-capability-enable.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
+import { isQueuedHostVerbResult } from "../host-jobs/hosted-verbs.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 import {
@@ -175,6 +179,7 @@ import {
   resolvePodFilesAtRun,
   verbToolLabel,
 } from "./file-parameters.js";
+import { refuseFlaggedCapabilityRecipient } from "./send-recipient-consent.js";
 
 const logger = createLogger({ module: "execute-capability" });
 
@@ -605,8 +610,10 @@ export async function executeCapability(input: {
       parameters: skills.parameters,
       // Sync or async: how long a pod file's URL lives (`file-parameters.ts`).
       executionMode: skills.executionMode,
-      // The intent the verb serves: the gate's app outward floor reads it.
+      // The intent the verb serves: the gate's app outward floor reads it,
+      // and a send intent's recipient is read through its input map (below).
       intent: skills.intent,
+      inputMap: skills.inputMap,
     })
     .from(skills)
     .where(
@@ -694,6 +701,21 @@ export async function executeCapability(input: {
     };
   }
 
+  // DO NOT CONTACT (founder, 2026-11-09): a verb whose intent reaches a
+  // person is refused when that person is flagged, whoever asks, BEFORE the
+  // gate, so nothing is filed for review. The post-gate runner checks again
+  // (an approved run whose person was flagged after it was filed).
+  const doNotContact = await refuseFlaggedCapabilityRecipient(
+    skillRow,
+    parameters,
+    {
+      userId,
+      agentUserId: input.agentUserId ?? null,
+      recipientId: input.intentRequest?.recipient?.id ?? null,
+    }
+  );
+  if (doNotContact) return doNotContact;
+
   const decision = await gateCapabilityExecution({
     capabilityKind: "skill",
     capabilityId: skillRow.id,
@@ -703,6 +725,8 @@ export async function executeCapability(input: {
     workspaceId,
     channelId: actingChannelId,
     issuer: "hub.capabilities-execute",
+    // A trial run's session refuses every write (the gate's trial rung).
+    sessionId: input.sessionId ?? null,
     readOnly: autoRuns,
     // An intent action proposes when it reaches outside the pod, whoever
     // asked (an app or an agent drafting for the person).
@@ -714,6 +738,18 @@ export async function executeCapability(input: {
   // lift it, so it carries no enable-link and files no enable request. It is
   // recorded for the person all the same, under its own reason and in the
   // person's words: the agent's sentence ("do not retry it…") is for the agent.
+  // A trial run's write (the rule lab): refused, nothing to enable, nothing
+  // recorded as a refused capability run.
+  if (
+    decision.decision === "deny" &&
+    decision.reasonCode === TRIAL_RUN_WRITE_REFUSED
+  ) {
+    return {
+      kind: "deny",
+      reason: decision.reason,
+      reasonCode: TRIAL_RUN_WRITE_REFUSED,
+    };
+  }
   if (decision.decision === "deny" && decision.reasonCode === DENIED_BY_RULE) {
     await recordRefusedCapabilityRun({
       userId,
@@ -1677,6 +1713,14 @@ export interface ResolvedSkillRow {
   parameters: unknown;
   /** Sync or async: the lifetime of a pod file's signed URL. */
   executionMode: string | null;
+  /**
+   * REQUIRED, both, for the same reason: a verb whose intent reaches a person
+   * is refused for a flagged recipient, read through its input map
+   * (`send-recipient-consent.ts`); a loader that forgot either column would
+   * let the send through unchecked.
+   */
+  intent: string | null;
+  inputMap: unknown;
 }
 
 /**
@@ -1738,8 +1782,13 @@ export async function markSkillProven(skillId: string): Promise<void> {
  */
 function outcomeDidTheWork(result: unknown): boolean {
   // A box run is QUEUED here, not performed: its finish stamps `proven_at`
-  // (box-runs.ts) once the script really exited 0.
-  return !isProposedEnvelope(result) && !isQueuedBoxRunResult(result);
+  // (box-runs.ts) once the script really exited 0. A hosted verb run
+  // (`computer.run_recipe`) is queued the same way: its host job is the run.
+  return (
+    !isProposedEnvelope(result) &&
+    !isQueuedBoxRunResult(result) &&
+    !isQueuedHostVerbResult(result)
+  );
 }
 
 /**
@@ -1850,6 +1899,20 @@ async function runResolvedSkillInner(
       enable?: CapabilityNextAction;
     }
 > {
+  // DO NOT CONTACT (founder, 2026-11-09): every run reaches this runner (a
+  // direct run, an approved proposal, a self-gated builtin), so a verb whose
+  // intent reaches a person sends nothing to a flagged one, first, before
+  // any file is minted or any tier runs. A definite not-delivered.
+  const doNotContact = await refuseFlaggedCapabilityRecipient(
+    skill,
+    parameters,
+    {
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
+    }
+  );
+  if (doNotContact) return doNotContact;
+
   // A run-time connection pick can't reach a code skill's sandbox (`runSkill`
   // takes no selector). Rather than SILENTLY running against the capability's
   // default credential — the wrong account, with no signal — refuse explicitly.

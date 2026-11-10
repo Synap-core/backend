@@ -257,8 +257,8 @@ describe("start_session with templateId — the playbook's deliverables are slot
 /**
  * The run's frozen definition is THE shared snapshot (`buildDefinitionSnapshot`,
  * run-playbook.ts): a hand-written copy at this door froze no `subjectProfile`
- * (so a run started here followed the LIVE lifecycle and end moves of a
- * playbook edited since), no criteria and no requiredIntents.
+ * (so a run started here followed the LIVE lifecycle of a playbook edited
+ * since), no criteria and no requiredIntents.
  */
 describe("start_session with templateId — the run freezes the whole definition", () => {
   it("the run snapshot carries subjectProfile, criteria and requiredIntents", async () => {
@@ -267,7 +267,7 @@ describe("start_session with templateId — the run freezes the whole definition
     // what is under test.
     const subjectProfile = {
       statusProperty: "status",
-      onEnd: { cancelled: "open", failed: "open" },
+      humanOnlyStatuses: ["wont_fix"],
     };
     await q(
       `insert into playbooks
@@ -306,6 +306,7 @@ describe("the method a binding door returns", () => {
       playbookId: PLAYBOOK,
       stageKey: res.session.currentStage ?? null,
       stages: res.session.stages,
+      userId: USER,
     });
     expect(method).toMatchObject({
       status: "ok",
@@ -325,6 +326,7 @@ describe("the method a binding door returns", () => {
       playbookId: PLAYBOOK,
       stageKey: null,
       stages: [],
+      userId: USER,
     });
     if (method.status !== "ok") throw new Error(method.status);
     expect(method.text).toContain(HOW_TO);

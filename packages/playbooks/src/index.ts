@@ -154,6 +154,18 @@ export interface PlaybookParam {
   options?: string[];
   default?: unknown;
   required?: boolean;
+  /**
+   * Where the value comes from when the caller gives none, as a reference:
+   * `subject.<field>` (the subject entity's `title`, `preview` or a property)
+   * or, on an entity param, `subject` (the subject itself). Read by the doors
+   * that know a subject: `snippet.render`, and every playbook run (the run
+   * funnel fills it through `fillParamsFromSubject` before validating, so a
+   * run an activator starts on a post answers `platform` from the post's
+   * `post-platform`). A field with no usable value fills nothing: a required
+   * param then stays missing and the run is refused, naming it. Absent on
+   * every param that does not declare one.
+   */
+  from?: string;
 }
 
 // Reading a stored `params` bag, and validating the answers against it. In its
@@ -294,6 +306,45 @@ export const OUTPUT_RETIRED_REASONS = [
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
+
+/**
+ * WHICH THING a slot holds up, and the status it holds it out of (plan
+ * e7f753db §9, "blockers, not steps"). Both halves are optional and default
+ * when read (`deriveThingBlocker`, `@synap-core/types/units`): `entityId` to
+ * the declaring session's subject, `to` to the thing's next main-path status.
+ * A slot blocks a thing; it never moves it — the thing stays in its column,
+ * marked blocked, and moves only through the governed status door.
+ */
+export interface SlotBlocks {
+  /** The thing held up. Absent ⇒ the session's subject. Floored at write. */
+  entityId?: string;
+  /** The status it cannot reach yet (a declared option key). Absent ⇒ next. */
+  to?: string;
+}
+
+/**
+ * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
+ * intent (`request_connection`), a playbook the pod runs, or a capability.
+ * The closed `blockedReason` list stays "what to build"; this says what to RUN.
+ */
+export type SlotClearedBy =
+  | { answer: true }
+  | { intent: string }
+  | { playbookId: string }
+  | { capability: string };
+
+/**
+ * A blocker cleared by AGENT work (an intent, a playbook, a capability) still
+ * holds the thing after the person answers: the answer hands the slot back to
+ * the agent, which now owes the run. Only a blocker the answer itself clears
+ * (`{answer: true}`, or none declared) ends with the hand-back
+ * (`stampUnblocked`, api `block-output.ts`). Pure.
+ */
+export function blockerOutlivesHandBack(
+  clearedBy: SlotClearedBy | null | undefined
+): boolean {
+  return !!clearedBy && !("answer" in clearedBy);
+}
 
 /**
  * The object kinds a declared output may POINT AT.
@@ -692,6 +743,26 @@ export interface ExpectedOutput {
    * a missing relation type must never un-deliver a deliverable.
    */
   subjectEdge?: SlotSubjectEdge;
+  /**
+   * The THING this slot holds up and the status it holds it out of — see
+   * {@link SlotBlocks}. DECLARED by the agent, like `unblocks` (whose prose
+   * it makes exact), never stamped. A person-owned slot with it is a
+   * need-you card naming the thing; an agent-owned slot with it is a
+   * runnable blocker — and an agent-owned slot holds a thing up ONLY when it
+   * declares this (api `listBlockingSlots`).
+   *
+   * Cleared with the ownership fields on the hand-back unless an agent's run
+   * still clears it ({@link blockerOutlivesHandBack}).
+   */
+  blocks?: SlotBlocks;
+  /**
+   * The blocker's short DOMAIN name (`not_connected`), lowercase snake. The
+   * closed `blockedReason` stays "what to build"; this is what the recurrence
+   * scanner groups repeats by. DECLARED, like `blocks`.
+   */
+  blockerKey?: string;
+  /** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
+  clearedBy?: SlotClearedBy;
 }
 
 /** See {@link ExpectedOutput.subjectEdge}. */
@@ -1098,6 +1169,75 @@ export interface PlaybookStageWhen {
   exists?: boolean;
 }
 
+/** At most this many choices in one ordered `runner` list (the rest are fallbacks). */
+export const PLAYBOOK_RUNNER_MAX_CHOICES = 4;
+
+/** At most this many capability keys in one `requires` set. */
+export const PLAYBOOK_REQUIRES_MAX = 16;
+
+/**
+ * How deep a chain of steps that are playbooks may go: a playbook whose step
+ * `uses` a playbook whose step `uses` another … counts each `uses` hop. The
+ * write door refuses a chain deeper than this, and any cycle.
+ */
+export const PLAYBOOK_USES_MAX_DEPTH = 3;
+
+/**
+ * WHO does a playbook or a step (founder decision, proposal 72fdca0b; spec
+ * document 7111934d §2.1). One choice:
+ *   - `"self"`      a STEP only: the run's own agent does it (the default);
+ *   - `"synap_ai"`  the pod's own AI; `{ synapAi: { persona } }` names its
+ *                   persona (an `agents.slug`, today's run param `agentType`);
+ *   - `{ agentId }` one agent (`users.id`): pod-specific, so never in a
+ *                   catalog package; `preset` names one of its presets;
+ *   - `{ role }`    any of the person's agents whose `agent_role`, or one of
+ *                   whose presets, is this slug; portable;
+ *   - `{ engine }`  any of the person's agents of this engine
+ *                   (`users.agent_type`, e.g. "claude-code"); portable.
+ * `computer` narrows a role or engine to the agents on that computer (by id or
+ * name). DECLARED: the write door validates it; resolving it to an agent is the
+ * runner resolution's job (`agent-dispatch/route.ts` stays the only router).
+ */
+export type PlaybookRunnerRef =
+  | "self"
+  | "synap_ai"
+  | { synapAi: { persona: string } }
+  | { agentId: string; preset?: string }
+  | { role: string; computer?: string }
+  | { engine: string; computer?: string };
+
+/** One choice, or an ordered list where each later choice is a fallback. */
+export type PlaybookRunner = PlaybookRunnerRef | PlaybookRunnerRef[];
+
+/** The choices of a `runner`, in order (a single choice is a list of one). */
+export function runnerChoices(
+  runner: PlaybookRunner | null | undefined
+): PlaybookRunnerRef[] {
+  if (runner === null || runner === undefined) return [];
+  return Array.isArray(runner) ? runner : [runner];
+}
+
+/**
+ * A step that IS another playbook, pinned at a version (founder decision,
+ * proposal 72fdca0b). The run starts a child session following that playbook
+ * at that version; the parent waits for it and takes back its outputs.
+ */
+export interface PlaybookStageUses {
+  /** The playbook this step runs (a playbook on this pod). */
+  playbookId: string;
+  /**
+   * The version it runs at. The write door fills in the playbook's current
+   * version when absent, so a STORED step always carries it; optional here
+   * because a definition on its way in may still omit it. A version the pod
+   * no longer keeps is refused.
+   */
+  version?: number;
+  /** Child param ← a parent param or subject path (identifier path). */
+  with?: Record<string, string>;
+  /** Parent step slot label ← child output label (default: the same label). */
+  outputs?: Record<string, string>;
+}
+
 /**
  * A first-class stage of a Playbook — an ordered phase the run advances through.
  * Stages are ADDITIVE: a playbook with no stages behaves exactly as before
@@ -1206,6 +1346,60 @@ export interface PlaybookStage {
    * Advisory: nothing consumes it yet.
    */
   when?: PlaybookStageWhen;
+  /**
+   * WHO does this step — see {@link PlaybookRunner}. Absent ⇒ `"self"`, the
+   * run's own agent, as before.
+   */
+  runner?: PlaybookRunner;
+  /**
+   * The step IS another playbook — see {@link PlaybookStageUses}. Absent ⇒
+   * the step is worked in the run's own session, as before.
+   */
+  uses?: PlaybookStageUses;
+  /**
+   * The tools this step needs, by capability key (`media-ffmpeg`), checked
+   * against the runner's computer before it is handed the step. Added to the
+   * playbook's own `requires`. Absent ⇒ nothing is checked, as before.
+   */
+  requires?: string[];
+  /**
+   * The question the POD asks the person when a run's turn ends this stage —
+   * see {@link PlaybookStageEndAsk}. Absent ⇒ the stage asks nothing, as
+   * before.
+   */
+  endAsk?: PlaybookStageEndAsk;
+}
+
+/**
+ * A stage-end ask (plan 08e4fba7 decision 5, founder 9 Nov 2026): a run never
+ * asks the person — it has no ask tool — so a playbook that needs a person's
+ * structured answer mid-run DECLARES it on the stage the answer ends. When a
+ * run's turn completes with this stage (or an earlier one) current, the pod
+ * raises it as ONE owed slot, the run waits (`waiting_on_you`), and the
+ * person's answer wakes a run turn told which stage comes next.
+ */
+export interface PlaybookStageEndAsk {
+  /** The slot's label: what the answer is ("Next week's priorities"). */
+  label: string;
+  /** One line of facts: why the person is asked now. */
+  why?: string;
+  /** What moves once they answer ("The run creates a task for each one"). */
+  unblocks?: string;
+  /** How they answer — the one ask shape. */
+  ask: SlotAsk;
+  /** A `choose` ask's options read from the pod at raise time. */
+  optionsFrom?: PlaybookStageEndAskOptionsFrom;
+}
+
+/**
+ * Where a stage-end `choose` reads its options: the entities linked TO the
+ * run's subject by `relation` (a variant `derived_from` its asset), newest
+ * first, each an option whose value is the entity id. They come before the
+ * declared options, eight in all. None found ⇒ the ask is not raised: there is
+ * nothing to choose among.
+ */
+export interface PlaybookStageEndAskOptionsFrom {
+  relation: string;
 }
 
 /**
@@ -1278,35 +1472,16 @@ export type AwaitedGateProposalType =
 export const DEFAULT_STAGE_GATE_PROPOSAL_TYPE: StageGateProposalType =
   "playbook.stage_gate";
 
-/** The terminal statuses a session ends in — the keys of {@link PlaybookOnEnd}. */
-export const PLAYBOOK_ON_END_STATUSES = [
-  "closed",
-  "cancelled",
-  "failed",
-] as const;
-export type PlaybookOnEndStatus = (typeof PLAYBOOK_ON_END_STATUSES)[number];
-
-/**
- * `subjectProfile.onEnd` — the status the process moves what it worked on (its
- * subject and every target still open) to when the session ENDS in that
- * terminal status. Each value is an option of the subject's lifecycle; a
- * terminal status with no entry moves nothing. Applied by the one close door
- * (`complete-session.ts`, @synap/api) through the status door, as the session.
- */
-export type PlaybookOnEnd = Partial<Record<PlaybookOnEndStatus, string>>;
-
 /**
  * The subject-LIFECYCLE half of a stored `subjectProfile` — tolerant (stored
  * jsonb is data). `statusProperty` names the subject kind's property holding
- * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose;
- * `onEnd` the value each session end moves the subject to (junk dropped).
+ * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose.
  * The api's `readPlaybookProcess` adds the zod-parsed `activators` on top.
  */
 export function readSubjectLifecycle(subjectProfile: unknown): {
   profileSlug: string | null;
   statusProperty: string | null;
   humanOnlyStatuses: string[];
-  onEnd: PlaybookOnEnd;
 } {
   const sp =
     subjectProfile && typeof subjectProfile === "object"
@@ -1314,21 +1489,12 @@ export function readSubjectLifecycle(subjectProfile: unknown): {
       : {};
   const str = (v: unknown) =>
     typeof v === "string" && v.trim() ? v.trim() : null;
-  const onEnd: PlaybookOnEnd = {};
-  if (sp.onEnd && typeof sp.onEnd === "object" && !Array.isArray(sp.onEnd)) {
-    const raw = sp.onEnd as Record<string, unknown>;
-    for (const status of PLAYBOOK_ON_END_STATUSES) {
-      const value = str(raw[status]);
-      if (value) onEnd[status] = value;
-    }
-  }
   return {
     profileSlug: str(sp.profileSlug),
     statusProperty: str(sp.statusProperty),
     humanOnlyStatuses: Array.isArray(sp.humanOnlyStatuses)
       ? sp.humanOnlyStatuses.flatMap((v) => (str(v) ? [str(v)!] : []))
       : [],
-    onEnd,
   };
 }
 
@@ -2382,6 +2548,22 @@ export interface CapabilityDefinition {
    * list-by-producer index ("which capabilities emit event X").
    */
   emits?: string[];
+  /**
+   * Where the capability runs and how a computer installs, checks and removes
+   * it (installer reconciliation f75fbb48 §3.5): `placement`, `install`,
+   * `verify`, `uninstall`, `permissions`, `licence`, `services`, `recipes`.
+   * Pure shapes here; the ONE rule is `CapabilityComputerSpecSchema`
+   * (@synap-core/types/capability-manifest). The applier stores the declared
+   * blocks on the installed capability as `metadata.computer`, verbatim.
+   */
+  placement?: Record<string, unknown>;
+  install?: Record<string, unknown>;
+  verify?: Record<string, unknown>;
+  uninstall?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
+  licence?: string;
+  services?: Array<Record<string, unknown>>;
+  recipes?: Array<Record<string, unknown>>;
 }
 
 // ── LoopDefinition — a config descriptor that INSTANTIATES an autonomy loop ────

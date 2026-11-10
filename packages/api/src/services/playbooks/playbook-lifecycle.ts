@@ -57,6 +57,7 @@ import {
   focusSessions,
   isUniqueViolation,
   playbooks,
+  insertFocusSessionRow,
 } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
 import {
@@ -67,6 +68,8 @@ import {
 import {
   collectPlaybookCriteria,
   describeMissingParams,
+  fillParamsFromSubject,
+  needsSubjectKinds,
   readCriteria,
   readPlaybookParams,
   validatePlaybookParams,
@@ -74,7 +77,6 @@ import {
   type LinkInput,
   type PlaybookParam,
   type PlaybookParamTypeError,
-  type PlaybookStage,
   type SessionCriterion,
 } from "@synap/playbooks";
 import {
@@ -82,9 +84,13 @@ import {
   PARAM_SLOT_CIRCUMSTANCE,
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
+import { recordPlaybookVersion } from "./playbook-versions.js";
+import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
-import { stampSlotKeys } from "../focus-sessions/slot-keys.js";
-import { stageSlotsToAdd } from "../focus-sessions/stage-slots.js";
+import {
+  withBirthStageSlots,
+  writeSessionBirthSubjectMove,
+} from "../focus-sessions/session-birth.js";
 import { parseCommandTemplate } from "../../utils/command-template.js";
 import { authoringMisses } from "../../utils/template-diagnostics.js";
 import {
@@ -152,39 +158,6 @@ export function withDeclaredParamsDefaulted(
     if (out[p.name] === undefined || out[p.name] === null) out[p.name] = "";
   }
   return out;
-}
-
-/**
- * The run's bound SUBJECT answers the playbook's entity param when the caller
- * left it unanswered.
- *
- * A subject-bound run already says WHICH entity it is about, and a playbook that
- * declares exactly one `entity` param ("Company — the session subject") is
- * asking for that same thing. Without this, every scheduled run over a subject
- * rendered `@{arg:company:entity}` as `""` ("Advance  through the Stellar grant
- * process") AND, on the `owe` path, filed an owed slot asking a person for the
- * entity the run was already bound to.
- *
- * Deliberately narrow: a caller-supplied value always wins, and a playbook with
- * two or more entity params is left alone — which of them is the subject is not
- * derivable, and guessing would bind the wrong one silently.
- */
-export function subjectAnswersEntityParam(
-  declared: readonly PlaybookParam[],
-  supplied: Record<string, unknown> | undefined,
-  subjectId: string | null | undefined
-): Record<string, unknown> {
-  const given = supplied ?? {};
-  if (!subjectId) return given;
-  const entityParams = declared.filter((p) => p.type === "entity");
-  if (entityParams.length !== 1) return given;
-  const name = entityParams[0]!.name;
-  const current = given[name];
-  const answered =
-    current !== undefined &&
-    current !== null &&
-    !(typeof current === "string" && current.trim() === "");
-  return answered ? given : { ...given, [name]: subjectId };
 }
 
 /**
@@ -410,6 +383,13 @@ export interface InstantiateInput {
    */
   origin?: "playbook" | "automation" | "agent" | "human";
   /**
+   * The agent that started the run, when one did. The birth stage's subject
+   * move (`writeSessionBirthSubjectMove`) is governed as this agent; absent,
+   * it is the person's (`userId`) — the approved-proposal path, where the
+   * approval is the person's decision.
+   */
+  agentUserId?: string | null;
+  /**
    * A FIXED row id, for the approved-proposal path: the `focus_session/create`
    * executor materializes at `proposal.targetId` so any link built at propose
    * time resolves. With an id the insert is conflict-safe (a re-approve writes
@@ -575,10 +555,48 @@ export async function instantiateSessionRow(
   // Until this existed the declaration was decorative: nothing read `required`,
   // `default` or `type` on any run path, so a missing required param rendered
   // as `""` and a default never reached the prompt at all.
+  //
+  // The run's bound SUBJECT answers what the playbook declares it answers
+  // (`fillParamsFromSubject`, @synap/playbooks): an entity param that is the
+  // subject, and a `from: "subject.<field>"` param from that field. Done HERE,
+  // in the one funnel, so every door fills the same way — an activator's
+  // proposal carries no params (it names only its subject), and its approval
+  // replay used to be refused for a value the subject already held (Produce
+  // Content's `platform`, live 2026-11-09, proposal bff02fbb). The subject's
+  // visibility was enforced by the caller; this reads it to fill, never to
+  // widen what the run may see.
   const declaredParams = readPlaybookParams(playbook.params);
+  const subjectRow = input.subjectId
+    ? await db.query.entities.findFirst({
+        columns: { title: true, preview: true, properties: true },
+        where: eq(entities.id, input.subjectId),
+      })
+    : undefined;
+  const subjectKinds =
+    input.subjectId && subjectRow && needsSubjectKinds(declaredParams)
+      ? ((await subjectKindSlugs({
+          subjectId: input.subjectId,
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+        })) ?? [])
+      : [];
+  const subjectFill = fillParamsFromSubject(
+    declaredParams,
+    input.params,
+    input.subjectId
+      ? {
+          id: input.subjectId,
+          title: subjectRow?.title ?? null,
+          preview: subjectRow?.preview ?? null,
+          properties:
+            (subjectRow?.properties as Record<string, unknown> | null) ?? null,
+          kinds: subjectKinds,
+        }
+      : null
+  );
   const paramResolution = validatePlaybookParams(
     declaredParams,
-    subjectAnswersEntityParam(declaredParams, input.params, input.subjectId)
+    subjectFill.values
   );
   const onMissingRequired = input.onMissingRequired ?? "refuse";
   if (
@@ -604,18 +622,11 @@ export async function instantiateSessionRow(
   // Substituted against the RESOLVED values, so a declared `default` finally
   // reaches the agent's instruction.
   //
-  // Title = playbook name + the bound subject's own title. Read the entity here
-  // rather than trusting a caller-passed name: `instantiateSession` has three
+  // Title = playbook name + the bound subject's own title. The entity read
+  // above (the param fill's), never a caller-passed name: `instantiateSession` has three
   // callers and only one of them resolves the subject. The same title is what
   // an entity param holding the subject renders as in the prompt.
-  let subjectTitle: string | null = null;
-  if (input.subjectId) {
-    const subject = await db.query.entities.findFirst({
-      columns: { title: true },
-      where: eq(entities.id, input.subjectId),
-    });
-    subjectTitle = subject?.title ?? null;
-  }
+  const subjectTitle: string | null = subjectRow?.title ?? null;
   const prompt =
     input.goalOverride ??
     resolveGoal(
@@ -660,67 +671,68 @@ export async function instantiateSessionRow(
           PARAM_SLOT_CIRCUMSTANCE.run
         )
       : [];
-  // Seed the active stage from the playbook's first stage (null when stageless,
-  // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
-  const stages = (playbook.stages as PlaybookStage[]) ?? [];
-  const currentStage = stages[0]?.key ?? null;
   // The run is born INTO its first stage, so it owes that stage's declared
-  // outputs from birth — the same rule every later advance applies
-  // (`stage-slots.ts`, through `advanceSessionStage`).
-  const firstStageSlots = stageSlotsToAdd(
-    stages,
-    currentStage,
-    declaredOutputs
-  );
-  // Keyed at birth (`slot-keys.ts`): every slot's stable identity.
-  const expectedOutputs = stampSlotKeys([
-    ...declaredOutputs,
-    ...firstStageSlots,
-    ...paramSlots,
-  ]);
-
-  const insert = db.insert(focusSessions).values({
-    ...(input.id ? { id: input.id } : {}),
-    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-    workspaceId: input.workspaceId,
-    userId: input.userId,
-    title,
-    goal,
-    playbookId: playbook.id,
-    // Typed origin (migration 0240) — instantiating from a playbook IS the
-    // definition of a playbook-origin session; the caller knows it without
-    // inspecting metadata.
-    origin: input.origin ?? "playbook",
-    projectId: input.projectId ?? null,
-    trackId: input.trackId ?? null,
-    trackStage: input.trackId ? (input.trackStage ?? null) : null,
-    subjectEntityId: input.subjectId ?? null,
-    expectedOutputs,
-    // Playbook-level + every stage's criteria, stageKey stamped — the one
-    // copy rule. Written in this body, so the approved-proposal path grades
-    // against the same list as a direct instantiate.
-    criteria: input.criteria ?? collectPlaybookCriteria(playbook),
-    currentStage,
-    channelId: input.channelId ?? null,
-    agentIds: input.agentIds ?? [],
-    status: input.status ?? "active",
-    metadata: {
-      ...(input.metadata ?? {}),
-      [RUN_PROMPT_METADATA_KEY]: prompt,
-      // The answers the run was actually given — see RUN_PARAMS_METADATA_KEY.
-      // Written unconditionally (an empty object for a param-less playbook) so
-      // a reader can tell "this run was given nothing" from "this row predates
-      // the field", which absence alone cannot say.
-      [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues,
-      titleSource: (ownTitle
-        ? "agent"
-        : "derived") satisfies SessionTitleSource,
+  // outputs from birth (`withBirthStageSlots`); the row writer seeds the
+  // stage, copies the stages and keys every slot.
+  const session = await insertFocusSessionRow(
+    db,
+    {
+      id: input.id,
+      correlationId: input.correlationId ?? null,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      title,
+      goal,
+      playbook,
+      // Typed origin (migration 0240) — instantiating from a playbook IS the
+      // definition of a playbook-origin session; the caller knows it without
+      // inspecting metadata.
+      origin: input.origin ?? "playbook",
+      projectId: input.projectId ?? null,
+      trackId: input.trackId ?? null,
+      trackStage: input.trackStage ?? null,
+      subjectEntityId: input.subjectId ?? null,
+      expectedOutputs: [
+        ...withBirthStageSlots(playbook, declaredOutputs),
+        ...paramSlots,
+      ],
+      // Playbook-level + every stage's criteria, stageKey stamped — the one
+      // copy rule. Written in this body, so the approved-proposal path grades
+      // against the same list as a direct instantiate.
+      criteria: input.criteria ?? collectPlaybookCriteria(playbook),
+      channelId: input.channelId ?? null,
+      agentIds: input.agentIds ?? [],
+      status: input.status ?? "active",
+      metadata: {
+        ...(input.metadata ?? {}),
+        [RUN_PROMPT_METADATA_KEY]: prompt,
+        // The answers the run was actually given — see RUN_PARAMS_METADATA_KEY.
+        // Written unconditionally (an empty object for a param-less playbook) so
+        // a reader can tell "this run was given nothing" from "this row predates
+        // the field", which absence alone cannot say.
+        [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues,
+        titleSource: (ownTitle
+          ? "agent"
+          : "derived") satisfies SessionTitleSource,
+      },
     },
-  });
-  const [session] = input.id
-    ? await insert.onConflictDoNothing().returning()
-    : await insert.returning();
+    // A caller-fixed id (the approved proposal's) is conflict-safe: a
+    // re-approve writes nothing and returns null.
+    input.id ? { onConflict: "nothing" } : {}
+  );
   if (!session) return null;
+
+  // BIRTH STAGE = SUBJECT STATUS, the direct start's rule (backend#862): the
+  // run was born into its first stage, so that stage's `subjectStatus` moves
+  // the subject now, governed as whoever started it. Only a LIVE session: an
+  // appointment (`scheduled`) is work nobody has started yet.
+  if (session.status === "active") {
+    await writeSessionBirthSubjectMove({
+      session,
+      userId: input.userId,
+      agentUserId: input.agentUserId ?? null,
+    });
+  }
 
   // Provenance edges.
   const edges: LinkInput[] = [
@@ -748,8 +760,10 @@ export async function instantiateSessionRow(
 
   await createLinks(edges);
 
-  // Recall for the run that just started (the ONE funnel behind every run
-  // door). Background, never fails the run; the sweep is the floor.
+  // The ONE funnel behind every run door. The runner skips a playbook run
+  // (`skipped: playbook_run`, founder 9 Nov 2026: runs recall on demand), so
+  // this only stamps the skip: no retrieval, no room post. Background, never
+  // fails the run; the sweep is the floor.
   void enqueueSessionRecall(session.id, "start");
 
   return session as FocusSession;
@@ -876,30 +890,34 @@ export async function promoteSessionToPlaybook(
   let playbook: Playbook;
   let reused = false;
   try {
-    const [row] = await db
-      .insert(playbooks)
-      .values({
-        workspaceId: session.workspaceId,
-        createdBy: input.userId,
-        name,
-        description: input.description ?? null,
-        goalTemplate,
-        expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
-        // The session's criteria become the playbook's own — STRUCTURE only
-        // (key/statement/required/check). Evaluations are this run's verdicts,
-        // not the template's; `stageKey` is dropped because promote copies no
-        // stages, so a stage-bound criterion would point at nothing.
-        criteria: readCriteria(session.criteria).map(
-          ({ stageKey: _stageKey, ...structure }) => structure
-        ),
-        executor: "is-agent",
-        status: "draft",
-        subjectProfile,
-        // Lineage lives in the `session → promoted_to → playbook` edge below — the
-        // single source of truth — not duplicated here.
-      })
-      .returning();
-    playbook = row as Playbook;
+    playbook = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(playbooks)
+        .values({
+          workspaceId: session.workspaceId,
+          createdBy: input.userId,
+          name,
+          description: input.description ?? null,
+          goalTemplate,
+          expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
+          // The session's criteria become the playbook's own — STRUCTURE only
+          // (key/statement/required/check). Evaluations are this run's verdicts,
+          // not the template's; `stageKey` is dropped because promote copies no
+          // stages, so a stage-bound criterion would point at nothing.
+          criteria: readCriteria(session.criteria).map(
+            ({ stageKey: _stageKey, ...structure }) => structure
+          ),
+          executor: "is-agent",
+          status: "draft",
+          subjectProfile,
+          // Lineage lives in the `session → promoted_to → playbook` edge below — the
+          // single source of truth — not duplicated here.
+        })
+        .returning();
+      // Version 1 is kept with the row (0416): a step may pin it.
+      await recordPlaybookVersion(tx, row as Playbook, input.userId);
+      return row as Playbook;
+    });
   } catch (err) {
     // 0227: concurrent promote / same-name race — return the surviving non-archived
     // playbook instead of failing the promote door.

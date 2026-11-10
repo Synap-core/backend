@@ -47,6 +47,10 @@ import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { unmodeledOfPatch } from "../hub-protocol/update-write-receipt.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
+import {
+  isReachFieldPatch,
+  reachFieldGrantSpace,
+} from "../../utils/reach-field-grant.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
   emitAiCorrection,
@@ -531,11 +535,23 @@ export const mutateProcs = {
       // Clearing a home narrows and stays on the ordinary lane.
       const aiHomesRecord =
         isAiWriteRequest(input) && homeChange && input.homeWorkspaceId !== null;
+      // A pod app's LinkedIn profile for a pod-wide lead it reaches through a
+      // role (decision 3632f045): checked in that role's space and ALWAYS
+      // proposed (utils/reach-field-grant.ts). Every other own field of a
+      // pod-wide record stays judged pod scope.
+      const reachSpace = isReachFieldPatch(input)
+        ? await reachFieldGrantSpace({
+            entityId: input.id,
+            kind: existing.type,
+            storedWorkspaceId: existing.workspaceId,
+          })
+        : null;
       const forcePropose =
         promotesToGlobal ||
         changesProfileType ||
         aiAttachesBody ||
         aiHomesRecord ||
+        reachSpace !== null ||
         input.forcePropose === true;
 
       // A promotion to pod-wide lands the row pod-wide: the key's grant must
@@ -563,10 +579,11 @@ export const mutateProcs = {
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: permWorkspaceId,
+        workspaceId: reachSpace ?? permWorkspaceId,
         // The key's grant is checked on the row's own workspace: a pod-wide
-        // entity is pod-scope, never the caller's lens (S7).
-        grantWorkspaceId: existing.workspaceId ?? null,
+        // entity is pod-scope, never the caller's lens (S7); a reach-field
+        // patch in the space whose role reaches it (above).
+        grantWorkspaceId: reachSpace ?? existing.workspaceId ?? null,
         subjectType: "entity",
         action: "update",
         source: input.source,

@@ -32,7 +32,7 @@ You build the surfaces the user sees: views over their data, bento dashboards, f
 
 ## Apps are views of pod state
 
-Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from the declared lifecycle of the kind and from the playbook bound to the entity, and moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
+Model first, UI second. An app built on the pod never hard-codes a status, a status order, a stage or step list, or a status colour: it reads them from `flow.of` (tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`): the kind's lifecycle in order, the playbook stage that owns each status, the things in each with who works them and their next step. A thing's own status and what holds it up come from `statusOf` (`GET /api/hub/orient?statusOf=<id>`). Moving work is a pod write (status move, session or playbook action), never app-local state. For any new use case, consolidate the operation first (workspace, kinds, lifecycles, relations, linked playbooks), then draw the UI as a representation of it. Load `rules/apps-are-views-of-pod-state` (founder, 6 Nov 2026).
 
 ## Before you build anything
 
@@ -59,29 +59,19 @@ Widget definitions are the source of truth for which cells are installed and how
 
 ## Four things you can build
 
+Tailored UI is pod-native first (founder, 9 Nov 2026): one of the four below, or an HTML page bound as a kind's renderer, shown on the desktop. A standalone site or app only when the person asks for one (`system/synap-app/overview`).
+
 1. **Views** — named queries + rendering config over entities of a given profile. Kanban of tasks, gallery of articles, calendar of events.
 2. **Bento dashboards** — 12-col grid compositions of cells (view-cards, entity-cards, widgets). The Home dashboard is a bento. Workspace landing pages are bentos.
 3. **Workspaces** — full lenses with profiles, views, a bento, and seed entities. The biggest building block.
-4. **New cell types** (Capability B) — AI can define entirely new rendering cells when no existing widget covers the need. Cells run in a sandboxed iframe. Pod-global cells (no `workspaceId`) are available immediately in all workspaces without a proposal step.
+4. **New cell types** (Capability B) — AI can define entirely new rendering cells when no existing widget covers the need. Cells run in a sandboxed frame. One recipe, in `system/synap/viewframe-cells` ("Define a cell: the one recipe"): check `synap_list_widgets`, write an ES module or an HTML page (the pod picks how it is drawn), define it with `synap_create_cell`, then place it on a bento (`placeOn`) or bind it to a kind (`synap_promote_cell_to_renderer`). An agent's define is a proposal: `proposed` is success.
 
-   ```json
-   POST /api/hub/cells/define
-   {
-     "name":           "Burndown Chart",
-     "rendererSource": "<!DOCTYPE html>…</html>",
-     "typeKey":        "burndown-chart",
-     "description":    "Sprint burndown over task completions",
-     "defaultSize":    { "w": 8, "h": 6 }
-   }
-   ```
-
-   - Leave `deps` out. The frame loads no code from the network (no CDN, no esm.sh): React and `@synap/kit` come from the host, and a cell that declares runtime `deps` is refused on web and desktop. Bundle any library into the source (`synap cell build --bundle-deps`); the `synap` skill's ViewFrame Cells section lists what the frame provides.
-   - Always `GET /api/hub/widget-definitions` first — if a cell already covers the need, use it. New cell definitions are permanent; only create when genuinely novel.
-   - For the full in-frame query/mutate/shell-actions API see the `synap` skill's **ViewFrame Cells** section (or load `synap-ui:SKILL` via `GET /api/hub/skills/system?sections=synap-ui:SKILL`).
+   - Leave `deps` out. The frame loads no code from the network (no CDN, no esm.sh): React and `@synap/kit` come from the host, and a cell that declares runtime `deps` is refused on web and desktop. Bundle any library into the source (`synap cell build --bundle-deps`); the same chapter lists what the frame provides and the in-frame query/mutate/shell-actions API.
    - **"Make this my Posts dashboard"** = a cell bound to the kind's `dashboard` slot, not a new workspace:
      1. `create_cell` a frame that reads what the kind's own page reads, through the bridge's intent reads: `lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list` (params and shapes: `synap` skill, ViewFrame Cells → "Intent reads"). Never pre-fetch rows into the source.
      2. `promote_cell_to_renderer({ profileSlug: "post", slot: "dashboard", cellKey })`. `dashboard` is the `entity-profile` content kind. It is governed, so `proposed` is success.
      - On a kind with a lifecycle the cell fills the **Dashboard** tab and the Pipeline tab stays the board (its moves and card frame are the kind's). On a kind without one, the cell is the page.
+     - **A board drawn from a playbook or a pipeline reads `flow.of`**, in a cell too: `window.synap.query("flow.of", { profileSlug })` returns the kind's states in declared order, the playbook stage that owns each, and the things in each (params and shape: `synap` skill, ViewFrame Cells → "Intent reads"). An app outside the frame reads the same `flow.of` (tRPC, Hub `GET /api/hub/flow`). No status list or stage list is written by hand.
      - A saved view can take the same slot from the app (Keep → Become renderer of… → Whole profile dashboard). Any view type renders there.
 
 ---
@@ -124,7 +114,7 @@ POST /api/hub/views
   "type":        "kanban",
   "profileSlug": "task",
   "config": {
-    "groupBy":  { "property": "projectId" },
+    "groupByField": "projectId",
     "columns":  [
       { "slug": "title" },
       { "slug": "priority" },
@@ -138,7 +128,17 @@ POST /api/hub/views
 }
 ```
 
-The `config` shape varies by view type — kanban needs `groupBy`, calendar needs a date property, gallery needs an image property. When in doubt, fetch an existing view of the same type first and mirror its structure.
+The `config` shape varies by view type — kanban needs `groupByField` (a property key, a string; `groupBy` is not read), calendar needs a date property, gallery needs an image property. When in doubt, fetch an existing view of the same type first and mirror its structure.
+
+### Which door (MCP)
+
+- Create a view → `synap_create_view`.
+- A kind's lifecycle as a board → `synap_create_view` with `type: "pipeline"` and `config: { profileSlug }`. The columns are the kind's declared statuses, never config: a kind with no lifecycle is refused, so declare it first (`synap_declare_lifecycle`).
+- Change a view after create (rename it, a bento's `config.blocks`, a kanban's grouping) → `synap_update_view` with the whole new config. Each bento block is stored as `{ id, kind: "widget", widgetType, config, pos: { x, y, w, h } }` (a recipe's `{ key, config, x, y, w, h }` is `widgetType: key`, `pos: { x, y, w, h }`). Every widget you add or change is checked against the widget catalog before anything is filed (blocks kept unchanged are not); an agent's edit is a proposal.
+- Whiteboard shapes → `synap_update_view_content`.
+- What a space opens on → `synap_set_start_page`: a cell `synap_list_widgets` lists for that space, or a website `url` (with `podAppClientId` for a pod app).
+
+The Hub REST twins: `POST /views`, `PATCH /views/:viewId`, `POST /views/:viewId/arrange`.
 
 ---
 
@@ -206,7 +206,7 @@ The canonical flow:
      ],
      views: [
        { name: "Pipeline", type: "kanban", profileSlug: "draft",
-         config: { groupBy: { property: "status" } } },
+         config: { groupByField: "status" } },
        { name: "Published", type: "gallery", profileSlug: "article",
          config: { filters: [{ property: "status", op: "eq", value: "published" }] } }
      ],
@@ -251,7 +251,7 @@ Otherwise: add a view, add a bento block, add properties — don't multiply work
 3. Propose (before committing):
    - Workspace name: "CRM"
    - Views:
-     - `Deals Pipeline` — kanban on `deal`, groupBy `stage`
+     - `Deals Pipeline` — kanban on `deal`, `groupByField` `stage`
      - `Contacts` — table on `contact`, columns: name, role, company, lastInteraction
      - `Companies` — gallery on `company` (logo-forward)
      - `Upcoming Meetings` — calendar on `event`, filter `relatedToContact`
@@ -272,7 +272,7 @@ POST /api/hub/views/{bentoViewId}/arrange
 { "userId": "{userId}", "blocks": [ /* full new blocks array */ ] }
 ```
 
-`bento.arrange` is auto-approved by default. Safe to run without hesitation when the user rearranges or adds widgets.
+`bento.arrange` is auto-approved by default. Safe to run without hesitation when the user rearranges or adds widgets. On MCP there is no arrange tool: edit the bento with `synap_update_view` (see "Which door").
 
 Call `synap_list_widgets` first. Only place keys from that list. `stat-card` needs `profileSlug`. `view` / `view-table` need a saved `viewId`. `entity-count` is a legacy alias of `stat-card` — prefer `stat-card`.
 

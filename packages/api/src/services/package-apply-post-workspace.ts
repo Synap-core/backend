@@ -839,7 +839,7 @@ export async function applyPackagePostWorkspace(
       scope: string;
       reconcile?: Pick<
         InstalledPlaybookReconcileResult,
-        "kind" | "applied" | "ownerOwned" | "proposalId"
+        "kind" | "applied" | "ownerOwned" | "held" | "proposalId"
       > & { error?: string };
     }> => {
       const [row] = await db
@@ -864,6 +864,8 @@ export async function applyPackagePostWorkspace(
             kind: r.kind,
             applied: r.applied,
             ownerOwned: r.ownerOwned,
+            // Who-runs-it changes the template made, held for a person.
+            held: r.held,
             ...(r.proposalId ? { proposalId: r.proposalId } : {}),
           },
         };
@@ -874,6 +876,7 @@ export async function applyPackagePostWorkspace(
             kind: "up-to-date",
             applied: [],
             ownerOwned: [],
+            held: [],
             error: (e as Error).message,
           },
         };

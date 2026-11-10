@@ -25,9 +25,10 @@
  * `scope: 'user'`, the one shape the legacy stores cannot express — there is
  * no legacy key for it, and inventing one would fork the store this table
  * exists to unify. A per-object (`subjectId`) binding is a second such shape
- * in principle, but is moot in practice: this door REFUSES any non-null
- * `subjectId` outright (decision 2026-09-07, whole-kind only — see
- * `renderer-bindings.ts`), so it never reaches the mirror question.
+ * in principle: this door REFUSES a non-null `subjectId` (decision
+ * 2026-09-07, whole-kind only — see `renderer-bindings.ts`) except for a
+ * playbook or a view (`renderer-targets.ts`), which have no profile row and so
+ * never mirror either.
  *
  * Mirrors the two pre-existing tRPC write paths it subsumes:
  *   - workspace overlay → `profiles.setProfileRendererOverride`
@@ -54,6 +55,7 @@ import { OBJECT_KINDS } from "@synap-core/types/vocabulary";
 import { TRPCError } from "@trpc/server";
 
 import { assertMayBindRenderer } from "./renderer-binding-authz.js";
+import { isPerObjectBindingKind } from "../renderers/renderer-targets.js";
 import { assertRendererRefAllowedForScope } from "./renderer-ref-scope.js";
 import {
   SLOT_TO_CONTENT_KIND,
@@ -166,13 +168,11 @@ export interface SetProfileRendererInput {
   ref: RendererRef | null;
   scope: RendererScope;
   /**
-   * REFUSED. Renderer bindings are whole-kind only (decision 2026-09-07, see
-   * the header of `renderer-bindings.ts`) — a non-null value is rejected at
-   * this door with `BAD_REQUEST` before any write. The field stays on the
-   * input shape only because the three callers upstream (tRPC
-   * `profiles.setProfileRendererOverride`, Hub Protocol `profiles.setRenderer`,
-   * and the `profile/renderer.set` proposal executor) still parse and forward
-   * it; removing it there is a separate, larger cleanup than this refusal.
+   * The ONE object a per-object target (a playbook, a view) is bound to:
+   * REQUIRED for those kinds, and it must be an object the caller can open.
+   * REFUSED for every other kind: renderer bindings are whole-kind only
+   * (decision 2026-09-07, see the header of `renderer-bindings.ts`), rejected
+   * with `BAD_REQUEST` before any write (`assertRendererBindingTarget`).
    */
   subjectId?: string | null;
   /** Set when a proposal approval materialized this write — kept as lineage. */
@@ -217,12 +217,26 @@ export async function setProfileRenderer(
   // Synap caller needs one, and the legacy mirror this table replaces already
   // cannot express one. Refused here, at the one write door — before any DB
   // round trip — so a new caller can never reopen it by omission.
-  if (subjectId !== null) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "Renderer bindings are whole-kind only — a per-object binding " +
-        "(subjectId) is not supported. See renderer-bindings.ts.",
+  //
+  // The ONE exception is a target whose renderer IS one object's page — a
+  // playbook or a view (`renderer-targets.ts`): a definition, not an entity
+  // instance, the same shape a capability's page-set always had. For those a
+  // binding MUST name one object the caller can open, in the target's own
+  // slots: with no `subjectId` the row was a whole-kind binding every view's
+  // (or playbook's) page fell back to, and any string was accepted as an id.
+  // The shared rule (`assertRendererBindingTarget`), here at the one write
+  // door so every caller inherits it. A whole-kind binding naming no object
+  // has nothing to check, so only a call that names an object, or must, loads
+  // the rule (its object check pulls in the id prober's whole import graph).
+  if (subjectId !== null || isPerObjectBindingKind(profileSlug)) {
+    const { assertRendererBindingTarget } =
+      await import("../renderers/renderer-target-checks.js");
+    await assertRendererBindingTarget({
+      profileSlug,
+      slot,
+      scope,
+      subjectId,
+      userId,
     });
   }
 

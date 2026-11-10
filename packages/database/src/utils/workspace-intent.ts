@@ -24,6 +24,11 @@ const producedEntrySchema = z.object({ profile: z.string() });
 export const workspaceIntentDefinitionSchema = z.object({
   label: z.string(),
   produces: z.array(producedEntrySchema).optional(),
+  /**
+   * The ONE output the space exists to produce (One model plan, decision 3):
+   * a profile slug, kind or role, always one of `produces`.
+   */
+  primary: z.string().optional(),
 });
 
 export type WorkspaceIntentDefinition = z.infer<
@@ -36,6 +41,7 @@ export type WorkspaceIntentDefinition = z.infer<
  */
 const projectedIntentSchema = workspaceIntentDefinitionSchema.extend({
   produces: z.array(z.unknown()).catch([]).optional(),
+  primary: z.unknown().optional(),
 });
 
 /** The stored form of a definition's intent; null when it declares none. */
@@ -49,9 +55,15 @@ export function projectTemplateIntent(
     const slug = entry.success ? entry.data.profile.trim() : "";
     return slug ? [slug] : [];
   });
+  const produces = [...new Set(slugs)];
+  // Kept only when it names one of `produces`: a primary the space does not
+  // produce is a malformed declaration, dropped alone.
+  const primary =
+    typeof parsed.data.primary === "string" ? parsed.data.primary.trim() : "";
   return {
     label: parsed.data.label.trim(),
-    produces: [...new Set(slugs)],
+    produces,
+    ...(primary && produces.includes(primary) ? { primary } : {}),
     source: "template",
   };
 }

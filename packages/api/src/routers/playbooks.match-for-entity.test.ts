@@ -85,6 +85,7 @@ vi.mock("../access/index.js", () => ({
 
 import { playbooksRouter } from "./playbooks.js";
 import { compactPlaybookMatches } from "./mcp/handlers/match-playbooks-compact.js";
+import { PLAYBOOK_DESCRIPTION_CAP } from "../services/playbooks/playbook-search-text.js";
 
 const WORKSPACE = "00000000-0000-4000-8000-000000000010";
 
@@ -151,6 +152,8 @@ describe("playbooks.matchForEntity", () => {
         name: "Produce content from this idea",
         scope: "session",
         templateKind: "Work template",
+        // No description on the row: the key is there, null (never absent).
+        description: null,
         goalTemplate: "Produce content for {{platform}} from {{subject}}",
         subjectProfileSlug: "post",
         activators: [],
@@ -230,6 +233,7 @@ describe("playbooks.matchForEntity", () => {
         name: "Enrich this lead",
         scope: "session",
         templateKind: "Work template",
+        description: null,
         goalTemplate: "Enrich {{subject}}",
         subjectProfileSlug: "lead",
         activators: [],
@@ -314,6 +318,50 @@ describe("playbooks.matchForEntity", () => {
       score: 2,
       reason: "Made for post items",
     });
+  });
+
+  it("ranks on a playbook's description and returns it; the agent door cuts it (finding 9463e6b3)", async () => {
+    // The ask's words are ONLY in the description: before, the match door
+    // ranked the goal template alone and never saw them.
+    const long = `Turn a recorded take into a vertical reel: ${"cut, caption and export the best pieces. ".repeat(12)}`;
+    const chain = selectChain([
+      {
+        id: "pb-letter",
+        name: "Newsletter issue",
+        description: "Write this week's letter",
+        goalTemplate: "Write the issue",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: null,
+      },
+      {
+        id: "pb-take",
+        name: "Enhance a recording",
+        description: long,
+        goalTemplate: "Run the passes on {take}",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: null,
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const ranked = await caller.matchForEntity({
+      workspaceId: WORKSPACE,
+      intentText: "make a reel from my take",
+    });
+
+    expect(ranked.map((r) => r.id)).toEqual(["pb-take"]);
+    // The full text on the ranked row (a UI strip may show it whole)...
+    expect(ranked[0]!.description).toBe(long);
+    // ...and the agent door's row: cut at a word, under the cap, with "…".
+    const [row] = compactPlaybookMatches(ranked, undefined);
+    expect(row!.description!.endsWith("…")).toBe(true);
+    expect(row!.description!.length).toBeLessThanOrEqual(
+      PLAYBOOK_DESCRIPTION_CAP + 1
+    );
+    expect(long.startsWith(row!.description!.slice(0, -1))).toBe(true);
   });
 
   it("returns [] when no playbook matches the profile", async () => {

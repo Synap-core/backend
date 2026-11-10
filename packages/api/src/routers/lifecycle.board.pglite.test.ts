@@ -46,7 +46,7 @@ vi.mock("@synap/database", async (importOriginal) => {
           return {
             propertySlug: "commercialStage",
             options: [
-              { key: "draft", category: "open" },
+              { key: "draft", category: "open", stuckAfterDays: 7 },
               { key: "negotiating", category: "active", label: "In talks" },
               { key: "won", category: "done" },
               { key: "lost", category: "lost" },
@@ -322,6 +322,27 @@ describe("lifecycle.board — a kind", () => {
     expect(board.live).toBe(5);
     expect(board.hasWorker).toBe(false);
     expect(board.suggestedShape).toBe("list");
+  });
+
+  it("an item older than its column's stuckAfterDays is stuck, a newer one is not (the one stuckForDays rule)", async () => {
+    const client = await freshDb();
+    const old = await thing(client, {
+      status: "draft",
+      title: "Old draft",
+      createdDaysAgo: 20,
+    });
+    const fresh = await thing(client, {
+      status: "draft",
+      title: "New draft",
+      createdDaysAgo: 2,
+    });
+
+    const caller = await lifecycleCaller();
+    const board = await caller.board({ profileSlug: "deal" });
+    const draft = board.columns.find((c) => c.key === "draft")!;
+    const stuckOf = (id: string) => draft.items.find((i) => i.id === id)!.stuck;
+    expect(stuckOf(old)).toBe(true);
+    expect(stuckOf(fresh)).toBe(false);
   });
 
   it("time in column counts from the LATEST move's occurred time, a backdated one included (W4)", async () => {

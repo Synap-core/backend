@@ -40,7 +40,6 @@ const KNOWN: Record<string, { count: number; reason: string }> = {
   "automations.ts": { count: 2, reason: IS_REMAINDER },
   "chat-stream.ts": { count: 1, reason: IS_REMAINDER },
   "mcp-servers.ts": { count: 2, reason: IS_REMAINDER },
-  "external/chat.ts": { count: 1, reason: IS_REMAINDER },
   "hub-protocol/rest/capture.ts": { count: 1, reason: IS_REMAINDER },
   "hub-protocol/rest/health-dependencies.ts": {
     count: 1,

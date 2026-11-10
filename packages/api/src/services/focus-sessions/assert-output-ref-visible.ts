@@ -180,13 +180,44 @@ export async function isOutputRefVisible(params: {
  * is the same read oracle one field over. Every door that declares an ask
  * (update, create, block, a room question) reaches this function, so the
  * provenance is floored BY EXISTING, never per door.
+ *
+ * THE SAME FLOOR for a blocker's pointers (plan e7f753db §9): the thing a
+ * slot `blocks` (an entity) and the playbook that `clearedBy` names. The
+ * blocker read resolves the thing's NAME and status for a need-you card, so
+ * an unfloored id is the same oracle again.
  */
 export async function findUnreachableOutputRefs(params: {
   userId: string;
-  outputs: ReadonlyArray<Pick<ExpectedOutput, "label" | "ref" | "ask">>;
+  outputs: ReadonlyArray<
+    Pick<ExpectedOutput, "label" | "ref" | "ask"> &
+      Partial<Pick<ExpectedOutput, "blocks" | "clearedBy">>
+  >;
 }): Promise<string[]> {
   const bad: string[] = [];
   for (const slot of params.outputs) {
+    const blocked = slot?.blocks?.entityId;
+    if (
+      typeof blocked === "string" &&
+      !(await isOutputRefVisible({
+        userId: params.userId,
+        kind: "entity",
+        refId: blocked,
+      }))
+    ) {
+      bad.push(`${slot.label} (the thing it blocks)`);
+    }
+    const clearedBy = slot?.clearedBy;
+    if (
+      clearedBy &&
+      "playbookId" in clearedBy &&
+      !(await isOutputRefVisible({
+        userId: params.userId,
+        kind: "playbook",
+        refId: clearedBy.playbookId,
+      }))
+    ) {
+      bad.push(`${slot.label} (the playbook that clears it)`);
+    }
     const ref = slot?.ref;
     if (ref) {
       const visible =

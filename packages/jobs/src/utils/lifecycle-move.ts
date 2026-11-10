@@ -16,11 +16,20 @@
  */
 import {
   db,
+  and,
+  eq,
+  isNull,
+  or,
+  entities,
+  entityFacets,
+  profiles,
+  relations,
   applyStatusMove,
   canonicalLifecycleOptionKey,
   classifyStatusMove,
   resolveStatusMoveTarget,
   type ApplyStatusMoveResult,
+  type ResolveTargetResult,
 } from "@synap/database";
 import {
   dispatchLifecycleTransition,
@@ -45,11 +54,114 @@ export async function lifecycleSlugOf(
   return r.ok ? r.target.lifecycle.propertySlug : null;
 }
 
+/**
+ * Resolve the ROLE an automation addresses: by its facet id, or by entity +
+ * role slug. `viaRelation` reaches the role on a related thing when the entity
+ * does not wear it itself: the one entity this entity points to with that
+ * relation type (e.g. a person `works_at` their company) and that wears the
+ * role. None, or several, is ROLE_NOT_ATTACHED: never a guess.
+ */
+export async function resolveAutomationRoleTarget(input: {
+  facetId?: string;
+  entityId?: string;
+  role?: string;
+  viaRelation?: string;
+  workspaceId: string;
+}): Promise<ResolveTargetResult> {
+  if (input.facetId) {
+    const [facet] = await db
+      .select({ entityId: entityFacets.entityId })
+      .from(entityFacets)
+      .where(
+        and(eq(entityFacets.id, input.facetId), isNull(entityFacets.deletedAt))
+      )
+      .limit(1);
+    if (!facet)
+      return {
+        ok: false,
+        code: "NOT_FOUND",
+        reason: `Role not found: ${input.facetId}`,
+      };
+    return resolveStatusMoveTarget(db, {
+      entityId: facet.entityId,
+      facetId: input.facetId,
+      workspaceId: input.workspaceId,
+    });
+  }
+  if (!input.entityId || !input.role) {
+    return {
+      ok: false,
+      code: "NOT_FOUND",
+      reason: "Name the role by facetId, or by entityId and facetSlug.",
+    };
+  }
+  let entityId = input.entityId;
+  if (input.viaRelation) {
+    const [own] = await db
+      .select({ id: entityFacets.id })
+      .from(entityFacets)
+      .innerJoin(profiles, eq(profiles.id, entityFacets.profileId))
+      .where(
+        and(
+          eq(entityFacets.entityId, input.entityId),
+          eq(profiles.slug, input.role),
+          isNull(entityFacets.deletedAt)
+        )
+      )
+      .limit(1);
+    if (!own) {
+      const wearers = await db
+        .selectDistinct({ id: relations.targetEntityId })
+        .from(relations)
+        .innerJoin(entities, eq(entities.id, relations.targetEntityId))
+        .innerJoin(entityFacets, eq(entityFacets.entityId, entities.id))
+        .innerJoin(profiles, eq(profiles.id, entityFacets.profileId))
+        .where(
+          and(
+            eq(relations.sourceEntityId, input.entityId),
+            eq(relations.type, input.viaRelation),
+            or(
+              isNull(relations.workspaceId),
+              eq(relations.workspaceId, input.workspaceId)
+            ),
+            isNull(entities.deletedAt),
+            eq(profiles.slug, input.role),
+            isNull(entityFacets.deletedAt)
+          )
+        );
+      if (wearers.length !== 1 || !wearers[0].id) {
+        return {
+          ok: false,
+          code: "ROLE_NOT_ATTACHED",
+          reason:
+            wearers.length === 0
+              ? `"${input.role}" is attached neither to this entity nor to what it ${input.viaRelation}`
+              : `"${input.role}" is attached to ${wearers.length} things this entity ${input.viaRelation}; name the facet`,
+        };
+      }
+      entityId = wearers[0].id;
+    }
+  }
+  return resolveStatusMoveTarget(db, {
+    entityId,
+    role: input.role,
+    workspaceId: input.workspaceId,
+  });
+}
+
 export async function moveStatusFromAutomation(input: {
   ownerId: string;
   workspaceId: string;
   entityId: string;
+  /** A ROLE's status: the facet it names (absent = the kind's status). */
+  facetId?: string | null;
   to: string;
+  /**
+   * The status the rule says the thing must be at (its condition). Another
+   * value answers `conflict` before anything is governed or written; absent =
+   * the value read now (still compare-and-set).
+   */
+  expectedFrom?: string;
   reason?: string;
   automationContext?: SideEffectPayload["automationContext"] & {
     focusSessionId?: string | null;
@@ -60,12 +172,28 @@ export async function moveStatusFromAutomation(input: {
 }): Promise<AutomationStatusMoveResult> {
   const resolved = await resolveStatusMoveTarget(db, {
     entityId: input.entityId,
+    facetId: input.facetId ?? null,
     workspaceId: input.workspaceId,
   });
   if (!resolved.ok) {
     return { status: "refused", code: resolved.code, reason: resolved.reason };
   }
   const { target } = resolved;
+  // The rule's condition, read like the api door reads an agent's belief: a
+  // false one never reaches governance (no proposal that could only fail).
+  if (input.expectedFrom !== undefined) {
+    const expected = canonicalLifecycleOptionKey(
+      target.lifecycle,
+      input.expectedFrom
+    );
+    if (expected !== target.current) {
+      return {
+        status: "conflict",
+        expectedFrom: expected,
+        actual: target.current,
+      };
+    }
+  }
   // The same input normaliser as `moveStatus`: a case/separator variant of a
   // declared option moves to that option.
   const to = canonicalLifecycleOptionKey(target.lifecycle, input.to);
@@ -74,7 +202,7 @@ export async function moveStatusFromAutomation(input: {
     return {
       status: "refused",
       code: "UNKNOWN_OPTION",
-      reason: `"${input.to}" is not a status of ${target.entityType ?? "this kind"}`,
+      reason: `"${input.to}" is not a status of ${target.role ?? target.entityType ?? "this kind"}`,
     };
   }
   if (target.current === to) {
@@ -90,8 +218,8 @@ export async function moveStatusFromAutomation(input: {
     data: {
       id: input.entityId,
       entityId: input.entityId,
-      role: null,
-      facetId: null,
+      role: target.role,
+      facetId: target.facetId,
       property: target.lifecycle.propertySlug,
       expectedFrom: target.current,
       to,

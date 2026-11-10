@@ -20,6 +20,10 @@
 
 import { z } from "@hono/zod-openapi";
 import { PACKAGE_UPDATE_ROW_KINDS } from "@synap-core/types/package-updates";
+import {
+  CapabilityComputerSpecSchema,
+  pickComputerSpec,
+} from "@synap-core/types/capability-manifest";
 
 import { loadCapabilityTemplate } from "../../../services/capabilities/create-from-definition.js";
 import {
@@ -241,46 +245,72 @@ export const McpServerDefSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
-export const CapabilityDefinitionSchema = z.object({
-  key: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  params: z.array(ParamSpecSchema).optional(),
-  vault: z.array(VaultDefSchema).optional(),
-  // OPTIONAL, defaulting to []. A capability is legitimately tools-only (a
-  // Discord/Telegram bot: one transport tool, zero skills) or skills-only (an
-  // `agency-skills`-style prompt pack: zero tools). Of the 25 shipped CP
-  // capability templates, 8 carry `tools: []` and 8 carry `skills: []` — the
-  // empty array is the norm, so REQUIRING the key was pure ceremony that made
-  // an otherwise-valid definition un-appliable (the live 400 on the Discord
-  // bridge's inline definition, which omits `skills` entirely).
-  // `.default([])` also NORMALIZES: the applier iterates `def.tools` /
-  // `def.skills` unguarded, so parsing here is what keeps that safe.
-  tools: z.array(ToolDefSchema).optional().default([]),
-  skills: z.array(SkillDefSchema).optional().default([]),
-  // Optional: MCP servers registered so agents get live tools + mcp:// resolves.
-  mcpServers: z.array(McpServerDefSchema).optional(),
-  // Optional: session-template playbooks seeded alongside {vault · tools · skills}.
-  playbooks: z.array(PlaybookDefSchema).optional(),
-  // Optional: WHEN→THEN automations seeded alongside the capability (e.g. a
-  // cron source-ingest). Loosely shaped; validated by automations.create.
-  automations: z
-    .array(
-      z.object({
-        name: z.string().min(1),
-        description: z.string().optional(),
-        triggerType: z.enum(["event", "cron", "webhook", "manual"]),
-        triggerConfig: z.record(z.string(), z.unknown()).optional(),
-        flowDefinition: z.object({
-          nodes: z.array(z.record(z.string(), z.unknown())),
-          edges: z.array(z.record(z.string(), z.unknown())),
-        }),
-        status: z.enum(["draft", "active", "paused", "error"]).optional(),
-        metadata: z.record(z.string(), z.unknown()).optional(),
-      })
-    )
-    .optional(),
-});
+export const CapabilityDefinitionSchema = z
+  .object({
+    key: z.string().min(1),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    params: z.array(ParamSpecSchema).optional(),
+    vault: z.array(VaultDefSchema).optional(),
+    // OPTIONAL, defaulting to []. A capability is legitimately tools-only (a
+    // Discord/Telegram bot: one transport tool, zero skills) or skills-only (an
+    // `agency-skills`-style prompt pack: zero tools). Of the 25 shipped CP
+    // capability templates, 8 carry `tools: []` and 8 carry `skills: []` — the
+    // empty array is the norm, so REQUIRING the key was pure ceremony that made
+    // an otherwise-valid definition un-appliable (the live 400 on the Discord
+    // bridge's inline definition, which omits `skills` entirely).
+    // `.default([])` also NORMALIZES: the applier iterates `def.tools` /
+    // `def.skills` unguarded, so parsing here is what keeps that safe.
+    tools: z.array(ToolDefSchema).optional().default([]),
+    skills: z.array(SkillDefSchema).optional().default([]),
+    // Optional: MCP servers registered so agents get live tools + mcp:// resolves.
+    mcpServers: z.array(McpServerDefSchema).optional(),
+    // Optional: session-template playbooks seeded alongside {vault · tools · skills}.
+    playbooks: z.array(PlaybookDefSchema).optional(),
+    // Optional: WHEN→THEN automations seeded alongside the capability (e.g. a
+    // cron source-ingest). Loosely shaped; validated by automations.create.
+    automations: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          description: z.string().optional(),
+          triggerType: z.enum(["event", "cron", "webhook", "manual"]),
+          triggerConfig: z.record(z.string(), z.unknown()).optional(),
+          flowDefinition: z.object({
+            nodes: z.array(z.record(z.string(), z.unknown())),
+            edges: z.array(z.record(z.string(), z.unknown())),
+          }),
+          status: z.enum(["draft", "active", "paused", "error"]).optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+        })
+      )
+      .optional(),
+    // Where it runs and how a computer installs, checks and removes it
+    // (reconciliation f75fbb48 §3.5). Documented open here; the ONE rule
+    // (`CapabilityComputerSpecSchema`, @synap-core/types/capability-manifest,
+    // the catalog's own) checks them below, so a refusal names every problem
+    // the catalog would.
+    placement: z.record(z.string(), z.unknown()).optional(),
+    install: z.record(z.string(), z.unknown()).optional(),
+    verify: z.record(z.string(), z.unknown()).optional(),
+    uninstall: z.record(z.string(), z.unknown()).optional(),
+    permissions: z.record(z.string(), z.unknown()).optional(),
+    licence: z.string().optional(),
+    services: z.array(z.record(z.string(), z.unknown())).optional(),
+    recipes: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .superRefine((def, ctx) => {
+    const blocks = pickComputerSpec(def as Record<string, unknown>);
+    if (!blocks) return;
+    const parsed = CapabilityComputerSpecSchema.safeParse(blocks);
+    if (parsed.success) return;
+    for (const issue of parsed.error.issues)
+      ctx.addIssue({
+        code: "custom",
+        path: issue.path.map((p) => (typeof p === "symbol" ? String(p) : p)),
+        message: issue.message,
+      });
+  });
 
 const ApplyCapabilityRequestSchema = z
   .object({

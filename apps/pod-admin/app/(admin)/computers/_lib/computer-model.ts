@@ -19,11 +19,13 @@ import {
   computerKeyState,
   days,
   isLiveKey,
+  platformLabel,
   seenLine,
   type ComputerBelongsTo,
   type ComputerKeyLike as SharedComputerKeyLike,
   type ComputerKeyState,
 } from "@synap-core/types/computers";
+import { AGENT_CONNECT_COMMAND } from "@synap-core/types/agents";
 import { resolveComputerBelongsToLabel } from "@synap-core/types/vocabulary";
 import type { SubjectEventLike } from "../../../_lib/object/subject-activity";
 import type { StatusKind } from "../../components/status-pill";
@@ -71,6 +73,12 @@ export interface ComputerLike {
   accessName: string | null;
   /** "Runs scripts" is on: it leases its person's box runs. */
   runsScripts?: boolean;
+  /** "Installs from the pod" is on: it leases the install, update and remove jobs of the tools on it (`host.runner`). */
+  hostsServices?: boolean;
+  /** "Wakes agents" is on: the pod may count on its waker to start its agents. */
+  wakesAgents?: boolean;
+  /** Its waker as the wake rule reads it: null = none ever ran; online = within the lease. */
+  waker?: { online: boolean; wakesAgents: boolean } | null;
   /** Whose computer it is (0388): the person's own, an agent's, or shared. */
   belongsTo?: ComputerBelongsTo | null;
   agents: ComputerAgentLike[];
@@ -406,10 +414,18 @@ export function activityLine(
       return typeof data.keyTtlDays === "number"
         ? `Key lifetime set to ${days(data.keyTtlDays)}`
         : "Key lifetime back to the pod default";
+    case "machine_wakes_agents":
+      return data.enabled === true
+        ? "Set to wake its agents"
+        : "Stopped waking its agents";
     case "machine_runs_scripts":
       return data.enabled === true
         ? `Set to run ${whose} scripts`
         : `Stopped running ${whose} scripts`;
+    case "machine_hosts_services":
+      return data.enabled === true
+        ? "Set to install from the pod"
+        : "Stopped installing from the pod";
     case "machine_revoke":
       return typeof data.revokedKeys === "number"
         ? `Revoked — ${data.revokedKeys} key${data.revokedKeys === 1 ? "" : "s"} stopped working`
@@ -427,4 +443,69 @@ export function revokeLine(c: ComputerLike): string {
   return agents > 0
     ? `Revokes ${keys} and disconnects ${agents} agent${agents === 1 ? "" : "s"}.`
     : `Revokes ${keys}.`;
+}
+
+// ─── "Wakes agents": what the card says about the waker ──────────────
+
+/** The CLI, as every command the console hands over names it. */
+const CLI = AGENT_CONNECT_COMMAND.replace(/ init$/, "");
+/** Installs the waker as a login service: macOS only (synap-cli waker.ts). */
+export const WAKER_INSTALL_COMMAND = `${CLI} waker install`;
+/** Runs the waker in the foreground: any other OS keeps it running itself. */
+export const WAKER_RUN_COMMAND = `${CLI} waker`;
+/** Says whether the waker service runs and what the pod answers it. */
+export const WAKER_STATUS_COMMAND = `${CLI} waker status`;
+
+export interface WakerWords {
+  /** The card's sentence. */
+  line: string;
+  /** The command to run on the computer, when one is owed. */
+  command: string | null;
+  /** A line under the command (how to keep it running off macOS). */
+  note: string | null;
+}
+
+/**
+ * The "Wakes agents" card's words, from the switch and the waker as the wake
+ * rule reads it (`computerWakerOf`): `waker === null` = no waker ever polled
+ * (hand over the command that starts one, `waker install` on macOS, which is
+ * the only OS it installs on); `online === false` = one ran and its lease
+ * lapsed (it is installed, so hand over `waker status`).
+ */
+export function wakerWords(c: ComputerLike): WakerWords {
+  const name = c.name;
+  const waker = c.waker ?? null;
+  const promise = `${name} starts its agents when work is handed to them`;
+  if (waker?.online) {
+    return {
+      line: c.wakesAgents
+        ? `${promise}. Its waker is running.`
+        : `Its waker is running. Turn this on and ${promise}.`,
+      command: null,
+      note: null,
+    };
+  }
+  const lead = c.wakesAgents
+    ? `${promise}, once its waker runs.`
+    : `Let ${name} start its agents when work is handed to them, without a terminal open.`;
+  if (waker) {
+    return {
+      line: `${lead} ${name}'s waker isn't running right now. Check it on ${name}:`,
+      command: WAKER_STATUS_COMMAND,
+      note: null,
+    };
+  }
+  const os = platformLabel(c.platform);
+  const mac = os === "macOS";
+  const keepRunning =
+    "keep it running (a service manager can start it at boot).";
+  return {
+    line: `${lead} Start its waker on ${name}:`,
+    command: mac ? WAKER_INSTALL_COMMAND : WAKER_RUN_COMMAND,
+    note: mac
+      ? null
+      : os
+        ? `On ${os}, ${keepRunning}`
+        : "Keep it running (a service manager can start it at boot).",
+  };
 }

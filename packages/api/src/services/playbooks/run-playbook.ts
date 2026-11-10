@@ -124,6 +124,7 @@ import {
   loadVisibleEntityIds,
 } from "./pinned-subject-query.js";
 import { QueryFilterParseError } from "@synap/jobs/workers/query-dsl.js";
+import { trialSessionMetadata, type TrialRunInput } from "./trial-run.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -234,6 +235,14 @@ export interface RunPlaybookInput {
    * runs leave this false so each click starts a fresh run.
    */
   idempotentBySubject?: boolean;
+  /**
+   * A TRIAL run (the rule lab, design b199a3a4 slice 1b, `trial-run.ts`): the
+   * drafts render in place of the current versions they name, the session is
+   * stamped `metadata.trial` so every write door refuses its writes, and it
+   * runs on Synap AI only. A person's act: refused with `agentUserId`,
+   * `handToAgentId`, `idempotentBySubject` or a worker. One run, no fan-out.
+   */
+  trial?: TrialRunInput;
   /**
    * Resolve the goal from the playbook's goalTemplate. The scheduled path passes
    * a resolver closing over the automation StepContext (so `{{trigger.payload.*}}`
@@ -494,7 +503,10 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   expectedOutputs: unknown;
   criteria: unknown;
   requiredIntents: unknown;
+  guidance: unknown;
   subjectProfile: unknown;
+  runner: unknown;
+  requires: unknown;
 } {
   return {
     version: playbook.version,
@@ -508,8 +520,17 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     // only the template it was launched from — a run whose playbook has since
     // been re-declared must still read as what it actually needed.
     requiredIntents: playbook.requiredIntents,
+    // The rules the run was DECLARED to follow (refs). What it actually USED
+    // (each current version's id and content hash) is stamped next to it by
+    // the executor that renders the method (`recordRunGuidance`), replacing
+    // this list with `{ declared, status, hash, used, demoted, missing }`.
+    guidance: { declared: playbook.guidance },
     // The kind the run's subject must be (the subject-kind floor).
     subjectProfile: playbook.subjectProfile,
+    // Who the run was declared to be done by, and the tools it needs (0416):
+    // the stage runner reads them from this frozen copy, never the live row.
+    runner: playbook.runner,
+    requires: playbook.requires,
   };
 }
 
@@ -1174,8 +1195,9 @@ export async function checkUnattendedPlaybookReadiness(input: {
  * any additional fan-out runs execute as side effects.
  */
 export async function runPlaybook(
-  input: RunPlaybookInput
+  rawInput: RunPlaybookInput
 ): Promise<RunPlaybookResult> {
+  const input = trialRunInput(rawInput);
   // Resolve the playbook — by id, else by NAME within this workspace (then a
   // pod-wide NULL-workspace playbook), with the cross-workspace visibility guard.
   // The ONE door (playbook-lifecycle.ts): the appointment materializer resolves
@@ -1290,8 +1312,8 @@ export async function runPlaybook(
   );
 
   // Fan-out: additional items each get their own session/channel/run. Failures
-  // are logged but never abort the primary result.
-  for (let i = 1; i < runItems.length; i++) {
+  // are logged but never abort the primary result. A trial is ONE run.
+  for (let i = 1; !input.trial && i < runItems.length; i++) {
     try {
       await executeSingleRun(
         playbook,
@@ -1339,6 +1361,28 @@ function withHandedTo(
       via: handOff.via,
     },
   };
+}
+
+/**
+ * A trial's run input, checked: a person's act on Synap AI only, one run
+ * (`RunPlaybookInput.trial`). Anything else passes through unchanged.
+ */
+function trialRunInput(input: RunPlaybookInput): RunPlaybookInput {
+  if (!input.trial) return input;
+  const refused = input.agentUserId
+    ? "only a person can try a draft rule, not an agent"
+    : input.handToAgentId
+      ? "a trial runs on Synap AI, so it cannot be handed to an agent"
+      : input.idempotentBySubject || input.worker
+        ? "a trial is started by a person, never by a schedule or a worker"
+        : null;
+  if (refused) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Not a trial run: ${refused}.`,
+    });
+  }
+  return { ...input, runOn: "synap_ai" };
 }
 
 /**
@@ -1450,6 +1494,9 @@ async function executeSingleRun(
     ...startedByAgentPatch(
       handOff?.agentUserId === input.agentUserId ? null : input.agentUserId
     ),
+    // A trial (the rule lab): the drafts it renders, and the stamp every
+    // write door refuses a write on.
+    ...(input.trial ? trialSessionMetadata(input.trial) : {}),
     // `profileSlug` = the lifecycle the worker follows: process-sync settles
     // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker
@@ -1470,6 +1517,8 @@ async function executeSingleRun(
     playbookId: playbook.id,
     workspaceId: input.workspaceId,
     userId: actorId,
+    // The birth stage's subject move is governed as the agent that ran it.
+    agentUserId: input.agentUserId ?? null,
     params,
     ...(input.onMissingRequired
       ? { onMissingRequired: input.onMissingRequired }

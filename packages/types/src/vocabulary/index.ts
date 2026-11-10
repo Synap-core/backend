@@ -537,6 +537,12 @@ const ACTION_VERB_ROWS = {
   // matter — the button asks, the session receipt reports.
   plan_approval: { imperative: "Approve plan", past: "Approved plan" },
   deploy_approval: { imperative: "Approve deploy", past: "Approved deploy" },
+  // A playbook STAGE GATE (`playbook.stage_gate`, changeType `stage_gate`):
+  // the person agrees to a session entering a stage. Like the dev gates, not
+  // bare "Approve"; titled as a LEAD (`ACTION_TITLE_LEADS`) whose name is the
+  // stage and the thing ("Approve stage: Send proposal for EU deal"), never
+  // "Stage gate Job" (finding 8f2dee79).
+  stage_gate: { imperative: "Approve stage", past: "Approved stage" },
   // Document-edit proposal types (`DOCUMENT_PATCH_PROPOSAL_TYPES` + the legacy
   // `ai_edit`), filed against an EXISTING document by the pod's patch door.
   // Without rows they humanized to "Section update" / "Ai edit" and composed
@@ -723,10 +729,20 @@ type TitlePreposition = "in" | "of" | "for";
 /**
  * Actions whose title is a LEAD, `<verb>: <name>`, with no kind noun: the
  * object is a batch the name describes, not a record of a kind ("Writes held
- * for review: Claude Code, 2026-10-27, 12 items"). Keyed like
- * {@link ACTION_VERBS} (whole token).
+ * for review: Claude Code, 2026-10-27, 12 items"), or a stage gate whose
+ * name says the stage and the thing. Keyed like {@link ACTION_VERBS} (whole
+ * token, then its last dotted segment: `playbook.stage_gate`).
  */
-export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set(["held_writes"]);
+export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set([
+  "held_writes",
+  "stage_gate",
+]);
+
+function isTitleLead(action: string): boolean {
+  const key = action.toLowerCase();
+  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+  return ACTION_TITLE_LEADS.has(key) || ACTION_TITLE_LEADS.has(tail);
+}
 
 function resolveActionPreposition(action: string | null | undefined): string {
   if (!action) return "";
@@ -1275,7 +1291,7 @@ export function buildObjectActionTitle(params: {
   // reaching it were written by the pod, in English.
   const verbEn = resolveActionLabel(actionToken, mood, "en");
   const verb = resolveActionLabel(actionToken, mood, locale);
-  if (actionToken && ACTION_TITLE_LEADS.has(actionToken.toLowerCase())) {
+  if (actionToken && isTitleLead(actionToken)) {
     const lead = nameSlot(objectName, verbEn, verbEn, "");
     return lead ? t("vocabulary.title.lead", { verb, name: lead }) : verb;
   }
@@ -1313,6 +1329,52 @@ export function buildObjectActionTitle(params: {
     name,
     ...nounParams(resolveNoun(kind, locale)),
   });
+}
+
+/**
+ * The title of a capability asked for one of the person's computers
+ * (`installation/request`): what it does, to which capability, on which
+ * computer. `Install "ffmpeg on your computer" on Mac`, `Remove "…" from
+ * Mac`, and `Add "…" from the marketplace and install it on Mac` when
+ * approving also adds the capability to the pod. The verb comes from the
+ * action door (`resolveActionLabel`); the capability and the computer are
+ * names, never tokens. Without a computer name it falls back to the
+ * generic door.
+ */
+export function buildInstallationTitle(params: {
+  /** `install`, `update`, `verify` or `remove`. */
+  action: string;
+  /** The capability's display name, else its catalog key. */
+  name: string;
+  computer?: string | null;
+  /** Approving it also adds the capability to the pod from the catalog. */
+  addsFromCatalog?: boolean;
+  locale?: Locale;
+}): string {
+  const locale = catalogLocaleOf(params.locale);
+  const t = sentences(locale);
+  const name = params.name.trim();
+  const computer = (params.computer ?? "").trim();
+  if (!computer)
+    return buildObjectActionTitle({
+      action: params.action,
+      objectName: name,
+      locale,
+    });
+  if (params.addsFromCatalog && params.action === "install")
+    return t("vocabulary.title.addAndInstallOn", { name, computer });
+  // A check is the action door's `check` (no `verify` verb exists).
+  const verb = resolveActionLabel(
+    params.action === "verify" ? "check" : params.action,
+    "imperative",
+    locale
+  );
+  return t(
+    params.action === "remove"
+      ? "vocabulary.title.fromComputer"
+      : "vocabulary.title.onComputer",
+    { verb, name, computer }
+  );
 }
 
 /** The title preposition an action takes, or "" for none. */
@@ -2845,6 +2907,8 @@ const PACKAGE_FIELD_LABELS: Readonly<Record<string, string>> = {
   detect: "How it is found on a computer",
   wake: "How a computer starts it",
   practices: "Skills its agents get",
+  toolProfile: "Tools its agents start with",
+  toolGroups: "Tool groups its agents start with",
 };
 
 export function resolvePackageFieldLabel(key: string): string {
@@ -3409,6 +3473,27 @@ export function resolveMembersDecideLabel(
 }
 
 /**
+ * Why the send door sent nothing: the recipient person is marked do not
+ * contact (`doNotContact` on the person, founder 2026-11-09). ONE sentence for
+ * every door that refuses it (the send door's `error`, an approval's failure).
+ * `name` is the person's title, else "this person"; `reason` is their
+ * `doNotContactReason`, said as written, omitted when empty.
+ */
+export function resolveDoNotContactRefusal(params: {
+  name?: string | null;
+  reason?: string | null;
+  locale?: Locale;
+}): string {
+  const t = sentences(catalogLocaleOf(params.locale));
+  const name =
+    params.name?.trim() || t("vocabulary.refusal.doNotContact.unnamed");
+  const reason = params.reason?.trim();
+  return reason
+    ? t("vocabulary.refusal.doNotContact.reason", { name, reason })
+    : t("vocabulary.refusal.doNotContact", { name });
+}
+
+/**
  * Who holds a slot that was HANDED to an agent (`delegatedTo`, an agent TYPE
  * token) — past mood, because the hand-off already happened. ONE spelling for
  * the session page's outcome row, the hand-off toast and Relay's owed rows.
@@ -3811,6 +3896,40 @@ export function resolveAgentWakeRefusalLabel(
   return (
     (AGENT_WAKE_REFUSAL_LABELS as Readonly<Record<string, string>>)[why] ??
     humanizeToken(why)
+  );
+}
+
+/**
+ * What a person does about each reason an agent can't be woken (`wake.why`),
+ * one plain sentence each: the fix, never the fault. A surface adds the door
+ * the sentence names (the computer's page, the command with the agent's
+ * name). `agents/wake.ts` holds the floor that a new reason ships with its fix.
+ */
+export const AGENT_WAKE_REFUSAL_FIXES = {
+  paused: "It is paused. Resume it to let it take work again.",
+  binding_broken:
+    "The connector it is set up with does not work. Fix that connector, or set it up again.",
+  no_template:
+    "No agent template matches its type. Install its program from the Marketplace's Agents tab.",
+  no_template_wake:
+    "Its program cannot be started by a computer. It works when someone opens it.",
+  no_computer:
+    "It is on no computer. Run the Synap worker for it on the computer that has its program.",
+  no_waker:
+    "Nothing on its computer starts agents yet. Run the Synap worker for it on that computer.",
+  computer_offline:
+    "Its computer is offline. Turn it on, or start Synap on it.",
+  wakes_off:
+    "Waking agents is turned off on its computer. Turn it back on there.",
+} as const;
+
+/** A wake refusal's fix; an unknown reason gets none rather than a guess. */
+export function resolveAgentWakeRefusalFix(
+  why: string | null | undefined
+): string | null {
+  if (!why) return null;
+  return (
+    (AGENT_WAKE_REFUSAL_FIXES as Readonly<Record<string, string>>)[why] ?? null
   );
 }
 

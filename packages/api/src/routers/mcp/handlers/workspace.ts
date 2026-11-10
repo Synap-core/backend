@@ -49,6 +49,7 @@ import {
   grantProfileAccessDoor,
   moveEntitiesDoor,
   renameWorkspaceDoor,
+  setStartPageDoor,
   type WorkspaceOpsActor,
 } from "../../../services/workspace-ops-doors.js";
 import {
@@ -56,6 +57,9 @@ import {
   requireScope,
   readReasoning,
   rejectMissingWriteWorkspace,
+  pageSlice,
+  LIST_PAGE_DEFAULT,
+  LIST_PAGE_MAX,
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
@@ -65,6 +69,26 @@ export const workspaceHandlers: McpHandlerMap = {
   synap_orient: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // The narrow read a worker polls (every 30 s): the sessions handed to this
+    // agent, nothing else. The whole briefing is far over the reply cap
+    // (`reply-cap.ts`), and a capped reply cannot carry the block a machine
+    // needs whole. The SAME read the briefing's `startHere.handedToYou` makes.
+    if (args.only !== undefined) {
+      if (args.only !== "handedToYou") {
+        return ok({
+          error: `Unknown only '${String(args.only)}'. Valid value: handedToYou.`,
+        });
+      }
+      if (!agentUserId) {
+        return ok({
+          error:
+            "only:'handedToYou' needs an agent key: work is handed to an agent, and this key is not one.",
+        });
+      }
+      const { readHandedToYou } =
+        await import("../../../services/discover/start-here.js");
+      return ok({ handedToYou: await readHandedToYou(userId, agentUserId) });
+    }
     const { discover } = await import("../../../services/discover/discover.js");
     const { statusOfIncludeInput, statusOfInput } =
       await import("../../../services/status/status-read.js");
@@ -651,7 +675,13 @@ export const workspaceHandlers: McpHandlerMap = {
         includeArchived: args.includeArchived === true,
         ...(typeof args.appId === "string" ? { appId: args.appId } : {}),
       });
-      const ids = rows.map((w) => w.id);
+      const { page: pageRows, paging } = pageSlice(
+        rows,
+        args,
+        LIST_PAGE_DEFAULT,
+        LIST_PAGE_MAX
+      );
+      const ids = pageRows.map((w) => w.id);
       const [usedBy, counts] = await Promise.all([
         listProjectsUsingWorkspaces(db, ids, userId),
         ids.length
@@ -673,7 +703,8 @@ export const workspaceHandlers: McpHandlerMap = {
       const countById = new Map(counts.map((r) => [r.workspaceId, r.count]));
       return ok({
         count: rows.length,
-        workspaces: rows.map((w) => ({
+        ...paging,
+        workspaces: pageRows.map((w) => ({
           id: w.id,
           name: w.name,
           description: w.description,
@@ -925,6 +956,58 @@ export const workspaceHandlers: McpHandlerMap = {
         workspaceId,
         name,
         description,
+      })
+    );
+  },
+  /**
+   * Set what a space opens on: a stored cell (`cellKey`), a website (`url`,
+   * optionally a pod app's `podAppClientId`), or `clear` for the space's own
+   * home. One door: `workspacesRouter.setPrimarySurface` (the browser's tRPC
+   * route), which checks the surface opens in the space before its gate.
+   */
+  synap_set_start_page: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const workspaceId = args.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      return ok({ error: "workspaceId is required" });
+    }
+    const str = (v: unknown) =>
+      typeof v === "string" && v.trim() ? v.trim() : undefined;
+    const cellKey = str(args.cellKey);
+    const url = str(args.url);
+    const clear = args.clear === true;
+    const chosen = [cellKey, url, clear || undefined].filter(Boolean).length;
+    if (chosen !== 1) {
+      return ok({
+        error:
+          "Name exactly one start page: cellKey (a cell from synap_list_widgets), url (a website, with podAppClientId when it is a pod app), or clear: true (the space's own home).",
+      });
+    }
+    const title = str(args.title);
+    const podAppClientId = str(args.podAppClientId);
+    if (podAppClientId && !url) {
+      return ok({
+        error: "podAppClientId goes with url: the site it signs in to.",
+      });
+    }
+    const primarySurface = clear
+      ? null
+      : cellKey
+        ? { kind: "cell" as const, cellKey, ...(title ? { title } : {}) }
+        : {
+            kind: "url" as const,
+            url: url!,
+            ...(title ? { title } : {}),
+            ...(podAppClientId ? { podApp: { clientId: podAppClientId } } : {}),
+          };
+    return ok(
+      await setStartPageDoor(opsActor(ctx), {
+        workspaceId,
+        primarySurface,
+        reasoning: readReasoning(args),
       })
     );
   },

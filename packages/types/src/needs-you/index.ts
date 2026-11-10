@@ -727,6 +727,7 @@ export {
   NEEDS_YOU_CONTEXT_COPY,
   needsYouContextFromOwedSlot,
   needsYouContextFromProposal,
+  type NeedsYouBlocks,
   type NeedsYouContext,
   type NeedsYouContextFrom,
   type NeedsYouContextLine,

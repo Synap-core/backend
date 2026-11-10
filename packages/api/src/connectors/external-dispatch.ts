@@ -98,6 +98,8 @@ import {
 } from "./channel-send.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
 import { heldSend, type HeldSend } from "../services/channels/held-sends.js";
+import { trialSessionWriteRefusal } from "@synap/capability-gate";
+import type { SendGuidanceStamp } from "../services/playbooks/playbook-guidance.js";
 
 const logger = createLogger({ module: "external-dispatch" });
 
@@ -254,6 +256,10 @@ const CONNECT_AFFORDANCE =
 // leaf module below (see its docstring for why it's split out).
 export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { refuseWorkerSendPastCeiling } from "../services/playbooks/worker-send-ceiling.js";
+import {
+  doNotContactRefusal,
+  readRecipientDoNotContact,
+} from "../services/channels/do-not-contact.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { encodeFormBody } from "./form-encode.js";
 import { isUuid } from "@synap-core/types/property-render";
@@ -782,6 +788,14 @@ export interface SendExternalMessageInput {
   /** Who drafted it, carried from the proposal onto the message row. */
   draftedBy?: DraftedBy | null;
   /**
+   * The rules the playbook run that drafted it used (slice 1b of design
+   * b199a3a4), carried from the proposal onto the message row. Set ONLY by the
+   * `messaging.external.send` executor (the stamp the pod filed with the
+   * proposal); a fresh send is stamped here from its `sessionId`'s run, never
+   * from a caller-supplied value.
+   */
+  guidance?: SendGuidanceStamp | null;
+  /**
    * A subject line the caller gave (email). Recorded on the proposal (the
    * person reads it before approving) and on the message row. The connectors'
    * send takes the body only and derives their own reply envelope, so no
@@ -845,6 +859,32 @@ export interface SendExternalMessageResult {
  * WhatsApp / Gmail, Stalwart for self-hosted email), then mirror the outbound
  * message into the DB inbox so the conversation history is complete.
  */
+/**
+ * The guidance stamp of a send made in `sessionId` (see
+ * `SendExternalMessageInput.guidance`). Never throws: a failed read is stamped
+ * `unavailable`, never left absent (absent reads as "no rules").
+ */
+async function stampSendGuidance(
+  sessionId: string | null | undefined
+): Promise<SendGuidanceStamp | null> {
+  if (!sessionId) return null;
+  try {
+    const { readSendGuidance } =
+      await import("../services/playbooks/playbook-guidance.js");
+    return await readSendGuidance(sessionId);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "send: the drafting run's rules could not be read; stamped unavailable"
+    );
+    return {
+      status: "unavailable",
+      runId: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export async function sendExternalMessage(
   input: SendExternalMessageInput
 ): Promise<SendExternalMessageResult> {
@@ -885,6 +925,23 @@ export async function sendExternalMessage(
   }
   const threadId = input.threadId ?? sendChannel?.externalId ?? null;
 
+  // A TRIAL run (the rule lab) never sends and never files a send, whoever
+  // asks: refused before anything is filed. A session that cannot be read
+  // refuses too. An approved replay was filed outside any trial.
+  if (!input.alreadyApproved) {
+    const trial = await trialSessionWriteRefusal(input.sessionId);
+    if (trial) {
+      return { success: false, error: trial, errorClass: "permission" };
+    }
+  }
+
+  // The rules the drafting run used, stamped by the POD from the session's
+  // run (never from the caller): on the proposal it files and on the message
+  // it records. An approved replay carries the stamp filed with its proposal.
+  const guidance = input.alreadyApproved
+    ? (input.guidance ?? null)
+    : await stampSendGuidance(input.sessionId);
+
   // Resolve the EXTERNAL channel to route to the correct connector provider
   // (stalwart vs unipile vs gmail). Same resolution the immediate REST path
   // already does.
@@ -896,7 +953,13 @@ export async function sendExternalMessage(
             eq(channels.channelType, ChannelType.EXTERNAL),
             eq(channels.externalId as any, threadId)
           ),
-          columns: { id: true, externalSource: true, workspaceId: true },
+          columns: {
+            id: true,
+            externalSource: true,
+            workspaceId: true,
+            contextObjectType: true,
+            contextObjectId: true,
+          },
         })
       : undefined;
   if (!threadId && !sendChannel) {
@@ -944,6 +1007,22 @@ export async function sendExternalMessage(
       });
       if (denial) return { success: false, error: denial };
     }
+  }
+
+  // Do not contact (founder, 2026-11-09): the person the conversation is
+  // bound to may be flagged, and then NOTHING goes to them, whoever asks (a
+  // person, an app, an agent, an automation). Refused before the gate, so
+  // nothing is filed; and on an approved replay too, since the flag may have
+  // been set after the send was filed. A conversation bound to no person goes
+  // on as before (`services/channels/do-not-contact.ts`).
+  const doNotContact = await readRecipientDoNotContact(linkedChannel);
+  if (doNotContact) {
+    return {
+      success: false,
+      error: doNotContactRefusal(doNotContact),
+      errorClass: "do_not_contact",
+      providerRef: linkedChannel?.externalSource ?? undefined,
+    };
   }
 
   const provider = linkedChannel?.externalSource ?? undefined;
@@ -1009,6 +1088,7 @@ export async function sendExternalMessage(
     }
     const gateResult = await gateMessagingSend({
       ...input,
+      guidance,
       // A held send is filed, never dispatched (it would fail): a `run` the
       // gate would allow becomes a review, like every other mustPropose.
       mustPropose: mustPropose || !!held,
@@ -1046,7 +1126,7 @@ export async function sendExternalMessage(
 
   if (sendChannel) {
     return sendOnChannel({
-      input,
+      input: { ...input, guidance },
       channel: sendChannel,
       connector,
       provider,
@@ -1273,6 +1353,7 @@ async function sendOnChannel(args: {
       workspaceId: input.workspaceId ?? null,
       proposalId: input.proposalId ?? null,
       draftedBy: input.draftedBy ?? null,
+      guidance: input.guidance ?? null,
       subject: input.subject ?? null,
     });
   } catch (err) {
@@ -1501,6 +1582,7 @@ async function gateMessagingSend(
           : {}),
         ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
         ...(input.subject ? { subject: input.subject } : {}),
+        ...(input.guidance ? { guidance: input.guidance } : {}),
         ...(input.held ? { held: input.held } : {}),
         capabilityKind: "tool",
         capabilityId,

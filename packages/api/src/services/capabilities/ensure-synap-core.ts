@@ -874,6 +874,26 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         additionalProperties: false,
       },
     },
+    // ── Hosted verbs — a recipe of a tool installed on a computer ───────────
+    {
+      name: "computer.run_recipe",
+      kind: "builtin",
+      scope: "pod",
+      intent: null,
+      description:
+        "Run one recipe of a tool INSTALLED on one of the person's computers (media-ffmpeg's loudness-normalize, reframe-crop, …), on that computer, with nobody at the keyboard. `capability` is the tool's key, `recipe` the recipe's name (the tool's approved recipes; an unknown name is refused with the list), `params` its values: a `file` param takes a pod file id (a file entity you can read), an `output` param a bare file name with an extension (\"voice-loud.m4a\"). `computer` names one (\"mac\", its name or id); omitted, the one where the tool is installed and checked. Never sent to a computer where the tool is missing or failed its check: that is refused with the next step (synap_request_installation). QUEUES the run: returns { status: 'queued', hostJobId, computer, recipe }; the run's log and files land on that host job and in the asking session's room. The files are the person's, in the run's space.",
+      parameters: {
+        type: "object",
+        required: ["capability", "recipe"],
+        properties: {
+          capability: { type: "string" },
+          recipe: { type: "string" },
+          params: { type: "object" },
+          computer: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+    },
     // ── Marketplace (Wave 3b) — search/install over cp_catalog_cache ────────
     {
       name: "market.search",
@@ -884,7 +904,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       // carried on pods seeded before (an omitted intent is left alone).
       intent: null,
       description:
-        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
+        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. A capability entry says where it runs (`runsOn`: pod, computer); one that runs on a computer adds its `systems`, `licence` and `computers` (each of the person's computers with `canInstall`, or `why` not): ask for it with synap_request_installation. Read-only.",
       parameters: {
         type: "object",
         properties: {
@@ -1203,6 +1223,33 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
             description: "Messages per channel (default 20, max 50).",
           },
         },
+      },
+    },
+    {
+      name: "snippet.render",
+      kind: "builtin",
+      scope: "pod",
+      metadata: { readOnly: true },
+      description:
+        'Render a stored snippet (a text with variables, kind `snippet`) once and return the text: { text, misses }. `values` fills its variables by name; a variable declared `from: "subject.<field>"` fills from `subjectEntityId` (title, preview or a property) when you give no value, read only if the person may read that entity. A required variable with no value (and no default) refuses the render and names it. An optional one with none renders empty and is listed in `misses`, as is any unknown {name} left as written. Built-ins {today}, {now}, {me}, {clipboard}, {selection} are filled when not declared. A retired snippet is refused. A value containing braces is kept literally. READ, auto-runs, writes nothing: to send the text use messaging.send.',
+      parameters: {
+        type: "object",
+        properties: {
+          snippetId: { type: "string", format: "uuid" },
+          values: {
+            type: "object",
+            description: "Variable values by name.",
+            additionalProperties: true,
+          },
+          subjectEntityId: {
+            type: "string",
+            format: "uuid",
+            description:
+              "The entity that `from: subject.<field>` variables read from.",
+          },
+          workspaceId: { type: "string", format: "uuid" },
+        },
+        required: ["snippetId"],
       },
     },
     {

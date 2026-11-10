@@ -124,7 +124,8 @@ export function waitKindBall(
  *    no reason (a question, a param, an ask).
  *  - `source`: what the pod found the wait in (`WaitingOnSource`); a work
  *    unit splits by its checks (`ci` while they run, `merge_queue` once
- *    green), and `owed_slot` / `hold` defer to their own axis. A `step` (a
+ *    green), an agent's blocking slot is `agent_work`, and a person's
+ *    `owed_slot` / `hold` defer to their own axis. A `step` (a
  *    lifecycle option's declared `waits`) gives its own `waitKind`, else
  *    defers to the `hold` axis by its `on`.
  */
@@ -155,10 +156,20 @@ export const WAIT_KIND_FROM = {
   },
   source: {
     pending_proposal: "approval",
+    // A send filed but held until THEY act (a LinkedIn invitation not
+    // accepted yet, `proposals.data.held`): approving it sends nothing.
+    held_send: "their_reply",
     blocked_by: "another_work",
     child_session: "another_work",
     work_unit_checks: "ci",
     work_unit_green: "merge_queue",
+    // An agent-owned slot that declares the thing it blocks (plan e7f753db
+    // §9): the agent holds it until its run delivers the slot.
+    agent_blocker: "agent_work",
+    // A step's unmet requirement (`LifecycleOption.requires`): a fact or a
+    // link the person owes ("answer"), or an agent's to find.
+    requirement: "answer",
+    requirement_agent: "agent_work",
   },
 } as const satisfies {
   hold: Record<HoldOn, WaitKind>;

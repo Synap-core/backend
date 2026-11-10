@@ -33,7 +33,7 @@ import {
 } from "../../utils/agent-handles.js";
 import { notifyHumanMentions } from "../../services/messaging/notify-room-post.js";
 import { recordOwnerRoomReply } from "../../services/focus-sessions/session-answer.js";
-import { resolveSummonedAgentUserId } from "../../services/messaging/turn-principal.js";
+import { resolveTurnAgentUserId } from "../../services/messaging/turn-principal.js";
 import {
   routeRoomMessage,
   type RoomCandidate,
@@ -131,7 +131,6 @@ import {
   usesInternalSessionBoundary,
   resolveAgentId,
   getMcpServersForWorkspace,
-  ensureAgentUser,
   relayToExternalChannel,
 } from "./helpers.js";
 import { createLogger } from "@synap-core/core";
@@ -626,37 +625,17 @@ export const sendMessageProcedure = protectedProcedure
       }
     }
 
-    // Resolve the ACTING agent instance for proposal attribution.
-    //
-    // Source of truth = the channel's bound agent instance (the ai_agent
-    // member). Per-instance threads bind the specific agent-user the human is
-    // chatting with, so its proposals are credited to THAT named instance —
-    // not the user's pod-wide default. This is what makes "this agent did X"
-    // true and the per-agent dashboard accurate.
-    //
-    // Fallback (legacy/unbound personal threads, group channels) → the user's
-    // pod-wide personal agent, preserving prior behaviour.
+    // The ACTING agent of this Synap AI turn: the sender's ONE personal AI
+    // (decision 6b45c6c3), in every room and space. A channel's bound agent or
+    // a routed teammate is a MODE of that AI (persona, presence), never its
+    // identity; nothing enrolls it in the space (`resolveTurnAgentUserId`).
     let agentUserId: string | undefined;
-    if (channel.channelType === ChannelType.PERSONAL) {
-      const [boundAgent] = await db
-        .select({ memberId: channelMembers.memberId })
-        .from(channelMembers)
-        .where(
-          and(
-            eq(channelMembers.channelId, channelId),
-            eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
-          )
-        )
-        .limit(1);
-      agentUserId = boundAgent?.memberId;
-    }
-    if (!agentUserId && workspaceId) {
-      try {
-        agentUserId = await ensureAgentUser(userId, workspaceId);
-      } catch (err) {
-        // Non-critical — degrade gracefully
-        logger.error({ err, channelId }, "Failed to ensure agent user");
-      }
+    try {
+      agentUserId = await resolveTurnAgentUserId({ principalUserId: userId });
+    } catch (err) {
+      // Never a silent fallback to another identity: the turn names no agent
+      // and writes as the sender, as it did when this read failed before.
+      logger.error({ err, channelId }, "Failed to resolve the personal AI");
     }
 
     const resolvedService = await resolveIntelligenceService({
@@ -797,11 +776,13 @@ export const sendMessageProcedure = protectedProcedure
         wake: roomWake,
       });
       // Never ask "who should answer?" about a message something already
-      // answers: a reply to an agent's open question (the answer loop), an
-      // anchored comment's or a capture room's own turn.
+      // answers: a reply to an agent's open question (the answer loop), a
+      // free message that woke the session's agent, an anchored comment's or
+      // a capture room's own turn.
       if (
         roomChoice &&
         ownerReply?.status !== "answered" &&
+        !(ownerReply?.status === "no_open_question" && ownerReply.woke) &&
         !anchoredComment?.decision.trigger &&
         !captureTurn
       ) {
@@ -882,24 +863,13 @@ export const sendMessageProcedure = protectedProcedure
 
     // ── Routing dispatch wiring ───────────────────────────────────────────────
     // For multiplayer rooms with a routing decision:
-    //   1. Override agentUserId with the routed teammate (server-resolved —
-    //      never from request body). Hub-protocol tool call handlers will
-    //      call resolveChannelCapabilities(channelId, agentUserId) themselves
-    //      to apply the per-channel capability grant.
+    //   1. The acting agent is NOT the teammate: it stays the sender's
+    //      personal AI (decision 6b45c6c3); the teammate is a mode of it.
     //   2. Resolve the teammate's agentType for IS dispatch.
     //   3. Broadcast presence so the UI can show the typing indicator.
     if (routingDecision) {
-      // Override agentUserId with the routed teammate (server-resolved — not
-      // from request body) — but only an agent the SUMMONER holds. This turn
-      // already runs as the sender (`userId` is the IS operator: floor +
-      // governance); a non-owner summoning the owner's @ai keeps THEIR own
-      // agent as the acting principal (founder decision D, `turn-principal.ts`).
-      agentUserId = await resolveSummonedAgentUserId({
-        roomOwnerId: channel.userId,
-        summonerId: userId,
-        teammateId: routingDecision.teammateId,
-        summonerAgentUserId: agentUserId,
-      });
+      // The routed teammate picks the persona and the presence below; the
+      // acting agent stays the sender's personal AI (resolved above).
 
       // Resolve the routed teammate's agentType for effectiveAgentType override.
       try {

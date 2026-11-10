@@ -40,6 +40,8 @@ export interface RequestWriteContext {
   readonly probe?: boolean;
   /** D6 — the key principal is an agent (its user id). */
   readonly actingAgentUserId?: string;
+  /** D4 — the agent a pod-signed IS delegation names for its turn (`act.sub`). */
+  readonly delegatedTurnAgent?: DelegatedTurnAgent;
   /** A1 — the session id the MCP door derived (guessed, not named). */
   readonly derivedSessionId?: string;
   /**
@@ -195,6 +197,46 @@ export function getActingAgentUserId(): string | undefined {
   return storage.getStore()?.actingAgentUserId;
 }
 
+// ═══ Concern: DELEGATED TURN AGENT (D4) ═══════════════════════════════════════
+//
+// The agent THIS POD chose for an AI-service turn, read from the pod-signed
+// delegation's `act.sub` (`authenticateIsDelegation`). It is NOT the acting
+// agent above (entering it there would move every IS write onto another
+// governance lane); it is only the proof that the IS may NAME this agent as
+// the persona of its writes (`resolveActorId`). The pod picks that agent
+// itself (`resolveIntelligenceService` → a house agent of the operator), so a
+// house agent, which holds no key of its own, needs no act-as key either.
+
+export interface DelegatedTurnAgent {
+  /** The delegation's `sub`: who the turn runs as. */
+  readonly operatorUserId: string;
+  /** The delegation's `act.sub`: the agent the pod signed for the turn. */
+  readonly agentUserId: string;
+}
+
+/** Run `fn` with the pod-signed turn agent recorded; no agent enters no scope. */
+export function runWithDelegatedTurnAgent<T>(
+  turn: { operatorUserId: string; agentUserId: string | null | undefined },
+  fn: () => T
+): T {
+  return turn.agentUserId
+    ? runWithPatch(
+        {
+          delegatedTurnAgent: {
+            operatorUserId: turn.operatorUserId,
+            agentUserId: turn.agentUserId,
+          },
+        },
+        fn
+      )
+    : fn();
+}
+
+/** The agent the pod signed for this AI-service turn, if any. */
+export function getDelegatedTurnAgent(): DelegatedTurnAgent | undefined {
+  return storage.getStore()?.delegatedTurnAgent;
+}
+
 // ═══ Concern: KEY GRANT (W1) ══════════════════════════════════════════════════
 //
 // The grant bounding the calling API key. Read by the write gate
@@ -249,6 +291,17 @@ export function runWithGrant<T>(
   fn: () => T
 ): T {
   return grant ? runWithPatch({ grant }, fn) : fn();
+}
+
+/**
+ * Run `fn` with NO key grant in force, the rest of the request context kept
+ * (acting agent, calling key...). For a VERDICT about the person, never for a
+ * read whose rows are returned: the review ladder's session rung asks whether
+ * the PERSON may read the proposal's session (founder, 9 Nov 2026), while the
+ * key's own reach stays bounded by its decide fence and by every read door.
+ */
+export function runWithoutGrant<T>(fn: () => T): T {
+  return getRequestGrant() ? runWithPatch({ grant: undefined }, fn) : fn();
 }
 
 /** The grant bounding the calling key, if any. */

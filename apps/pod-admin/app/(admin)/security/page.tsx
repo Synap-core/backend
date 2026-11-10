@@ -4,9 +4,10 @@
  * Pod security — who the pod trusts, and where its secrets live.
  *
  * First the pod's one switch for people: "Approvals need you in person"
- * (the proof-of-presence mode, W3 slice 3), then what asks for a passkey on
- * this pod and your own passkeys (W5: the ONE passkeys card, shared with
- * settings Security), above the sections they govern.
+ * (the proof-of-presence mode, W3 slice 3), then what asks for it on this
+ * pod, then one line about your OWN ways to confirm it's you, with the door
+ * to your Security page where they are listed and managed (founder, 7 Nov
+ * 2026, session 539e519b: one place, never a second passkeys card here).
  *
  * Two sections, the active one in `?section=` so deep links land on it (the
  * old `/trust-keys?section=issuers&focus=<id>` redirects here with its query):
@@ -22,7 +23,7 @@ import { Suspense } from "react";
 import { PageFallback, PageHeader, PageShell } from "../components/page-header";
 import { UrlTabs } from "../components/url-tabs";
 import { IssuersSection } from "./_lib/issuers-section";
-import { PasskeysCard } from "../../_lib/passkeys/passkeys-card";
+import { WaysInSummary } from "../../_lib/presence/ways-in/ways-in-summary";
 import { PresenceModeCard } from "./_lib/presence-mode-card";
 import { SensitivityCard } from "./_lib/sensitivity-card";
 import { SecretsSection } from "./_lib/secrets-section";
@@ -39,7 +40,7 @@ function SecurityInner() {
       <div className="mb-6 flex flex-col gap-5">
         <PresenceModeCard />
         <SensitivityCard />
-        <PasskeysCard returnTo="/security#passkeys" />
+        <WaysInSummary />
       </div>
 
       <UrlTabs

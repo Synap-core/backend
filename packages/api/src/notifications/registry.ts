@@ -1458,9 +1458,28 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     // factor's own name, is sent).
     messageSyntax: "icu",
     titleTemplate:
-      "{factor, select, passkey {{change, select, added {A passkey was added to your account} removed {A passkey was removed from your account} other {A passkey was added to or removed from your account}}} totp {{change, select, added {A 2FA app was added to your account} removed {A 2FA app was removed from your account} other {A 2FA app was added to or removed from your account}}} recovery_codes {{change, select, added {New recovery codes were made for your account} removed {Your recovery codes were cleared} other {Your recovery codes changed}}} other {{change, select, added {A device key was added to your account} removed {A device key was removed from your account} other {A device key was added to or removed from your account}}}}",
+      "{factor, select, passkey {{change, select, added {A passkey was added to your account} removed {A passkey was removed from your account} other {A passkey was added to or removed from your account}}} totp {{change, select, added {An authenticator app was added to your account} removed {An authenticator app was removed from your account} other {An authenticator app was added to or removed from your account}}} recovery_codes {{change, select, added {New recovery codes were made for your account} removed {Your recovery codes were cleared} other {Your recovery codes changed}}} other {{change, select, added {A device key was added to your account} removed {A device key was removed from your account} other {A device key was added to or removed from your account}}}}",
     bodyTemplate:
       "{named, select, yes {{label}. } other {}}If it wasn’t you, remove it in pod admin, Security.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    needsYou: "informational",
+  },
+  {
+    // "Add this device" (founder decision of 9 Nov 2026, session 84c74a23): a
+    // NEW device asks to be approved. Every device of the person hears it, so
+    // the person approves it on one they already use, or declines a request
+    // that is not theirs. Tokens from `requestDeviceLink`: `label` (what the
+    // new device calls itself), `id` (the request).
+    type: "security.device_link_requested",
+    category: "system",
+    label: "A new device asks to be approved",
+    icon: "shield-alert",
+    priority: "high",
+    messageSyntax: "icu",
+    titleTemplate: "A device asks to confirm it’s you",
+    bodyTemplate:
+      "{label} wants to approve requests for you. If it’s you, open this on a device you already use and pick the number it shows. If not, decline it.",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
     needsYou: "informational",
@@ -1480,7 +1499,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     titleTemplate:
       "{stage, select, requested {Someone asked to reset how you confirm it is you} cancelled {The reset of how you confirm it is you was cancelled} other {How you confirm it is you was reset}}",
     bodyTemplate:
-      "{stage, select, requested {In 24 hours your passkeys, Face ID keys, 2FA app and recovery codes stop working here. If it wasn’t you, cancel it now in pod admin, Security.} cancelled {Nothing changed.} other {Add a passkey or Face ID again in pod admin, Security. If it wasn’t you, sign in and secure your account now.}}",
+      "{stage, select, requested {In 24 hours your passkeys, Face ID keys, authenticator app and recovery codes stop working here. If it wasn’t you, cancel it now in pod admin, Security.} cancelled {Nothing changed.} other {Add a passkey or Face ID again in pod admin, Security. If it wasn’t you, sign in and secure your account now.}}",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
     needsYou: "informational",

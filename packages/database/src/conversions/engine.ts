@@ -52,6 +52,10 @@ import {
   lifecycleProjectionQueries,
   type LifecycleProjectionScope,
 } from "../services/lifecycle/project-lifecycle-columns.js";
+import {
+  dropStaleLifecycleLists,
+  fillFacetInitialStatus,
+} from "../services/lifecycle/heal-lifecycle-declarations.js";
 import { EVERY_PROFILE, opProfileSlugs } from "./data-changes.js";
 import {
   classifyRelationDefCopies,
@@ -162,6 +166,10 @@ export interface OpCounts {
   lifecycleColumnsProjected?: number;
   /** projectLifecycleColumns: of those, rows whose value no option declares (status kept, no category). */
   lifecycleUncategorized?: number;
+  /** fillFacetInitialStatus: facets given their lifecycle's initial status. */
+  facetsInitialStatusFilled?: number;
+  /** dropStaleLifecycleLists: lifecycle defs whose stored option list / default was rewritten. */
+  lifecycleListsHealed?: number;
   /** renameProfile: entities whose `type` was rewritten to the new slug. */
   entitiesRetyped?: number;
   /** renameProfile (`fromTemplate`): rows left because a `toSlug` twin already sits beside them. */
@@ -287,6 +295,8 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   // Derivation only: an unfilled column reads as "no status yet"; the declare
   // door and the next boot fill it.
   projectLifecycleColumns: "advisory",
+  fillFacetInitialStatus: "advisory",
+  dropStaleLifecycleLists: "advisory",
   reconcileEntityScope: "advisory",
   reconcileFacetScope: "advisory",
   keep: "advisory",
@@ -649,6 +659,10 @@ async function applyOp(
       return applyRekindByStatus(tx, op);
     case "projectLifecycleColumns":
       return applyProjectLifecycleColumns(tx);
+    case "fillFacetInitialStatus":
+      return applyHeal(tx, "facetsInitialStatusFilled", fillFacetInitialStatus);
+    case "dropStaleLifecycleLists":
+      return applyHeal(tx, "lifecycleListsHealed", dropStaleLifecycleLists);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -2165,6 +2179,7 @@ export async function applyRenamePropertyKey(
   op: RenamePropertyKeyOp
 ): Promise<OpCounts> {
   const keepTarget = op.onConflict === "keepTarget";
+  const prependSource = op.onConflict === "prependSource";
   const r = await tx<Array<{ renamed: number; conflicts: number }>>`
     WITH picked AS (
       SELECT e.id, (e.properties ? ${op.targetKey}::text) AS had_target
@@ -2178,6 +2193,21 @@ export async function applyRenamePropertyKey(
       SET properties = CASE
             WHEN picked.had_target AND ${keepTarget}::boolean
               THEN e.properties - ${op.sourceKey}::text
+            -- prependSource: the source text becomes the first paragraph of the
+            -- target. Nothing is discarded; a target that already opens with
+            -- the source (a re-run, or the same words) is not doubled.
+            WHEN picked.had_target AND ${prependSource}::boolean
+              THEN (e.properties - ${op.sourceKey}::text)
+                || jsonb_build_object(${op.targetKey}::text,
+                     CASE
+                       WHEN (e.properties ->> ${op.targetKey}::text) = (e.properties ->> ${op.sourceKey}::text)
+                         OR left(e.properties ->> ${op.targetKey}::text,
+                                 length((e.properties ->> ${op.sourceKey}::text) || E'\n\n'))
+                            = (e.properties ->> ${op.sourceKey}::text) || E'\n\n'
+                         THEN e.properties -> ${op.targetKey}::text
+                       ELSE to_jsonb((e.properties ->> ${op.sourceKey}::text) || E'\n\n'
+                                     || (e.properties ->> ${op.targetKey}::text))
+                     END)
             ELSE (e.properties - ${op.sourceKey}::text)
               || jsonb_build_object(${op.targetKey}::text, e.properties -> ${op.sourceKey}::text)
           END,
@@ -2192,7 +2222,9 @@ export async function applyRenamePropertyKey(
   `;
   const counts: OpCounts = {};
   if (r[0]?.renamed) counts.entitiesKeyRenamed = r[0].renamed;
-  if (r[0]?.conflicts) counts.entitiesKeyConflicts = r[0].conflicts;
+  // A prepend discards nothing, so it is not a conflict.
+  if (r[0]?.conflicts && !prependSource)
+    counts.entitiesKeyConflicts = r[0].conflicts;
   return counts;
 }
 
@@ -3017,10 +3049,38 @@ export async function computeCounts(
       }
       return {};
     }
+    case "fillFacetInitialStatus":
+    case "dropStaleLifecycleLists": {
+      // Dry run DERIVED from the apply: the same statements, rolled back.
+      try {
+        await sql.begin(async (tx) => {
+          const counts = await applyOp(
+            tx as unknown as Sql,
+            op,
+            {} as RunOptions
+          );
+          throw new DryRunRollback(counts, []);
+        });
+      } catch (e) {
+        if (e instanceof DryRunRollback) return e.counts;
+        throw e;
+      }
+      return {};
+    }
     case "keep":
     case "extractNonEntity":
       return {};
   }
+}
+
+/** Run one lifecycle heal and report its row count under `key`. */
+async function applyHeal(
+  tx: Sql,
+  key: "facetsInitialStatusFilled" | "lifecycleListsHealed",
+  heal: (tx: Sql) => Promise<number>
+): Promise<OpCounts> {
+  const n = await heal(tx);
+  return n ? { [key]: n } : {};
 }
 
 /**
