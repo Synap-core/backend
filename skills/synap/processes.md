@@ -144,7 +144,7 @@ All three are optional: without them a playbook runs exactly as before.
   these (a one-shot `generate` playbook gets no tools; a run of at most 2
   stages and no gate gets 6 reads; a longer one the pod's 19 core tools).
   Each entry is a run tool (`update_document`, `web_search`), an intent slug
-  (`search_external`) or a capability name. A stage's `tools` narrows the
+  (such as search_external) or a capability name. A stage's `tools` narrows the
   playbook's while it is active and must be a subset (refused otherwise).
   A run has no session, ask or room tool: the pod closes its session when the
   turn ends and raises a stage's `endAsk`, so never ask for those in text.

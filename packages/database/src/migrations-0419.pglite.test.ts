@@ -73,6 +73,13 @@ beforeAll(async () => {
       "stages" jsonb NOT NULL DEFAULT '[]',
       "required_intents" jsonb NOT NULL DEFAULT '[]'
     );
+    CREATE TABLE "playbook_versions" (
+      "playbook_id" uuid NOT NULL, "version" integer NOT NULL, "definition" jsonb NOT NULL,
+      PRIMARY KEY ("playbook_id", "version")
+    );
+    INSERT INTO "playbook_versions" VALUES
+      ('${SHORT}', 1, '{"name":"old","requiredIntents":["send_message"]}'),
+      ('${LONG}', 1, '{"name":"new","tools":["web_fetch"]}');
     INSERT INTO "workspaces" VALUES ('${WS}', '{"taskIntents":["search_external","send_message"]}');
     INSERT INTO "tools" VALUES ('${TOOL}', 'apify_run_actor');
     INSERT INTO "skills" VALUES ('${SKILL}', 'source-triage');
@@ -136,6 +143,20 @@ describe("migration 0419 — one tools field", () => {
     expect(long.stages[1]!.tools).toEqual(["datagouv_get_dataset"]);
     expect((await row(GATED)).tools).toEqual([]);
     expect((await row(GEN)).tools).toEqual([]);
+  });
+
+  it("a kept version's requiredIntents becomes its tools; one already on tools is left as it is", async () => {
+    const { rows } = await pg.query<{ playbook_id: string; definition: Record<string, unknown> }>(
+      `SELECT playbook_id, definition FROM playbook_versions ORDER BY playbook_id`
+    );
+    expect(rows.find((r) => r.playbook_id === SHORT)!.definition).toEqual({
+      name: "old",
+      tools: ["send_message"],
+    });
+    expect(rows.find((r) => r.playbook_id === LONG)!.definition).toEqual({
+      name: "new",
+      tools: ["web_fetch"],
+    });
   });
 
   it("re-running changes nothing", async () => {

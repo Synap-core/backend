@@ -2742,7 +2742,8 @@ export interface LoopDefinition {
 //     defined, else the base value.
 //   - stages: additive by `key` — base stages keep their order; an overlay stage
 //     whose `key` matches a base stage merges onto it (overlay stage fields win,
-//     stage `tools` union); overlay stages with new keys append after.
+//     stage `tools` and deprecated `grants` union); overlay stages with new
+//     keys append after.
 //   - grants / params / expectedOutputs / tools: UNION (grants dedup by
 //     kind+id, params by name, expectedOutputs by kind, tools by entry) — base
 //     first, overlay appended.
@@ -2811,8 +2812,17 @@ function mergeStages(
     const existing = byKey.get(key);
     if (existing) {
       const tools = unionTools(existing.tools, stage.tools);
+      // The deprecated stage `grants` still union (the write door folds them
+      // into `tools`), so a composed definition loses none of the base's.
+      const grants = unionCapabilityRefs(
+        Array.isArray(existing.grants)
+          ? (existing.grants as CapabilityRef[])
+          : undefined,
+        Array.isArray(stage.grants) ? (stage.grants as CapabilityRef[]) : undefined
+      );
       const merged: Record<string, unknown> = { ...existing, ...stage };
       if (tools) merged.tools = tools;
+      if (grants) merged.grants = grants;
       byKey.set(key, merged);
     } else {
       byKey.set(key, { ...stage });
