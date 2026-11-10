@@ -134,6 +134,7 @@ describe("letting agents run one playbook without asking", () => {
     await expect(caller().create(allow(3))).rejects.toMatchObject({
       code: "CONFLICT",
       message: expect.stringContaining("version 4"),
+      cause: { reasonCode: "SUBJECT_VERSION_CHANGED" },
     });
     expect(h.insertedValues).toHaveLength(0);
   });
