@@ -5,6 +5,7 @@ export default defineConfig({
     "scripts/create-admin-cli": "src/scripts/create-admin-cli.ts",
     "scripts/user-admin-cli": "src/scripts/user-admin-cli.ts",
     "scripts/field-crypto": "src/scripts/field-crypto-cli.ts",
+    "scripts/run-conversions": "src/scripts/run-conversions-cli.ts",
   },
   format: ["esm"],
   sourcemap: true,
