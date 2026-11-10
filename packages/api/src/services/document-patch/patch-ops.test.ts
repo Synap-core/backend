@@ -11,6 +11,7 @@ import {
   DocumentPatchOpsSchema,
   previewPatch,
   removedEmbeds,
+  isSectionOnlyPatch,
   renderDocumentPatch,
   resolvePatchFields,
   resolvePatchTitle,
@@ -473,5 +474,123 @@ describe("set_scope / set_refresher — fields, never the body", () => {
     expect(() =>
       DocumentPatchOpsSchema.parse([{ op: "set_scope", scope: "project:x" }])
     ).toThrow();
+  });
+});
+
+// The person's own plain block (`upsert_section` with `form: "heading"`): what
+// a one-shot playbook landing on `owner: "person"` files, so approving it is
+// the one write into the person's `## Caption` (decision of 10 Nov 2026).
+describe("upsert_section form heading: the person's own plain block", () => {
+  const SCRIPT = [
+    "S1: You do not own your digital life.",
+    "S2: Your data lives on servers you never chose.",
+    "",
+    "## Caption",
+    "",
+    "The caption the person saved.",
+    "",
+    "## Notes",
+    "",
+    "Shoot on Tuesday.",
+    "",
+  ].join("\n");
+  const op = (body: string) =>
+    ({
+      op: "upsert_section",
+      id: "caption",
+      title: "Caption",
+      body,
+      form: "heading",
+    }) as const;
+
+  it("replaces the block's body in place, every other line kept, no container and no owner stamp", () => {
+    const out = renderDocumentPatch(SCRIPT, [op("The new caption.")], {
+      writer: AGENT,
+      now: NOW,
+    });
+    expect(out.markdown).toBe(
+      SCRIPT.replace("The caption the person saved.", "The new caption.")
+    );
+    expect(out.markdown).not.toContain("synap-section");
+    expect(out.replacedSections).toEqual(["caption"]);
+  });
+
+  it("replaces a block that ends the document", () => {
+    const doc = "S1: Hook.\n\n## Caption\nOld words\nover two lines";
+    const out = renderDocumentPatch(doc, [op("New words.")], {
+      writer: AGENT,
+      now: NOW,
+    });
+    expect(out.markdown).toBe("S1: Hook.\n\n## Caption\n\nNew words.\n");
+  });
+
+  it("stops at a following section container, which it leaves byte for byte", () => {
+    const doc = [
+      "## Caption",
+      "Old.",
+      ai("caption-draft", "An older AI draft."),
+      "",
+    ].join("\n");
+    const out = renderDocumentPatch(doc, [op("New.")], {
+      writer: AGENT,
+      now: NOW,
+    });
+    expect(out.markdown).toBe(
+      [
+        "## Caption",
+        "",
+        "New.",
+        "",
+        ai("caption-draft", "An older AI draft."),
+        "",
+      ].join("\n")
+    );
+  });
+
+  it("appends the block when the document has none, and never reads a heading inside a container as it", () => {
+    // A person's section CONTAINER titled "Caption" is not the plain block.
+    const container = [
+      `::::synap-section{id="mine" owner="human"}`,
+      "## Caption",
+      "",
+      "A person's section.",
+      "::::",
+    ].join("\n");
+    const doc = ["S1: Hook.", "", container, ""].join("\n");
+    const out = renderDocumentPatch(doc, [op("First caption.")], {
+      writer: AGENT,
+      now: NOW,
+    });
+    expect(out.markdown).toBe(
+      `${doc.trimEnd()}\n\n## Caption\n\nFirst caption.\n`
+    );
+    expect(out.replacedSections).toEqual([]);
+  });
+
+  it("refuses two blocks of the title and a body that would split into another block", () => {
+    expect(() =>
+      renderDocumentPatch(`${SCRIPT}\n## Caption\n\nAgain.\n`, [op("x")], {
+        writer: AGENT,
+        now: NOW,
+      })
+    ).toThrow(/2 "## Caption" blocks/);
+    expect(() =>
+      renderDocumentPatch(SCRIPT, [op("Line.\n## Hashtags")], {
+        writer: AGENT,
+        now: NOW,
+      })
+    ).toThrow(/starting with "## "/);
+  });
+
+  it("is a document update, not a section write (governance keys)", () => {
+    expect(isSectionOnlyPatch([op("x")])).toBe(false);
+    expect(
+      isSectionOnlyPatch([
+        { op: "upsert_section", id: "a", title: "A", body: "x" },
+      ])
+    ).toBe(true);
+    expect(DocumentPatchOpsSchema.parse([op("x")])[0]).toMatchObject({
+      form: "heading",
+    });
   });
 });

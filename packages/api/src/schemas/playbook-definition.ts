@@ -95,6 +95,12 @@ export const outputLandingSchema = z.strictObject({
     .max(200)
     .regex(/^[^\r\n]+$/, "a section title is one line"),
   /**
+   * Whose section (`OutputLanding.owner`): `ai` (default) = an AI-owned
+   * section offered as a draft; `person` = the document's plain
+   * `## <section>` block, replaced on approval (the one write).
+   */
+  owner: z.enum(["ai", "person"]).optional(),
+  /**
    * Past outcomes read as examples (`OutputLanding.examples`): how many of
    * the person's last approved and rejected drafts of this playbook in this
    * space. Off when absent; each count capped so the examples never crowd out

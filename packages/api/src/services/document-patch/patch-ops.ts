@@ -53,6 +53,7 @@ import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
   parseSections,
   sectionOwner,
+  upsertHeadingBlockInMarkdown,
   upsertSectionInMarkdown,
   SectionBodyError,
   type ParsedSections,
@@ -75,6 +76,15 @@ export const DocumentPatchOpSchema = z.discriminatedUnion("op", [
     title: z.string().min(1).max(200),
     body: z.string().max(100_000),
     status: z.string().max(40).optional(),
+    /**
+     * `heading` = write the document's PLAIN `## <title>` block (no section
+     * container, no owner stamp: the person's own form, as an app writes it),
+     * replacing its body in place or appending it (`upsertHeadingBlockInMarkdown`).
+     * Absent = a `synap-section` container by `id` (the default). A one-shot
+     * playbook landing on a person's own target files this (`lands.owner:
+     * "person"`), so approving the proposal is the one write.
+     */
+    form: z.literal("heading").optional(),
   }),
   z.object({
     op: z.literal("replace_text"),
@@ -301,6 +311,21 @@ function applyOp(
 ): string {
   switch (op.op) {
     case "upsert_section": {
+      if (op.form === "heading") {
+        try {
+          const written = upsertHeadingBlockInMarkdown(content, {
+            title: op.title,
+            body: op.body,
+          });
+          if (written.replaced) replacedSections.push(op.id);
+          return written.markdown;
+        } catch (err) {
+          if (err instanceof SectionBodyError) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+          }
+          throw err;
+        }
+      }
       const parsed = parseSections(content);
       refuseUnlocatable(parsed, "before");
       const existing = parsed.sections.find((s) => s.id === op.id);
@@ -678,7 +703,11 @@ export function resolvePatchFields(ops: readonly DocumentPatchOp[]): {
   return out;
 }
 
-/** Is every op a section write? Governance files those under the section keys. */
+/**
+ * Is every op a section write? Governance files those under the section keys.
+ * A plain heading block (`form: "heading"`) is the person's own text, not a
+ * section: it is a document update.
+ */
 export function isSectionOnlyPatch(ops: readonly DocumentPatchOp[]): boolean {
-  return ops.every((op) => op.op === "upsert_section");
+  return ops.every((op) => op.op === "upsert_section" && op.form !== "heading");
 }

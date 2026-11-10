@@ -244,6 +244,7 @@ import * as schema from "@synap/database/schema";
 import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { registerPlaybooksRoutes } from "./playbooks.js";
+import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
 import {
   buildGeneratePrompt,
   GENERATE_PROMPT_MAX_CHARS,
@@ -287,6 +288,7 @@ const DOC_2 = randomUUID();
 const CAPTION = randomUUID(); // executor: generate
 const AGENTIC = randomUUID(); // executor: is-agent (the control)
 const CAPTION_EX = randomUUID(); // executor: generate, opts in to past outcomes
+const CAPTION_MINE = randomUUID(); // executor: generate, lands in the person's own "## Caption"
 
 const SCRIPT = [
   "S1: You do not own your digital life.",
@@ -376,7 +378,10 @@ beforeAll(async () => {
     id: string,
     name: string,
     executor: string,
-    examples?: { approved?: number; rejected?: number }
+    examples?: { approved?: number; rejected?: number },
+    landing: { section: string; owner?: "person" } = {
+      section: "Caption draft",
+    }
   ) =>
     q(
       `insert into playbooks (id, workspace_id, created_by, name, goal_template, executor, status, metadata, params, input_strategy, channel_spec, expected_outputs, stages, criteria, tools, guidance, requires, subject_profile, version)
@@ -397,7 +402,7 @@ beforeAll(async () => {
             relationToSubject: "none",
             lands: {
               target: "subject_document_section",
-              section: "Caption draft",
+              ...landing,
               ...(examples ? { examples } : {}),
             },
           },
@@ -406,6 +411,13 @@ beforeAll(async () => {
     );
   await playbook(CAPTION, "Write the caption", "generate");
   await playbook(AGENTIC, "Write the caption (agent)", "is-agent");
+  await playbook(
+    CAPTION_MINE,
+    "Write the caption (into the person's caption)",
+    "generate",
+    undefined,
+    { section: "Caption", owner: "person" }
+  );
   await playbook(CAPTION_EX, "Write the caption (with examples)", "generate", {
     approved: 1,
     rejected: 2,
@@ -824,5 +836,73 @@ describe("past outcomes as context (lands.examples, slice 8)", () => {
       "subject",
       "subject_document",
     ]);
+  });
+});
+
+describe("a landing on the person's own target (lands.owner: person, decision of 10 Nov 2026)", () => {
+  it("files ONE upsert_section of the person's plain block; approving it replaces the caption they saved: the one write", async () => {
+    const { status, body } = await runPlaybook(CAPTION_MINE, POST_2);
+    expect(status, JSON.stringify(body)).toBe(200);
+    const [p] = (await proposalRows()).filter(
+      (r) => r.id === body.generated.proposalId
+    );
+    const payload = (p!.data.data ?? p!.data) as Record<string, any>;
+    // The kit's guard still holds: exactly one upsert_section from the pod.
+    expect(payload.ops).toEqual([
+      {
+        op: "upsert_section",
+        id: "caption",
+        title: "Caption",
+        body: DRAFT,
+        form: "heading",
+      },
+    ]);
+    expect(p).toMatchObject({
+      status: "pending",
+      created_by: "system:generate-run",
+    });
+    expect(body.generated).toMatchObject({
+      sectionId: "caption",
+      section: "Caption",
+    });
+    const run = (await runRows()).find(
+      (r) => r.generation?.proposal?.id === p!.id
+    )!;
+    expect(run.generation!.lands).toEqual({
+      target: "subject_document_section",
+      section: "Caption",
+      owner: "person",
+    });
+
+    // Nothing is written until the person approves.
+    const key = `${PERSON}/documents/${DOC_2}.md`;
+    expect(h.blobs.get(key)).toBe(SCRIPT);
+
+    // Approving applies the stored op: the person's "## Caption" now holds
+    // the draft, no AI section is added, every other line is kept.
+    await applyApprovedDocumentPatch(
+      {
+        targetId: DOC_2,
+        agentUserId: null,
+        createdBy: "system:generate-run",
+        data: p!.data,
+      },
+      PERSON
+    );
+    const [doc] = (
+      await q<{ storage_key: string }>(
+        `select storage_key from documents where id = $1`,
+        [DOC_2]
+      )
+    ).rows;
+    const after = h.blobs.get(doc!.storage_key)!;
+    expect(after).toBe(
+      SCRIPT.replace(
+        "## Caption\nThe caption the person saved.",
+        `## Caption\n\n${DRAFT}\n`
+      )
+    );
+    expect(after).not.toContain("synap-section");
+    expect(after).not.toContain("The caption the person saved.");
   });
 });
