@@ -41292,6 +41292,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
+				targetSubjectId?: string | undefined;
+				targetSubjectVersion?: number | undefined;
 				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
@@ -41312,6 +41314,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
@@ -41346,9 +41350,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectLabel: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
+			};
+		}>;
+		forSubject: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				subjectId: string;
+			};
+			meta: object;
+			output: {
+				rules: {
+					agentLabel: string | null;
+					agentUserId: string | null;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					id: string;
+					principalClass: string | null;
+					principalKind: "agent" | "any" | "class";
+					scopeKind: "pod" | "workspace";
+					sourceProposalId: string | null;
+					targetKind: "action" | "capability" | "connection" | "profile";
+					targetPattern: string;
+					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectLabel: string | null;
+					targetSubjectVersion: number | null;
+					verdict: "auto" | "deny" | "propose";
+					workspaceId: string | null;
+				}[];
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -41371,6 +41406,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectLabel: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
@@ -41394,6 +41432,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectLabel: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
@@ -41565,6 +41606,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
