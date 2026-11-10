@@ -107,8 +107,7 @@ function runQuietFor(hours: number) {
   return and(
     eq(playbookRuns.status, "running"),
     drizzleSql`${playbookRuns.startedAt} < now() - (${hours}::int * interval '1 hour')`,
-    sessionQuietFor(hours),
-    RUN_STAGE_NOT_WAITING
+    sessionQuietFor(hours)
   )!;
 }
 
@@ -154,7 +153,10 @@ export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
 )`;
 
 /** A running run past the window whose session shows no recent activity. */
-const RUN_IS_STALE = runQuietFor(PLAYBOOK_RUN_REAPER_STALE_HOURS);
+const RUN_IS_STALE = and(
+  runQuietFor(PLAYBOOK_RUN_REAPER_STALE_HOURS),
+  RUN_STAGE_NOT_WAITING
+)!;
 
 /**
  * A run the pod handed to its OWN AI (the IS) is quiet much sooner: an IS turn

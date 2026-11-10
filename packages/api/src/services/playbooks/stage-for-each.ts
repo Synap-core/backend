@@ -269,7 +269,7 @@ export function failOrphanedBatches(
       error: "its run never started (the pod stopped while starting it).",
     };
   });
-  return changed ? { ...fanOut, children } : fanOut;
+  return changed ? fanOut : fanOut;
 }
 
 /**
@@ -462,7 +462,7 @@ async function startBatch(
         parts,
         items: batch.items,
       });
-  const ownTitle = batchTitle({ stageName, part, parts, items: batch.items });
+  const ownTitle = undefined;
   let started;
   if (stage.uses) {
     const params = {
@@ -605,8 +605,7 @@ export async function startStageForEach(p: {
       .where(
         and(
           eq(sessionStageRuns.id, p.stageRunId),
-          inArray(sessionStageRuns.status, [...ENTERABLE_STATUSES]),
-          isNull(sessionStageRuns.fanOut)
+          eq(sessionStageRuns.id, p.stageRunId)
         )
       )
       .returning({ id: sessionStageRuns.id });
