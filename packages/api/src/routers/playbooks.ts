@@ -3189,7 +3189,7 @@ export const playbooksRouter = router({
       // TOOLS — refuse a run whose tools lack what a step declares BEFORE a
       // proposal is filed for a run that could never start (`runPlaybook`
       // asks it again when the run starts, the approved replay included).
-      if (declaresStepTools(playbook.stages)) {
+      if (declaresStepTools(playbook)) {
         const choice = await resolveRunChoice({
           userId: ctx.userId,
           agentUserId: input.agentUserId,

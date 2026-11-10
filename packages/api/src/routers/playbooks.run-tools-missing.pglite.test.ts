@@ -135,7 +135,7 @@ const USER = randomUUID();
 /** Claude Code on the person's devbox: its runner served it 30 s ago — awake. */
 const RUNNING = randomUUID();
 const WS = randomUUID();
-/** Its step names `list_playbooks`, which no run here can use. */
+/** Its step names `fireflies`, a capability this pod does not serve. */
 const LACKING = randomUUID();
 /** Its step names a run tool, a served intent and a visible capability. */
 const READY = randomUUID();
@@ -225,7 +225,7 @@ beforeAll(async () => {
     [WS, USER]
   );
   for (const [id, name, tools] of [
-    [LACKING, "Read the runs", ["list_playbooks", "get_session"]],
+    [LACKING, "Read the runs", ["fireflies", "get_session"]],
     [READY, "Read sessions", READY_TOOLS],
   ] as const) {
     await q(
@@ -263,13 +263,13 @@ describe("a step names a tool no run here can use", () => {
           {
             stageKey: "read",
             stageName: "Read the runs",
-            missing: ["list_playbooks"],
+            missing: ["fireflies"],
           },
         ],
       },
     });
     expect((err as Error).message).toMatch(
-      /step "Read the runs" needs list_playbooks.*Nothing was started/
+      /step "Read the runs" needs fireflies.*Nothing was started/
     );
     expect(h.dispatched).toEqual([]);
     for (const table of [
@@ -327,14 +327,14 @@ describe("the write door warns, never refuses", () => {
     const res = await asPerson().create({
       name: "Read the runs again",
       goalTemplate: "Read the runs",
-      tools: ["list_playbooks"],
-      stages: JSON.parse(stages(["list_playbooks"])),
+      tools: ["fireflies"],
+      stages: JSON.parse(stages(["fireflies"])),
     });
     expect(res.status).toBe("created");
     expect(res.playbook).not.toBeNull();
     expect("warnings" in res && res.warnings).toEqual([
       expect.stringMatching(
-        /will refuse to start: its step "Read the runs" needs list_playbooks/
+        /cannot start: its step "Read the runs" needs fireflies/
       ),
     ]);
   });
@@ -353,12 +353,12 @@ describe("the write door warns, never refuses", () => {
   it("update warns over the merged row when the patch touches the steps", async () => {
     const res = await asPerson().update({
       id: READY,
-      tools: [...READY_TOOLS, "list_playbooks"],
-      stages: JSON.parse(stages([...READY_TOOLS, "list_playbooks"])),
+      tools: [...READY_TOOLS, "fireflies"],
+      stages: JSON.parse(stages([...READY_TOOLS, "fireflies"])),
     });
     expect(res.status).toBe("updated");
     expect("warnings" in res && res.warnings).toEqual([
-      expect.stringMatching(/step "Read the runs" needs list_playbooks/),
+      expect.stringMatching(/step "Read the runs" needs fireflies/),
     ]);
   });
 });

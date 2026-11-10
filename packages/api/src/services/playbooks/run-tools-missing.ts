@@ -4,6 +4,10 @@
  * ended 12 s in because its worker had no tool for the step (finding
  * a9cc4848). The check runs before any session, room, run row or proposal.
  *
+ * What a step declares: its own `tools`; a step without its own list declares
+ * the playbook's entries that are run tools (lead default D4, 10 Nov 2026,
+ * until the founder decides which tools a code playbook's steps declare).
+ *
  * A step's `tools` entry is MISSING from a run on the pod's own AI when the
  * run resolves nothing for it, by the same rules as `run-tool-profile.ts`:
  *   - the run is one model call (`one-shot`): it has no tools at all;
@@ -26,8 +30,7 @@ import {
   isRunToolName,
   readToolsList,
   runClassOf,
-  runnerChoices,
-  type PlaybookRunner,
+  runsOnPodAi,
 } from "@synap/playbooks";
 import {
   defaultDeps,
@@ -58,23 +61,14 @@ export interface RunToolsPlaybook {
   stages: unknown;
 }
 
-/** Does every choice of this runner land on the pod's own AI? PURE. */
-function runsOnPodAi(runner: unknown): boolean {
-  return runnerChoices(runner as PlaybookRunner | undefined).every(
-    (c) =>
-      c === "self" ||
-      c === "synap_ai" ||
-      (typeof c === "object" && c !== null && "synapAi" in c)
-  );
-}
-
-/** The steps a run on the pod's AI works that declare their own `tools`. PURE. */
+/** The steps a run on the pod's AI works and the tools each declares. PURE. */
 function declaringStages(
-  stages: unknown
+  playbook: Pick<RunToolsPlaybook, "tools" | "stages">
 ): Array<{ key: string; name: string; tools: string[] }> {
-  if (!Array.isArray(stages)) return [];
+  if (!Array.isArray(playbook.stages)) return [];
+  const inherited = readToolsList(playbook.tools).filter(isRunToolName);
   const out: Array<{ key: string; name: string; tools: string[] }> = [];
-  for (const s of stages) {
+  for (const s of playbook.stages) {
     if (!s || typeof s !== "object") continue;
     const stage = s as {
       key?: unknown;
@@ -82,7 +76,9 @@ function declaringStages(
       tools?: unknown;
       runner?: unknown;
     };
-    const tools = readToolsList(stage.tools);
+    const tools = Array.isArray(stage.tools)
+      ? readToolsList(stage.tools)
+      : inherited;
     if (tools.length === 0 || !runsOnPodAi(stage.runner)) continue;
     const key = String(stage.key);
     out.push({
@@ -94,9 +90,11 @@ function declaringStages(
   return out;
 }
 
-/** Does a step a run on the pod's AI works declare its own `tools`? PURE. */
-export function declaresStepTools(stages: unknown): boolean {
-  return declaringStages(stages).length > 0;
+/** Does a step a run on the pod's AI works declare tools? PURE. */
+export function declaresStepTools(
+  playbook: Pick<RunToolsPlaybook, "tools" | "stages">
+): boolean {
+  return declaringStages(playbook).length > 0;
 }
 
 /**
@@ -111,7 +109,7 @@ export async function findRunToolsMissing(
   },
   deps: Pick<RunToolProfileDeps, "readRegistry"> = defaultDeps
 ): Promise<RunToolsCheck> {
-  const stages = declaringStages(input.playbook.stages);
+  const stages = declaringStages(input.playbook);
   if (stages.length === 0) return { status: "ok", missing: [] };
   const oneShot = runClassOf(input.playbook) === "one-shot";
   const playbookTools = new Set(readToolsList(input.playbook.tools));
@@ -155,19 +153,15 @@ export async function findRunToolsMissing(
   return { status: "ok", missing };
 }
 
-/** "step "A" needs x, y; step "B" needs z". PURE. */
-function stepsLacking(missing: readonly StageToolsMissing[]): string {
-  return missing
-    .map((m) => `step "${m.stageName}" needs ${m.missing.join(", ")}`)
-    .join("; ");
-}
-
-/** The refusal sentence of a run that cannot start. PURE. */
-export function describeRunToolsMissing(
+/** The sentence naming each step and what it lacks, for the refusal and the save warning. PURE. */
+function runToolsMissingSentence(
   playbookName: string,
   missing: readonly StageToolsMissing[]
 ): string {
-  return `"${playbookName}" cannot run here: its ${stepsLacking(missing)}, which a run on this pod cannot use. Nothing was started. Hand the run to an agent that has these tools, add a capability that serves them, or take them off the step.`;
+  const steps = missing
+    .map((m) => `step "${m.stageName}" needs ${m.missing.join(", ")}`)
+    .join("; ");
+  return `A run of "${playbookName}" on this pod's AI cannot start: its ${steps}, which a run on this pod cannot use. Hand its runs to an agent that has these tools, add a capability that serves them, or take them off the step.`;
 }
 
 /**
@@ -189,9 +183,7 @@ export async function runToolsSaveWarnings(
     ];
   }
   if (check.missing.length === 0) return [];
-  return [
-    `A run of "${input.playbook.name}" on this pod's AI will refuse to start: its ${stepsLacking(check.missing)}, which a run on this pod cannot use. Add a capability that serves them, hand its runs to an agent that has them, or take them off the step.`,
-  ];
+  return [runToolsMissingSentence(input.playbook.name, check.missing)];
 }
 
 /**
@@ -214,7 +206,7 @@ export async function refuseRunMissingTools(
   if (check.status !== "ok" || check.missing.length === 0) return;
   throw new TRPCError({
     code: "PRECONDITION_FAILED",
-    message: describeRunToolsMissing(input.playbook.name, check.missing),
+    message: `${runToolsMissingSentence(input.playbook.name, check.missing)} Nothing was started.`,
     cause: { reasonCode: RUN_TOOLS_MISSING, missing: check.missing },
   });
 }
