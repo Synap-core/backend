@@ -4,9 +4,10 @@
  * Before it, PATCH refused `completeOutput` and nothing else took it, so every
  * run "finished" with its outputs still owed (run audit 80005d94, 10 Nov 2026).
  *
- * Driven through the real route. The observed seam is `updateFocusSession`,
- * the ONE service the MCP door calls (row lock, human-slot floor, evidence
- * verdict, governance): stubbed here, pinned by its own suites.
+ * Driven through the real route. The observed seam is `updateFocusSession`
+ * (reached through `claimSessionOutput`), the ONE service the MCP door calls
+ * (row lock, human-slot floor, evidence verdict, governance): stubbed here,
+ * pinned by its own suites.
  *
  * Rows rule out: a claim that never reaches that service (or reaches it with
  * another field, or with a body-supplied actor); a claim on ANOTHER person's

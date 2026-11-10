@@ -3943,9 +3943,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * The Hub door for CLAIMING a declared deliverable. The PATCH door refuses
    * `completeOutput` (it takes no row lock: `unsupportedUpdateFieldError`), so
    * an in-pod run, whose only door is Hub REST, could declare outputs and never
-   * claim one (run audit 80005d94, 10 Nov 2026). This calls the ONE service the
-   * MCP door calls (`updateFocusSession`): the row lock, the human-slot floor,
-   * the evidence verdict and governance are its, never a second copy here.
+   * claim one (run audit 80005d94, 10 Nov 2026). `claimSessionOutput` calls the
+   * ONE service the MCP door calls (`updateFocusSession`, `completeOutput`
+   * only): the row lock, the human-slot floor, the evidence verdict and
+   * governance are its, never a second copy here.
    * Owner-floored like the block door (`resolveRowActingContext`).
    */
   app.post("/focus-sessions/:id/outputs/complete", async (c) => {
@@ -3956,6 +3957,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
+    // A key bounded to a space or project must hold write on the session's
+    // own place (the rung the unblock and answer doors run).
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     const raw = await c.req.json().catch(() => null);
     const parsed = CompleteOutputBodySchema.safeParse(raw);
     if (!parsed.success) {
@@ -3976,14 +3981,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
 
-      const { updateFocusSession } =
-        await import("../../../services/focus-sessions/update-session.js");
-      const result = await updateFocusSession({
+      const { claimSessionOutput } =
+        await import("../../../services/focus-sessions/claim-output.js");
+      const result = await claimSessionOutput({
         sessionId: session.id,
         userId: acting.userId,
         // The verified acting agent (auth context), never a body field.
         agentUserId: c.get("agentUserId") as string | undefined,
-        completeOutput: parsed.data.output,
+        output: parsed.data.output,
       });
       switch (result.status) {
         case "not_found":
@@ -3993,8 +3998,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         case "proposed":
           return jsonGoverned(c, {
             status: "proposed",
-            message: "The claim was proposed for review",
+            message: proposedMessageFor(
+              result.proposalType,
+              "The claim was proposed for review"
+            ),
             proposalId: result.proposalId,
+            ...(result.proposalType
+              ? { proposalType: result.proposalType }
+              : {}),
             summary: result.summary,
             reviewPath: result.reviewPath,
             reviewUrl: result.reviewUrl,
