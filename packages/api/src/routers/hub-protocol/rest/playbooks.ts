@@ -682,7 +682,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           Record<string, unknown> | undefined,
         schedule: body.schedule as string | number | boolean | null | undefined,
         executor: body.executor as
-          "is-agent" | "external-agent" | "hybrid" | undefined,
+          "is-agent" | "external-agent" | "hybrid" | "generate" | undefined,
         status: body.status as
           "draft" | "active" | "paused" | "archived" | undefined,
         // `session` | `project` (a METHOD a project runs as a track). Validated

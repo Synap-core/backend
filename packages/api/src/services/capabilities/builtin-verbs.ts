@@ -3751,7 +3751,9 @@ const playbookUpdateParams = z
     /** REPLACES the criteria list. Shape validated by `sessionCriteriaSchema`. */
     criteria: z.array(z.record(z.string(), z.unknown())).optional(),
     status: z.enum(["draft", "active", "paused", "archived"]).optional(),
-    executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
+    executor: z
+      .enum(["is-agent", "external-agent", "hybrid", "generate"])
+      .optional(),
     /** Shown to the reviewer when the write lands as a proposal. */
     reasoning: z.string().max(2000).optional(),
     // STRICT, like `tool.request`: an unknown key is REFUSED, never accepted and

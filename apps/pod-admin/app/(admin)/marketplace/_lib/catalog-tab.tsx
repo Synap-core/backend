@@ -207,7 +207,7 @@ export function CatalogTab() {
   );
 }
 
-function EntryCard({
+export function EntryCard({
   entry,
   showSource,
 }: {
@@ -215,6 +215,8 @@ function EntryCard({
   showSource: boolean;
 }) {
   const Icon = kindIcon(entry.objectKind);
+  // Absent is omitted: a placeholder sentence is not a state (ui-composition).
+  const description = readableDescription(entry.description);
   return (
     <Link
       href={catalogDetailHref(entry)}
@@ -251,9 +253,11 @@ function EntryCard({
         </Chip>
       </div>
 
-      <p className="line-clamp-2 text-[12px] leading-relaxed text-foreground/65">
-        {readableDescription(entry.description) ?? "No description."}
-      </p>
+      {description && (
+        <p className="line-clamp-2 text-[12px] leading-relaxed text-foreground/65">
+          {description}
+        </p>
+      )}
 
       <div className="mt-auto flex min-w-0 items-center gap-1.5 pt-1 text-[11px] text-foreground/65">
         <span className="truncate font-mono">{entry.id}</span>

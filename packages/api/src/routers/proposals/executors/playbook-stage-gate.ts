@@ -35,6 +35,7 @@ import {
   transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -65,14 +66,30 @@ export function registerPlaybookStageGateExecutors(): void {
         });
       }
 
-      // Resume ONLY from `paused`. A session the human has since closed, failed
-      // or cancelled must not be reanimated by an approval that was about a
-      // stage boundary, not about the session's life. The guard is in the WHERE
-      // clause so the decision and the write cannot disagree.
+      // A gate on a run that ENDED is never approvable into nothing. A session
+      // that ends expires its pending gates (`setSessionStatus`), so this is a
+      // gate left from before that rule, or a race with the close: refuse,
+      // naming why, instead of an approval that changes nothing (live: 9c527c67
+      // approved on closed run be143ceb, 9 Nov 2026). More work is a new run.
+      if (isTerminalSessionStatus(session.status)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            `This run ended (${session.status}) before its stage gate was answered, ` +
+            "so approving it cannot continue it. Nothing was changed. " +
+            "Start the playbook again on the same record to go on.",
+        });
+      }
+
+      // Resume ONLY from a pause (`paused`, or `stale`: the reaper's aging of a
+      // pause, still waiting on this gate). A session the human has since
+      // closed, failed or cancelled is refused above: an approval about a
+      // stage boundary never reanimates a session's life. The guard is in the
+      // WHERE clause so the decision and the write cannot disagree.
       // The approver resumes it; the transition names the proposal.
       const { rows: resumed } = await setSessionStatus(db, {
         sessionId,
-        from: "paused",
+        from: ["paused", "stale"],
         to: "active",
         actor: { kind: "human", userId },
         proposalId: proposal.id,

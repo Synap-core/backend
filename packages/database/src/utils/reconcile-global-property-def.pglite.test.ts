@@ -242,3 +242,92 @@ describe("reconcile never writes a pod-wide global property def", () => {
     expect((await globalDef()).constraints).toEqual({});
   });
 });
+
+// A template update that REORDERS a lifecycle's options reaches a pod that
+// already holds the def (status-first wave, founder 2026-11-09: lead stages
+// new, researching, qualified, outreach, …). The reconcile writes the template
+// order first, so no conversion is needed to reorder `leadStage`; categories
+// and the lifecycle declaration survive.
+describe("reconcile reorders a lifecycle's options to the template order", () => {
+  const OLD = [
+    "new",
+    "researching",
+    "outreach",
+    "engaged",
+    "qualified",
+    "nurturing",
+    "converted",
+    "disqualified",
+  ];
+  const NEW = [
+    "new",
+    "researching",
+    "qualified",
+    "outreach",
+    "engaged",
+    "nurturing",
+    "converted",
+    "disqualified",
+  ];
+  const CATEGORY: Record<string, string> = {
+    new: "open",
+    researching: "open",
+    outreach: "open",
+    engaged: "active",
+    qualified: "active",
+    nurturing: "active",
+    converted: "done",
+    disqualified: "lost",
+  };
+  const leadRole = (order: string[]) => ({
+    slug: "lead",
+    displayName: "Lead",
+    scope: "shared",
+    profileKind: "role",
+    lifecycle: {
+      property: "leadStage",
+      options: order.map((key) => ({ key, category: CATEGORY[key] })),
+    },
+    properties: [
+      {
+        slug: "leadStage",
+        label: "Stage",
+        valueType: "string",
+        inputType: "select",
+        enumValues: order,
+      },
+    ],
+  });
+  const leadStage = async () =>
+    (
+      await q<{
+        constraints: {
+          enum?: string[];
+          enumOptions?: Array<{ key: string; category?: string }>;
+        };
+        is_lifecycle: boolean;
+      }>(
+        `select pd.constraints, pp.is_lifecycle from property_defs pd
+           join profile_properties pp on pp.property_def_id = pd.id
+           join profiles p on p.id = pp.profile_id
+          where p.slug = 'lead' and pd.slug = 'leadStage'`
+      )
+    )[0]!;
+
+  it("an existing leadStage def takes the new order, categories and lifecycle kept", async () => {
+    await reconcile([leadRole(OLD)]);
+    expect((await leadStage()).constraints.enum).toEqual(OLD);
+
+    const report = await reconcile([leadRole(NEW)]);
+    expect(report.properties.enumsUpdated).toEqual([
+      { profile: "lead", slug: "leadStage" },
+    ]);
+    const def = await leadStage();
+    expect(def.constraints.enum).toEqual(NEW);
+    expect(def.constraints.enumOptions?.map((o) => o.key)).toEqual(NEW);
+    expect(
+      def.constraints.enumOptions?.map((o) => [o.key, o.category])
+    ).toEqual(NEW.map((k) => [k, CATEGORY[k]]));
+    expect(def.is_lifecycle).toBe(true);
+  });
+});

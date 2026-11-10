@@ -93,6 +93,7 @@ const SAMPLE: Required<
   ],
   decisionId: "66666666-6666-6666-6666-666666666666",
   relationToSubject: "made_for",
+  lands: { target: "subject_document_section", section: "Stored draft" },
   optional: true,
   blocks: { entityId: "33333333-3333-4333-8333-333333333333", to: "contacted" },
   blockerKey: "not_connected",
