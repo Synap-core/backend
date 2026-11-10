@@ -248,6 +248,7 @@ async function assertPersonAllowsPlaybook(
     throw new TRPCError({
       code: "CONFLICT",
       message: `This playbook changed since you looked at it: it is now version ${playbook.version}. Look at it again, then allow that version.`,
+      cause: { reasonCode: "SUBJECT_VERSION_CHANGED" },
     });
   }
   const sameHome = playbook.workspaceId
