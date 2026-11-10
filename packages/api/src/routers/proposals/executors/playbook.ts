@@ -852,14 +852,18 @@ export function registerPlaybookExecutors(): void {
         // means nothing was started, so the claim is released (see below).
         const firstSubject = subjects[0] ?? carriedSubjectId;
         const result = await runFor(firstSubject);
-        if (result.status === "running" && subjects.length > 1) {
+        // A one-shot (`executor: "generate"`) run that filed its draft is a
+        // run that STARTED and finished at once: delivered like `running`.
+        const started =
+          result.status === "running" || result.status === "generated";
+        if (started && subjects.length > 1) {
           batch = await runBatchRest(
             subjects.slice(1),
             runFor,
             startedRun(subjects[0]!, result)
           );
         }
-        if (result.status === "running") {
+        if (started) {
           receipt = batch ?? {
             started: [startedRun(firstSubject, result)],
             failed: [],
@@ -1179,7 +1183,9 @@ export async function runBatchRest(
       const subjectId = subjects[next++]!;
       try {
         const r = await runFor(subjectId);
-        if (r.status === "running") started.push(startedRun(subjectId, r));
+        // `generated`: a one-shot run filed its draft (it has no session).
+        if (r.status === "running" || r.status === "generated")
+          started.push(startedRun(subjectId, r));
         else failed.push(subjectId);
       } catch {
         failed.push(subjectId);

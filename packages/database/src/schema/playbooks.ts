@@ -29,8 +29,14 @@ import {
 import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-/** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
-export type PlaybookExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/**
+ * Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef.
+ * `generate` = a ONE-SHOT playbook (plan 08e4fba7 slice 1): the pod reads the
+ * subject, makes ONE `ai.generate` call and files the result as a proposal on
+ * the subject, with no session, room or agent turn (`generate-run.ts`).
+ */
+export type PlaybookExecutorRef =
+  "is-agent" | "external-agent" | "hybrid" | "generate";
 
 /** Sentinel used when workspace_id IS NULL so pod-wide names participate in uniqueness. */
 export const PLAYBOOK_POD_WIDE_WORKSPACE_SENTINEL =
@@ -110,7 +116,7 @@ export const playbooks = pgTable(
     /** PlaybookSchedule | null — { cron, enabled }. */
     schedule: jsonb("schedule"),
     executor: text("executor", {
-      enum: ["is-agent", "external-agent", "hybrid"],
+      enum: ["is-agent", "external-agent", "hybrid", "generate"],
     })
       .$type<PlaybookExecutorRef>()
       .notNull()

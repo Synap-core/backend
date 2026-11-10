@@ -26,6 +26,14 @@ export function resolveExecutor(ref: ExecutorRef): Executor {
       return externalAgent;
     case "hybrid":
       return hybrid;
+    case "generate":
+      // A one-shot playbook never dispatches on a session: `executeSingleRun`
+      // runs it through `executeGenerateRun` (one `ai.generate` call, a
+      // proposal on the subject) before any session exists. Reaching here
+      // means a door skipped that branch: refuse rather than start an agent.
+      throw new Error(
+        "A one-shot (generate) playbook runs without a session: start it through runPlaybook, never through a session executor."
+      );
     default: {
       // Exhaustiveness guard — a new ExecutorRef must add a branch here.
       const _exhaustive: never = ref;
