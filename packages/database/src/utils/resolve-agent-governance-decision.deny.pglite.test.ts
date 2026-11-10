@@ -87,7 +87,8 @@ beforeAll(async () => {
       expires_at timestamptz,
       -- 0420: a rule naming one object at one version
       target_subject_id uuid,
-      target_subject_version integer
+      target_subject_version integer,
+      principal_owner_id text
     );
     CREATE TABLE governance_ceilings (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

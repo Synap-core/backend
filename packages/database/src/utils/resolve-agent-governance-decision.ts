@@ -207,6 +207,8 @@ export interface ResolveAgentGovernanceInput {
 export interface RuleSubject {
   id: string;
   version: number;
+  /** The person the acting agent works for: a subject rule covers only that person's agents. */
+  forUserId: string;
 }
 
 /**
@@ -313,6 +315,7 @@ interface GovernanceRuleCandidate {
   targetProfile: string | null;
   targetSubjectId: string | null;
   targetSubjectVersion: number | null;
+  principalOwnerId: string | null;
   verdict: GovernanceRuleVerdict;
   createdAt: Date;
 }
@@ -374,7 +377,10 @@ function scoreRuleTarget(
     "targetKind" | "targetPattern" | "targetProfile"
   > &
     Partial<
-      Pick<GovernanceRuleCandidate, "targetSubjectId" | "targetSubjectVersion">
+      Pick<
+        GovernanceRuleCandidate,
+        "targetSubjectId" | "targetSubjectVersion" | "principalOwnerId"
+      >
     >,
   eventKey: string,
   profileSlug: string | null | undefined,
@@ -383,8 +389,9 @@ function scoreRuleTarget(
   subject?: RuleSubject | null
 ): number | undefined {
   // A rule that NAMES one object (0420) matches only that object at the
-  // version it was approved for, on its exact action: it can only NARROW, with
-  // the same score as a plain exact rule. Any other shape (a glob, another
+  // version it was approved for, on its exact action, for an agent of the
+  // person who made it: it can only NARROW, with the same score as a plain
+  // exact rule. Any other shape (a glob, another
   // kind) matches nothing: widening a whole class from one object's approval
   // is exactly what it must never do. Guard: `subject-rule-narrows.test.ts`.
   if (rule.targetSubjectId) {
@@ -392,7 +399,8 @@ function scoreRuleTarget(
       rule.targetPattern === eventKey &&
       subject != null &&
       rule.targetSubjectId === subject.id &&
-      rule.targetSubjectVersion === subject.version
+      rule.targetSubjectVersion === subject.version &&
+      rule.principalOwnerId === subject.forUserId
       ? 3
       : undefined;
   }
@@ -686,6 +694,7 @@ export async function resolveGovernanceRule(
       targetProfile: governanceRules.targetProfile,
       targetSubjectId: governanceRules.targetSubjectId,
       targetSubjectVersion: governanceRules.targetSubjectVersion,
+      principalOwnerId: governanceRules.principalOwnerId,
       verdict: governanceRules.verdict,
       createdAt: governanceRules.createdAt,
     })

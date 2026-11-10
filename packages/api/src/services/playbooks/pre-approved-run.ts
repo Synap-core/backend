@@ -1,57 +1,47 @@
 /**
  * PRE-APPROVED AGENT RUNS (founder decision, 10 Nov 2026, proposal a01b9d46;
- * plan fbfadf54 §6): a person lets agents run ONE playbook without asking.
+ * plan fbfadf54 §6): a person lets their agents run ONE playbook without
+ * asking.
  *
  * The approval is a `governance_rules` row naming that playbook at its version
- * (0420), matched by the one governance door (`checkPermissionOrPropose` →
- * `resolveGovernanceRule`); the grant then carries `preApprovedByRuleId`. An
- * agent's run is held as the person's draft (B6, `runPlaybook`) unless that
- * rule decided AND the run stays what the person allowed: work on pod data by
- * the pod's own AI. This file is the second half, checked when the run starts:
- *  - the playbook declares no capability (no `grants` link, no step grant, no
- *    `requiredIntents`): a capability can reach outside the pod, and grants
- *    are links, which do not bump the version the rule is pinned to;
+ * and the person whose agents it covers (0420), matched by the one governance
+ * door (`checkPermissionOrPropose` → `resolveGovernanceRule`); the grant then
+ * carries `preApprovedByRuleId`. An agent's run is held as the person's draft
+ * (B6, `runPlaybook`) unless that rule decided, still names the version the
+ * run starts, AND the playbook is eligible ({@link preApprovalEligibility}):
+ *  - every `tools` entry (the playbook's and each step's) is a run tool on the
+ *    pod's own data, and no `grants` link names a capability (a capability or
+ *    a web read can reach outside the pod; links do not bump the version the
+ *    rule is pinned to);
  *  - the run is not handed to an agent or a computer, the playbook does not
- *    run on agents (`executor`), and no runner (the playbook's or a step's)
- *    names anyone but Synap AI;
+ *    run on agents (`executor`), and every runner (the playbook's or a step's)
+ *    is the pod's own AI (`runsOnPodAi`);
  *  - no step IS another playbook (`uses`): that playbook was not allowed.
- * Any of these fails → held as before, with a reason the reply names. Space
- * `taskIntents` are not the playbook's declaration; a capability they offer
- * still meets the outward floor (`capability.run`) on every call.
+ * Any of these fails → held as before, with a reason the reply names and the
+ * draft keeps (`metadata.triage.heldBecause`). Space `taskIntents` are not the
+ * playbook's declaration; a capability they offer still meets the outward
+ * floor (`capability.run`) on every call.
  */
-import {
-  and,
-  eq,
-  gt,
-  isNull,
-  ne,
-  or,
-  governanceRules,
-  type getDb,
-} from "@synap/database";
+import { and, eq, ne, governanceRules, type getDb } from "@synap/database";
 import type { Playbook } from "@synap/database/schema";
+import { isPodDataRunTool, readToolsList, runsOnPodAi } from "@synap/playbooks";
 import {
-  readRequiredIntents,
-  runnerChoices,
-  type PlaybookRunner,
-} from "@synap/playbooks";
+  PLAYBOOK_RUN_ACTION,
+  type PreApprovalHeldReason,
+  type PreApprovalIneligibleReason,
+} from "@synap-core/types/governance-rules";
 import { createLogger } from "@synap-core/core";
 import {
   getLinksFor,
   resolveGrantedCapabilities,
 } from "../links/links-service.js";
+import { activeRulePredicate } from "../../utils/governance-rule-reads.js";
 
 const logger = createLogger({ module: "pre-approved-run" });
 
 type Db = Awaited<ReturnType<typeof getDb>>;
 
-/** Why an agent's run of a pre-approved playbook is still held. */
-export type PreApprovalHeldReason =
-  | "version_changed"
-  | "declares_tools"
-  | "runs_elsewhere"
-  | "runs_other_playbook"
-  | "could_not_check";
+export type { PreApprovalHeldReason, PreApprovalIneligibleReason };
 
 /** The line the run reply adds for the agent (tool text, never translated). */
 export const PRE_APPROVAL_HELD_LINE: Record<PreApprovalHeldReason, string> = {
@@ -67,21 +57,19 @@ export const PRE_APPROVAL_HELD_LINE: Record<PreApprovalHeldReason, string> = {
     "Whether this run may start without asking could not be checked, so it asks.",
 };
 
+/** May a run of this playbook start on a person's pre-approval? */
+export type PreApprovalEligibility =
+  | { eligible: true; reason: null }
+  | { eligible: false; reason: PreApprovalIneligibleReason };
+
 export type PreApprovalDecision =
   | { runs: true; ruleId: string }
   | { runs: false; reason?: PreApprovalHeldReason };
 
 type PreApprovablePlaybook = Pick<
   Playbook,
-  "id" | "version" | "executor" | "runner" | "stages" | "requiredIntents"
+  "id" | "version" | "executor" | "runner" | "stages" | "tools"
 >;
-
-/** Only Synap AI: no runner, or every choice is the pod's own AI. */
-function runsOnPodAi(runner: unknown): boolean {
-  return runnerChoices(runner as PlaybookRunner | null | undefined).every(
-    (c) => c === "synap_ai" || (typeof c === "object" && "synapAi" in c)
-  );
-}
 
 function stagesOf(stages: unknown): Array<Record<string, unknown>> {
   return Array.isArray(stages)
@@ -91,10 +79,64 @@ function stagesOf(stages: unknown): Array<Record<string, unknown>> {
     : [];
 }
 
+const ineligible = (
+  reason: PreApprovalIneligibleReason
+): PreApprovalEligibility => ({ eligible: false, reason });
+
+/**
+ * THE eligibility of a playbook for a pre-approved agent run: read by the run
+ * ({@link decidePreApprovedRun}) and by `governanceRules.forSubject`, so the
+ * page offering the approval says what the run will do.
+ */
+export async function preApprovalEligibility(p: {
+  playbook: PreApprovablePlaybook;
+  userId: string;
+  /** The run is handed to an agent (`resolveRunChoice`'s `handOff`). */
+  handedOff?: boolean;
+}): Promise<PreApprovalEligibility> {
+  const { playbook } = p;
+  const stages = stagesOf(playbook.stages);
+  if (
+    p.handedOff ||
+    playbook.executor === "external-agent" ||
+    !runsOnPodAi(playbook.runner) ||
+    stages.some((s) => !runsOnPodAi(s.runner))
+  ) {
+    return ineligible("runs_elsewhere");
+  }
+  if (stages.some((s) => s.uses != null)) {
+    return ineligible("runs_other_playbook");
+  }
+  const declared = [
+    ...readToolsList(playbook.tools),
+    ...stages.flatMap((s) => readToolsList(s.tools)),
+  ];
+  if (declared.some((t) => !isPodDataRunTool(t))) {
+    return ineligible("declares_tools");
+  }
+  try {
+    const links = await getLinksFor(p.userId, "playbook", playbook.id);
+    const granted = await resolveGrantedCapabilities(links, {
+      linkType: "grants",
+      fromType: "playbook",
+    });
+    if (granted.length > 0) return ineligible("declares_tools");
+  } catch (err) {
+    logger.warn(
+      { err, playbookId: playbook.id },
+      "pre-approved run: could not read the playbook's granted capabilities"
+    );
+    return ineligible("could_not_check");
+  }
+  return { eligible: true, reason: null };
+}
+
 /**
  * Does this agent run start without the person's click? `preApprovedByRuleId`
  * is the grant's (`checkPermissionOrPropose`); absent, the run is held, and
- * the reason says so when a rule names an earlier version of the playbook.
+ * the reason says so when the person's rule names an earlier version. The
+ * rule is read again here: the playbook may have changed between the run
+ * door's check and this start, and a rule never covers another version.
  */
 export async function decidePreApprovedRun(p: {
   db: Db;
@@ -105,68 +147,49 @@ export async function decidePreApprovedRun(p: {
   userId: string;
 }): Promise<PreApprovalDecision> {
   const { db, playbook } = p;
-  if (!p.preApprovedByRuleId) {
-    try {
-      const [stale] = await db
-        .select({ id: governanceRules.id })
-        .from(governanceRules)
-        .where(
-          and(
-            isNull(governanceRules.revokedAt),
-            or(
-              isNull(governanceRules.expiresAt),
-              gt(governanceRules.expiresAt, new Date())
-            ),
-            eq(governanceRules.targetPattern, "playbook.run"),
-            eq(governanceRules.verdict, "auto"),
-            eq(governanceRules.targetSubjectId, playbook.id),
-            ne(governanceRules.targetSubjectVersion, playbook.version)
-          )
-        )
-        .limit(1);
-      return stale
-        ? { runs: false, reason: "version_changed" }
-        : { runs: false };
-    } catch (err) {
-      logger.warn(
-        { err, playbookId: playbook.id },
-        "pre-approved run: could not read whether an earlier version was allowed"
-      );
-      return { runs: false, reason: "could_not_check" };
-    }
-  }
-
-  const stages = stagesOf(playbook.stages);
-  if (
-    p.handedOff ||
-    playbook.executor === "external-agent" ||
-    !runsOnPodAi(playbook.runner) ||
-    stages.some((s) => !runsOnPodAi(s.runner))
-  ) {
-    return { runs: false, reason: "runs_elsewhere" };
-  }
-  if (stages.some((s) => s.uses != null)) {
-    return { runs: false, reason: "runs_other_playbook" };
-  }
-  if (
-    readRequiredIntents(playbook).length > 0 ||
-    stages.some((s) => Array.isArray(s.grants) && s.grants.length > 0)
-  ) {
-    return { runs: false, reason: "declares_tools" };
-  }
+  const ruleId = p.preApprovedByRuleId;
+  const personsRule = and(
+    activeRulePredicate(),
+    eq(governanceRules.targetPattern, PLAYBOOK_RUN_ACTION),
+    eq(governanceRules.verdict, "auto"),
+    eq(governanceRules.targetSubjectId, playbook.id),
+    eq(governanceRules.principalOwnerId, p.userId)
+  );
+  let rule: { version: number | null } | undefined;
   try {
-    const links = await getLinksFor(p.userId, "playbook", playbook.id);
-    const granted = await resolveGrantedCapabilities(links, {
-      linkType: "grants",
-      fromType: "playbook",
-    });
-    if (granted.length > 0) return { runs: false, reason: "declares_tools" };
+    [rule] = await db
+      .select({ version: governanceRules.targetSubjectVersion })
+      .from(governanceRules)
+      .where(
+        and(
+          personsRule,
+          ruleId
+            ? eq(governanceRules.id, ruleId)
+            : ne(governanceRules.targetSubjectVersion, playbook.version)
+        )
+      )
+      .limit(1);
   } catch (err) {
     logger.warn(
       { err, playbookId: playbook.id },
-      "pre-approved run: could not read the playbook's granted capabilities"
+      "pre-approved run: could not read the person's rule for this playbook"
     );
     return { runs: false, reason: "could_not_check" };
   }
-  return { runs: true, ruleId: p.preApprovedByRuleId };
+  if (!ruleId) {
+    return rule ? { runs: false, reason: "version_changed" } : { runs: false };
+  }
+  // Gone since the door's check (revoked, replaced): held, as with no rule.
+  if (!rule) return { runs: false };
+  if (rule.version !== playbook.version) {
+    return { runs: false, reason: "version_changed" };
+  }
+  const eligibility = await preApprovalEligibility({
+    playbook,
+    userId: p.userId,
+    handedOff: p.handedOff,
+  });
+  return eligibility.eligible
+    ? { runs: true, ruleId }
+    : { runs: false, reason: eligibility.reason };
 }

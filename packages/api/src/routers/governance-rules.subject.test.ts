@@ -2,8 +2,10 @@
  * Letting agents run one playbook without asking (founder decision, 10 Nov
  * 2026) is a `governanceRules.create` naming that playbook at a version
  * (0420). Three properties, driven through the real router:
- *   - only a PERSON grants it: an agent credential is refused (PERSON_ONLY)
- *     and nothing is written — an agent may never approve its own rule;
+ *   - only a PERSON grants it: an agent credential or an app's scoped key is
+ *     refused (PERSON_ONLY) and nothing is written: an agent may never
+ *     approve its own rule; the rule records the person whose agents it
+ *     covers (`principalOwnerId`);
  *   - it holds for the version the person saw: a playbook edited since is
  *     refused (CONFLICT), naming its current version;
  *   - it lives where the playbook does, and only as an exact `playbook.run`.
@@ -29,41 +31,39 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
-  return {
-    ...actual,
-    db: {
-      query: {
-        // No pod-admin workspace configured: isPodAdmin() = false.
-        workspaces: { findFirst: async () => undefined },
-        workspaceMembers: { findFirst: async () => ({ role: "editor" }) },
-        users: { findFirst: async () => undefined },
-        playbooks: { findFirst: async () => h.playbook },
-        governanceRules: {
-          findFirst: async () => undefined,
-          findMany: async () => [],
-        },
+  const db = {
+    query: {
+      // No pod-admin workspace configured: isPodAdmin() = false.
+      workspaces: { findFirst: async () => undefined },
+      workspaceMembers: { findFirst: async () => ({ role: "editor" }) },
+      users: { findFirst: async () => undefined },
+      playbooks: { findFirst: async () => h.playbook },
+      governanceRules: {
+        findFirst: async () => undefined,
+        findMany: async () => [],
       },
-      insert: () => ({
-        values: (v: Record<string, unknown>) => ({
-          returning: async () => {
-            h.insertedValues.push(v);
-            return [{ id: "rule-1", ...v }];
-          },
-        }),
-      }),
-      update: () => ({
-        set: () => ({
-          where: () => {
-            h.updates += 1;
-            return { returning: async () => [] };
-          },
-        }),
-      }),
-      select: () => ({
-        from: () => ({ where: async () => [] }),
-      }),
     },
+    insert: () => ({
+      values: (v: Record<string, unknown>) => ({
+        returning: async () => {
+          h.insertedValues.push(v);
+          return [{ id: "rule-1", ...v }];
+        },
+      }),
+    }),
+    update: () => ({
+      set: () => ({
+        where: () => {
+          h.updates += 1;
+          return { returning: async () => [] };
+        },
+      }),
+    }),
+    select: () => ({
+      from: () => ({ where: async () => [] }),
+    }),
   };
+  return { ...actual, db };
 });
 
 vi.mock("../middleware/read-only-guard.js", async () => {
@@ -79,6 +79,7 @@ vi.mock("../middleware/audit-log.js", async () => {
 import { governanceRulesRouter } from "./governance-rules.js";
 import type { Context } from "../types/context.js";
 import { playbookPreApprovalRule } from "@synap-core/types/governance-rules";
+import { runWithGrant } from "@synap/database";
 
 function caller(extra: Partial<Context> = {}) {
   return governanceRulesRouter.createCaller({
@@ -111,9 +112,10 @@ describe("letting agents run one playbook without asking", () => {
       targetPattern: "playbook.run",
       targetSubjectId: PLAYBOOK,
       targetSubjectVersion: 3,
+      principalOwnerId: PERSON,
       verdict: "auto",
     });
-    // The older approvals of the same playbook are taken back.
+    // The person's older approvals of the same playbook are taken back.
     expect(h.updates).toBe(1);
   });
 
@@ -126,6 +128,20 @@ describe("letting agents run one playbook without asking", () => {
         cause: { reasonCode: "PERSON_ONLY" },
       });
     }
+    expect(h.insertedValues).toHaveLength(0);
+  });
+
+  it("an app's scoped sign-in cannot grant it either", async () => {
+    const appGrant = {
+      scopes: [{ permissions: ["entity.read"] }],
+      clientId: "app",
+    } as never;
+    await expect(
+      runWithGrant(appGrant, () => caller().create(allow()))
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      cause: { reasonCode: "PERSON_ONLY" },
+    });
     expect(h.insertedValues).toHaveLength(0);
   });
 

@@ -4,8 +4,11 @@ import { resolveGovernanceRule } from "./resolve-agent-governance-decision.js";
 /**
  * A rule that NAMES one object (0420, founder decision of 10 Nov 2026: "let
  * agents run this playbook without asking", pinned to its version) may only
- * NARROW: it matches the exact action on that object at that version, and
- * nothing else. A broad rule never reads as naming the object.
+ * NARROW: it matches the exact action on that object at that version, for an
+ * agent of the person who made it, and nothing else. A broad rule never reads
+ * as naming the object. The plain match, the next version, another playbook
+ * and no subject are driven on PGlite
+ * (`resolve-agent-governance-decision.subject.pglite.test.ts`).
  * Fake db: candidate rows come back as if the SQL had already filtered
  * principal and scope (convention of resolve-agent-governance-decision.test.ts).
  */
@@ -23,7 +26,8 @@ function dbReturning(rows: unknown[]): any {
 }
 
 const P = "11111111-1111-4111-8111-111111111111";
-const Q = "22222222-2222-4222-8222-222222222222";
+const PERSON = "33333333-3333-4333-8333-333333333333";
+const OTHER_PERSON = "44444444-4444-4444-8444-444444444444";
 
 const row = (o: {
   id: string;
@@ -31,6 +35,7 @@ const row = (o: {
   verdict: "auto" | "propose";
   targetSubjectId?: string | null;
   targetSubjectVersion?: number | null;
+  principalOwnerId?: string | null;
   createdAt?: Date;
 }) => ({
   id: o.id,
@@ -41,6 +46,12 @@ const row = (o: {
   targetProfile: null,
   targetSubjectId: o.targetSubjectId ?? null,
   targetSubjectVersion: o.targetSubjectVersion ?? null,
+  principalOwnerId:
+    o.principalOwnerId !== undefined
+      ? o.principalOwnerId
+      : o.targetSubjectId
+        ? PERSON
+        : null,
   verdict: o.verdict,
   createdAt: o.createdAt ?? new Date("2026-11-10T00:00:00Z"),
 });
@@ -55,7 +66,7 @@ const PRE_APPROVAL = row({
 
 const resolveRun = (
   rows: unknown[],
-  ruleSubject?: { id: string; version: number }
+  ruleSubject?: { id: string; version: number; forUserId: string }
 ) =>
   resolveGovernanceRule({
     db: dbReturning(rows),
@@ -66,29 +77,25 @@ const resolveRun = (
   });
 
 describe("a rule naming one playbook at one version", () => {
-  it("matches a run of that playbook at that version, and says it names it", async () => {
-    const match = await resolveRun([PRE_APPROVAL], { id: P, version: 3 });
-    expect(match).toMatchObject({
-      ruleId: "pre",
+  it("matches an agent of the person who made it, never another person's agent", async () => {
+    const run = { id: P, version: 3 };
+    expect(
+      await resolveRun([PRE_APPROVAL], { ...run, forUserId: PERSON })
+    ).toMatchObject({ ruleId: "pre", namesSubject: true });
+    expect(
+      await resolveRun([PRE_APPROVAL], { ...run, forUserId: OTHER_PERSON })
+    ).toBeUndefined();
+    const ownerless = row({
+      id: "ownerless",
+      targetPattern: "playbook.run",
       verdict: "auto",
-      namesSubject: true,
+      targetSubjectId: P,
+      targetSubjectVersion: 3,
+      principalOwnerId: null,
     });
-  });
-
-  it("matches nothing once the playbook's version moved on", async () => {
     expect(
-      await resolveRun([PRE_APPROVAL], { id: P, version: 4 })
+      await resolveRun([ownerless], { ...run, forUserId: PERSON })
     ).toBeUndefined();
-  });
-
-  it("matches nothing for another playbook", async () => {
-    expect(
-      await resolveRun([PRE_APPROVAL], { id: Q, version: 3 })
-    ).toBeUndefined();
-  });
-
-  it("matches nothing when the door names no subject", async () => {
-    expect(await resolveRun([PRE_APPROVAL])).toBeUndefined();
   });
 
   it("matches nothing on another action, or under a glob pattern", async () => {
@@ -97,7 +104,7 @@ describe("a rule naming one playbook at one version", () => {
       agentUserId: "agent-1",
       subjectType: "playbook",
       action: "update",
-      ruleSubject: { id: P, version: 3 },
+      ruleSubject: { id: P, version: 3, forUserId: PERSON },
     });
     expect(onUpdate).toBeUndefined();
     const glob = row({
@@ -107,7 +114,9 @@ describe("a rule naming one playbook at one version", () => {
       targetSubjectId: P,
       targetSubjectVersion: 3,
     });
-    expect(await resolveRun([glob], { id: P, version: 3 })).toBeUndefined();
+    expect(
+      await resolveRun([glob], { id: P, version: 3, forUserId: PERSON })
+    ).toBeUndefined();
   });
 
   it("a broad auto rule still matches, but never reads as naming the playbook", async () => {
@@ -121,10 +130,18 @@ describe("a rule naming one playbook at one version", () => {
       targetPattern: "playbook.run",
       verdict: "auto",
     });
-    const viaBroad = await resolveRun([broad], { id: P, version: 3 });
+    const viaBroad = await resolveRun([broad], {
+      id: P,
+      version: 3,
+      forUserId: PERSON,
+    });
     expect(viaBroad).toMatchObject({ ruleId: "broad" });
     expect(viaBroad).not.toHaveProperty("namesSubject");
-    const viaExact = await resolveRun([exact], { id: P, version: 3 });
+    const viaExact = await resolveRun([exact], {
+      id: P,
+      version: 3,
+      forUserId: PERSON,
+    });
     expect(viaExact).toMatchObject({ ruleId: "exact" });
     expect(viaExact).not.toHaveProperty("namesSubject");
   });
@@ -136,7 +153,11 @@ describe("a rule naming one playbook at one version", () => {
       verdict: "propose",
     });
     expect(
-      await resolveRun([broadPropose, PRE_APPROVAL], { id: P, version: 3 })
+      await resolveRun([broadPropose, PRE_APPROVAL], {
+        id: P,
+        version: 3,
+        forUserId: PERSON,
+      })
     ).toMatchObject({ ruleId: "pre", namesSubject: true });
     const laterPropose = row({
       id: "later",
@@ -147,6 +168,7 @@ describe("a rule naming one playbook at one version", () => {
     const later = await resolveRun([PRE_APPROVAL, laterPropose], {
       id: P,
       version: 3,
+      forUserId: PERSON,
     });
     expect(later).toMatchObject({ ruleId: "later" });
     expect(later).not.toHaveProperty("namesSubject");

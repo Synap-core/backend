@@ -42,7 +42,8 @@ beforeAll(async () => {
       revoked_reason text,
       -- 0420: a rule naming one object at one version
       target_subject_id uuid,
-      target_subject_version integer
+      target_subject_version integer,
+      principal_owner_id text
     );
     -- The mirror reads an agent's computer (host seed, 0388): no host here.
     CREATE TABLE users (id text PRIMARY KEY, host_user_id text);

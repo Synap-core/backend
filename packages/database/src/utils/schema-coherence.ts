@@ -1388,6 +1388,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0420_governance_rule_subject.sql",
   },
   {
+    table: "governance_rules",
+    column: "principal_owner_id",
+    addedBy: "0420_governance_rule_subject.sql",
+  },
+  {
     table: "governance_ceilings",
     column: "principal_class",
     addedBy: "0320_machine_identity.sql",

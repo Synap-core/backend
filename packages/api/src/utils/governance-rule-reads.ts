@@ -250,6 +250,8 @@ export async function listAgentGovernanceOverrides(
       and(
         activeRulePredicate(),
         eq(governanceRules.principalKind, "agent"),
+        // A rule naming one object (0420) is not an override of the action.
+        isNull(governanceRules.targetSubjectId),
         podOrWorkspaceScopePredicate(workspaceId)
       )
     );

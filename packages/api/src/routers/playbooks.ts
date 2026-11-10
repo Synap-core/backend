@@ -3263,7 +3263,11 @@ export const playbooksRouter = router({
         // Pre-approval (founder, 10 Nov 2026): a rule a person made for THIS
         // playbook at THIS version may lift that hold; the grant then says so
         // (`preApprovedByRuleId`). A broad rule never does.
-        ruleSubject: { id: playbook.id, version: playbook.version },
+        ruleSubject: {
+          id: playbook.id,
+          version: playbook.version,
+          forUserId: ctx.userId,
+        },
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         source: input.source,
         reasoning: input.reasoning,

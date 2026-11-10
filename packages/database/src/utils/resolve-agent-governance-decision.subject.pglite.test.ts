@@ -131,10 +131,16 @@ async function rule(r: {
   const { rows } = await pg.query<{ id: string }>(
     `INSERT INTO governance_rules
        (principal_kind, scope_kind, target_kind, target_pattern, verdict,
-        created_by, target_subject_id, target_subject_version)
-     VALUES ('any', 'pod', 'action', $1, 'auto', $2, $3, $4)
+        created_by, target_subject_id, target_subject_version, principal_owner_id)
+     VALUES ('any', 'pod', 'action', $1, 'auto', $2, $3, $4, $5)
      RETURNING id`,
-    [r.pattern, `user:${HUMAN}`, r.subjectId ?? null, r.subjectVersion ?? null]
+    [
+      r.pattern,
+      `user:${HUMAN}`,
+      r.subjectId ?? null,
+      r.subjectVersion ?? null,
+      r.subjectId ? HUMAN : null,
+    ]
   );
   return rows[0]!.id;
 }
@@ -150,19 +156,21 @@ const launch = (
     subjectType: "playbook",
     action: "run",
     heldAsDraft,
-    ...(subject ? { ruleSubject: subject } : {}),
+    ...(subject ? { ruleSubject: { ...subject, forUserId: HUMAN } } : {}),
     preferAgentMetadataAutoApproveFor: true,
   });
 
 describe("migration 0420", () => {
-  it("adds both subject columns, idempotently", async () => {
+  it("adds the subject columns and the rule's owner, idempotently", async () => {
     await pg.exec(MIGRATION);
     const { rows } = await pg.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns
-        WHERE table_name = 'governance_rules' AND column_name LIKE 'target_subject_%'
+        WHERE table_name = 'governance_rules'
+          AND (column_name LIKE 'target_subject_%' OR column_name = 'principal_owner_id')
         ORDER BY column_name`
     );
     expect(rows.map((r) => r.column_name)).toEqual([
+      "principal_owner_id",
       "target_subject_id",
       "target_subject_version",
     ]);

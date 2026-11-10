@@ -812,6 +812,9 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
         ),
         eq(governanceRules.principalKind, "any"),
         eq(governanceRules.targetKind, "action"),
+        // A rule naming ONE object (0420) allows that object only: it is
+        // never the space's baseline for the whole action.
+        isNull(governanceRules.targetSubjectId),
         or(
           eq(governanceRules.scopeKind, "pod"),
           and(

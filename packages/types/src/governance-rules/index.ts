@@ -266,7 +266,11 @@ export interface HumanizeTargetOptions {
 type TargetRow = Pick<
   GovernanceRuleRowLike,
   "targetKind" | "targetPattern" | "targetProfile"
->;
+> & {
+  /** The one object it names (0420), by its name, and the version it holds for. */
+  targetSubjectLabel?: string | null;
+  targetSubjectVersion?: number | null;
+};
 
 /** What the rule matches, in words. */
 export function humanizeTarget(
@@ -282,6 +286,12 @@ export function humanizeTarget(
   }
   if (rule.targetKind === "profile") {
     return `Everything of type "${rule.targetProfile ?? "?"}"`;
+  }
+  // A rule naming ONE object reads by that object and its version, never as
+  // the whole action ("Run playbook · Weekly review, version 3").
+  if (rule.targetSubjectLabel) {
+    const title = governanceRuleTitle(rule);
+    if (title) return title;
   }
   // Every other action pattern (an exact key, a glob, the `@reversible` class)
   // is named by the ONE write-pattern derivation the proposal cards use: a raw
@@ -395,9 +405,42 @@ export function verdictLabel(verdict: string): string {
 export const PLAYBOOK_RUN_ACTION = "playbook.run";
 
 /**
+ * Why an agent's run is held although its person allowed the playbook (or an
+ * earlier version) for agents. All but `version_changed` also say why a
+ * playbook cannot be pre-approved at all (`governanceRules.forSubject`'s
+ * `preApproval.reason`): it uses tools beyond the pod's data, runs on another
+ * agent or computer, runs another playbook, or could not be checked.
+ */
+export const PRE_APPROVAL_HELD_REASONS = [
+  "version_changed",
+  "declares_tools",
+  "runs_elsewhere",
+  "runs_other_playbook",
+  "could_not_check",
+] as const;
+export type PreApprovalHeldReason = (typeof PRE_APPROVAL_HELD_REASONS)[number];
+/** Why a playbook cannot be pre-approved for agents, whatever its rules. */
+export type PreApprovalIneligibleReason = Exclude<
+  PreApprovalHeldReason,
+  "version_changed"
+>;
+
+/** Is this stored value a {@link PreApprovalHeldReason}? */
+export function isPreApprovalHeldReason(
+  value: unknown
+): value is PreApprovalHeldReason {
+  return (
+    typeof value === "string" &&
+    (PRE_APPROVAL_HELD_REASONS as readonly string[]).includes(value)
+  );
+}
+
+/**
  * The `governanceRules.create` input that lets agents run ONE playbook at ONE
  * version without asking (founder decision, 10 Nov 2026): any of the person's
- * agents, the playbook's own space (pod-wide for a pod-wide playbook), the
+ * OWN agents (the create door records the person as the rule's
+ * `principalOwnerId`; another member's agent never matches), the playbook's
+ * own space (pod-wide for a pod-wide playbook), the
  * exact action narrowed to that playbook. Any edit that bumps its version
  * leaves the rule matching nothing, so the next launch asks again. Built here
  * once, so no surface writes its own shape.
@@ -444,7 +487,7 @@ export function playbookPreApprovalState(
   playbook: { id: string; version: number }
 ): PlaybookPreApprovalState {
   const named = rules.filter(
-    (r) =>
+    (r): r is typeof r & { targetSubjectVersion: number } =>
       r.targetPattern === PLAYBOOK_RUN_ACTION &&
       r.verdict === "auto" &&
       r.targetSubjectId === playbook.id &&
@@ -457,7 +500,7 @@ export function playbookPreApprovalState(
     return { state: "allowed", ruleId: current.id, version: playbook.version };
   }
   const earlier = named[0];
-  return earlier && earlier.targetSubjectVersion != null
+  return earlier
     ? { state: "outdated", allowedVersion: earlier.targetSubjectVersion }
     : { state: "none" };
 }

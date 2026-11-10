@@ -4,7 +4,9 @@
  * (`preApprovedByRuleId`), an agent's run starts at once instead of waiting
  * as the person's draft (B6), as long as it stays what the person allowed:
  * pod data only, the pod's own AI, no other playbook. Otherwise it is held as
- * before, and the reply says why.
+ * before, and the reply and the draft (`metadata.triage.heldBecause`) say
+ * why. The rule is read again at the start: its version must be the
+ * playbook's, and it must be the person's own (`principal_owner_id`).
  *
  * Same harness as `run-playbook.agent-draft.pglite.test.ts` (real
  * `runPlaybook` on PGlite, the executor captured), plus `governance_rules`
@@ -60,7 +62,7 @@ vi.mock("../playbook-lifecycle.js", async (importOriginal) => {
       params: [],
       version: 3,
       runner: null,
-      requiredIntents: [],
+      tools: [],
       ...h.playbook,
     })),
     instantiateSession: vi.fn(
@@ -200,6 +202,15 @@ beforeEach(async () => {
 });
 
 const RULE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const OTHER_PERSON = "55555555-5555-4555-8555-555555555555";
+
+/** The person's rule letting agents run the playbook at `version`. */
+const allow = (version: number, owner = PERSON, id = RULE) =>
+  q(
+    `insert into governance_rules (id, principal_kind, scope_kind, target_kind, target_pattern, verdict, created_by, target_subject_id, target_subject_version, principal_owner_id)
+     values ($1, 'any', 'pod', 'action', 'playbook.run', 'auto', 'user:x', $2, $3, $4)`,
+    [id, PLAYBOOK, version, owner]
+  );
 
 const agentRun = (preApprovedByRuleId?: string) =>
   runPlaybook({
@@ -212,6 +223,8 @@ const agentRun = (preApprovedByRuleId?: string) =>
   });
 
 describe("an agent's run of a playbook the person allowed beforehand", () => {
+  beforeEach(() => allow(3));
+
   it("starts at once: run row running, dispatched once, born accepted under the rule", async () => {
     const r = await agentRun(RULE);
     expect(r.held).toBeUndefined();
@@ -232,33 +245,58 @@ describe("an agent's run of a playbook the person allowed beforehand", () => {
     const r = await agentRun();
     expect(r.held).toBe(true);
     expect(r.heldBecause).toBeUndefined();
+    expect((await metadataOf(r.session!.id)).triage).toBeUndefined();
     expect(h.dispatched).toHaveLength(0);
     expect(await runsOf(r.session!.id)).toHaveLength(0);
   });
 
-  it("is held, and says so, when a rule allows an EARLIER version of this playbook", async () => {
-    await q(
-      `insert into governance_rules (principal_kind, scope_kind, target_kind, target_pattern, verdict, created_by, target_subject_id, target_subject_version)
-       values ('any', 'pod', 'action', 'playbook.run', 'auto', 'user:x', $1, 2)`,
-      [PLAYBOOK]
-    );
+  it("is held, and says so on the draft, when the person allowed an EARLIER version", async () => {
+    await h.client!.exec("delete from governance_rules");
+    await allow(2);
     const r = await agentRun();
+    expect(r).toMatchObject({ held: true, heldBecause: "version_changed" });
+    expect((await metadataOf(r.session!.id)).triage).toEqual({
+      heldBecause: "version_changed",
+    });
+    expect(h.dispatched).toHaveLength(0);
+  });
+
+  it("another person's rule for an earlier version says nothing about this person's run", async () => {
+    await h.client!.exec("delete from governance_rules");
+    await allow(2, OTHER_PERSON);
+    const r = await agentRun();
+    expect(r.held).toBe(true);
+    expect(r.heldBecause).toBeUndefined();
+  });
+
+  it("is held when the playbook changed between the run door's check and the start", async () => {
+    // The door matched the rule at version 3; the playbook now reads version 4.
+    h.playbook = { version: 4 };
+    const r = await agentRun(RULE);
     expect(r).toMatchObject({ held: true, heldBecause: "version_changed" });
     expect(h.dispatched).toHaveLength(0);
   });
 
-  it("is held when the playbook uses tools beyond pod data (a step grant, a grants link, an intent)", async () => {
+  it("is held, with no reason, when the rule is gone since the door's check", async () => {
+    await h.client!.exec("delete from governance_rules");
+    const r = await agentRun(RULE);
+    expect(r.held).toBe(true);
+    expect(r.heldBecause).toBeUndefined();
+  });
+
+  it("is held when the playbook uses tools beyond pod data (a capability, an intent, a web read, a step's tool, a grants link)", async () => {
     for (const [playbook, granted] of [
+      [{ tools: ["gmail"] }, []],
+      [{ tools: ["send_email"] }, []],
+      [{ tools: ["get_entity", "web_search"] }, []],
       [
         {
-          stages: [
-            { key: "s", title: "S", grants: [{ kind: "tool", id: "gmail" }] },
-          ],
+          tools: ["get_entity"],
+          stages: [{ key: "s", title: "S", tools: ["github"] }],
         },
         [],
       ],
       [{}, [{ kind: "tool", id: "gmail", name: "Gmail" }]],
-      [{ requiredIntents: ["send-email"] }, []],
     ] as const) {
       h.playbook = playbook as Record<string, unknown>;
       h.granted = granted as unknown[];
@@ -291,9 +329,13 @@ describe("an agent's run of a playbook the person allowed beforehand", () => {
     expect(r).toMatchObject({ held: true, heldBecause: "runs_other_playbook" });
   });
 
-  it("Synap AI as the named runner still starts at once", async () => {
+  it("Synap AI as the runner, a step done by the run's own runner, and pod-data run tools still start at once", async () => {
     h.playbook = {
       runner: ["synap_ai", { synapAi: { persona: "researcher" } }],
+      tools: ["get_entity", "synap_list_sessions", "update_document"],
+      stages: [
+        { key: "s", title: "S", runner: "self", tools: ["update_document"] },
+      ],
     };
     const r = await agentRun(RULE);
     expect(r.held).toBeUndefined();

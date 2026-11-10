@@ -48,6 +48,8 @@ import {
   desc,
   ProposalStatus,
   authoredCreatedBy,
+  getRequestGrant,
+  isFullAccessGrant,
   readReversibleDefault,
   setReversibleDefault,
   readOwnOrganiseDefault,
@@ -69,6 +71,7 @@ import {
   type GovernancePrincipalKind,
 } from "@synap-core/types/governance-rules";
 import { isAgentCaller } from "../services/library/agent-door.js";
+import { preApprovalEligibility } from "../services/playbooks/pre-approved-run.js";
 import {
   mayCarryHostSeed,
   revokeHostSeeds,
@@ -229,11 +232,14 @@ async function assertPersonAllowsPlaybook(
     workspaceId: string | null;
   }
 ): Promise<void> {
-  if (isAgentCaller(ctx)) {
+  // A scoped key (an app's sign-in) is refused too, as for an action's mode
+  // (`assertPersonSetsActionMode`): only a person's full-access sign-in.
+  const grant = isAgentCaller(ctx) ? null : getRequestGrant();
+  if (isAgentCaller(ctx) || (!!grant && !isFullAccessGrant(grant))) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message:
-        "Only a person can let agents run a playbook without asking — an agent cannot.",
+        "Only a person can let agents run a playbook without asking: an agent or an app cannot.",
       cause: { reasonCode: "PERSON_ONLY" },
     });
   }
@@ -828,6 +834,8 @@ export const governanceRulesRouter = router({
             input.targetKind === "profile" ? input.targetProfile : null,
           targetSubjectId: input.targetSubjectId ?? null,
           targetSubjectVersion: input.targetSubjectVersion ?? null,
+          // The person whose agents a rule naming one object covers.
+          principalOwnerId: input.targetSubjectId ? ctx.userId : null,
           verdict: input.verdict,
           sourceProposalId: input.sourceProposalId ?? null,
           // PROVENANCE (display only, never an enforcement input): this is the
@@ -839,46 +847,87 @@ export const governanceRulesRouter = router({
           expiresAt: input.expiresAt ?? null,
         })
         .returning();
-      // The same rule for the agent's box, when the box is the agent's
-      // (host-seed.ts). A seed that fails leaves the box asking: stricter.
-      if (rule) await seedHostRules(db, [rule]);
-      // A newer approval of the same object replaces the older ones: they
-      // name a version that no longer runs, and the list shows one row.
+      // A newer approval of the same object by the same person, for the same
+      // principal and place, replaces their older ones (they name a version
+      // that no longer runs), with the seeds copied from them; before this
+      // rule is seeded, so its own seed is never caught. Another person's
+      // approvals are left alone.
       if (rule?.targetSubjectId) {
-        await db
+        const replaced = await db
           .update(governanceRules)
           .set({ revokedAt: new Date(), revokedReason: SUBJECT_RULE_REPLACED })
           .where(
             and(
+              activeRulePredicate(),
               eq(governanceRules.targetSubjectId, rule.targetSubjectId),
               eq(governanceRules.targetPattern, rule.targetPattern),
               eq(governanceRules.principalKind, rule.principalKind),
-              isNull(governanceRules.revokedAt),
+              eq(governanceRules.principalOwnerId, ctx.userId),
+              eq(governanceRules.scopeKind, rule.scopeKind),
+              rule.workspaceId
+                ? eq(governanceRules.workspaceId, rule.workspaceId)
+                : isNull(governanceRules.workspaceId),
+              rule.agentUserId
+                ? eq(governanceRules.agentUserId, rule.agentUserId)
+                : isNull(governanceRules.agentUserId),
               ne(governanceRules.id, rule.id)
             )
-          );
+          )
+          .returning({ id: governanceRules.id });
+        await revokeHostSeeds(
+          db,
+          replaced.map((r) => r.id)
+        );
       }
+      // The same rule for the agent's box, when the box is the agent's
+      // (host-seed.ts). A seed that fails leaves the box asking: stricter.
+      if (rule) await seedHostRules(db, [rule]);
 
       return { rule };
     }),
 
   /**
-   * The active rules naming ONE object (0420), e.g. whether agents may run a
-   * playbook without asking (`playbookPreApprovalState`). Same visibility as
-   * `listAll`: pod rules and the caller's visible spaces only.
+   * The caller's own active rules naming ONE object (0420), e.g. whether their
+   * agents may run a playbook without asking (`playbookPreApprovalState`), and
+   * for a playbook whether a run of it can start on such an approval at all
+   * (`preApproval`, the run's own derivation: `preApprovalEligibility`). Same
+   * visibility as `listAll`: pod rules and the caller's visible spaces only.
+   * `preApproval` is null when the subject is no playbook the caller can read.
    */
   forSubject: protectedProcedure
     .input(z.object({ subjectId: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const rows = await db.query.governanceRules.findMany({
-        where: and(
-          activeRulePredicate(),
-          eq(governanceRules.targetSubjectId, input.subjectId),
-          userVisibleWhere(governanceRules.workspaceId, ctx.userId)
-        ),
-        orderBy: [desc(governanceRules.createdAt)],
-      });
-      return { rules: await mapRulesWithAgentLabels(rows) };
+      const [rows, playbook] = await Promise.all([
+        db.query.governanceRules.findMany({
+          where: and(
+            activeRulePredicate(),
+            eq(governanceRules.targetSubjectId, input.subjectId),
+            eq(governanceRules.principalOwnerId, ctx.userId),
+            userVisibleWhere(governanceRules.workspaceId, ctx.userId)
+          ),
+          orderBy: [desc(governanceRules.createdAt)],
+        }),
+        db.query.playbooks.findFirst({
+          where: and(
+            eq(playbooks.id, input.subjectId),
+            userVisibleWhere(playbooks.workspaceId, ctx.userId)
+          ),
+          columns: {
+            id: true,
+            version: true,
+            executor: true,
+            runner: true,
+            stages: true,
+            tools: true,
+          },
+        }),
+      ]);
+      return {
+        rules: await mapRulesWithAgentLabels(rows),
+        preApproval: playbook
+          ? await preApprovalEligibility({ playbook, userId: ctx.userId })
+          : null,
+      };
     }),
 
   /**

@@ -77,6 +77,7 @@ export type SeedableRule = Pick<
   | "targetProfile"
   | "targetSubjectId"
   | "targetSubjectVersion"
+  | "principalOwnerId"
   | "verdict"
   | "expiresAt"
 >;
@@ -194,6 +195,7 @@ export async function seedHostRules(
       // would hold the action for EVERY object.
       targetSubjectId: r.targetSubjectId,
       targetSubjectVersion: r.targetSubjectVersion,
+      principalOwnerId: r.principalOwnerId,
       verdict: "auto",
       expiresAt: r.expiresAt,
       createdBy: hostSeedCreatedBy(r.id),

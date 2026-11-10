@@ -102,6 +102,9 @@ export const governanceRules = pgTable(
     // this without asking"). A version bump leaves the rule matching nothing.
     targetSubjectId: uuid("target_subject_id"),
     targetSubjectVersion: integer("target_subject_version"),
+    // The person whose agents a rule naming one object covers (0420): only an
+    // agent acting for this person matches it.
+    principalOwnerId: text("principal_owner_id"),
 
     verdict: governanceVerdictEnum("verdict").notNull(),
 

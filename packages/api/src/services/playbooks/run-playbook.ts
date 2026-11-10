@@ -1753,7 +1753,11 @@ async function executeSingleRun(
             preApprovedByRuleId: preApprovedRuleId,
           },
         }
-      : {}),
+      : preApproval && !preApproval.runs && preApproval.reason
+        ? // Held although the person allowed it (or an earlier version):
+          // the draft says why (`projectTriage` → `triage.heldBecause`).
+          { triage: { heldBecause: preApproval.reason } }
+        : {}),
     // `profileSlug` = the lifecycle the worker follows: process-sync settles
     // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker

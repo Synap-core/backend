@@ -233,4 +233,29 @@ describe("letting agents run one playbook without asking (0420)", () => {
       })
     ).toMatch(/· Weekly review, version 3$/);
   });
+
+  it("a rule list names the playbook and its version, never the whole action", () => {
+    const rule = {
+      targetKind: "action",
+      targetPattern: "playbook.run",
+      targetProfile: null,
+    } as const;
+    const broad = humanizeTarget(rule);
+    const one = humanizeTarget({
+      ...rule,
+      targetSubjectLabel: "Weekly review",
+      targetSubjectVersion: 3,
+    });
+    expect(one).toMatch(/· Weekly review, version 3$/);
+    expect(one).not.toBe(broad);
+  });
+
+  it("the held reasons are one closed list", async () => {
+    const { isPreApprovalHeldReason, PRE_APPROVAL_HELD_REASONS } =
+      await import("./index.js");
+    for (const r of PRE_APPROVAL_HELD_REASONS)
+      expect(isPreApprovalHeldReason(r)).toBe(true);
+    expect(isPreApprovalHeldReason("tool_missing")).toBe(false);
+    expect(isPreApprovalHeldReason(3)).toBe(false);
+  });
 });
