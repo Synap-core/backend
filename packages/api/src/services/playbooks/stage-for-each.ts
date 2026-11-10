@@ -31,7 +31,11 @@
  *
  * Every change to `fan_out` is a read-modify-write under a row lock, so two
  * children closing at once never start four, and a replayed close settles
- * nothing twice. Never throws.
+ * nothing twice. Entering the step claims its row (compare and set), so two
+ * entries at once fan out once. A batch marked running whose run never got a
+ * session (the pod stopped while starting it) fails after
+ * {@link FAN_OUT_ORPHAN_MINUTES}, at the next pump or the hourly session
+ * sweep ({@link sweepOrphanedFanOuts}). Never throws.
  */
 
 import {
@@ -42,6 +46,8 @@ import {
   eq,
   entities,
   focusSessions,
+  inArray,
+  isNull,
   playbookRuns,
   setSessionStatus,
 } from "@synap/database";
@@ -59,6 +65,7 @@ import {
   type PlaybookStageUses,
 } from "@synap/playbooks";
 import type { RunOn } from "@synap-core/types/agents";
+import { countedNoun } from "@synap-core/types/vocabulary";
 import { createLogger } from "@synap-core/core";
 import {
   mapStageChildParams,
@@ -85,6 +92,15 @@ const nameOf = (s: { key: string; name?: string }) => s.name?.trim() || s.key;
 
 /** At most this many children are listed, one line each, in the join message. */
 const JOIN_LINES_MAX = 50;
+
+/**
+ * A batch marked running whose run has no session after this long never
+ * started (the pod stopped between the claim and the start): it fails.
+ */
+export const FAN_OUT_ORPHAN_MINUTES = 15;
+
+/** The step row statuses a `forEach` step is entered from. */
+const ENTERABLE_STATUSES = ["running", "waiting_tools"] as const;
 
 /** The list a resolved `over` value holds: a list, or a text holding a JSON list. */
 export function forEachList(value: unknown): unknown[] | null {
@@ -189,9 +205,71 @@ export function batchGoal(
   return [
     goal,
     "",
-    `This run is part ${p.part} of ${p.parts} of step "${p.stageName}". Work only on these ${p.items.length} item${p.items.length === 1 ? "" : "s"} (${p.as}); the run that started this one gathers every part.`,
+    `This run is part ${p.part} of ${p.parts} of step "${p.stageName}". Work only on these ${countedNoun(p.items.length, "item")} (${p.as}); the run that started this one gathers every part.`,
     ...lines,
   ].join("\n");
+}
+
+/** A short name for one item: the text itself, else its title, name or id. */
+function itemLabel(item: unknown): string {
+  if (typeof item === "string") return item;
+  if (typeof item === "number" || typeof item === "boolean") {
+    return String(item);
+  }
+  if (item && typeof item === "object") {
+    const o = item as Record<string, unknown>;
+    for (const k of ["title", "name", "label", "id"]) {
+      if (typeof o[k] === "string" && o[k].trim()) return o[k].trim();
+    }
+  }
+  return JSON.stringify(item);
+}
+
+const ITEM_LABEL_MAX = 40;
+
+/**
+ * The child's title: its step, its part and the items it works on, so a list
+ * of the children tells them apart (plan fbfadf54 5b). Pure.
+ */
+export function batchTitle(p: {
+  stageName: string;
+  part: number;
+  parts: number;
+  items: unknown[];
+}): string {
+  const first = p.items.length > 0 ? itemLabel(p.items[0]) : "";
+  const label =
+    first.length > ITEM_LABEL_MAX
+      ? `${first.slice(0, ITEM_LABEL_MAX - 1).trimEnd()}…`
+      : first;
+  const more = p.items.length > 1 ? ` and ${p.items.length - 1} more` : "";
+  const head = `${p.stageName}, part ${p.part} of ${p.parts}`;
+  return label ? `${head}: ${label}${more}` : head;
+}
+
+/**
+ * Fail every batch marked running that still has no run after
+ * {@link FAN_OUT_ORPHAN_MINUTES} (its start never finished). Pure; the same
+ * fan-out when there is none.
+ */
+export function failOrphanedBatches(
+  fanOut: StageFanOut,
+  now: Date = new Date()
+): StageFanOut {
+  const cutoff = now.getTime() - FAN_OUT_ORPHAN_MINUTES * 60_000;
+  let changed = false;
+  const children = fanOut.children.map((c) => {
+    if (c.status !== "running" || c.sessionId) return c;
+    const claimed = c.claimedAt ? Date.parse(c.claimedAt) : Number.NaN;
+    if (Number.isFinite(claimed) && claimed > cutoff) return c;
+    changed = true;
+    return {
+      ...c,
+      status: "failed" as const,
+      error: "its run never started (the pod stopped while starting it).",
+    };
+  });
+  return changed ? { ...fanOut, children } : fanOut;
 }
 
 /**
@@ -384,6 +462,7 @@ async function startBatch(
         parts,
         items: batch.items,
       });
+  const ownTitle = batchTitle({ stageName, part, parts, items: batch.items });
   let started;
   if (stage.uses) {
     const params = {
@@ -398,6 +477,7 @@ async function startBatch(
         : {}),
       params,
       goalResolver: goalFor(params),
+      ownTitle,
     });
   } else {
     if (!session.playbookId) return { error: "the run follows no playbook." };
@@ -411,6 +491,7 @@ async function startBatch(
       stageOnly: stage.key,
       params,
       goalResolver: goalFor(params),
+      ownTitle,
     });
   }
   const child = started.session;
@@ -439,12 +520,14 @@ export async function pumpFanOut(stageRunId: string): Promise<{
     for (;;) {
       let claimed: number[] = [];
       const fanOut = await changeFanOut(stageRunId, (f) => {
-        claimed = batchesToStart(f);
-        if (claimed.length === 0) return null;
-        return claimed.reduce(
-          (acc, i) => withChild(acc, i, { status: "running" }),
-          f
+        const swept = failOrphanedBatches(f);
+        claimed = batchesToStart(swept);
+        const claimedAt = new Date().toISOString();
+        const next = claimed.reduce(
+          (acc, i) => withChild(acc, i, { status: "running", claimedAt }),
+          swept
         );
+        return next === f ? null : next;
       });
       if (!fanOut || claimed.length === 0) break;
       ctx ??= await readContext(stageRunId);
@@ -486,6 +569,8 @@ export async function pumpFanOut(stageRunId: string): Promise<{
 
 export type StartStageForEachResult =
   | { status: "started"; childSessionIds: string[] }
+  /** Another entry of the step claimed it first: it fans out once. */
+  | { status: "already_started" }
   | { status: "failed"; error: string };
 
 /**
@@ -512,14 +597,24 @@ export async function startStageForEach(p: {
     const plan = planFanOut(stage.forEach!, ctx.params, ctx.subject);
     if ("error" in plan) throw new Error(plan.error);
     const { fanOut } = plan;
-    await db
+    // Compare and set: only the entry that finds the step not yet fanned out
+    // plans it (two re-checks of its tools at once fan out once).
+    const [claimed] = await db
       .update(sessionStageRuns)
       .set({ status: "waiting_child", fanOut })
-      .where(eq(sessionStageRuns.id, p.stageRunId));
+      .where(
+        and(
+          eq(sessionStageRuns.id, p.stageRunId),
+          inArray(sessionStageRuns.status, [...ENTERABLE_STATUSES]),
+          isNull(sessionStageRuns.fanOut)
+        )
+      )
+      .returning({ id: sessionStageRuns.id });
+    if (!claimed) return { status: "already_started" };
     const kept = fanOut.children.reduce((n, c) => n + c.items.length, 0);
     await roomLine(
       session,
-      `Step ${stageName} runs as ${fanOut.children.length} run${fanOut.children.length === 1 ? "" : "s"} of up to ${fanOut.batch} item${fanOut.batch === 1 ? "" : "s"} each (${kept}${kept < fanOut.total ? ` of ${fanOut.total}` : ""} items), at most ${PLAYBOOK_FOR_EACH_PARALLEL} at once. This run goes on when they are done.`,
+      `Step ${stageName} runs as ${countedNoun(fanOut.children.length, "run")} of up to ${countedNoun(fanOut.batch, "item")} each (${kept < fanOut.total ? `${kept} of ${countedNoun(fanOut.total, "item")}` : countedNoun(kept, "item")}), at most ${PLAYBOOK_FOR_EACH_PARALLEL} at once. This run goes on when they are done.`,
       `stage-for-each:${p.stageRunId}:planned`
     );
     const { started: childSessionIds } = await pumpFanOut(p.stageRunId);
@@ -543,7 +638,7 @@ export async function startStageForEach(p: {
         hold: {
           on: "agent",
           ref: `session_stage_run:${p.stageRunId}`,
-          reason: `Step ${stageName} is worked by ${fanOut.children.length} runs.`,
+          reason: `Step ${stageName} is worked by ${countedNoun(fanOut.children.length, "run")}.`,
         },
       }).catch((err: unknown) => {
         // The step row still says it waits; the session stays as it was.
@@ -556,10 +651,16 @@ export async function startStageForEach(p: {
     return { status: "started", childSessionIds };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
+    // Never over a step another entry already fanned out.
     await db
       .update(sessionStageRuns)
       .set({ status: "failed", endedAt: new Date() })
-      .where(eq(sessionStageRuns.id, p.stageRunId));
+      .where(
+        and(
+          eq(sessionStageRuns.id, p.stageRunId),
+          inArray(sessionStageRuns.status, [...ENTERABLE_STATUSES])
+        )
+      );
     await roomLine(
       session,
       `Step ${stageName} could not run once per item: ${error}`,
@@ -621,8 +722,32 @@ export async function settleFanOutChild(p: {
       { err, childSessionId: child.id },
       "for each: settling a child run failed"
     );
-    return { status: "not_a_step" };
+    return {
+      status: "settle_failed",
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
+}
+
+/**
+ * The hourly session sweep's share: every `forEach` step with a batch whose
+ * run never started ({@link FAN_OUT_ORPHAN_MINUTES}) is pumped, which fails
+ * that batch, starts the next and finishes the step when none is left. A
+ * parent whose step waits is spared by the reapers, so without this it would
+ * wait forever. Returns the steps pumped.
+ */
+export async function sweepOrphanedFanOuts(): Promise<number> {
+  const rows = await db
+    .select({ id: sessionStageRuns.id })
+    .from(sessionStageRuns)
+    .where(
+      and(
+        eq(sessionStageRuns.status, "waiting_child"),
+        drizzleSql`EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' = 'running' AND c ->> 'sessionId' IS NULL AND (c ->> 'claimedAt' IS NULL OR (c ->> 'claimedAt')::timestamptz < now() - (${FAN_OUT_ORPHAN_MINUTES}::int * interval '1 minute')))`
+      )
+    );
+  for (const row of rows) await pumpFanOut(row.id);
+  return rows.length;
 }
 
 const failedParts = (fanOut: StageFanOut) =>
@@ -662,10 +787,12 @@ async function joinLines(fanOut: StageFanOut): Promise<string[]> {
         : c.status === "failed"
           ? `FAILED${c.error ? `: ${c.error}` : ""}`
           : "CANCELLED";
-    return `- part ${i + 1} (${c.items.length} item${c.items.length === 1 ? "" : "s"}): ${name}, ${what}`;
+    return `- part ${i + 1} (${countedNoun(c.items.length, "item")}): ${name}, ${what}`;
   });
   if (fanOut.children.length > JOIN_LINES_MAX) {
-    lines.push(`- and ${fanOut.children.length - JOIN_LINES_MAX} more parts`);
+    lines.push(
+      `- and ${countedNoun(fanOut.children.length - JOIN_LINES_MAX, "more part")}`
+    );
   }
   return lines;
 }
@@ -780,8 +907,8 @@ async function finishIfAllEnded(
   const done = fanOut.children.length - failed.length;
   const head =
     failed.length > 0
-      ? `Step ${stageName} is done: ${done} of ${fanOut.children.length} runs delivered; part${failed.length === 1 ? "" : "s"} ${failed.join(", ")} failed.`
-      : `Step ${stageName} is done: all ${fanOut.children.length} runs delivered.`;
+      ? `Step ${stageName} is done: ${done} of ${countedNoun(fanOut.children.length, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} failed.`
+      : `Step ${stageName} is done: all ${countedNoun(fanOut.children.length, "run")} delivered.`;
   const then = toStage
     ? `The run moved on to step ${nameOf(next!)}.`
     : !next

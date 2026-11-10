@@ -79,6 +79,8 @@ export interface StageFanOutChild {
   /** queued (not started yet), running, or how it ended. */
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   sessionId?: string;
+  /** When it was marked running (ISO): a run still missing long after never started. */
+  claimedAt?: string;
   /** Why it could not start, when it failed before it had a session. */
   error?: string;
 }

@@ -387,7 +387,9 @@ export type SettleStageChildResult =
       /** The batches whose run failed or was cancelled (1-based part numbers). */
       failed: number[];
       toStage?: string;
-    };
+    }
+  /** Settling a `forEach` child broke (logged): nothing was settled. */
+  | { status: "settle_failed"; error: string };
 
 /**
  * A child run that works a step closed: settle the step (see the header).
