@@ -17,6 +17,8 @@
  *   - create_rule              → rule.create
  *   - create_playbook          → playbook.create (a DRAFT process)
  *   - create_view              → view.create (a List over the bundle's things)
+ *   - create_cell              → cell.define (a generated cell)
+ *   - bind_renderer            → profile.renderer.set (a cell on one object's page)
  *   - update_<kind>            → <kind>.update (a Library rebuild's change)
  * NONE of these keys is in the shipped `DEFAULT_AUTO_APPROVE` (which carries
  * only read/presentational keys: search.*, memory.recall, entity.read,
@@ -147,6 +149,15 @@ export function captureGraphEventKeys(
     } else if (op.op === "create_link") {
       // `POST /links` judges every edge as `link.create`.
       add({ subjectType: "link", action: "create" });
+    } else if (op.op === "create_cell") {
+      // The SAME key the direct cell door judges (`synap_create_cell` →
+      // `cell.define`): generated source is floored, so a graph carrying one
+      // proposes for an agent.
+      add({ subjectType: "cell", action: "define" });
+    } else if (op.op === "bind_renderer") {
+      // The SAME key the binding door judges (`profiles.setRenderer` gates
+      // `profile.renderer.set` for a playbook's or a view's page too).
+      add({ subjectType: "profile", action: "renderer.set" });
     } else {
       // FAIL CLOSED. The SAME defect class as the hardcoded gate pair this
       // wave removed: an op arm this function does not recognise produced NO

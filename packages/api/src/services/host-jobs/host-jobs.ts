@@ -60,6 +60,7 @@ import {
   installations,
   users,
   type HostJobEvidence,
+  type HostJobKind,
   type HostJobRow,
   type InstallationHealth,
   type InstallationRow,
@@ -144,7 +145,11 @@ async function settleExpired(runner: HostRunner): Promise<void> {
     eq(hostJobs.userId, runner.ownerUserId),
     eq(hostJobs.machineUserId, runner.machineUserId)
   );
-  await db
+  const closed = {
+    installationId: hostJobs.installationId,
+    kind: hostJobs.kind,
+  };
+  const stopped = await db
     .update(hostJobs)
     .set({
       status: "stopped",
@@ -159,9 +164,10 @@ async function settleExpired(runner: HostRunner): Promise<void> {
         isNotNull(hostJobs.stopRequestedAt),
         lt(hostJobs.leaseExpiresAt, sql`now()`)
       )
-    );
+    )
+    .returning(closed);
   const neverStarted = `the runner never started it (${HOST_MAX_LEASE_ATTEMPTS} attempts)`;
-  await db
+  const unstarted = await db
     .update(hostJobs)
     .set({
       status: "failed",
@@ -179,8 +185,9 @@ async function settleExpired(runner: HostRunner): Promise<void> {
         lt(hostJobs.leaseExpiresAt, sql`now()`),
         gte(hostJobs.attempt, HOST_MAX_LEASE_ATTEMPTS)
       )
-    );
-  await db
+    )
+    .returning(closed);
+  const stalled = await db
     .update(hostJobs)
     .set({
       status: "failed",
@@ -199,7 +206,111 @@ async function settleExpired(runner: HostRunner): Promise<void> {
           sql.raw(`now() - interval '${HOST_STALL_GRACE_SECONDS} seconds'`)
         )
       )
-    );
+    )
+    .returning(closed);
+  // A lifecycle job the clock closed never sent its finish: the status its
+  // lease set (installing, updating, removing) is released here, or nothing
+  // would ever move it again (finding 36daa4e2).
+  for (const job of stopped) await releaseHeldInstallation(job, "stopped");
+  for (const job of unstarted)
+    await releaseHeldInstallation(job, "never started");
+  for (const job of stalled) await releaseHeldInstallation(job, "stalled");
+}
+
+/** The status a lifecycle job's lease holds its installation in until its finish. */
+const HELD_BY_JOB: Partial<Record<HostJobKind, InstallationStatus>> = {
+  install: "installing",
+  update: "updating",
+  remove: "removing",
+};
+
+/** The statuses only a lifecycle job's finish moves on. */
+export const HELD_INSTALLATION_STATUSES = Object.values(
+  HELD_BY_JOB
+) as readonly InstallationStatus[];
+
+const HELD_NOUN: Partial<Record<HostJobKind | InstallationStatus, string>> = {
+  install: "install",
+  installing: "install",
+  update: "update",
+  updating: "update",
+  remove: "removal",
+  removing: "removal",
+};
+
+/** Why a lifecycle job ended without its finish. */
+export type HeldEnd = "stopped" | "never started" | "stalled" | "no finish";
+
+/**
+ * Why an installation's lifecycle job ended without its finish, in the words
+ * the person reads on it (`statusDetail`). Pure.
+ */
+export function heldEndDetail(
+  kindOrStatus: HostJobKind | InstallationStatus,
+  why: HeldEnd
+): string {
+  const noun = HELD_NOUN[kindOrStatus] ?? "job";
+  switch (why) {
+    case "stopped":
+      return `The ${noun} was stopped.`;
+    case "never started":
+      return `The ${noun} did not start: the computer never picked it up.`;
+    case "stalled":
+      return `The ${noun} did not finish: the computer stopped answering while it ran.`;
+    case "no finish":
+      return `The ${noun} ended without its result reaching the pod.`;
+  }
+}
+
+/**
+ * A lifecycle job that ended WITHOUT its finish (settled by the clock)
+ * moves its installation out of the status its lease set, to `failed` with
+ * the true reason, through the one status writer. From `failed` the
+ * reconciler checks first, then repairs (self-heal ladder); a job a person
+ * stopped runs nothing by itself. A failure that reaches the ladder's cap
+ * files the one "try again" card, as a failed finish does.
+ */
+async function releaseHeldInstallation(
+  job: { installationId: string; kind: HostJobKind },
+  why: Exclude<HeldEnd, "no finish">
+): Promise<void> {
+  const held = HELD_BY_JOB[job.kind];
+  if (!held) return;
+  await moveInstallation(job.installationId, [held], "failed", {
+    statusDetail: heldEndDetail(job.kind, why),
+  });
+  if (why !== "stopped") await askToTryAgainIfStopped(job.installationId);
+}
+
+/**
+ * Defence in depth for a status no job will ever move: an installation in
+ * `installing`, `updating` or `removing` whose lifecycle jobs are all closed
+ * (a job closed before this release existed, or by a path that forgot it)
+ * becomes `failed`, so the reconciler checks it and then repairs. Only when
+ * no lifecycle job of it is open, in the same statement: a running install
+ * is never touched. Returns the row after the release, or null when it was
+ * not released (a job is open, or it is not held).
+ */
+export async function releaseOrphanedInstallation(
+  row: Pick<InstallationRow, "id" | "status">
+): Promise<InstallationRow | null> {
+  if (!HELD_INSTALLATION_STATUSES.includes(row.status)) return null;
+  const [released] = await db
+    .update(installations)
+    .set({
+      status: "failed",
+      statusDetail: heldEndDetail(row.status, "no finish"),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(installations.id, row.id),
+        eq(installations.status, row.status),
+        drizzleSql`NOT EXISTS (SELECT 1 FROM ${hostJobs} WHERE ${hostJobs.installationId} = ${installations.id} AND ${hostJobs.kind} <> 'verb' AND ${hostJobs.status} IN ('queued', 'leased', 'running'))`
+      )
+    )
+    .returning();
+  return released ?? null;
 }
 
 const leasable = () =>
@@ -783,12 +894,18 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
   }
 
   const ok = status === "done";
+  // A job that finished done is the truth even when the installation was
+  // released to `failed` meanwhile (`releaseOrphanedInstallation` runs only
+  // with no open job, so it can meet this job only between its close above
+  // and the move below).
+  const from = (held: InstallationStatus): InstallationStatus[] =>
+    ok ? [held, "failed"] : [held];
   let installationStatus: InstallationStatus | null = null;
   switch (job.kind) {
     case "install":
       installationStatus = await moveInstallation(
         job.installationId,
-        ["installing"],
+        from("installing"),
         ok ? "installed" : "failed",
         ok
           ? { installedAt: new Date(), statusDetail: null }
@@ -799,7 +916,7 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
       // A failed update keeps the previous version running (design §4).
       installationStatus = await moveInstallation(
         job.installationId,
-        ["updating"],
+        from("updating"),
         "installed",
         {
           statusDetail: ok
@@ -811,7 +928,7 @@ export async function finishHostJob(input: FinishHostJobInput): Promise<
     case "remove":
       installationStatus = await moveInstallation(
         job.installationId,
-        ["removing"],
+        from("removing"),
         ok ? "removed" : "failed",
         ok
           ? { removedAt: new Date(), statusDetail: null }

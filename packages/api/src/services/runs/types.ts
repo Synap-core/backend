@@ -26,6 +26,7 @@ import type {
 import type { SessionActivityWire } from "@synap-core/types/run-activity";
 import type { RunWhere } from "@synap-core/types/computers";
 import type { GuidanceSnapshot } from "@synap-core/types/guidance";
+import type { RunCostRecord } from "./run-cost-record.js";
 import type {
   BoxRunEvidence,
   BoxRunRow,
@@ -401,6 +402,15 @@ export interface PlaybookRunDetail {
    * also the one item of `proposals`. Absent on every other run.
    */
   generation?: PlaybookRunGeneration;
+  /**
+   * Why an agent run cost what it cost (`run-cost-record.ts`): its turns as
+   * the ledger kept them (model, input, cache reads and writes, what counted
+   * against the budget), the first call's inventory (prompt sections, tool
+   * names, guidance), the input total over every turn, and the output tokens
+   * and real cost its agent-run telemetry reported. Present when the run's
+   * session is readable; a one-shot run's record is `generation`.
+   */
+  cost?: RunCostRecord;
 }
 
 /** The session card behind a playbook run. */
