@@ -111,15 +111,25 @@ const SECOND_TURN = {
   model: "anthropic/claude-haiku-5-5",
 };
 
-/** The ledger complete-run wrote for RUN (5 turns; the middle 3 dropped). */
+// A turn the IS reported failed: its outcome and reason are kept as such.
+const FAILED_TURN = {
+  at: at(9).toISOString(),
+  turnKey: "turn-3",
+  outcome: "failed",
+  reason: "turn_error",
+  agentType: "meta",
+  ceiling: 120_000,
+};
+
+/** The ledger complete-run wrote for RUN (6 turns; the middle 3 dropped). */
 const LEDGER = {
   runId: RUN,
   stops: 1,
   autoContinues: 1,
   firstTurn: FIRST_TURN,
-  turns: [SECOND_TURN],
+  turns: [SECOND_TURN, FAILED_TURN],
   cost: {
-    turns: 5,
+    turns: 6,
     freshInputTokens: 100_000,
     rawInputTokens: 164_000,
     cacheReadInputTokens: 64_000,
@@ -267,6 +277,19 @@ describe("runs.get — an agent run's cost record", () => {
         model: "anthropic/claude-haiku-5-5",
         inputTokens: 30_000,
         // Not reported by the provider: absent, never 0.
+        chargedInputTokens: null,
+        cacheReadInputTokens: null,
+        cacheWriteInputTokens: null,
+        ceiling: 120_000,
+        next: null,
+      },
+      {
+        at: FAILED_TURN.at,
+        outcome: "failed",
+        reason: "turn_error",
+        agentType: "meta",
+        model: null,
+        inputTokens: null,
         chargedInputTokens: null,
         cacheReadInputTokens: null,
         cacheWriteInputTokens: null,
