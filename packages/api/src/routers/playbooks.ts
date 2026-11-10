@@ -153,6 +153,7 @@ import {
 } from "../services/playbooks/run-playbook.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
 import {
+  declaresStepTools,
   refuseRunMissingTools,
   runToolsSaveWarnings,
 } from "../services/playbooks/run-tools-missing.js";
@@ -3158,13 +3159,15 @@ export const playbooksRouter = router({
       // both at once) BEFORE a proposal is filed (same placement as FILING
       // above), with exactly the arguments `runPlaybook` resolves it with
       // again when the run starts.
-      const runChoice = await resolveRunChoice({
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-        handToAgentId: input.handToAgentId,
-        runOn: input.runOn,
-        playbook,
-      });
+      if (input.handToAgentId || input.runOn) {
+        await resolveRunChoice({
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
+          handToAgentId: input.handToAgentId,
+          runOn: input.runOn,
+          playbook,
+        });
+      }
       if (input.remember) {
         if (input.agentUserId || ctx.agentUserId) {
           throw new TRPCError({
@@ -3186,13 +3189,22 @@ export const playbooksRouter = router({
       // TOOLS — refuse a run whose tools lack what a step declares BEFORE a
       // proposal is filed for a run that could never start (`runPlaybook`
       // asks it again when the run starts, the approved replay included).
-      await refuseRunMissingTools({
-        playbook,
-        workspaceId: runWorkspaceId,
-        userId: ctx.userId,
-        handedToAgent: runChoice.handOff !== null,
-        executor: runChoice.runOn.executor,
-      });
+      if (declaresStepTools(playbook.stages)) {
+        const choice = await resolveRunChoice({
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
+          handToAgentId: input.handToAgentId,
+          runOn: input.runOn,
+          playbook,
+        });
+        await refuseRunMissingTools({
+          playbook,
+          workspaceId: runWorkspaceId,
+          userId: ctx.userId,
+          handedToAgent: choice.handOff !== null,
+          executor: choice.runOn.executor,
+        });
+      }
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,

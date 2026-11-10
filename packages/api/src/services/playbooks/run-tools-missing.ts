@@ -94,6 +94,11 @@ function declaringStages(
   return out;
 }
 
+/** Does a step a run on the pod's AI works declare its own `tools`? PURE. */
+export function declaresStepTools(stages: unknown): boolean {
+  return declaringStages(stages).length > 0;
+}
+
 /**
  * The steps whose declared tools a run of this playbook on the pod's own AI
  * cannot use, under the run's lens.
