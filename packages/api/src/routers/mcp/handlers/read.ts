@@ -47,6 +47,8 @@ import {
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
 import { toolError } from "../tool-errors.js";
+import { fitReply } from "./fit-reply.js";
+
 import { parseEntityListFiltersInput } from "../../../utils/entity-list-filters-input.js";
 import {
   listEffectiveRelationTypes,
@@ -81,6 +83,12 @@ import {
   PROFILES_PAGE_DEFAULT,
   ENTITIES_PAGE_MAX,
 } from "./shared.js";
+
+/**
+ * The longest message a thread read carries whole; longer ones keep their
+ * start (`truncated: true`, `contentChars` = the full length).
+ */
+export const THREAD_MESSAGE_MAX_CHARS = 2_000;
 
 /**
  * Postgres 22P02 — "invalid input syntax for type uuid" — anywhere in the
@@ -467,31 +475,65 @@ export const readHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // `limit` used to reach nothing — every call returned 50 messages.
     // Clamped, not refused: an over-large ask still gets the cap.
+    const cursor =
+      typeof args.cursor === "string" && isUuid(args.cursor)
+        ? args.cursor
+        : undefined;
     const result = await caller.context.getThreadContext({
       threadId: args.threadId as string,
       limit: pageLimit(args.limit, 50, 100),
+      ...(cursor ? { cursor } : {}),
     });
     // Only the caller's own typing is theirs. A teammate's, an agent's, an
     // external contact's (WhatsApp, email, Telegram) or the pod's own message
     // is fenced (`untrusted`, audit F5), by the ONE room rule
-    // (`classifyRoomAuthor`) judged against the caller.
-    return ok({
-      ...result,
-      messages: result.messages.map((m) =>
-        m.userId &&
+    // (`classifyRoomAuthor`) judged against the caller. Each message is
+    // clipped to THREAD_MESSAGE_MAX_CHARS first (`truncated`, `contentChars`).
+    const messages = result.messages.map((m) => {
+      const long =
+        typeof m.content === "string" &&
+        m.content.length > THREAD_MESSAGE_MAX_CHARS;
+      const content = long
+        ? `${m.content.slice(0, THREAD_MESSAGE_MAX_CHARS - 1)}…`
+        : m.content;
+      const clip = long
+        ? { truncated: true, contentChars: m.content.length }
+        : {};
+      return m.userId &&
         classifyRoomAuthor(
           { role: m.role, authorType: m.authorType, userId: m.userId },
           userId
         ) === "person"
-          ? m
-          : {
-              ...m,
-              content: untrusted(
-                m.content,
-                `a channel message (${m.authorType ?? "unknown"} author)`
-              ),
-            }
-      ),
+        ? { ...m, content, ...clip }
+        : {
+            ...m,
+            content: untrusted(
+              content,
+              `a channel message (${m.authorType ?? "unknown"} author)`
+            ),
+            ...clip,
+          };
+    });
+    // A program reads this room (a worker's follow-ups): the reply fits under
+    // the cap instead of coming back cut (finding 69fdd2e6). The messages are
+    // newest first, so the ones a fit leaves out are the oldest, and
+    // `nextCursor` reads on from the last one shown.
+    const fitted = fitReply(
+      { ...result, messages },
+      {
+        how: "This reply was fitted under the reply cap: the oldest messages were left out (read them with `cursor: nextCursor`), and each list in `omitted` kept its first items, each string in `clipped` its start.",
+      }
+    );
+    const shown = fitted.messages;
+    const cutMessages = shown.length < messages.length;
+    return ok({
+      ...fitted,
+      ...(cutMessages
+        ? {
+            hasMore: true,
+            nextCursor: shown[shown.length - 1]?.id ?? result.nextCursor,
+          }
+        : {}),
     });
   },
   /**

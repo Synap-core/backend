@@ -212,6 +212,105 @@ export function projectLeanOutcomes(
   };
 }
 
+/** The longest goal, label or param value a lean session header carries. */
+export const LEAN_HEADER_TEXT_MAX = 300;
+/** The most declared outputs, stages, or one stage's outputs it carries. */
+export const LEAN_HEADER_LIST_MAX = 30;
+
+const clip = (v: unknown, max = LEAN_HEADER_TEXT_MAX): unknown =>
+  typeof v === "string" && v.length > max ? `${v.slice(0, max - 1)}…` : v;
+const listOf = (v: unknown): Record<string, unknown>[] =>
+  Array.isArray(v)
+    ? v
+        .filter(
+          (x): x is Record<string, unknown> => !!x && typeof x === "object"
+        )
+        .slice(0, LEAN_HEADER_LIST_MAX)
+    : [];
+const outputsOf = (v: unknown) =>
+  listOf(v).map((o) => ({
+    key: o.key,
+    label: clip(o.label),
+    kind: o.kind,
+    ...(o.owner ? { owner: o.owner } : {}),
+  }));
+
+/**
+ * The session itself as a LEAN read carries it on the MCP door: who it is,
+ * what it follows, what it declares it will produce (keys, labels, kinds) and
+ * its run's params, each text clipped and each list capped. Never the long
+ * columns (stages' goals and criteria, `metadata.prompt`, `metadata.runTurns`,
+ * criteria): those made a lean read 18,987 characters (finding 69fdd2e6),
+ * over the reply cap. A worker reads how to run a session from these fields
+ * (`playbookId`, `metadata.params`, the declared outputs' kinds); the full
+ * read (`detail: 'full'`) still has the rest.
+ */
+export function projectLeanSessionHeader(row: {
+  id: string;
+  title?: string | null;
+  goal?: string | null;
+  status?: string | null;
+  workspaceId?: string | null;
+  projectId?: string | null;
+  trackId?: string | null;
+  channelId?: string | null;
+  playbookId?: string | null;
+  currentStage?: string | null;
+  subjectEntityId?: string | null;
+  parentSessionId?: string | null;
+  updatedAt?: Date | string | null;
+  expectedOutputs?: unknown;
+  stages?: unknown;
+  metadata?: unknown;
+}): Record<string, unknown> {
+  const meta =
+    row.metadata && typeof row.metadata === "object"
+      ? (row.metadata as Record<string, unknown>)
+      : {};
+  const rawParams =
+    meta.params &&
+    typeof meta.params === "object" &&
+    !Array.isArray(meta.params)
+      ? (meta.params as Record<string, unknown>)
+      : null;
+  const params = rawParams
+    ? Object.fromEntries(
+        Object.entries(rawParams)
+          .slice(0, LEAN_HEADER_LIST_MAX)
+          .map(([k, v]) => [
+            k,
+            Array.isArray(v)
+              ? v.slice(0, LEAN_HEADER_LIST_MAX).map((x) => clip(x))
+              : v && typeof v === "object"
+                ? clip(JSON.stringify(v))
+                : clip(v),
+          ])
+      )
+    : null;
+  return {
+    id: row.id,
+    title: row.title ?? null,
+    goal: clip(row.goal ?? null),
+    status: row.status ?? null,
+    workspaceId: row.workspaceId ?? null,
+    projectId: row.projectId ?? null,
+    trackId: row.trackId ?? null,
+    channelId: row.channelId ?? null,
+    playbookId: row.playbookId ?? null,
+    currentStage: row.currentStage ?? null,
+    subjectEntityId: row.subjectEntityId ?? null,
+    parentSessionId: row.parentSessionId ?? null,
+    updatedAt: row.updatedAt ?? null,
+    expectedOutputs: outputsOf(row.expectedOutputs),
+    stages: listOf(row.stages).map((st) => ({
+      key: st.key,
+      name: clip(st.name),
+      expectedOutputs: outputsOf(st.expectedOutputs),
+    })),
+    metadata: params ? { params } : {},
+  };
+}
+
 type SessionRowLike = Parameters<
   typeof import("./continuation-packet.js").projectContinuationPacket
 >[0];
