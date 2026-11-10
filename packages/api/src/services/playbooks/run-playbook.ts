@@ -79,7 +79,11 @@ import {
   resolveGoal,
 } from "./playbook-lifecycle.js";
 import { playbookAtVersion } from "./playbook-versions.js";
-import { STAGE_OF_METADATA_KEY, type StageOf } from "./stage-of.js";
+import {
+  STAGE_OF_METADATA_KEY,
+  scopePlaybookToStage,
+  type StageOf,
+} from "./stage-of.js";
 import {
   resolveGrantedCapabilities,
   getLinksFor,
@@ -307,6 +311,17 @@ export interface RunPlaybookInput {
    * finds the parent step to hand its outputs back to (`stage-child.ts`).
    */
   stageOf?: StageOf;
+  /**
+   * Run ONE stage of the playbook (`scopePlaybookToStage`): a child run of a
+   * `forEach` step that names no `uses` playbook, pinned at the parent's
+   * version. Absent ⇒ every stage.
+   */
+  stageOnly?: string;
+  /**
+   * The run's own title (a `forEach` child: its step, part and items), kept
+   * over the derived "<playbook> — <subject>" name. Absent ⇒ derived.
+   */
+  ownTitle?: string;
   /**
    * The PROJECT this run is filed into (`focus_sessions.project_id`). Must be
    * visible to `userId`; refused otherwise.
@@ -1316,10 +1331,14 @@ export async function runPlaybook(
   // A step that IS this playbook runs the version it is pinned at: the run,
   // its snapshot and its session follow that kept definition, never the live
   // row (spec 7111934d §3.2).
-  const playbook =
+  const pinned =
     input.pinnedVersion !== undefined
       ? await playbookAtVersion(await getDb(), live, input.pinnedVersion)
       : live;
+  // A child run of a `forEach` step runs that one step.
+  const playbook = input.stageOnly
+    ? scopePlaybookToStage(pinned, input.stageOnly)
+    : pinned;
 
   // FILING — the project/track this run lands in, resolved ONCE for every
   // fan-out item. Before any session, channel or run row exists, so a bad
@@ -1641,6 +1660,8 @@ async function executeSingleRun(
     ...(input.pinnedVersion !== undefined
       ? { pinnedVersion: input.pinnedVersion }
       : {}),
+    ...(input.stageOnly ? { stageOnly: input.stageOnly } : {}),
+    ...(input.ownTitle ? { ownTitle: input.ownTitle } : {}),
     workspaceId: input.workspaceId,
     userId: actorId,
     // The birth stage's subject move is governed as the agent that ran it.

@@ -142,26 +142,28 @@ export function stageChildWanted(
 }
 
 /** A pod notice in the session's room (role system): nobody typed it. */
-async function roomLine(
+export async function roomLine(
   session: { id: string; userId: string; channelId: string | null },
   content: string,
   key: string
-): Promise<void> {
-  if (!session.channelId) return;
+): Promise<string | null> {
+  if (!session.channelId) return null;
   try {
     const { postChannelMessage } = await import("../messaging/post-message.js");
-    await postChannelMessage({
+    const posted = await postChannelMessage({
       channelId: session.channelId,
       content,
       userId: session.userId,
       role: "system",
       idempotencyKey: key,
     });
+    return posted.messageId ?? null;
   } catch (err) {
     logger.warn(
       { err, sessionId: session.id },
       "stage child: room line failed"
     );
+    return null;
   }
 }
 
@@ -312,13 +314,13 @@ export async function startStageChild(p: {
  * bound for dispatch through its binding (the one send door); a Synap AI run
  * gets one turn. A pull agent finds it in the room and its orient.
  */
-async function tellRunAgent(
+export async function tellRunAgent(
   parent: { id: string; userId: string; channelId: string | null },
   runAgent: string | null,
   content: string,
   key: string
 ): Promise<void> {
-  await roomLine(parent, content, key);
+  const messageId = await roomLine(parent, content, key);
   try {
     if (runAgent) {
       const { resolveAgentReach } =
@@ -335,11 +337,13 @@ async function tellRunAgent(
       });
       return;
     }
-    if (!parent.channelId) return;
+    // The turn answers the room line (the door reads its message).
+    if (!parent.channelId || !messageId) return;
     const { triggerAutoRespond } =
       await import("../../utils/trigger-auto-respond.js");
     await triggerAutoRespond({
       channelId: parent.channelId,
+      userMessageId: messageId,
       content,
       sourceUserId: parent.userId,
       focusSessionId: parent.id,
@@ -354,7 +358,11 @@ async function tellRunAgent(
 }
 
 /** Resume a paused parent (system move, compare and set from `paused`). */
-async function resumeParent(parentId: string, userId: string, why: string) {
+export async function resumeParent(
+  parentId: string,
+  userId: string,
+  why: string
+) {
   await setSessionStatus(db, {
     sessionId: parentId,
     from: ["paused"],
@@ -372,7 +380,16 @@ export type SettleStageChildResult =
       status: "advanced" | "told" | "on_fail" | "dropped";
       satisfied: string[];
       toStage?: string;
-    };
+    }
+  /** A child of a `forEach` step: others still run, or the step is done. */
+  | {
+      status: "fan_out_waiting" | "fan_out_done";
+      /** The batches whose run failed or was cancelled (1-based part numbers). */
+      failed: number[];
+      toStage?: string;
+    }
+  /** Settling a `forEach` child broke (logged): nothing was settled. */
+  | { status: "settle_failed"; error: string };
 
 /**
  * A child run that works a step closed: settle the step (see the header).
@@ -431,6 +448,17 @@ async function settleStageChildUnsafe(
     ),
   });
   if (!parent) return { status: "not_a_step" };
+
+  // A child of a `forEach` step: its batch is settled on the step's fan-out.
+  if (stageOf.forEachIndex !== undefined) {
+    const { settleFanOutChild } = await import("./stage-for-each.js");
+    return settleFanOutChild({
+      child,
+      ended,
+      parent,
+      stageOf: { ...stageOf, forEachIndex: stageOf.forEachIndex },
+    });
+  }
 
   // Compare and set: only the entry still waiting on THIS child is settled.
   const delivered = ended === "closed";

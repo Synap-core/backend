@@ -28,7 +28,8 @@ import type { PlaybookRunExternalAgent } from "./playbook-runs.js";
  * waiting_tools  its runner's computer lacks a tool it needs: an install was
  *                asked for, the step waits;
  * waiting_child  the step IS a playbook (`uses`): a child run works it
- *                (slice 4);
+ *                (slice 4); or it runs once per batch of items (`forEach`):
+ *                child runs work it (`fanOut`);
  * waiting_start  its agent is bound for dispatch and starting its provider
  *                task waits for the person's approval (governance);
  * unreached      its agent is bound for dispatch and the step did not reach
@@ -72,6 +73,32 @@ export const STAGE_RUNNER_VIAS = [
 ] as const;
 export type StageRunnerVia = (typeof STAGE_RUNNER_VIAS)[number];
 
+/** One child run of a `forEach` step: its items and where it stands. */
+export interface StageFanOutChild {
+  items: unknown[];
+  /** queued (not started yet), running, or how it ended. */
+  status: "queued" | "running" | "done" | "failed" | "cancelled";
+  sessionId?: string;
+  /** When it was marked running (ISO): a run still missing long after never started. */
+  claimedAt?: string;
+  /** Why it could not start, when it failed before it had a session. */
+  error?: string;
+}
+
+/**
+ * A `forEach` step's fan-out (0421): the collection it was cut from, the
+ * batches, and each child run. Written only by `stage-for-each.ts`, under a
+ * row lock.
+ */
+export interface StageFanOut {
+  over: string;
+  as: string;
+  batch: number;
+  /** Items the collection held (before `max` and the pod-wide cap). */
+  total: number;
+  children: StageFanOutChild[];
+}
+
 export const sessionStageRuns = pgTable(
   "session_stage_runs",
   {
@@ -99,6 +126,8 @@ export const sessionStageRuns = pgTable(
     status: text("status", { enum: SESSION_STAGE_RUN_STATUSES })
       .notNull()
       .default("running"),
+    /** A `forEach` step's batches and child runs (0421); NULL for any other step. */
+    fanOut: jsonb("fan_out").$type<StageFanOut>(),
     /** Per required tool: installed | missing | unverified, + the install ask. */
     requiresReport: jsonb("requires_report"),
     /** Each runner choice passed over, and why (`RunnerPassedOver[]`). */

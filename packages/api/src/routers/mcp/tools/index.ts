@@ -86,6 +86,9 @@ import {
   CRITERION_ABOUT,
   CRITERION_CHECK_MEANINGS,
   OUTPUT_REF_KINDS,
+  PLAYBOOK_FOR_EACH_MAX_BATCH,
+  PLAYBOOK_FOR_EACH_MAX_ITEMS,
+  PLAYBOOK_FOR_EACH_PARALLEL,
 } from "@synap/playbooks";
 // The ONE ask schema (`@synap-core/types/ask`) — the MCP `ask` property is
 // DERIVED from it (below), never hand-copied.
@@ -409,7 +412,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     ),
     forEach: deriveJsonSchema(
       playbookStageSchema.shape.forEach.unwrap(),
-      "Advisory, not run yet: once per item, {over: '<param or dotted path>', as?, max? (1-200)}. Today the stage runs once; do not rely on a fan-out."
+      `Run the step once per batch of items, as child runs: {over: '<run param or subject.path holding a list>', as? (the child's param name, default 'item'), max? (1-${PLAYBOOK_FOR_EACH_MAX_ITEMS} items), batch? (1-${PLAYBOOK_FOR_EACH_MAX_BATCH} items per child, default 1)}. At most ${PLAYBOOK_FOR_EACH_PARALLEL} children run at once; they start under this run's approval; the run waits for all of them, then goes on and names any that failed.`
     ),
     when: deriveJsonSchema(
       playbookStageSchema.shape.when.unwrap(),

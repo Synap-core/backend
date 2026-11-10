@@ -1131,29 +1131,47 @@ export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
  */
 export const PLAYBOOK_FOR_EACH_MAX_ITEMS = 200;
 
+/** Items one child run of a `forEach` stage may take at most (`batch`). */
+export const PLAYBOOK_FOR_EACH_MAX_BATCH = 50;
+
+/** Child runs of one `forEach` stage running at once; the rest wait their turn. */
+export const PLAYBOOK_FOR_EACH_PARALLEL = 3;
+
 /**
  * A stage that runs once per item of a collection (a UNIT), e.g. one run per
- * shot of a film. DECLARED, ADVISORY UNTIL THE EXECUTOR LANDS: it names WHAT to
- * iterate, it does not iterate; a run executes the stage once. This is the one
- * statement of that for `forEach` and `when`; the schema, the MCP stage schema
- * and the tool text point here.
+ * shot of a film, or per 30 findings. EXECUTED by the pod
+ * (`services/playbooks/stage-for-each.ts` in @synap/api): entering the stage
+ * cuts the collection into batches of `batch` items and starts ONE CHILD RUN
+ * per batch, at most {@link PLAYBOOK_FOR_EACH_PARALLEL} at once. A child runs
+ * the step's `uses` playbook when it names one, else this playbook at the
+ * parent's version reduced to this one stage; it gets its items as the param
+ * `as` and in its goal, under the parent's approval (no new proposal). The
+ * parent waits; when every child has ended it goes on, and names any child
+ * that failed (a failed child does not fail the parent).
  */
 export interface PlaybookStageForEach {
   /**
    * The collection to iterate: a run param name (`shots`) or a dotted path into
-   * the subject or earlier outputs (`subject.shots`). A reference, never data.
+   * a run param or the subject (`subject.shots`). A reference, never data. Its
+   * value is a list, or a text holding a JSON list.
    */
   over: string;
   /** Name the current item goes by inside the stage (default: `item`). */
   as?: string;
   /** Items at most (1 to {@link PLAYBOOK_FOR_EACH_MAX_ITEMS}). */
   max?: number;
+  /**
+   * Items per child run (1 to {@link PLAYBOOK_FOR_EACH_MAX_BATCH}; default 1).
+   * With more than one, the child's `as` param is the list of its items.
+   */
+  batch?: number;
 }
 
 /**
  * A condition under which a stage runs. DECLARED, ADVISORY UNTIL THE EXECUTOR
- * LANDS (see {@link PlaybookStageForEach}): it names the test, it does not
- * evaluate it. Give `equals` or `exists` (or both).
+ * LANDS: it names the test, it does not evaluate it. Give `equals` or
+ * `exists` (or both). This is the one statement of that for `when`; the
+ * schema, the MCP stage schema and the tool text point here.
  */
 export interface PlaybookStageWhen {
   /** A run param or earlier output to test: a name or dotted path. A reference, never data. */
@@ -1330,9 +1348,8 @@ export interface PlaybookStage {
    */
   tier?: PlaybookStageTier;
   /**
-   * Run this stage once per item of a collection — see
+   * Run this stage once per item of a collection, as child runs — see
    * {@link PlaybookStageForEach}. Absent ⇒ the stage runs once, as before.
-   * Advisory: nothing consumes it yet.
    */
   forEach?: PlaybookStageForEach;
   /**

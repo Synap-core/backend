@@ -25,6 +25,7 @@ import {
   AWAITED_GATE_PROPOSAL_TYPES,
   type AwaitedGateProposalType,
   MAX_STAGE_LESSONS,
+  PLAYBOOK_FOR_EACH_MAX_BATCH,
   PLAYBOOK_FOR_EACH_MAX_ITEMS,
   PLAYBOOK_STAGE_TIERS,
   STAGE_LESSON_MAX_CHARS,
@@ -256,6 +257,13 @@ export const playbookStageSchema = z.looseObject({
         .optional(),
       /** Declared ceiling on items per run; never above the pod-wide cap. */
       max: z.number().int().min(1).max(PLAYBOOK_FOR_EACH_MAX_ITEMS).optional(),
+      /** Items per child run (default 1). */
+      batch: z
+        .number()
+        .int()
+        .min(1)
+        .max(PLAYBOOK_FOR_EACH_MAX_BATCH)
+        .optional(),
     })
     .optional(),
   /**
@@ -351,8 +359,8 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // consumes the tier yet.
   "tier",
   // A track stage session is started once by the tracks service; fanning a
-  // stage out over a collection is a session RUN's concern, and nothing
-  // consumes it yet.
+  // stage out over a collection into child runs is a session RUN's concern
+  // (the stage runner, `stage-for-each.ts`).
   "forEach",
   // A track stage session is started by the tracks service; skipping a stage
   // on a condition is a session RUN's concern, and nothing consumes it yet.

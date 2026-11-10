@@ -40635,6 +40635,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					tier?: "deep" | "quick" | "standard" | undefined;
 					forEach?: {
 						as?: string | undefined;
+						batch?: number | undefined;
 						max?: number | undefined;
 						over: string;
 					} | undefined;
@@ -47689,6 +47690,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					tier?: "deep" | "quick" | "standard" | undefined;
 					forEach?: {
 						as?: string | undefined;
+						batch?: number | undefined;
 						max?: number | undefined;
 						over: string;
 					} | undefined;
@@ -48786,6 +48788,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					tier?: "deep" | "quick" | "standard" | undefined;
 					forEach?: {
 						as?: string | undefined;
+						batch?: number | undefined;
 						max?: number | undefined;
 						over: string;
 					} | undefined;
@@ -59811,6 +59814,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							tier?: "deep" | "quick" | "standard" | undefined;
 							forEach?: {
 								as?: string | undefined;
+								batch?: number | undefined;
 								max?: number | undefined;
 								over: string;
 							} | undefined;
