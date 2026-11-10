@@ -438,8 +438,8 @@ export function playbookPreApprovalState(
     id: string;
     targetPattern: string;
     verdict: string;
-    targetSubjectId: string | null;
-    targetSubjectVersion: number | null;
+    targetSubjectId?: string | null;
+    targetSubjectVersion?: number | null;
   }>,
   playbook: { id: string; version: number }
 ): PlaybookPreApprovalState {

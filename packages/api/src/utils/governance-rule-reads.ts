@@ -155,11 +155,15 @@ export async function mapRulesWithAgentLabels(rows: GovernanceRuleRow[]) {
     targetKind: r.targetKind,
     targetPattern: r.targetPattern,
     targetProfile: r.targetProfile,
-    targetSubjectId: r.targetSubjectId,
-    targetSubjectVersion: r.targetSubjectVersion,
-    targetSubjectLabel: r.targetSubjectId
-      ? (subjectLabels.get(r.targetSubjectId) ?? null)
-      : null,
+    // Only on a rule that names one object (0420): every other row keeps the
+    // shape its readers (sample world, pod admin fixtures) already build.
+    ...(r.targetSubjectId
+      ? {
+          targetSubjectId: r.targetSubjectId,
+          targetSubjectVersion: r.targetSubjectVersion,
+          targetSubjectLabel: subjectLabels.get(r.targetSubjectId) ?? null,
+        }
+      : {}),
     verdict: r.verdict,
     createdAt: r.createdAt,
     createdBy: r.createdBy,
