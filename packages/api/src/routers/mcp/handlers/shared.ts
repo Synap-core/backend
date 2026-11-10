@@ -238,6 +238,14 @@ function fenceUntrustedReplacer(_key: string, value: unknown): unknown {
     : value;
 }
 
+/**
+ * The text `ok()` writes for `data`'s own fields (fenced, compact) — what a
+ * handler measures when it fits a reply under the cap (`fit-reply.ts`).
+ */
+export function replyJson(data: unknown): string {
+  return JSON.stringify(data, fenceUntrustedReplacer) ?? "";
+}
+
 export function ok(data: unknown): CallToolResult {
   // Best-effort: inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
   // whenever the result carries a primary object id (see primaryObjectId). The

@@ -184,12 +184,13 @@ Get a document by ID: its markdown `content`, the `revision` to pass back as `ba
 
 **Get thread context** · Group: `read` · readOnlyHint: true · openWorldHint: false
 
-Get full context for a thread: all messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.
+Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.
 
 | Parameter  | Type   | Required | Description                                                                                      |
 | ---------- | ------ | -------- | ------------------------------------------------------------------------------------------------ |
 | `threadId` | string | yes      | Channel/thread UUID                                                                              |
 | `limit`    | number | no       | Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn. |
+| `cursor`   | string | no       | Older messages: the last reply's `nextCursor`.                                                   |
 
 ## synap_list_proposals
 

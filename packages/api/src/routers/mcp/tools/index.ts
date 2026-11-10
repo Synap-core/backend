@@ -1016,7 +1016,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Get full context for a thread: all messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
+          "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1025,6 +1025,10 @@ export const tools = {
               type: "number",
               description:
                 "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn.",
+            },
+            cursor: {
+              type: "string",
+              description: "Older messages: the last reply's `nextCursor`.",
             },
           },
           required: ["threadId"],
