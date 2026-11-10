@@ -40,6 +40,7 @@ beforeAll(async () => {
     schema.projectTracks,
     schema.focusSessions,
     schema.lifecycleTransitionOutbox,
+    schema.proposals,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
   }
@@ -389,5 +390,86 @@ describe("setSessionStatus — the one session status write", () => {
       );
     }
     expect((await row(id)).status).toBe("active");
+  });
+});
+
+describe("a session that ENDS takes its pending stage gates with it", () => {
+  // Live 9 Nov 2026: gate 9c527c67 stayed pending on run be143ceb after the
+  // run closed; the person approved it and nothing could happen.
+  async function session(status: string) {
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO focus_sessions (id, user_id, goal, status, workspace_id)
+       VALUES (gen_random_uuid(), $1, 'g', $2, $3) RETURNING id`,
+      [OWNER, status, WORKSPACE]
+    );
+    return r.rows[0]!.id;
+  }
+  async function proposal(sessionId: string, proposalType: string) {
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO proposals (target_type, target_id, proposal_type, data, status, session_id)
+       VALUES ('focus_session', $1, $2, '{"stageKey":"draft"}'::jsonb, 'pending', $3::uuid) RETURNING id`,
+      [sessionId, proposalType, sessionId]
+    );
+    return r.rows[0]!.id;
+  }
+  const proposalRow = async (id: string) =>
+    (
+      await pg.query<{ status: string; data: Record<string, unknown> }>(
+        `SELECT status, data FROM proposals WHERE id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+
+  for (const to of ["closed", "failed", "cancelled"] as const) {
+    it(`${to}: its pending stage gate is EXPIRED and says why`, async () => {
+      const id = await session("paused");
+      const gate = await proposal(id, "playbook.stage_gate");
+      await setSessionStatus(db, {
+        sessionId: id,
+        from: ["paused"],
+        to,
+        actor: { kind: "system" },
+      });
+      const g = await proposalRow(gate);
+      expect(g.status).toBe("expired");
+      expect(g.data).toMatchObject({
+        stageKey: "draft",
+        expiredBy: "session_ended",
+        sessionEndedAs: to,
+      });
+    });
+  }
+
+  it("leaves other proposals of the session, and gates of other sessions, pending", async () => {
+    const ended = await session("paused");
+    const other = await session("paused");
+    const handOff = await proposal(ended, "assign_agent");
+    const otherGate = await proposal(other, "playbook.stage_gate");
+    await setSessionStatus(db, {
+      sessionId: ended,
+      from: ["paused"],
+      to: "closed",
+      actor: { kind: "system" },
+    });
+    expect((await proposalRow(handOff)).status).toBe("pending");
+    expect((await proposalRow(otherGate)).status).toBe("pending");
+  });
+
+  it("a pause or a resume expires nothing", async () => {
+    const id = await session("active");
+    const gate = await proposal(id, "playbook.stage_gate");
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: ["active"],
+      to: "paused",
+      actor: { kind: "system" },
+    });
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: ["paused"],
+      to: "active",
+      actor: { kind: "human", userId: OWNER },
+    });
+    expect((await proposalRow(gate)).status).toBe("pending");
   });
 });

@@ -78,7 +78,7 @@ export interface PackagePlaybook {
     required?: boolean;
     defaultValue?: unknown;
   }>;
-  executor?: "is-agent" | "external-agent" | "hybrid";
+  executor?: "is-agent" | "external-agent" | "hybrid" | "generate";
   /**
    * The stored `{kind, ...}` object (jsonb). Was typed as the bare kind string,
    * which the exporter emitted — and which no apply door's schema accepts.

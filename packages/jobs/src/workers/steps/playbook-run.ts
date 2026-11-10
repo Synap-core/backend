@@ -36,7 +36,9 @@ import {
   type PlaybookRunMode,
 } from "@synap-core/types/automations";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
+import { findInFlightRunSession } from "../../utils/run-in-flight.js";
 import { logger } from "../automation-executor-logger.js";
+import { isUuid } from "@synap-core/types/property-render";
 import type {
   StepContext,
   ExecutionPayload,
@@ -304,6 +306,25 @@ export async function executePlaybookRun(
         "playbook_run in propose mode needs the automation that owns it (no automationContext) — refusing to file an unattributable proposal"
       );
     }
+    // ONE run per (playbook, subject) at a time — the rule the run spine's
+    // subject reuse applies to a run-mode node, applied before anything is
+    // filed. A run still working on this subject answers the activator: a
+    // second proposal could only start a duplicate run (see run-in-flight.ts).
+    // A name-only node (no id) is resolved at approval, where the replay
+    // checks the same thing.
+    if (resolvedSubjectId && isUuid(data.playbookId ?? "")) {
+      const inFlight = await findInFlightRunSession({
+        playbookId: data.playbookId!,
+        subjectId: resolvedSubjectId,
+      });
+      if (inFlight) {
+        return {
+          status: "skipped",
+          reason: AUTOMATION_SKIP_REASONS.runInFlight,
+          sessionId: inFlight.id,
+        };
+      }
+    }
     // A worker's backlog holds its proposals too: past `maxPendingApprovals`
     // waiting on a person, it files no more (the spine's own gate for runs).
     if (data.worker) {
@@ -564,6 +585,20 @@ export async function executePlaybookRun(
     // supposed to supply, and never `""` substituted into the instruction.
     onMissingRequired: "refuse",
   });
+
+  // A ONE-SHOT run (`executor: "generate"`) made its draft in this call and
+  // filed it as a proposal on the subject: there is no session to stamp. The
+  // step output names the run and the proposal (a reuse: the earlier run's
+  // still-pending proposal).
+  if (result.generated) {
+    return {
+      runId: result.generated.runId,
+      status: result.generated.reused ? "reused" : "proposed",
+      proposalId: result.generated.proposalId,
+      reviewUrl: result.generated.reviewUrl,
+      ...(result.generated.reused ? { reused: true } : {}),
+    };
+  }
 
   // Nobody was eligible. Do not throw — an empty list is a quiet week, not a
   // failed automation — and do not stamp a session onto the firing event,

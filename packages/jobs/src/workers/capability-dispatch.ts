@@ -162,6 +162,17 @@ export interface PlaybookRunnerResult {
   reused?: boolean;
   /** `cooling_down`: the subject's latest run of this playbook failed recently. */
   skipped?: "no-subject" | "cooling_down" | WorkerSkipReason;
+  /**
+   * A ONE-SHOT run (`executor: "generate"`): no session (`session` is null),
+   * its draft filed as a proposal on the subject. Mirrors api's
+   * `GeneratedRunAnswer` structurally (not imported — circular dep).
+   */
+  generated?: {
+    runId: string;
+    proposalId: string;
+    reviewUrl: string;
+    reused?: true;
+  };
 }
 
 type PlaybookRunner = (

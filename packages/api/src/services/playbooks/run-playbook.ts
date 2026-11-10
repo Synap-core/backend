@@ -27,6 +27,7 @@ import {
   desc,
   inArray,
   notInArray,
+  or,
   channels,
   entities,
   focusSessions,
@@ -129,6 +130,7 @@ import {
   decidePreApprovedRun,
   type PreApprovalHeldReason,
 } from "./pre-approved-run.js";
+import type { GeneratedRunAnswer } from "./generate-run.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -402,6 +404,24 @@ type PlaybookRunStarted = {
   handedTo?: RunHandedTo;
   /** Present only on the no-subject branch, so both union members share the key. */
   skipped?: undefined;
+  /** Present only on a one-shot run (`executor: "generate"`). */
+  generated?: undefined;
+};
+
+/**
+ * A ONE-SHOT run (`executor: "generate"`, `generate-run.ts`): no session, one
+ * run row, its result filed as a proposal on the subject (`generated`).
+ */
+type PlaybookRunGenerated = {
+  run: PlaybookRun;
+  session: null;
+  generated: GeneratedRunAnswer;
+  /** An earlier run's still-pending proposal was returned (idempotency). */
+  reused?: true;
+  skipped?: undefined;
+  parentLink?: undefined;
+  held?: undefined;
+  handedTo?: undefined;
 };
 
 /** Who a run was handed to, as the run reply names it. */
@@ -413,6 +433,7 @@ export interface RunHandedTo {
 
 export type RunPlaybookResult =
   | PlaybookRunStarted
+  | PlaybookRunGenerated
   | {
       /** A pinned playbook had nobody eligible and the fallback matched nothing.
        *  No session, no run, no event stamp. */
@@ -433,6 +454,7 @@ export type RunPlaybookResult =
       held?: undefined;
       heldBecause?: undefined;
       handedTo?: undefined;
+      generated?: undefined;
     };
 
 /**
@@ -969,7 +991,11 @@ export async function resolveRunChoice(
     playbook: Pick<Playbook, "id" | "executor">;
   }
 ): Promise<ResolvedRunChoice> {
-  const executor = input.playbook.executor;
+  // A one-shot (`generate`) playbook is run by the pod itself: Synap AI.
+  const executor =
+    input.playbook.executor === "generate"
+      ? ("is-agent" as const)
+      : input.playbook.executor;
   const synapAiAllowed = executor !== "external-agent";
   const named = input.handToAgentId?.trim() || null;
   if (input.runOn === "synap_ai") {
@@ -1209,6 +1235,30 @@ export async function checkUnattendedPlaybookReadiness(input: {
  * (first) run + session is returned for the stable single-result contract;
  * any additional fan-out runs execute as side effects.
  */
+/**
+ * What a one-shot (`generate`) run cannot be: handed to an agent, a trial of
+ * draft rules (a trial renders on a session), or a per_moment worker batch
+ * (one session over many things). Refused by name, before anything exists.
+ */
+function refuseOneShotRunShape(
+  playbook: Pick<Playbook, "name">,
+  input: RunPlaybookInput
+): void {
+  const refuse = (why: string) => {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `"${playbook.name}" runs as one draft the pod writes (executor generate), so ${why}`,
+    });
+  };
+  if (input.handToAgentId?.trim()) {
+    refuse("it cannot be handed to an agent: run it without handToAgentId.");
+  }
+  if (input.trial) refuse("it has no trial of draft rules yet.");
+  if (input.worker?.size === "per_moment") {
+    refuse("it drafts for one record at a time, never a batch.");
+  }
+}
+
 export async function runPlaybook(
   rawInput: RunPlaybookInput
 ): Promise<RunPlaybookResult> {
@@ -1229,16 +1279,34 @@ export async function runPlaybook(
   // handle refuses cleanly instead of leaving a half-filed run.
   const filing = await resolveRunFiling(input);
 
+  // A ONE-SHOT playbook (`executor: "generate"`) is one model call the pod
+  // makes, filed as a proposal: no agent takes it, no session holds it. What
+  // needs a session or an agent is refused here, before anything exists.
+  const oneShot = playbook.executor === "generate";
+  if (oneShot) refuseOneShotRunShape(playbook, input);
+
   // RUN CHOICE — who does this run, resolved ONCE for every fan-out item,
   // before anything exists (an unknown / paused / foreign agent named for it
   // refuses the run; a remembered agent that is not awake falls to Synap AI).
-  const { handOff, runOn } = await resolveRunChoice({
-    userId: input.userId,
-    agentUserId: input.agentUserId,
-    handToAgentId: input.handToAgentId,
-    runOn: input.runOn,
-    playbook,
-  });
+  // A one-shot run is always the pod's own call (Synap AI): a remembered
+  // agent for the playbook does not apply to it.
+  const { handOff, runOn } = oneShot
+    ? {
+        handOff: null,
+        runOn: {
+          executor: "is-agent" as const,
+          agentUserId: null,
+          via: input.runOn ? ("named" as const) : ("default" as const),
+          passedOver: null,
+        },
+      }
+    : await resolveRunChoice({
+        userId: input.userId,
+        agentUserId: input.agentUserId,
+        handToAgentId: input.handToAgentId,
+        runOn: input.runOn,
+        playbook,
+      });
 
   // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
   // playbook depending on not-enabled skills files ONE enable request per pack
@@ -1446,6 +1514,54 @@ async function executeSingleRun(
   const rosterAgentIds = handOff
     ? [...new Set([...(startRoster ?? []), handOff.agentUserId])]
     : startRoster;
+
+  // ONE-SHOT: no session, no room, no agent turn. One model call through
+  // `ai.generate`, the result filed as a proposal on the subject, one run row
+  // with the call's record (`generate-run.ts`). Its own idempotency: an
+  // earlier run's still-pending proposal on the subject.
+  if (playbook.executor === "generate") {
+    const goalOverride =
+      (input.goalResolver
+        ? input.goalResolver(
+            input.goalTemplateOverride ?? playbook.goalTemplate
+          )
+        : undefined) ??
+      (input.goalTemplateOverride
+        ? resolveGoal(input.goalTemplateOverride, params, playbook.id)
+        : undefined);
+    if (input.idempotentBySubject && input.subjectId) {
+      const cooling = await latestRunFailedWithinCooldown(
+        playbook.id,
+        input.subjectId
+      );
+      if (cooling) {
+        return {
+          run: null,
+          session: null,
+          skipped: AUTOMATION_SKIP_REASONS.coolingDown,
+        };
+      }
+    }
+    // Loaded here, not at module load: the one-shot path reads documents
+    // and the model door, which no other run needs.
+    const { executeGenerateRun } = await import("./generate-run.js");
+    const done = await executeGenerateRun({
+      playbook,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      subjectId: input.subjectId ?? null,
+      params,
+      runOn: runOn ?? null,
+      ...(input.idempotentBySubject ? { idempotentBySubject: true } : {}),
+      ...(goalOverride !== undefined ? { goalOverride } : {}),
+    });
+    return {
+      run: done.run,
+      session: null,
+      generated: done.generated,
+      ...(done.reused ? { reused: true as const } : {}),
+    };
+  }
 
   // 0. Idempotency by subject — if a NON-TERMINAL session for this playbook +
   // subject already exists, REUSE it rather than starting a duplicate. This makes
@@ -2249,11 +2365,16 @@ async function latestRunFailedWithinCooldown(
       recent: drizzleSql<boolean>`COALESCE(${playbookRuns.completedAt}, ${playbookRuns.startedAt}) > now() - (${AI_DISPATCH_GUARDRAILS.failedSubjectCooldownHours}::int * interval '1 hour')`,
     })
     .from(playbookRuns)
-    .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
+    .leftJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
     .where(
       and(
         eq(playbookRuns.playbookId, playbookId),
-        eq(focusSessions.subjectEntityId, subjectId)
+        // A run's subject is its session's — or, for a one-shot run that has
+        // no session, the one its record names (`generation.subjectId`).
+        or(
+          eq(focusSessions.subjectEntityId, subjectId),
+          drizzleSql`${playbookRuns.generation}->>'subjectId' = ${subjectId}`
+        )
       )
     )
     .orderBy(desc(playbookRuns.startedAt))

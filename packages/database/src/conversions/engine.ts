@@ -178,6 +178,13 @@ export interface OpCounts {
   entitiesKeyRenamed?: number;
   /** renamePropertyKey: of those, entities that carried BOTH keys — the losing value was discarded per onConflict. */
   entitiesKeyConflicts?: number;
+  /**
+   * moveBasePropertyToFacet / renamePropertyKey: values a move discarded
+   * because the target already held a DIFFERENT value (the target wins). Each
+   * is listed on the result's `dropped` and kept on its entity under
+   * `system_data.droppedByConversion[<opKey>]`, never silently lost.
+   */
+  valuesDropped?: number;
   /** dedupeRelationDefs: redundant workspace copies drained onto the pod-wide row. */
   relationDefsCollapsed?: number;
   /** dedupeRelationDefs: workspace copies left alone — they carry their own meaning. */
@@ -210,16 +217,40 @@ export interface OpResult {
   severity?: "fatal" | "advisory";
   /**
    * Set on `status:"deferred"` results only — WHICH defer axis skipped the op.
-   * Stamped here at the two defer sites so a consumer (the boot caller's
+   * Stamped here at the defer sites so a consumer (the boot caller's
    * `/status/release` pending list) never re-derives it from the op type.
+   * `target-def-missing`: a `requireTargetDef` op has values to move and the
+   * target field is not declared yet; it waits, unledgered, and the next run
+   * retries it (no person needed: the template reconcile adds the field).
    */
-  deferReason?: "destructive-tail" | "defer-at-boot";
+  deferReason?: "destructive-tail" | "defer-at-boot" | "target-def-missing";
+  /** `target-def-missing` only: what the op waits for, in words. */
+  pending?: string;
   /**
    * mergeInto / dedupeProfileRows only: the field-level plan (dry run) or record
    * (apply) of every property def and link the op moves, restamps or leaves
    * behind. See `FieldPlanRow`. Not ledgered — the ledger stores counts only.
    */
   planDetail?: FieldPlanRow[];
+  /**
+   * moveBasePropertyToFacet / renamePropertyKey (real run): every value the op
+   * discarded because the target kept a different one. Not ledgered (the
+   * ledger stores counts; the entity keeps the value in `system_data`).
+   */
+  dropped?: DroppedValue[];
+}
+
+/** A value a key move discarded because its target kept a different one. */
+export interface DroppedValue {
+  entityId: string;
+  /** Set when the kept value sits on a facet (moveBasePropertyToFacet). */
+  facetId?: string;
+  /** The key whose value was discarded (stripped from the entity). */
+  key: string;
+  value: unknown;
+  /** The key that kept its own value. */
+  keptKey: string;
+  kept: unknown;
 }
 
 export interface RunOptions {
@@ -487,6 +518,21 @@ export async function runConversions(
       // Refuses (throws) BEFORE any write — dry run included, so a dry run
       // reports exactly what a real run would refuse.
       await assertCanonicalPrecondition(sql, op);
+      // Order-safe: a key move whose target field is not declared yet WAITS
+      // (not applied, not ledgered) and the run goes on; the next run retries.
+      const waitingFor = await missingTargetDef(sql, op);
+      if (waitingFor) {
+        results.push({
+          opKey: op.opKey,
+          op: op.op,
+          slug,
+          status: "deferred",
+          counts: {},
+          deferReason: "target-def-missing",
+          pending: waitingFor,
+        });
+        continue;
+      }
       if (options.dryRun) {
         if (opCarriesFieldPlan(op)) {
           const { counts, planDetail } = await planByRollback(sql, op, options);
@@ -510,12 +556,14 @@ export async function runConversions(
         }
       } else {
         const plan: FieldPlanRow[] = [];
+        const dropped: DroppedValue[] = [];
         const counts = await sql.begin(async (tx) => {
           const applied = await applyOp(
             tx as unknown as Sql,
             op,
             options,
-            plan
+            plan,
+            dropped
           );
           const c = await reprojectAfterOp(tx as unknown as Sql, op, applied);
           await recordLedger(tx as unknown as Sql, op.opKey, c, null);
@@ -529,6 +577,7 @@ export async function runConversions(
           status: isNoop ? "noop" : "applied",
           counts: counts as OpCounts,
           ...(opCarriesFieldPlan(op) ? { planDetail: plan } : {}),
+          ...(dropped.length > 0 ? { dropped } : {}),
         });
       }
     } catch (err: any) {
@@ -620,7 +669,8 @@ async function applyOp(
   tx: Sql,
   op: ConversionOp,
   options: RunOptions,
-  plan: FieldPlanRow[] = []
+  plan: FieldPlanRow[] = [],
+  dropped: DroppedValue[] = []
 ): Promise<OpCounts> {
   switch (op.op) {
     case "declareKind":
@@ -644,9 +694,9 @@ async function applyOp(
     case "remapPropertyValues":
       return applyRemapPropertyValues(tx, op);
     case "moveBasePropertyToFacet":
-      return applyMoveBasePropertyToFacet(tx, op);
+      return applyMoveBasePropertyToFacet(tx, op, dropped);
     case "renamePropertyKey":
-      return applyRenamePropertyKey(tx, op);
+      return applyRenamePropertyKey(tx, op, dropped);
     case "remapFacetPropertyValues":
       return applyRemapFacetPropertyValues(tx, op);
     case "foldRoleIntoStatus":
@@ -2096,34 +2146,161 @@ export async function applyRemapPropertyValues(
 }
 
 /**
+ * `requireTargetDef`: a key move lands only on a field the target declares
+ * (the property doors' rule). With values to move and no `targetKey` def linked
+ * to the target profile (the facet's role, or the kind itself), the op must
+ * WAIT: returns what it waits for ("target def missing: …"), and the run
+ * defers it unledgered, so it applies on the first run after the template
+ * reconcile adds the field. A backend release and a catalog publish land in
+ * either order. Nothing to move, or the field exists: null (apply).
+ */
+async function missingTargetDef(
+  sql: Sql,
+  op: ConversionOp
+): Promise<string | null> {
+  if (op.op !== "moveBasePropertyToFacet" && op.op !== "renamePropertyKey")
+    return null;
+  if (!op.requireTargetDef) return null;
+  const profileSlug =
+    op.op === "moveBasePropertyToFacet" ? op.facetSlug : op.slug;
+  const targetKey =
+    op.op === "moveBasePropertyToFacet"
+      ? (op.targetKey ?? op.sourceKey)
+      : op.targetKey;
+  const declared = await sql<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n
+    FROM profile_properties pp
+    JOIN profiles p ON p.id = pp.profile_id AND p.slug = ${profileSlug}
+    JOIN property_defs d ON d.id = pp.property_def_id AND d.slug = ${targetKey}
+  `;
+  if ((declared[0]?.n ?? 0) > 0) return null;
+  const toMove =
+    op.op === "moveBasePropertyToFacet"
+      ? await sql<Array<{ n: number }>>`
+          SELECT COUNT(*)::int AS n FROM entities e
+          JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+          WHERE e.deleted_at IS NULL
+            AND COALESCE(e.properties->>${op.sourceKey}, '') <> ''
+            AND EXISTS (
+              SELECT 1 FROM entity_facets f
+              JOIN profiles fp ON fp.id = f.profile_id
+              WHERE f.entity_id = e.id AND fp.slug = ${op.facetSlug} AND f.deleted_at IS NULL
+            )
+        `
+      : await sql<Array<{ n: number }>>`
+          SELECT COUNT(*)::int AS n FROM entities e
+          JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+          WHERE e.deleted_at IS NULL
+            AND COALESCE(e.properties->>${op.sourceKey}, '') <> ''
+        `;
+  const n = toMove[0]?.n ?? 0;
+  if (n === 0) return null;
+  return (
+    `target def missing: ${n} value(s) of '${op.sourceKey}' wait for '${profileSlug}.${targetKey}' ` +
+    `to be declared (the template reconcile adds it); retried on the next run`
+  );
+}
+
+/**
+ * Keep each dropped value on its entity, `system_data.droppedByConversion
+ * [<opKey>][<key>]`, and list it on the op's report: a move that keeps the
+ * target's value never loses the other one silently.
+ */
+async function recordDropped(
+  tx: Sql,
+  opKey: string,
+  rows: DroppedValue[],
+  dropped: DroppedValue[]
+): Promise<void> {
+  for (const d of rows) {
+    await tx`
+      UPDATE entities e
+      SET system_data = COALESCE(e.system_data, '{}'::jsonb)
+        || jsonb_build_object('droppedByConversion',
+             COALESCE(e.system_data->'droppedByConversion', '{}'::jsonb)
+             || jsonb_build_object(${opKey}::text,
+                  COALESCE(e.system_data->'droppedByConversion'->${opKey}::text, '{}'::jsonb)
+                  || jsonb_build_object(${d.key}::text, ${JSON.stringify(d.value)}::jsonb)))
+      WHERE e.id = ${d.entityId}
+    `;
+  }
+  dropped.push(...rows);
+}
+
+/**
  * Move a BASE entity property onto a currently-worn facet's own properties,
  * then strip the base key. See MoveBasePropertyToFacetOp for the contract.
  * One transaction (runConversions wraps applyOp in `sql.begin`), idempotent,
- * retry-safe; never loses data — an entity without the target facet keeps its
- * base value untouched and is counted, not silently dropped.
+ * retry-safe; never loses data: an entity without the target facet keeps its
+ * base value untouched and is counted, and a base value the facet's own value
+ * outranks is recorded (`recordDropped`), never silently dropped.
+ *
+ * "Empty" is one rule on both sides: a key that is absent, JSON null or "".
+ * Every step selects the facet by its profile SLUG, so a facet on any row of
+ * the role receives what the strip removes.
  */
 export async function applyMoveBasePropertyToFacet(
   tx: Sql,
-  op: MoveBasePropertyToFacetOp
+  op: MoveBasePropertyToFacetOp,
+  dropped: DroppedValue[] = []
 ): Promise<OpCounts> {
   const targetKey = op.targetKey ?? op.sourceKey;
   const counts: OpCounts = {};
 
-  // (a) copy the base value onto the facet's own properties — collision-skip:
-  // an existing facet value for targetKey is never clobbered.
+  // Conflicts, read before any write: the facet holds a DIFFERENT non-empty
+  // value. The facet's value wins; the base value is recorded, then stripped.
+  const conflicts = await tx<
+    Array<{
+      entity_id: string;
+      facet_id: string;
+      value: unknown;
+      kept: unknown;
+    }>
+  >`
+    SELECT e.id AS entity_id, f.id AS facet_id,
+           e.properties->${op.sourceKey}::text AS value,
+           f.properties->${targetKey}::text AS kept
+    FROM entities e
+    JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+    JOIN entity_facets f ON f.entity_id = e.id AND f.deleted_at IS NULL
+    JOIN profiles fp ON fp.id = f.profile_id AND fp.slug = ${op.facetSlug}
+    WHERE e.deleted_at IS NULL
+      AND COALESCE(e.properties->>${op.sourceKey}, '') <> ''
+      AND COALESCE(f.properties->>${targetKey}, '') <> ''
+      AND (f.properties->${targetKey}::text) IS DISTINCT FROM (e.properties->${op.sourceKey}::text)
+    ORDER BY e.id, f.id
+  `;
+  if (conflicts.length > 0) {
+    await recordDropped(
+      tx,
+      op.opKey,
+      conflicts.map((c) => ({
+        entityId: c.entity_id,
+        facetId: c.facet_id,
+        key: op.sourceKey,
+        value: c.value,
+        keptKey: targetKey,
+        kept: c.kept,
+      })),
+      dropped
+    );
+    counts.valuesDropped = conflicts.length;
+  }
+
+  // (a) copy the base value (verbatim JSON) onto every live facet of the role
+  // whose own value is empty; a facet value is never clobbered.
   const moved = await tx`
     UPDATE entity_facets f
     SET properties = COALESCE(f.properties, '{}'::jsonb)
-          || jsonb_build_object(${targetKey}::text, to_jsonb(e.properties->>${op.sourceKey})),
+          || jsonb_build_object(${targetKey}::text, e.properties->${op.sourceKey}::text),
         updated_at = now()
-    FROM entities e
-    JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+    FROM entities e, profiles p, profiles fp
     WHERE f.entity_id = e.id
-      AND f.profile_id = (SELECT id FROM profiles WHERE slug = ${op.facetSlug} AND is_active = true LIMIT 1)
+      AND p.id = e.profile_id AND p.slug = ${op.slug}
+      AND fp.id = f.profile_id AND fp.slug = ${op.facetSlug}
       AND f.deleted_at IS NULL AND e.deleted_at IS NULL
-      AND e.properties ? ${op.sourceKey}::text
-      AND (e.properties->>${op.sourceKey}) <> ''
-      AND NOT (COALESCE(f.properties, '{}'::jsonb) ? ${targetKey}::text)
+      AND COALESCE(e.properties->>${op.sourceKey}, '') <> ''
+      AND COALESCE(f.properties->>${targetKey}, '') = ''
   `;
   if (moved.count) counts.facetPropertiesMoved = moved.count;
 
@@ -2169,20 +2346,33 @@ export async function applyMoveBasePropertyToFacet(
  * Rename an entity property key. See RenamePropertyKeyOp for the contract.
  * ONE statement: the CTE picks the rows (same scoping as
  * applyRemapPropertyValues — every profile row of `slug`, live entities only,
- * carrying `sourceKey`) and records whether each already had `targetKey`; the
+ * carrying `sourceKey`) and records whether each already had a NON-EMPTY
+ * `targetKey` (absent, JSON null and "" are empty: the source fills them); the
  * UPDATE rewrites them and RETURNs that flag, so both counts come from the
  * rows actually written. `->` carries the value verbatim (any JSON type).
- * Idempotent: the strip empties the selection for a re-run.
+ * A conflict whose losing value differs from the kept one is recorded
+ * (`recordDropped`). Idempotent: the strip empties the selection for a re-run.
  */
 export async function applyRenamePropertyKey(
   tx: Sql,
-  op: RenamePropertyKeyOp
+  op: RenamePropertyKeyOp,
+  dropped: DroppedValue[] = []
 ): Promise<OpCounts> {
   const keepTarget = op.onConflict === "keepTarget";
   const prependSource = op.onConflict === "prependSource";
-  const r = await tx<Array<{ renamed: number; conflicts: number }>>`
+  const r = await tx<
+    Array<{
+      id: string;
+      had_target: boolean;
+      source: unknown;
+      target: unknown;
+    }>
+  >`
     WITH picked AS (
-      SELECT e.id, (e.properties ? ${op.targetKey}::text) AS had_target
+      SELECT e.id,
+             (COALESCE(e.properties->>${op.targetKey}, '') <> '') AS had_target,
+             e.properties->${op.sourceKey}::text AS source,
+             e.properties->${op.targetKey}::text AS target
       FROM entities e
       JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
       WHERE e.deleted_at IS NULL
@@ -2214,17 +2404,45 @@ export async function applyRenamePropertyKey(
           updated_at = now()
       FROM picked
       WHERE e.id = picked.id
-      RETURNING picked.had_target
+      RETURNING picked.id, picked.had_target, picked.source, picked.target
     )
-    SELECT COUNT(*)::int AS renamed,
-           COUNT(*) FILTER (WHERE had_target)::int AS conflicts
-    FROM written
+    SELECT id, had_target, source, target FROM written ORDER BY id
   `;
   const counts: OpCounts = {};
-  if (r[0]?.renamed) counts.entitiesKeyRenamed = r[0].renamed;
+  const renamed = r.length;
+  const conflicts = r.filter((row) => row.had_target);
+  if (renamed) counts.entitiesKeyRenamed = renamed;
   // A prepend discards nothing, so it is not a conflict.
-  if (r[0]?.conflicts && !prependSource)
-    counts.entitiesKeyConflicts = r[0].conflicts;
+  if (conflicts.length && !prependSource)
+    counts.entitiesKeyConflicts = conflicts.length;
+  if (!prependSource) {
+    // The losing side of a conflict, when it differs from the kept value.
+    const lost = conflicts
+      .filter(
+        (row) => JSON.stringify(row.source) !== JSON.stringify(row.target)
+      )
+      .map((row) =>
+        keepTarget
+          ? {
+              entityId: row.id,
+              key: op.sourceKey,
+              value: row.source,
+              keptKey: op.targetKey,
+              kept: row.target,
+            }
+          : {
+              entityId: row.id,
+              key: op.targetKey,
+              value: row.target,
+              keptKey: op.sourceKey,
+              kept: row.source,
+            }
+      );
+    if (lost.length > 0) {
+      await recordDropped(tx, op.opKey, lost, dropped);
+      counts.valuesDropped = lost.length;
+    }
+  }
   return counts;
 }
 
@@ -2997,43 +3215,10 @@ export async function computeCounts(
       const n = r[0]?.n ?? 0;
       return n > 0 ? { entitiesRemapped: n } : {};
     }
-    case "moveBasePropertyToFacet": {
-      // Mirrors applyMoveBasePropertyToFacet's three sets, without writing.
-      const targetKey = op.targetKey ?? op.sourceKey;
-      const r = await sql<
-        Array<{ moved: number; stripped: number; skipped: number }>
-      >`
-        SELECT
-          COUNT(*) FILTER (WHERE has_facet AND NOT facet_has_target)::int AS moved,
-          COUNT(*) FILTER (WHERE has_facet)::int AS stripped,
-          COUNT(*) FILTER (WHERE NOT has_facet)::int AS skipped
-        FROM (
-          SELECT
-            EXISTS (
-              SELECT 1 FROM entity_facets f
-              JOIN profiles fp ON fp.id = f.profile_id
-              WHERE f.entity_id = e.id AND fp.slug = ${op.facetSlug} AND f.deleted_at IS NULL
-            ) AS has_facet,
-            EXISTS (
-              SELECT 1 FROM entity_facets f
-              JOIN profiles fp ON fp.id = f.profile_id
-              WHERE f.entity_id = e.id AND fp.slug = ${op.facetSlug} AND f.deleted_at IS NULL
-                AND COALESCE(f.properties, '{}'::jsonb) ? ${targetKey}::text
-            ) AS facet_has_target
-          FROM entities e
-          JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
-          WHERE e.deleted_at IS NULL
-            AND e.properties ? ${op.sourceKey}::text
-            AND (e.properties->>${op.sourceKey}) <> ''
-        ) sub
-      `;
-      const row = r[0];
-      const counts: OpCounts = {};
-      if (row?.moved) counts.facetPropertiesMoved = row.moved;
-      if (row?.stripped) counts.entitiesBasePropertyStripped = row.stripped;
-      if (row?.skipped) counts.entitiesSkippedNoFacet = row.skipped;
-      return counts;
-    }
+    case "moveBasePropertyToFacet":
+      // Derived, not mirrored: the apply itself, rolled back (its conflict
+      // record and target-def refusal included).
+      return (await planByRollback(sql, op, options)).counts;
     case "projectLifecycleColumns": {
       // Dry run DERIVED from the apply: the same statements, rolled back.
       try {

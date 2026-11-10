@@ -36,6 +36,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         const chain = {
           from: () => chain,
           innerJoin: () => chain,
+          leftJoin: () => chain,
           where: () => chain,
           orderBy: () => chain,
           limit: async () => [],
