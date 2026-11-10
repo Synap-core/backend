@@ -248,11 +248,12 @@ export const completeRunBodySchema = z
         cacheReadInputTokens: count.optional().catch(undefined),
         cacheWriteInputTokens: count.optional().catch(undefined),
         /**
-         * What the turn's input COUNTED against `ceiling` (founder, 9 Nov
-         * 2026): `spentInputTokens` with each cache read weighed at its real
-         * price relative to an input token (the serving model's declared
-         * rates), so it can be lower than `spentInputTokens`. Absent from an
-         * IS that counts every token in full. Lenient like `model`.
+         * What the turn's input COUNTED against `ceiling`: its FRESH input,
+         * `spentInputTokens` minus the cache reads the provider reported
+         * (founder, 10 Nov 2026: cache reads count zero; an IS before the
+         * hard ceiling weighed them at their real price instead), so it can
+         * be lower than `spentInputTokens`. Absent from an IS that counts
+         * every token in full. Lenient like `model`.
          */
         chargedInputTokens: count.optional().catch(undefined),
       })
@@ -345,7 +346,7 @@ export interface RunTurnRecord {
   /** Prompt-cache tokens the provider reported over the turn. */
   cacheReadInputTokens?: number;
   cacheWriteInputTokens?: number;
-  /** What counted against the ceiling (cache reads at their real price). */
+  /** What counted against the ceiling: the fresh input (cache reads at 0). */
   chargedInputTokens?: number;
   /** What the pod decided for a stopped turn. */
   next?: "continue" | "ask";
