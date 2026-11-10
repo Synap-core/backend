@@ -755,6 +755,7 @@ export async function executeGenerateRun(
       userId: input.userId,
       systemAuthor: GENERATE_RUN_AUTHOR,
       forReview: { machineAuthor: GENERATE_RUN_AUTHOR },
+      run: { id: runId, playbookId: playbook.id },
       documentId: doc.id,
       baseRevision: doc.contentRevision,
       ops: [

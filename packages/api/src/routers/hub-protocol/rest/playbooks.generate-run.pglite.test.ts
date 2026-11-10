@@ -17,6 +17,8 @@
  *    cost, finish reason and prompt text on its `generation`;
  *  - a session, a room, a recall, or a dispatched executor for a generate run;
  *  - the door's answer missing the proposal id, its review link or the run id;
+ *  - a filed proposal that does not name the run that drafted it
+ *    (`data.run = { id, playbookId }`);
  *  - a second run on the same subject (`idempotentBySubject`) filing a second
  *    proposal while the first still waits;
  *  - a failed call leaving no record (the run row is `failed` with the error);
@@ -566,6 +568,9 @@ describe("a one-shot (generate) playbook run through the Hub door", () => {
       proposal: { id: p.id, documentId: DOC, sectionId: "caption-draft" },
     });
     expect(run.generation!.prompt.text).toBe(call.prompt);
+    // The proposal names the run that drafted it: from a proposal, the run's
+    // record (`GET /runs/:id`) is one read away.
+    expect(payload.run).toEqual({ id: run.id, playbookId: CAPTION });
     expect(
       run.generation!.context.map((c: { kind: string }) => c.kind)
     ).toEqual(["subject", "subject_document"]);
