@@ -71,6 +71,8 @@ import {
   type InstallationJobHistoryEntry,
 } from "./self-heal.js";
 import { askForPrerequisites } from "./self-heal-notice.js";
+import { contentHashVersion } from "@synap-core/types/package-updates";
+import { deepEqual } from "../capabilities/market-source.js";
 
 /**
  * Was this installation request already approved? The approve executor's
@@ -356,6 +358,12 @@ export interface InstallableCapability {
   /** The computer blocks AS STORED by the applier (`metadata.computer`). */
   manifest: Record<string, unknown>;
   kind: "service" | "tool";
+  /**
+   * The pod definition's version, as the catalog lists it (its content hash,
+   * `h-…`, `contentHashVersion`); null when the row carries no hash. Stamped
+   * on the installation as `capabilityVersion` when its snapshot is taken.
+   */
+  version: string | null;
 }
 
 /**
@@ -383,11 +391,15 @@ export async function loadInstallableCapability(
     if (!parsed.success) continue;
     const kind = installKind(parsed.data);
     if (!kind) continue;
+    const contentHash = (r.metadata as Record<string, unknown>).contentHash;
     return {
       capabilityId: r.id,
       capabilityKey,
       manifest: computer as Record<string, unknown>,
       kind,
+      version: contentHashVersion(
+        typeof contentHash === "string" ? contentHash : null
+      ),
     };
   }
   return null;
@@ -436,19 +448,72 @@ export async function loadLiveInstallation(
   return row ?? null;
 }
 
+/** What the pod's current definition changes against an installation's snapshot. */
+export interface DefinitionChange {
+  /** The snapshot IS the pod's current definition: an update is a repair. */
+  same: boolean;
+  recipesAdded: string[];
+  recipesRemoved: string[];
+}
+
+/** The recipe names a computer block declares (flat, or under `spec`). */
+function recipeNamesOf(manifest: Record<string, unknown>): string[] {
+  const spec =
+    manifest.spec && typeof manifest.spec === "object"
+      ? (manifest.spec as Record<string, unknown>)
+      : manifest;
+  return Array.isArray(spec.recipes)
+    ? spec.recipes
+        .map((r) =>
+          r && typeof r === "object" ? (r as { name?: unknown }).name : null
+        )
+        .filter((n): n is string => typeof n === "string")
+    : [];
+}
+
+/**
+ * The approved snapshot against the pod's current definition of the same
+ * capability: whether they differ at all (the whole computer block), and the
+ * recipes the update adds or removes, named on the card.
+ */
+export function definitionChange(
+  approved: Record<string, unknown>,
+  current: Record<string, unknown>
+): DefinitionChange {
+  const before = new Set(recipeNamesOf(approved));
+  const after = new Set(recipeNamesOf(current));
+  return {
+    same: deepEqual(approved, current),
+    recipesAdded: [...after].filter((n) => !before.has(n)),
+    recipesRemoved: [...before].filter((n) => !after.has(n)),
+  };
+}
+
 /**
  * Does this ask need the person's approval? Approval is once per
- * (capability, computer): a verify, or an install of the version already
- * approved (a repair), asks nobody. A first install, a new version, a
- * removal or a reinstall (after a removal: no live row) asks again.
+ * (capability, computer, definition): a verify, or an install of what is
+ * already approved (a repair), asks nobody. A first install, a new version,
+ * a removal or a reinstall (after a removal: no live row) asks again, and so
+ * does an UPDATE when the pod's capability has a newer definition than the
+ * installation's snapshot (`current`): it widens what runs on the computer
+ * (founder decision 2: upgrades ask). An update to the definition already
+ * approved is a repair.
  */
 export function requestNeedsApproval(
   row: InstallationRow | null,
-  req: { action: InstallationRequestAction; version?: string | null }
+  req: { action: InstallationRequestAction; version?: string | null },
+  current?: Record<string, unknown> | null
 ): boolean {
   if (req.action === "verify") return false;
   if (req.action === "remove") return true;
   if (!row || !row.approvedAt || row.desiredState !== "installed") return true;
+  if (
+    req.action === "update" &&
+    !req.version &&
+    current &&
+    !definitionChange(row.manifest ?? {}, current).same
+  )
+    return true;
   return (req.version ?? row.desiredVersion ?? null) !== row.desiredVersion;
 }
 
@@ -499,6 +564,7 @@ export async function applyInstallationRequest(input: {
         capabilityKey: input.capability.capabilityKey,
         machineUserId: input.computer.id,
         manifest: input.capability.manifest,
+        capabilityVersion: input.capability.version,
         desiredState: "installed",
         desiredVersion: input.version ?? null,
         approvedAt: now,
@@ -525,6 +591,7 @@ export async function applyInstallationRequest(input: {
         desiredState: "installed",
         desiredVersion: input.version ?? live.desiredVersion,
         manifest: input.capability.manifest,
+        capabilityVersion: input.capability.version,
         capabilityId: input.capability.capabilityId,
         approvedAt: now,
         approvedBy: input.approverId,

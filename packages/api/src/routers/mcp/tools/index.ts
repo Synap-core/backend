@@ -6452,7 +6452,7 @@ export const tools = {
               type: "string",
               enum: ["install", "update", "verify", "remove"],
               description:
-                "Default install. update = another version; verify = run its check now; remove = uninstall from that computer.",
+                "Default install. update = the pod's current definition (asks if it adds abilities), or `version`; verify = check now; remove = uninstall.",
             },
             version: {
               type: "string",

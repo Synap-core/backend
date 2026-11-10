@@ -23,6 +23,9 @@
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -141,6 +144,7 @@ vi.mock("../installations/request-installation.js", async (importOriginal) => {
   };
 });
 
+import { pickComputerSpec } from "@synap-core/types/capability-manifest";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { registerHostJobsRoutes } from "../../routers/hub-protocol/rest/host-jobs.js";
 import { BUILTIN_VERBS } from "../capabilities/builtin-verbs.js";
@@ -193,6 +197,29 @@ const LOUDNORM = {
     { name: "loudnorm2pass.py", sha256: "0".repeat(64), source: "print(1)\n" },
   ],
   gotchas: ["Normalise last."],
+};
+
+/** media-ffmpeg as the catalog served it before range-cut (0.35.0). */
+const FFMPEG_DEF = JSON.parse(
+  readFileSync(
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "../installations/__fixtures__/media-ffmpeg.0.35.0.definition.json"
+    ),
+    "utf8"
+  )
+) as Record<string, unknown>;
+
+/** The recipe the catalog added after the Mac's approval (proposal c6ba64e6). */
+const RANGE_CUT = {
+  name: "range-cut",
+  description: "Keep one time range of a video.",
+  params: {
+    in: { type: "file", description: "The video.", required: true },
+    out: { type: "output", description: "The result.", required: true },
+  },
+  steps: [{ program: "ffmpeg", args: ["-y", "-i", "{in}", "{out}"] }],
+  gotchas: ["Re-encodes the range."],
 };
 
 const run = BUILTIN_VERBS["computer.run_recipe"]!;
@@ -317,11 +344,41 @@ describe("computer.run_recipe — the ask", () => {
   });
 
   it("refuses an unknown recipe with the list, and values that do not fill it", async () => {
+    // Not in the snapshot, nor on the pod: no update would bring it.
     await expect(run(ask({ recipe: "range-cut" }), ctx)).rejects.toMatchObject(
       refusal(
         "UNKNOWN_RECIPE",
         "target_missing",
-        /approved version has no recipe "range-cut".*action "update".*loudness-normalize/
+        /has no recipe "range-cut", and neither has the pod's media-ffmpeg\. Its recipes: loudness-normalize/
+      )
+    );
+    // The pod's current media-ffmpeg has it (the catalog added it after the
+    // Mac's approval, proposal c6ba64e6): the refusal offers the update.
+    await q(
+      `INSERT INTO capabilities (id, created_by, name, template_key, metadata)
+       VALUES ($1, $2, 'ffmpeg on your computer', 'media-ffmpeg', $3::jsonb)`,
+      [
+        randomUUID(),
+        PERSON,
+        JSON.stringify({
+          // The pod's definition as the applier stores it (the computer
+          // blocks), with range-cut added since the Mac's approval.
+          computer: {
+            ...pickComputerSpec(FFMPEG_DEF),
+            recipes: [
+              ...((FFMPEG_DEF.recipes as unknown[] | undefined) ?? []),
+              RANGE_CUT,
+            ],
+          },
+          contentHash: "c".repeat(64),
+        }),
+      ]
+    );
+    await expect(run(ask({ recipe: "range-cut" }), ctx)).rejects.toMatchObject(
+      refusal(
+        "UNKNOWN_RECIPE",
+        "target_missing",
+        /its approved version has no recipe "range-cut", the pod's current one has it\. Ask for the update \(synap_request_installation, action "update"\) and approve it/
       )
     );
     await expect(
@@ -474,12 +531,12 @@ describe("approving an agent's computer.run_recipe", () => {
     });
     const { error } = await approve(id);
     expect(error?.message).toMatch(
-      /approved version has no recipe "range-cut".*action "update"/
+      /approved version has no recipe "range-cut", the pod's current one has it.*action "update"/
     );
     const row = await rowOf(id);
     expect(row.status).toBe("approval_failed");
     expect(row.rejection_reason).toMatch(
-      /^Couldn't apply — media-ffmpeg on MacBook-Pro: its approved version has no recipe "range-cut"; ask for its update/
+      /^Couldn't apply — media-ffmpeg on MacBook-Pro: its approved version has no recipe "range-cut", the pod's current one has it\. Ask for the update/
     );
     expect(row.rejection_reason).not.toMatch(/internal error/);
     expect(row.data.failure?.errorClass).toBe("target_missing");

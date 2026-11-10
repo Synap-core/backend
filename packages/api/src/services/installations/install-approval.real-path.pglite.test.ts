@@ -158,6 +158,15 @@ vi.mock("../capabilities/marketplace-install.js", async (importOriginal) => {
   };
 });
 
+// The recipe run's input file: one the person can read, with stored bytes.
+vi.mock("../../routers/file-upload.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readableFileEntity: async (_userId: string, id: string) => ({
+    ok: true,
+    entity: { id, storageKey: `k/${id}`, title: "take.mp4", size: 1 },
+  }),
+}));
+
 import { pickComputerSpec } from "@synap-core/types/capability-manifest";
 import { officialCatalogUrl } from "@synap/jobs/workers/cp-catalog-sync.js";
 import { installationHandlers } from "../../routers/mcp/handlers/installations.js";
@@ -390,5 +399,186 @@ describe("a failed approval names the check that failed", () => {
     expect(out.status).toBe("approval_failed");
     expect(out.reason).toMatch(/is not a computer/);
     expect(out.reason).not.toMatch(/no longer connected/);
+  });
+});
+
+/**
+ * The pod's media-ffmpeg gained a recipe after the Mac's approval (live,
+ * 2026-11-10: range-cut entered the catalog at 0.38; installation 4ed7c8a5
+ * kept its approval-time snapshot; two `action: "update"` asks came back
+ * `approved` at once and reinstalled the SAME snapshot, so the refusal's own
+ * advice "ask for its update" led nowhere).
+ *
+ * An update with no version now moves the snapshot to the pod's CURRENT
+ * definition: an ask when it differs (founder decision 2: upgrades ask),
+ * naming what it adds; a repair when it is the same. Through the real MCP
+ * handler, gate, `proposals.approve` and executor, then the real
+ * `computer.run_recipe` handler.
+ *
+ * Negative control: with `requestNeedsApproval` ignoring the definition (the
+ * pre-fix rule), the ask is `approved` at once, nothing moves, and the
+ * range-cut run is refused.
+ */
+describe("the pod's media-ffmpeg gained a recipe: an update asks, and approving it moves the Mac's snapshot", () => {
+  const NEW_HASH = "d".repeat(64);
+  const RANGE_CUT = {
+    name: "range-cut",
+    description: "Keep one time range of a video.",
+    params: {
+      in: { type: "file", description: "The video.", required: true },
+      out: { type: "output", description: "The result.", required: true },
+    },
+    steps: [{ program: "ffmpeg", args: ["-y", "-i", "{in}", "{out}"] }],
+    gotchas: ["Re-encodes the range."],
+  };
+  const SPACE = randomUUID();
+  let installationId: string;
+
+  const installation = async () =>
+    (
+      await q<{
+        id: string;
+        manifest: { recipes?: Array<{ name: string }> };
+        capability_version: string | null;
+      }>(
+        `SELECT id, manifest, capability_version FROM installations WHERE machine_user_id = $1 AND capability_key = 'media-ffmpeg' AND status <> 'removed'`,
+        [MAC]
+      )
+    ).rows[0]!;
+  const recipeNames = (m: { recipes?: Array<{ name: string }> }) =>
+    (m.recipes ?? []).map((r) => r.name);
+
+  async function agentAsksUpdate() {
+    const res = await installationHandlers["synap_request_installation"]!({
+      toolName: "synap_request_installation",
+      args: {
+        capabilityKey: "media-ffmpeg",
+        computer: "MacBook-Pro-de-Antoine.local",
+        action: "update",
+      },
+      userId: PERSON,
+      agentUserId: AGENT,
+      apiKeyScopes: ["mcp.read", "mcp.write"],
+    } as never);
+    return JSON.parse((res.content[0] as { text: string }).text) as {
+      status: string;
+      proposalId?: string;
+    };
+  }
+
+  const runRangeCut = async () => {
+    const { BUILTIN_VERBS } = await import("../capabilities/builtin-verbs.js");
+    return BUILTIN_VERBS["computer.run_recipe"]!(
+      {
+        capability: "media-ffmpeg",
+        recipe: "range-cut",
+        params: { in: randomUUID(), out: "take-cut.mp4" },
+        computer: "mac",
+      },
+      { userId: PERSON, workspaceId: SPACE, agentUserId: AGENT } as never
+    );
+  };
+
+  beforeAll(async () => {
+    // The Mac's install ran and was checked; no job is open.
+    installationId = (await installation()).id;
+    await q(`DELETE FROM host_jobs WHERE installation_id = $1`, [
+      installationId,
+    ]);
+    await q(
+      `UPDATE installations SET status = 'installed', verified_at = now(),
+         health = '{"verify":{"ok":true,"exitCode":0}}'::jsonb
+       WHERE id = $1`,
+      [installationId]
+    );
+  });
+
+  it("the pod's definition is the snapshot: an update is a repair, nobody is asked", async () => {
+    const out = await agentAsksUpdate();
+    expect(out.status, JSON.stringify(out)).toBe("approved");
+    expect(recipeNames((await installation()).manifest)).not.toContain(
+      "range-cut"
+    );
+    await q(`DELETE FROM host_jobs WHERE installation_id = $1`, [
+      installationId,
+    ]);
+  });
+
+  it("before: range-cut is refused, and the refusal offers the update", async () => {
+    // The catalog adds range-cut; the pod's capability converges to it.
+    await q(
+      `UPDATE capabilities
+         SET metadata = jsonb_set(
+               jsonb_set(metadata, '{computer,recipes}', (metadata->'computer'->'recipes') || $1::jsonb),
+               '{contentHash}', to_jsonb($2::text))
+       WHERE template_key = 'media-ffmpeg'`,
+      [JSON.stringify([RANGE_CUT]), NEW_HASH]
+    );
+    await expect(runRangeCut()).rejects.toMatchObject({
+      code: "UNKNOWN_RECIPE",
+      message: expect.stringMatching(
+        /the pod's current one has it\. Ask for the update/
+      ),
+    });
+  });
+
+  let proposalId: string;
+  it("the agent's update is ONE ask that names what it adds", async () => {
+    const out = await agentAsksUpdate();
+    expect(out.status, JSON.stringify(out)).toBe("proposed");
+    proposalId = out.proposalId!;
+    const row = await proposalRow(proposalId);
+    expect(row.data.data).toMatchObject({
+      action: "update",
+      definition: {
+        to: `h-${NEW_HASH.slice(0, 12)}`,
+        recipesAdded: ["range-cut"],
+        recipesRemoved: [],
+      },
+    });
+    expect(row.data.reasoning).toMatch(
+      /Update media-ffmpeg on MacBook-Pro-de-Antoine\.local to the pod's current definition \(adds recipe: range-cut\)/
+    );
+    // Asked, not applied: the Mac still runs the approved snapshot.
+    expect(recipeNames((await installation()).manifest)).not.toContain(
+      "range-cut"
+    );
+  });
+
+  it("approving it moves the snapshot, stamps the version, and queues the update", async () => {
+    await personApproves(proposalId);
+    const row = await proposalRow(proposalId);
+    expect(row.rejection_reason).toBeNull();
+    expect(row.status).toBe("approved");
+    const inst = await installation();
+    expect(recipeNames(inst.manifest)).toContain("range-cut");
+    expect(inst.capability_version).toBe(`h-${NEW_HASH.slice(0, 12)}`);
+    const jobs = (
+      await q<{ kind: string; status: string }>(
+        `SELECT kind, status FROM host_jobs WHERE installation_id = $1`,
+        [installationId]
+      )
+    ).rows;
+    expect(jobs).toEqual([{ kind: "update", status: "queued" }]);
+  });
+
+  it("after: a range-cut run is accepted on the Mac", async () => {
+    const out = (await runRangeCut()) as {
+      status: string;
+      recipe: string;
+      computer: { name: string };
+    };
+    expect(out).toMatchObject({
+      status: "queued",
+      recipe: "range-cut",
+      computer: { name: "MacBook-Pro-de-Antoine.local" },
+    });
+  });
+
+  it("asked again, the snapshot is the pod's definition: a repair again", async () => {
+    await q(`DELETE FROM host_jobs WHERE installation_id = $1`, [
+      installationId,
+    ]);
+    expect((await agentAsksUpdate()).status).toBe("approved");
   });
 });

@@ -161,17 +161,26 @@ export async function queueRecipeRun(
   const recipe = recipes.find((r) => r.name === input.recipe);
   if (!recipe) {
     // The recipes are the APPROVED version's (the manifest snapshot), never
-    // the catalog's today: a recipe the catalog added since needs the update
-    // approved first (proposal c6ba64e6: range-cut, added after the install).
-    // The fix comes first, the list last: an approval keeps ~180 characters.
+    // the pod's today. A recipe the pod's current definition has needs that
+    // update approved first (an update moves the snapshot, and asks); one it
+    // does not have is not there to update to. The fix comes first, the list
+    // last: an approval keeps ~180 characters of a reason.
+    const { loadInstallableCapability } =
+      await import("../installations/installations.js");
+    const onPod = await loadInstallableCapability(input.capabilityKey);
+    const podHasIt =
+      !!onPod &&
+      manifestRecipes(onPod.manifest).some((r) => r.name === input.recipe);
+    const list =
+      recipes.length > 0
+        ? `Its recipes: ${recipes.map((r) => r.name).join(", ")}.`
+        : "It declares no recipes.";
     return {
       ok: false,
       code: "UNKNOWN_RECIPE",
-      error: `${input.capabilityKey} on ${computer.name}: its approved version has no recipe "${input.recipe}"; ask for its update (synap_request_installation, action "update"). ${
-        recipes.length > 0
-          ? `Its recipes: ${recipes.map((r) => r.name).join(", ")}.`
-          : "It declares no recipes."
-      }`,
+      error: podHasIt
+        ? `${input.capabilityKey} on ${computer.name}: its approved version has no recipe "${input.recipe}", the pod's current one has it. Ask for the update (synap_request_installation, action "update") and approve it. ${list}`
+        : `${input.capabilityKey} on ${computer.name} has no recipe "${input.recipe}", and neither has the pod's ${input.capabilityKey}. ${list}`,
     };
   }
   const problem = recipeValuesProblem(recipe, input.values);
