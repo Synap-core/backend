@@ -26,6 +26,7 @@ import {
   type CompositeCreateEntityOp,
   type CompositeProposalOperation,
   type CompositeUpdateOperation,
+  type CompositeViewType,
 } from "@synap-core/types/proposals";
 import {
   planSessionEdges,
@@ -397,6 +398,35 @@ export interface MaterializeViewResult {
   containerEntityId?: string;
 }
 
+/** Per-op result for a `create_cell` op (a playbook's generated cell). */
+export interface MaterializeCellResult {
+  ref: string;
+  opIndex: number;
+  /** The `widget_definitions` row the cell door wrote. */
+  cellId: string;
+  /** The cell's key, what a binding names (`generated:<slug>`). */
+  typeKey: string;
+  workspaceId: string | null;
+  /**
+   * True when this run CREATED the row. False when the door updated a cell of
+   * the same key that was already there: that row is not this run's to undo.
+   */
+  created: boolean;
+}
+
+/** Per-op result for a `bind_renderer` op (a cell on one object's page). */
+export interface MaterializeRendererResult {
+  ref: string;
+  opIndex: number;
+  /** The `renderer_bindings` row this run wrote — what undo revokes. */
+  bindingId: string;
+  targetKind: "playbook" | "view";
+  targetId: string;
+  slot: "detail";
+  scope: "pod" | "workspace";
+  cellKey: string;
+}
+
 /**
  * Per-op result for an `update_*` op (a Library rebuild's change). `before`
  * and `after` hold ONLY the fields the op patched, read right around the
@@ -538,6 +568,10 @@ export interface MaterializeResult {
   playbooks: MaterializePlaybookResult[];
   /** Lists created by `create_view` ops. Empty by default. */
   views: MaterializeViewResult[];
+  /** Cells defined by `create_cell` ops (a playbook's UI). */
+  cells?: MaterializeCellResult[];
+  /** Bindings written by `bind_renderer` ops (a playbook's UI). */
+  renderers?: MaterializeRendererResult[];
   /** Rows CHANGED by `update_*` ops (a Library rebuild). Empty by default. */
   updates: MaterializeUpdateResult[];
   /** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
@@ -625,7 +659,7 @@ export type PlaybookCreateCaller = {
 export type ViewCreateCaller = {
   create: (input: {
     name: string;
-    viewType: "list" | "table" | "kanban" | "gallery";
+    viewType: CompositeViewType;
     workspaceId?: string;
     scopeProfileSlugs?: string[];
     /** The fixed member set (real entity ids). */
@@ -634,6 +668,43 @@ export type ViewCreateCaller = {
     containerEntityId?: string;
     config?: Record<string, unknown>;
   }) => Promise<{ id: string }>;
+};
+
+/**
+ * A generated cell (`create_cell`). Routes to the ONE cell door (`defineCell`,
+ * wired by `buildRuleLoopCallers`), which runs the mount and sandbox checks
+ * again on the source the reviewer approved.
+ */
+export type CellDefineCaller = {
+  define: (input: {
+    name: string;
+    rendererSource: string;
+    description?: string;
+    workspaceId: string | null;
+    contentKind?: string;
+  }) => Promise<{
+    id: string;
+    typeKey: string;
+    workspaceId: string | null;
+    created: boolean;
+  }>;
+};
+
+/**
+ * A cell bound to one object's page (`bind_renderer`). Routes to the ONE
+ * binding door (`setProfileRenderer`, wired by `buildRuleLoopCallers`) and
+ * answers the row it wrote. It REFUSES a slot that is already bound: approval
+ * never replaces a page somebody chose after the proposal was filed.
+ */
+export type RendererBindCaller = {
+  bind: (input: {
+    targetKind: "playbook" | "view";
+    targetId: string;
+    slot: "detail";
+    scope: "pod" | "workspace";
+    workspaceId: string | null;
+    cellKey: string;
+  }) => Promise<{ bindingId: string }>;
 };
 
 /**
@@ -821,6 +892,9 @@ export interface MaterializeOptions {
   playbookCaller?: PlaybookCreateCaller;
   /** List (`create_view`) — wired with the Rule Loop callers. */
   viewCaller?: ViewCreateCaller;
+  /** A playbook's UI (`create_cell`, `bind_renderer`) — wired with the Rule Loop callers. */
+  cellCaller?: CellDefineCaller;
+  rendererCaller?: RendererBindCaller;
   /** Changes (`update_*`, a Library rebuild) — wired with the Rule Loop callers. */
   updateCaller?: CompositeUpdateCaller;
   /**
@@ -926,6 +1000,13 @@ function appliedRowsOf(
     ...result.rules.map((r) => ({ kind: "rule", id: r.ruleId })),
     ...result.playbooks.map((p) => ({ kind: "playbook", id: p.playbookId })),
     ...result.views.map((v) => ({ kind: "view", id: v.viewId })),
+    ...(result.cells ?? [])
+      .filter((c) => c.created)
+      .map((c) => ({ kind: "cell", id: c.cellId })),
+    ...(result.renderers ?? []).map((r) => ({
+      kind: "renderer_binding",
+      id: r.bindingId,
+    })),
     ...result.updates.map((u) => ({ kind: `${u.op}`, id: u.targetId })),
     ...result.projects
       .filter((p) => !p.linked)
@@ -967,6 +1048,8 @@ export async function materializeCompositeGraph(
       (op.op === "create_rule" && !options?.ruleCaller) ||
       (op.op === "create_playbook" && !options?.playbookCaller) ||
       (op.op === "create_view" && !options?.viewCaller) ||
+      (op.op === "create_cell" && !options?.cellCaller) ||
+      (op.op === "bind_renderer" && !options?.rendererCaller) ||
       (isUpdateOperation(op) && !options?.updateCaller)
   );
   if (missingConfigCaller) {
@@ -1086,6 +1169,8 @@ export async function materializeCompositeGraph(
   const ruleResults: MaterializeRuleResult[] = [];
   const playbookResults: MaterializePlaybookResult[] = [];
   const viewResults: MaterializeViewResult[] = [];
+  const cellResults: MaterializeCellResult[] = [];
+  const rendererResults: MaterializeRendererResult[] = [];
   const updateResults: MaterializeUpdateResult[] = [];
   const facetResults: MaterializeFacetResult[] = [];
   let relations: MaterializeRelationResult[] = [];
@@ -1111,6 +1196,8 @@ export async function materializeCompositeGraph(
     rules: ruleResults,
     playbooks: playbookResults,
     views: viewResults,
+    ...(cellResults.length > 0 ? { cells: cellResults } : {}),
+    ...(rendererResults.length > 0 ? { renderers: rendererResults } : {}),
     updates: updateResults,
     projects: projectResults,
     sessions: sessionResults,
@@ -2070,6 +2157,93 @@ export async function materializeCompositeGraph(
         logger.warn(
           { err, ref: op.ref, name: op.name },
           "Skipping create_view op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
+    // ── Pass 5b — CELLS (`create_cell`, a playbook's UI) ──────────────────
+    // Through the ONE cell door, which checks the source again (mount,
+    // sandbox, no network). Per-op resilient: a cell that fails leaves the
+    // views beside it, and the binding that names it is skipped below.
+    const cellKeyByRef = new Map<string, string>();
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_cell") continue;
+      currentOpIndex = i;
+      if (!options?.cellCaller) {
+        throw new Error(
+          "materializeCompositeGraph: create_cell op reached pass execution with no cellCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const defined = await options.cellCaller.define({
+          name: op.name,
+          rendererSource: op.rendererSource,
+          ...(op.description ? { description: op.description } : {}),
+          workspaceId: op.workspaceId ?? null,
+          ...(op.contentKind ? { contentKind: op.contentKind } : {}),
+        });
+        cellKeyByRef.set(op.ref, defined.typeKey);
+        cellResults.push({
+          ref: op.ref,
+          opIndex: i,
+          cellId: defined.id,
+          typeKey: defined.typeKey,
+          workspaceId: defined.workspaceId,
+          created: defined.created,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_cell op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
+    // ── Pass 5c — BINDINGS (`bind_renderer`) ──────────────────────────────
+    // After the cells, so a `cellRef` resolves to the key its cell got. A
+    // binding whose cell did not land is skipped, named — never bound to a
+    // key that names nothing.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "bind_renderer") continue;
+      currentOpIndex = i;
+      if (!options?.rendererCaller) {
+        throw new Error(
+          "materializeCompositeGraph: bind_renderer op reached pass execution with no rendererCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const cellKey = op.cellRef ? cellKeyByRef.get(op.cellRef) : op.cellKey;
+        if (!cellKey) {
+          throw new Error(
+            `bind_renderer "${op.ref}": its cell "${op.cellRef}" was not defined, so there is nothing to bind`
+          );
+        }
+        const bound = await options.rendererCaller.bind({
+          targetKind: op.target.kind,
+          targetId: op.target.id,
+          slot: op.slot,
+          scope: op.scope,
+          workspaceId: op.workspaceId ?? null,
+          cellKey,
+        });
+        rendererResults.push({
+          ref: op.ref,
+          opIndex: i,
+          bindingId: bound.bindingId,
+          targetKind: op.target.kind,
+          targetId: op.target.id,
+          slot: op.slot,
+          scope: op.scope,
+          cellKey,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref },
+          "Skipping bind_renderer op (batch continues)"
         );
         failPlanStep(i, err);
       }

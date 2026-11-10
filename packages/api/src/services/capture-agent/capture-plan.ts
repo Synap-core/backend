@@ -16,6 +16,7 @@
  */
 
 import {
+  BIND_RENDERER_TARGET_KINDS,
   COMPOSITE_VIEW_TYPES,
   isLikelyUUID,
   isPlanOperation,
@@ -86,6 +87,7 @@ const _allRuleLoopEnumsCovered: _AllRuleLoopEnumsCovered = true;
 void _allRuleLoopEnumsCovered;
 
 export type PlanRefKind =
+  | "cell"
   | "entity"
   | "session"
   | "document"
@@ -126,6 +128,7 @@ const OP_REF_KIND: Partial<
   create_rule: "rule",
   create_playbook: "playbook",
   create_view: "view",
+  create_cell: "cell",
   // An update names an EXISTING row; its ref resolves to that row's id, so
   // a relation may target a reused container (`update_entity`).
   update_skill: "skill",
@@ -185,6 +188,8 @@ export function hasComposedSteps(
       op.op === "create_rule" ||
       op.op === "create_playbook" ||
       op.op === "create_view" ||
+      op.op === "create_cell" ||
+      op.op === "bind_renderer" ||
       isUpdateOperation(op)
   );
 }
@@ -771,7 +776,69 @@ export function validatePlanOperations(
         ) {
           push(i, "config must be an object");
         }
+        // A playbook's UI views carry their own config: the views door judges
+        // its content at apply time, the shape is refused here.
+        if (
+          op.viewType === "pipeline" &&
+          typeof op.config?.profileSlug !== "string"
+        ) {
+          push(
+            i,
+            "a pipeline needs `config.profileSlug` — the kind whose declared lifecycle its columns are"
+          );
+        }
+        if (op.viewType === "bento" && !Array.isArray(op.config?.blocks)) {
+          push(i, "a bento needs `config.blocks` — the widgets it places");
+        }
         return;
+      // ── A playbook's UI (cell + where it shows) ───────────────────────
+      // Shape and refs only: the source's mount and sandbox checks are the
+      // cell door's (`defineCell`), run again at apply time.
+      case "create_cell":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a cell step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a cell step needs a `name`");
+        if (typeof op.rendererSource !== "string" || !op.rendererSource.trim())
+          push(i, "a cell step needs its `rendererSource`");
+        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        return;
+      case "bind_renderer": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a binding step needs a `ref`");
+        const target = op.target as
+          { kind?: unknown; id?: unknown } | null | undefined;
+        if (
+          !target ||
+          !(BIND_RENDERER_TARGET_KINDS as readonly unknown[]).includes(
+            target.kind
+          )
+        ) {
+          push(
+            i,
+            `a binding's target.kind must be one of ${BIND_RENDERER_TARGET_KINDS.join(", ")} — one object's own page`
+          );
+        } else if (typeof target.id !== "string") {
+          push(i, "a binding's target needs the object's `id`");
+        } else {
+          expectId(i, "target.id", target.id);
+        }
+        if (op.slot !== "detail")
+          push(i, 'one object\'s page has one slot: `slot: "detail"`');
+        if (op.scope !== "pod" && op.scope !== "workspace")
+          push(i, 'a binding\'s scope is "pod" or "workspace"');
+        if (op.scope === "workspace" && !op.workspaceId)
+          push(i, "a workspace binding needs its `workspaceId`");
+        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        if (!op.cellRef === !op.cellKey) {
+          push(
+            i,
+            "a binding names its cell once: `cellRef` (a cell step in this bundle) OR `cellKey` (an existing cell)"
+          );
+        }
+        if (op.cellRef) expectRef(i, "cellRef", op.cellRef, "cell");
+        return;
+      }
       // ── Updates (Library rebuild) ─────────────────────────────────────
       // Shape only: the row's existence, ownership and the field contracts
       // are the update door's to judge at apply time.
@@ -918,7 +985,9 @@ export interface PlanStepSummary {
     | "automation"
     | "rule"
     | "playbook"
-    | "view";
+    | "view"
+    | "cell"
+    | "binding";
   label: string;
   /** Set on a step that CHANGES an existing row (a Library rebuild). */
   update?: { targetId: string };
@@ -973,6 +1042,14 @@ export function planStepSummaries(
         return { ...base, kind: "playbook", label: op.name };
       case "create_view":
         return { ...base, kind: "view", label: op.name };
+      case "create_cell":
+        return { ...base, kind: "cell", label: op.name };
+      case "bind_renderer":
+        return {
+          ...base,
+          kind: "binding",
+          label: `${op.cellRef ?? op.cellKey} on ${op.target.kind} ${op.target.id}`,
+        };
       case "update_skill":
       case "update_automation":
       case "update_rule":

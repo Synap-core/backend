@@ -5692,6 +5692,15 @@ declare enum ProfileScope {
 	WORKSPACE = "workspace",// Owned by a single workspace
 	USER = "user"
 }
+declare const COMPOSITE_VIEW_TYPES: readonly [
+	"list",
+	"table",
+	"kanban",
+	"gallery",
+	"pipeline",
+	"bento"
+];
+export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];
 export type WidgetRendererType = "builtin" | "frame" | "iframe" | "mcp-app" | "native";
 /**
  * Trust level of a widget/cell definition — the server-side authority for
@@ -9896,13 +9905,58 @@ export interface ProposalReviewGraph {
 	views?: Array<{
 		/** The group container the list is about, when there is one. */
 		containerRef?: string;
+		/** A pipeline: the kind whose declared lifecycle its columns are. */
+		lifecycleOf?: string;
 		/** How many things the list holds (in-batch refs + existing ids). */
 		memberCount: number;
 		name: string;
 		ref: string;
 		/** Kinds the list shows, when the op named them. */
 		scopeProfileSlugs?: string[];
-		viewType: "gallery" | "kanban" | "list" | "table";
+		viewType: CompositeViewType;
+		/** A bento: the widget keys it places, in block order. */
+		widgets?: string[];
+	}>;
+	/**
+	 * `create_cell` / `bind_renderer` — a GENERATED cell (its source is code a
+	 * person approves) and the pages it shows on. A binding of a cell in this
+	 * bundle is drawn under that cell; a binding of an existing cell gets an
+	 * entry of its own (`existingCellKey`).
+	 */
+	cells?: Array<{
+		bindings: Array<{
+			ref: string;
+			scope: "pod" | "workspace";
+			slot: "detail";
+			targetId: string;
+			targetKind: BindRendererTargetKind;
+			/** The object's name, when the pod read it for this viewer. */
+			targetName?: string;
+		}>;
+		/**
+		 * WHAT IT DOES once approved, read off the source: the bridge reads and
+		 * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
+		 * order they first appear). A name built at run time is not seen. The
+		 * frame gives a generated cell no network (connect-src none but the
+		 * bridge), so these are everything it can reach.
+		 */
+		bridgeOps?: {
+			reads: string[];
+			writes: string[];
+		};
+		contentKind?: string;
+		description?: string;
+		/** Set when this entry binds a cell that already exists (no source here). */
+		existingCellKey?: string;
+		/** How the frame draws it: `module` (React) or `page` (HTML). */
+		mechanism?: "module" | "page";
+		name: string;
+		/** The `create_cell` op's ref, or the `bind_renderer` op's for an existing cell. */
+		ref: string;
+		sourceBytes?: number;
+		/** The first characters of the source. The whole source is the op's. */
+		sourceExcerpt?: string;
+		sourceTruncated?: boolean;
 	}>;
 	/**
 	 * `update_*` — CHANGES to rows an earlier bundle made (a Library rebuild:
@@ -10215,7 +10269,13 @@ export interface CompositeCreateViewOp {
 	/** Stable handle for this view within the proposal (e.g. "list1"). */
 	ref: string;
 	name: string;
-	viewType: "gallery" | "kanban" | "list" | "table";
+	/**
+	 * A list type, or a playbook's UI view: `pipeline` (config `{profileSlug}`:
+	 * the kind's declared lifecycle as columns, refused by the views door for a
+	 * kind with none) or `bento` (config `{blocks}`, every widget from the
+	 * catalog). Both carry no member set.
+	 */
+	viewType: CompositeViewType;
 	/** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
 	workspaceId?: string;
 	/** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
@@ -10226,6 +10286,66 @@ export interface CompositeCreateViewOp {
 	containerRef?: string;
 	/** Render config overrides, validated by the views door. */
 	config?: Record<string, unknown>;
+}
+/**
+ * ── UI ops (a playbook's UI, 2026-11-09) ────────────────────────────────────
+ *
+ * The UI an agent proposes for a playbook (`synap_propose_app_from_playbook`)
+ * is pod-native pieces filed as ONE governed bundle: the kind's pipeline and a
+ * bento (`create_view`), a GENERATED cell (`create_cell`) and where it shows
+ * (`bind_renderer`). One review, one undo, nothing created unless approved.
+ *
+ * `create_cell` materializes through the ONE cell door (`defineCell`), which
+ * runs the same mount and sandbox checks `synap_create_cell` runs; the source
+ * the reviewer approves is the source stored. `bind_renderer` binds a cell to
+ * ONE object's page (a playbook's or a view's `detail`), through the one
+ * binding door (`setProfileRenderer`): a per-object binding, which never
+ * writes a legacy store, so undo is a revoke of exactly the row it made.
+ *
+ * Both per-op RESILIENT: a cell that fails leaves the views beside it, and a
+ * binding whose cell did not land is skipped, named.
+ */
+export interface CompositeCreateCellOp {
+	op: "create_cell";
+	/** Stable handle for this cell within the proposal (e.g. "board"). */
+	ref: string;
+	/** The cell's name; its key is derived from it (`generated:<slug>`). */
+	name: string;
+	/** The cell's whole source: an ES module, or an HTML page. */
+	rendererSource: string;
+	description?: string;
+	/** Space the cell lives in; absent ⇒ pod-global. */
+	workspaceId?: string;
+	/**
+	 * Its renderer slot kind (`CONTENT_KINDS` of `@synap/database`, e.g.
+	 * `entity-detail`), checked by the cell door. Absent ⇒ `widget`.
+	 */
+	contentKind?: string;
+}
+declare const BIND_RENDERER_TARGET_KINDS: readonly [
+	"playbook",
+	"view"
+];
+export type BindRendererTargetKind = (typeof BIND_RENDERER_TARGET_KINDS)[number];
+export interface CompositeBindRendererOp {
+	op: "bind_renderer";
+	/** Stable handle for this binding within the proposal (e.g. "board-on-playbook"). */
+	ref: string;
+	/** The object whose page shows the cell: an existing playbook or view. */
+	target: {
+		id: string;
+		kind: BindRendererTargetKind;
+	};
+	/** Its slot: one object's page has only `detail`. */
+	slot: "detail";
+	/** `pod` = the object's own page everywhere; `workspace` = in one space. */
+	scope: "pod" | "workspace";
+	/** Required for `scope: "workspace"`. */
+	workspaceId?: string;
+	/** The cell: a `create_cell` op in this batch… */
+	cellRef?: string;
+	/** …or an existing cell's key. Exactly one of the two. */
+	cellKey?: string;
 }
 /**
  * ── Connected PLAN ops ──────────────────────────────────────────────────────
@@ -10414,7 +10534,7 @@ export interface CompositeUpdateEntityOp {
 	};
 }
 export type CompositeUpdateOperation = CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -11584,6 +11704,19 @@ export type RevertTarget = {
  | {
 	id: string;
 	kind: "view";
+}
+/**
+ * A generated cell (`widget_definitions` row) a playbook's UI created.
+ * Retired by delete while untouched and shown nowhere else.
+ */
+ | {
+	id: string;
+	kind: "cell";
+}
+/** A renderer binding (`renderer_bindings` row). Retired by revoke, kept as history. */
+ | {
+	id: string;
+	kind: "renderer_binding";
 } | {
 	id: string;
 	kind: "project";
@@ -13128,6 +13261,33 @@ export interface MaterializeViewResult {
 	/** The group container recorded on the view config, when there was one. */
 	containerEntityId?: string;
 }
+/** Per-op result for a `create_cell` op (a playbook's generated cell). */
+export interface MaterializeCellResult {
+	ref: string;
+	opIndex: number;
+	/** The `widget_definitions` row the cell door wrote. */
+	cellId: string;
+	/** The cell's key, what a binding names (`generated:<slug>`). */
+	typeKey: string;
+	workspaceId: string | null;
+	/**
+	 * True when this run CREATED the row. False when the door updated a cell of
+	 * the same key that was already there: that row is not this run's to undo.
+	 */
+	created: boolean;
+}
+/** Per-op result for a `bind_renderer` op (a cell on one object's page). */
+export interface MaterializeRendererResult {
+	ref: string;
+	opIndex: number;
+	/** The `renderer_bindings` row this run wrote — what undo revokes. */
+	bindingId: string;
+	targetKind: "playbook" | "view";
+	targetId: string;
+	slot: "detail";
+	scope: "pod" | "workspace";
+	cellKey: string;
+}
 /**
  * Per-op result for an `update_*` op (a Library rebuild's change). `before`
  * and `after` hold ONLY the fields the op patched, read right around the
@@ -13223,6 +13383,10 @@ export interface MaterializeResult {
 	playbooks: MaterializePlaybookResult[];
 	/** Lists created by `create_view` ops. Empty by default. */
 	views: MaterializeViewResult[];
+	/** Cells defined by `create_cell` ops (a playbook's UI). */
+	cells?: MaterializeCellResult[];
+	/** Bindings written by `bind_renderer` ops (a playbook's UI). */
+	renderers?: MaterializeRendererResult[];
 	/** Rows CHANGED by `update_*` ops (a Library rebuild). Empty by default. */
 	updates: MaterializeUpdateResult[];
 	/** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
@@ -13415,7 +13579,7 @@ export type CaptureReceiptState = "applied" | "partial" | "pending";
 export interface PlanStepSummary {
 	ref: string | null;
 	opIndex: number;
-	kind: "automation" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
+	kind: "automation" | "binding" | "cell" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
 	label: string;
 	/** Set on a step that CHANGES an existing row (a Library rebuild). */
 	update?: {
@@ -16440,6 +16604,14 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	/** Lists created by `create_view` ops (revert deletes them while untouched). */
 	viewIds?: string[];
 	/**
+	 * Cells a `create_cell` op CREATED (`widget_definitions` ids). Revert deletes
+	 * one while it is untouched and nothing else shows it. A cell the door
+	 * updated instead was never this run's, and is not listed.
+	 */
+	cellIds?: string[];
+	/** Renderer bindings a `bind_renderer` op wrote (revert revokes them while active). */
+	rendererBindingIds?: string[];
+	/**
 	 * Body documents created WITH an entity. They ride the entity's soft delete
 	 * (a restored entity keeps its body), so revert never deletes them on their
 	 * own — unlike `documentIds`, which a document-create proposal owns.
@@ -16531,7 +16703,7 @@ export interface RowPatchRecord {
 export type UpdateOpName = MaterializeResult["updates"][number]["op"];
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "create_automation" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | UpdateOpName;
+	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | UpdateOpName;
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;
@@ -16544,6 +16716,10 @@ export interface MaterializedOpRecord {
 	playbookId?: string;
 	/** `create_view`: the List it created. */
 	viewId?: string;
+	/** `create_cell`: the cell row it created. */
+	cellId?: string;
+	/** `bind_renderer`: the binding row it wrote. */
+	rendererBindingId?: string;
 	sessionId?: string;
 	projectId?: string;
 	documentId?: string;
@@ -53036,6 +53212,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reverted: {
 					automationIds?: string[];
 					byOp?: Record<string, MaterializedOpRecord>;
+					cellIds?: string[];
 					documentEdit?: DocumentEditRecord;
 					documentIds: never[];
 					entityDocumentIds?: string[];
@@ -53068,6 +53245,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					projectSubjectIds?: Record<string, string>;
 					propertyDiffs?: EntityPropertyDiff[];
 					relationIds?: string[];
+					rendererBindingIds?: string[];
 					rowPatches?: RowPatchRecord[];
 					ruleIds?: string[];
 					sessionIds?: string[];

@@ -88,6 +88,8 @@ import {
   ArtboardDeckSlideSchema,
   BoardPlacementOptionsSchema,
 } from "./place-artboard-deck.js";
+import { VerbRefusal } from "./verb-refusal.js";
+import type { FailureErrorClass } from "@synap-core/types/failures";
 import { triageEmails } from "../mail-feed/triage.js";
 import { freezeChartEmbeds } from "../document-charts/freeze-chart-embeds.js";
 import { liveChartReader } from "../document-charts/freeze-charts-verb.js";
@@ -2488,8 +2490,31 @@ const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
     values: input.params,
     computer: input.computer ?? null,
   });
-  if (!out.ok) throw new Error(`${out.code}: ${out.error}`);
+  // A refusal is a definite not-run with the next step (`verb-refusal.ts`):
+  // an approval records its sentence and can be retried.
+  if (!out.ok)
+    throw new VerbRefusal(
+      out.error,
+      RECIPE_REFUSAL_CLASS[out.code] ?? "validation",
+      out.code
+    );
   return out.result;
+};
+
+/**
+ * Each refusal's failure class (the approval's recovery affordance): what is
+ * missing on the person's computers, what is in a state that stops it now,
+ * and what was asked wrong.
+ */
+const RECIPE_REFUSAL_CLASS: Record<string, FailureErrorClass> = {
+  NOT_INSTALLED: "target_missing",
+  COMPUTER_NOT_FOUND: "target_missing",
+  UNKNOWN_RECIPE: "target_missing",
+  FILE_NOT_READABLE: "target_missing",
+  NOT_RUNNABLE: "conflict",
+  COMPUTER_AMBIGUOUS: "validation",
+  BAD_PARAMS: "validation",
+  NO_SPACE: "validation",
 };
 
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {

@@ -3022,6 +3022,11 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_playbook: { subjectType: "playbook", action: "create" },
   // A List over the bundle's things — the `views.create` door.
   create_view: { subjectType: "view", action: "create" },
+  // A playbook's UI: a generated cell — the `cell/define` door…
+  create_cell: { subjectType: "cell", action: "define" },
+  // …and the page it shows on — the `profile/renderer.set` door, which binds
+  // a playbook's or a view's own page too (per-object binding).
+  bind_renderer: { subjectType: "profile", action: "renderer.set" },
   // A Library rebuild's CHANGES to what it made before — each the update door
   // of the object it rewrites (never a create: no twin is minted).
   update_skill: { subjectType: "skill", action: "update" },
@@ -3060,6 +3065,13 @@ const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   // A saved query over data that already exists: presentational, reversible,
   // mints no identity — below an entity, above a bare edge.
   create_view: 0.5,
+  // Generated CODE that runs in the frame and writes through the bridge
+  // (governed): configuration that acts, like an automation, ranked just
+  // above it; it never runs unattended.
+  create_cell: 2.2,
+  // Changes how one object's page renders: presentational and revocable,
+  // above a view (it replaces a page a person reads), below a record.
+  bind_renderer: 0.8,
   create_relation: 0,
   // An update rewrites a row a person already approved once: ranked with the
   // create of the same object, a hair below it (it mints no identity).

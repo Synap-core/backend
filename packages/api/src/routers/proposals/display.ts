@@ -166,6 +166,7 @@ import {
   type AskedBy,
 } from "../../utils/proposal-governance-decision.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
+import { isHtmlPageSource } from "@synap-core/types/renderables";
 import {
   createNameResolvers,
   stringProp,
@@ -2602,6 +2603,29 @@ export function buildProposalGraph(
  * The guard was right; the renderer was missing.
  */
 const SKILL_BODY_EXCERPT_CHARS = 280;
+/** A cell's source is CODE a person approves: a longer excerpt than a skill's. */
+const CELL_SOURCE_EXCERPT_CHARS = 1200;
+
+/**
+ * The bridge ops a cell's source NAMES (`query("op"` / `mutate("op"`), first
+ * appearance first: what the approver is told it reads and writes. A text
+ * read, like the cell door's own checks: an op name built at run time is not
+ * seen.
+ */
+export function cellBridgeOpsNamedIn(source: string): {
+  reads: string[];
+  writes: string[];
+} {
+  const reads: string[] = [];
+  const writes: string[] = [];
+  for (const m of source.matchAll(
+    /\b(query|mutate)\(\s*(["'`])([\w.:-]+)\2/g
+  )) {
+    const list = m[1] === "query" ? reads : writes;
+    if (!list.includes(m[3]!)) list.push(m[3]!);
+  }
+  return { reads, writes };
+}
 
 type UpdateReviewKind = NonNullable<
   ProposalReviewGraph["updates"]
@@ -2641,7 +2665,16 @@ function buildConfigReviewItems(
   const rules: NonNullable<ProposalReviewGraph["rules"]> = [];
   const playbooks: NonNullable<ProposalReviewGraph["playbooks"]> = [];
   const views: NonNullable<ProposalReviewGraph["views"]> = [];
+  const cells: NonNullable<ProposalReviewGraph["cells"]> = [];
   const updates: NonNullable<ProposalReviewGraph["updates"]> = [];
+  /** `bind_renderer` ops, drawn under their cell once every cell is listed. */
+  const bindOps: Array<{
+    index: number;
+    op: Extract<
+      CompositeProposalData["operations"][number],
+      { op: "bind_renderer" }
+    >;
+  }> = [];
 
   data.operations.forEach((op, index) => {
     if (isUpdateOperation(op)) {
@@ -2731,8 +2764,22 @@ function buildConfigReviewItems(
           bornStatus: "draft",
         });
         return;
-      case "create_view":
+      case "create_view": {
         renderedOpIndexes.add(index);
+        const lifecycleOf =
+          op.viewType === "pipeline" &&
+          typeof op.config?.profileSlug === "string"
+            ? op.config.profileSlug
+            : undefined;
+        const widgets =
+          op.viewType === "bento" && Array.isArray(op.config?.blocks)
+            ? (op.config.blocks as Array<Record<string, unknown>>).flatMap(
+                (block) =>
+                  typeof block?.widgetType === "string"
+                    ? [block.widgetType]
+                    : []
+              )
+            : undefined;
         views.push({
           ref: op.ref,
           name: op.name,
@@ -2742,12 +2789,61 @@ function buildConfigReviewItems(
             : {}),
           memberCount: op.entityRefs?.length ?? 0,
           ...(op.containerRef ? { containerRef: op.containerRef } : {}),
+          ...(lifecycleOf ? { lifecycleOf } : {}),
+          ...(widgets ? { widgets } : {}),
         });
+        return;
+      }
+      case "create_cell": {
+        renderedOpIndexes.add(index);
+        const source = op.rendererSource ?? "";
+        cells.push({
+          ref: op.ref,
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          ...(op.contentKind ? { contentKind: op.contentKind } : {}),
+          mechanism: isHtmlPageSource(source) ? "page" : "module",
+          sourceExcerpt: source.slice(0, CELL_SOURCE_EXCERPT_CHARS),
+          sourceTruncated: source.length > CELL_SOURCE_EXCERPT_CHARS,
+          sourceBytes: Buffer.byteLength(source, "utf8"),
+          bridgeOps: cellBridgeOpsNamedIn(source),
+          bindings: [],
+        });
+        return;
+      }
+      case "bind_renderer":
+        renderedOpIndexes.add(index);
+        bindOps.push({ index, op });
         return;
       default:
         return;
     }
   });
+  // A binding is drawn under the cell it shows: an in-batch cell's entry, or
+  // an entry of its own for a cell that already exists.
+  for (const { op } of bindOps) {
+    const binding = {
+      ref: op.ref,
+      targetKind: op.target.kind,
+      targetId: op.target.id,
+      slot: op.slot,
+      scope: op.scope,
+    };
+    const home = op.cellRef
+      ? cells.find((cell) => cell.ref === op.cellRef && !cell.existingCellKey)
+      : undefined;
+    if (home) {
+      home.bindings.push(binding);
+    } else {
+      const key = op.cellKey ?? op.cellRef ?? "";
+      cells.push({
+        ref: op.ref,
+        name: key,
+        existingCellKey: key,
+        bindings: [binding],
+      });
+    }
+  }
 
   return {
     ...(skills.length ? { skills } : {}),
@@ -2755,6 +2851,7 @@ function buildConfigReviewItems(
     ...(rules.length ? { rules } : {}),
     ...(playbooks.length ? { playbooks } : {}),
     ...(views.length ? { views } : {}),
+    ...(cells.length ? { cells } : {}),
     ...(updates.length ? { updates } : {}),
   };
 }

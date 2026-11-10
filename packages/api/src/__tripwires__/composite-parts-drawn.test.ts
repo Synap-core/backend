@@ -159,6 +159,22 @@ const ONE_OF_EACH = {
     fromRef: "s1",
     toSessionId: UUID,
   },
+  create_cell: {
+    op: "create_cell",
+    ref: "board",
+    name: "Onboarding board",
+    rendererSource:
+      'import React from "react";\nexport default function Board() { return null; }\n',
+    contentKind: "entity-detail",
+  },
+  bind_renderer: {
+    op: "bind_renderer",
+    ref: "board-on-playbook",
+    target: { kind: "playbook", id: UUID },
+    slot: "detail",
+    scope: "pod",
+    cellRef: "board",
+  },
   update_skill: {
     op: "update_skill",
     ref: "u-skill",
@@ -230,9 +246,9 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
   const keys = emittedKeys(graph);
 
   it("the projection lists the parts of a graph of every op kind (non-vacuity)", () => {
-    // 12 today: entities, relations, skills, automations, rules, playbooks,
-    // views, updates, projects, sessions, documents, links.
-    expect(keys.length).toBeGreaterThanOrEqual(12);
+    // 13 today: entities, relations, skills, automations, rules, playbooks,
+    // views, cells, updates, projects, sessions, documents, links.
+    expect(keys.length).toBeGreaterThanOrEqual(13);
     expect(keys).toEqual(
       expect.arrayContaining(["skills", "automations", "rules"])
     );
@@ -316,6 +332,28 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
     );
     expect(fields.does).toEqual(
       expect.objectContaining({ items: ["Brief a new client"] })
+    );
+  });
+});
+
+describe("a playbook's UI parts on pod-admin's proposal page", () => {
+  const graph = buildProposalGraph(data);
+  const items = compositeItems(graph, data, () => undefined);
+
+  it("a generated cell is drawn with its WHOLE source, as code, and where it shows", () => {
+    const cell = items.find((i) => i.source === "cells");
+    const fields =
+      cell?.shape === "record"
+        ? Object.fromEntries(cell.record.fields.map((f) => [f.key, f.after]))
+        : {};
+    expect(fields.source).toEqual(
+      expect.objectContaining({
+        kind: "code",
+        text: ONE_OF_EACH.create_cell.rendererSource,
+      })
+    );
+    expect(fields.showsOn).toEqual(
+      expect.objectContaining({ kind: "tags", items: [expect.any(String)] })
     );
   });
 });

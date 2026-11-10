@@ -1,6 +1,6 @@
 ## Four things you can build
 
-Tailored UI is pod-native first (founder, 9 Nov 2026): one of the four below, or an HTML page bound as a kind's renderer, shown on the desktop. A standalone site or app only when the person asks for one (`system/synap-app/overview`).
+Tailored UI is pod-native first (founder, 9 Nov 2026): one of the four below, or an HTML page bound as a kind's renderer, shown on the desktop. A standalone site or app only when the person asks for one (`system/synap-app/overview`). The UI of a playbook (its pipeline, a dashboard, a board on its page) is one verb, one review: `system/synap-ui/playbook-ui`.
 
 1. **Views** — named queries + rendering config over entities of a given profile. Kanban of tasks, gallery of articles, calendar of events.
 2. **Bento dashboards** — 12-col grid compositions of cells (view-cards, entity-cards, widgets). The Home dashboard is a bento. Workspace landing pages are bentos.

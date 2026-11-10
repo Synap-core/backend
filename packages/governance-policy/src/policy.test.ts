@@ -2108,6 +2108,8 @@ describe("deriveGatePairFromOperations", () => {
       "create_rule",
       "create_playbook",
       "create_view",
+      "create_cell",
+      "bind_renderer",
     ] as const;
     const rank = (p: { subjectType: string; action: string }) => {
       const key = `${p.subjectType}.${p.action}`;
