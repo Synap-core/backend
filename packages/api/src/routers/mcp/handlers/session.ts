@@ -10,6 +10,7 @@
 
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
+import { readRunCost } from "../../../services/runs/run-cost.js";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
 import { proposedMessageFor } from "../../../utils/permission-check.js";
@@ -1124,6 +1125,8 @@ export const sessionHandlers: McpHandlerMap = {
       // RECALL — captures / notes the pod found that may help this session
       // (`session-recall.ts`): pending · ok · empty · failed, never folded.
       recall: projectSessionRecall(session.metadata),
+      // COST — what the session's latest run spent (the lean read's field).
+      cost: readRunCost(session.metadata),
       ...(ambient?.sessionId
         ? {
             inferred: true,

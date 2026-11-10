@@ -72,6 +72,7 @@ import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import { applyRunCapture } from "./apply-run-capture.js";
+import { addTurnToCost, ledgerCost, type RunCost } from "./run-cost.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import {
@@ -326,6 +327,8 @@ export interface RunTurnsState {
    * (`stage-end-ask.ts`), by stage key: each is asked once per run.
    */
   stageAsks?: string[];
+  /** What the run spent over ALL its turns (`run-cost.ts`). */
+  cost?: RunCost;
 }
 
 /**
@@ -348,6 +351,7 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
   if (s.runId !== runId) return fresh;
   const n = (v: unknown) =>
     typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0;
+  const cost = ledgerCost(s);
   return {
     runId,
     stops: n(s.stops),
@@ -366,6 +370,7 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
           ),
         }
       : {}),
+    ...(cost ? { cost } : {}),
   };
 }
 
@@ -470,6 +475,7 @@ async function recordTurnEnd(
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
       ...(lastCheckpoint ? { lastCheckpoint } : {}),
       ...(state.stageAsks ? { stageAsks: state.stageAsks } : {}),
+      cost: addTurnToCost(state.cost, record),
     };
     await tx
       .update(focusSessions)

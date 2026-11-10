@@ -24319,6 +24319,33 @@ export type StructureAgainResult = {
 	sourceDocumentId: string;
 	status: "structured";
 } & Omit<RerunItemResult, "door" | "sourceDocumentIds">);
+export interface RunCost {
+	/** Turns the run reported. */
+	turns: number;
+	/**
+	 * Input tokens read fresh: each turn's input minus the cache reads the
+	 * provider reported (a turn whose cache reads were not reported counts in
+	 * full: unknown never reads as free).
+	 */
+	freshInputTokens: number;
+	/** Every input token, cache reads included. */
+	rawInputTokens: number;
+	/** Input tokens read from the prompt cache. */
+	cacheReadInputTokens: number;
+	/** The models that served the turns, first seen first. */
+	models: string[];
+	/** Turns that reported no token counts: their tokens are not in the sums. */
+	unmeasuredTurns?: number;
+	/**
+	 * Summed from a ledger written before the running total existed, which had
+	 * already dropped some turns: the sums may miss them.
+	 */
+	partial?: true;
+}
+/** A run's cost as the session reads show it: which run it is, and its cost. */
+export type RunCostRead = RunCost & {
+	runId: string;
+};
 export interface LeanRoomMessage {
 	id: string;
 	at: string;
@@ -24695,6 +24722,8 @@ export interface SessionUsage {
 		name: string | null;
 	} | null;
 	agents: SessionParticipant[];
+	/** What the session's latest run spent; null = no run turn reported. */
+	cost: RunCostRead | null;
 }
 export interface CriterionScore {
 	key: string;
@@ -39539,6 +39568,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				continuation: LeanContinuation;
+				cost: RunCostRead | null;
 				outcomes: LeanOutcomesSection;
 			};
 		}>;
