@@ -157,6 +157,7 @@ import {
   resolveRunChoice,
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
+import { PRE_APPROVAL_HELD_LINE } from "../services/playbooks/pre-approved-run.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
 import {
   declaresStepTools,
@@ -3259,6 +3260,10 @@ export const playbooksRouter = router({
         // e3c39721 §5: the draft was unreachable). Floors and rules above the
         // default still propose. Not on a replay: its approval was the accept.
         ...(input.agentUserId && !approvedReplay ? { heldAsDraft: true } : {}),
+        // Pre-approval (founder, 10 Nov 2026): a rule a person made for THIS
+        // playbook at THIS version may lift that hold; the grant then says so
+        // (`preApprovedByRuleId`). A broad rule never does.
+        ruleSubject: { id: playbook.id, version: playbook.version },
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         source: input.source,
         reasoning: input.reasoning,
@@ -3379,13 +3384,17 @@ export const playbooksRouter = router({
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
         ...(input.runOn ? { runOn: input.runOn } : {}),
         ...(input.trial ? { trial: input.trial } : {}),
+        ...(input.agentUserId && "preApprovedByRuleId" in perm
+          ? { preApprovedByRuleId: perm.preApprovedByRuleId }
+          : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
         }
         throw err;
       });
-      const { run, session, parentLink, skipped, held, handedTo } = started;
+      const { run, session, parentLink, skipped, held, heldBecause, handedTo } =
+        started;
 
       // ONE-SHOT (`executor: "generate"`): no session. The draft was filed as
       // a proposal on the subject, answered here at once so the app shows it
@@ -3427,6 +3436,7 @@ export const playbooksRouter = router({
           status: "draft" as const,
           message:
             "Playbook run created as a draft. It belongs to the person and does not start until they accept it in their sessions." +
+            (heldBecause ? ` ${PRE_APPROVAL_HELD_LINE[heldBecause]}` : "") +
             handedToLine(handedTo),
           proposalId: null as string | null,
           ...(parentLink ? { parentLink } : {}),

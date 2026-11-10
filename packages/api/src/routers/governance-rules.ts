@@ -43,6 +43,8 @@ import {
   and,
   or,
   isNotNull,
+  isNull,
+  ne,
   desc,
   ProposalStatus,
   authoredCreatedBy,
@@ -59,11 +61,14 @@ import {
   users,
   proposals,
   secrets,
+  playbooks,
 } from "@synap/database/schema";
 import {
   GOVERNANCE_PRINCIPAL_KINDS,
+  PLAYBOOK_RUN_ACTION,
   type GovernancePrincipalKind,
 } from "@synap-core/types/governance-rules";
+import { isAgentCaller } from "../services/library/agent-door.js";
 import {
   mayCarryHostSeed,
   revokeHostSeeds,
@@ -205,6 +210,58 @@ export async function assertCanManageRule(
   }
 }
 
+/** `revoked_reason` of a rule naming an object that a newer approval replaced. */
+export const SUBJECT_RULE_REPLACED = "replaced_by_newer_approval";
+
+/**
+ * Letting agents run a playbook without asking is the PERSON's act (founder
+ * decision, 10 Nov 2026): an agent credential may ask for it, never grant it.
+ * The rule holds for the version the person saw, so a playbook edited since
+ * is refused with its current version, and the rule lives where the playbook
+ * does (its space, or pod-wide for a pod-wide playbook).
+ */
+async function assertPersonAllowsPlaybook(
+  ctx: { agentUserId?: string | null; keyType?: string | null },
+  p: {
+    playbookId: string;
+    version: number;
+    scopeKind: "workspace" | "pod";
+    workspaceId: string | null;
+  }
+): Promise<void> {
+  if (isAgentCaller(ctx)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only a person can let agents run a playbook without asking — an agent cannot.",
+      cause: { reasonCode: "PERSON_ONLY" },
+    });
+  }
+  const playbook = await db.query.playbooks.findFirst({
+    where: eq(playbooks.id, p.playbookId),
+    columns: { version: true, workspaceId: true },
+  });
+  if (!playbook) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Playbook not found" });
+  }
+  if (playbook.version !== p.version) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `This playbook changed since you looked at it: it is now version ${playbook.version}. Look at it again, then allow that version.`,
+    });
+  }
+  const sameHome = playbook.workspaceId
+    ? p.scopeKind === "workspace" && p.workspaceId === playbook.workspaceId
+    : p.scopeKind === "pod";
+  if (!sameHome) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A rule for one playbook lives where the playbook does: its space, or pod-wide for a pod-wide playbook.",
+    });
+  }
+}
+
 /**
  * A connection rule widens (or narrows) what a connection may write without
  * review — only the connection's owner gives or withdraws that consent, so
@@ -267,7 +324,30 @@ const CreateInputSchema = z
     verdict: z.enum(["auto", "propose", "deny"]),
     sourceProposalId: z.string().uuid().optional(),
     expiresAt: z.coerce.date().optional(),
+    /**
+     * ONE object the rule names, at the version the person saw (0420). Today
+     * only a playbook, for `playbook.run`: "let agents run this without
+     * asking". Built by `playbookPreApprovalRule` (@synap-core/types).
+     */
+    targetSubjectId: z.string().uuid().optional(),
+    targetSubjectVersion: z.number().int().positive().optional(),
   })
+  .refine((v) => !!v.targetSubjectId === (v.targetSubjectVersion != null), {
+    message:
+      "targetSubjectId and targetSubjectVersion go together: a rule naming an object holds for one version of it",
+    path: ["targetSubjectVersion"],
+  })
+  .refine(
+    (v) =>
+      !v.targetSubjectId ||
+      (v.targetKind === "action" &&
+        v.targetPattern === PLAYBOOK_RUN_ACTION &&
+        v.principalKind !== "class"),
+    {
+      message: `a rule naming an object is an exact "${PLAYBOOK_RUN_ACTION}" action rule for an agent or any agent`,
+      path: ["targetSubjectId"],
+    }
+  )
   .refine((v) => v.principalKind !== "agent" || !!v.agentUserId, {
     message: "agentUserId is required when principalKind is 'agent'",
     path: ["agentUserId"],
@@ -721,6 +801,14 @@ export const governanceRulesRouter = router({
       if (input.targetKind === "connection") {
         await assertOwnsConnection(ctx.userId, input.targetPattern);
       }
+      if (input.targetSubjectId && input.targetSubjectVersion != null) {
+        await assertPersonAllowsPlaybook(ctx, {
+          playbookId: input.targetSubjectId,
+          version: input.targetSubjectVersion,
+          scopeKind: input.scopeKind,
+          workspaceId: input.workspaceId ?? null,
+        });
+      }
 
       const [rule] = await db
         .insert(governanceRules)
@@ -737,6 +825,8 @@ export const governanceRulesRouter = router({
           targetPattern: input.targetPattern,
           targetProfile:
             input.targetKind === "profile" ? input.targetProfile : null,
+          targetSubjectId: input.targetSubjectId ?? null,
+          targetSubjectVersion: input.targetSubjectVersion ?? null,
           verdict: input.verdict,
           sourceProposalId: input.sourceProposalId ?? null,
           // PROVENANCE (display only, never an enforcement input): this is the
@@ -751,8 +841,43 @@ export const governanceRulesRouter = router({
       // The same rule for the agent's box, when the box is the agent's
       // (host-seed.ts). A seed that fails leaves the box asking: stricter.
       if (rule) await seedHostRules(db, [rule]);
+      // A newer approval of the same object replaces the older ones: they
+      // name a version that no longer runs, and the list shows one row.
+      if (rule?.targetSubjectId) {
+        await db
+          .update(governanceRules)
+          .set({ revokedAt: new Date(), revokedReason: SUBJECT_RULE_REPLACED })
+          .where(
+            and(
+              eq(governanceRules.targetSubjectId, rule.targetSubjectId),
+              eq(governanceRules.targetPattern, rule.targetPattern),
+              eq(governanceRules.principalKind, rule.principalKind),
+              isNull(governanceRules.revokedAt),
+              ne(governanceRules.id, rule.id)
+            )
+          );
+      }
 
       return { rule };
+    }),
+
+  /**
+   * The active rules naming ONE object (0420), e.g. whether agents may run a
+   * playbook without asking (`playbookPreApprovalState`). Same visibility as
+   * `listAll`: pod rules and the caller's visible spaces only.
+   */
+  forSubject: protectedProcedure
+    .input(z.object({ subjectId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const rows = await db.query.governanceRules.findMany({
+        where: and(
+          activeRulePredicate(),
+          eq(governanceRules.targetSubjectId, input.subjectId),
+          userVisibleWhere(governanceRules.workspaceId, ctx.userId)
+        ),
+        orderBy: [desc(governanceRules.createdAt)],
+      });
+      return { rules: await mapRulesWithAgentLabels(rows) };
     }),
 
   /**

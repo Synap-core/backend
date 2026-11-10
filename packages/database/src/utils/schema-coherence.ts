@@ -1380,6 +1380,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "revoked_reason",
     addedBy: "0380_governance_rules_revoked_reason.sql",
   },
+  // A rule that names one object at one version (0420): every rule read
+  // selects it, so without it the resolver fails on every agent write.
+  {
+    table: "governance_rules",
+    column: "target_subject_id",
+    addedBy: "0420_governance_rule_subject.sql",
+  },
   {
     table: "governance_ceilings",
     column: "principal_class",
