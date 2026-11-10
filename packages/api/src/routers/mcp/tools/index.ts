@@ -3674,7 +3674,7 @@ export const tools = {
       {
         name: "synap_propose_app_from_playbook",
         annotations: {
-          title: "Propose a playbook's UI",
+          title: "Propose a template's UI",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,

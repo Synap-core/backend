@@ -54,7 +54,7 @@ The pod's MCP server lists 120 tools. A new agent key lists the `entry` tools; t
 | [`synap_list_agents`](#synap_list_agents)                                 | List agents and computers         | sessions     | yes       |
 | [`synap_create_cell`](#synap_create_cell)                                 | Define cell                       | build        | no        |
 | [`synap_promote_cell_to_renderer`](#synap_promote_cell_to_renderer)       | Promote cell to renderer          | build        | no        |
-| [`synap_propose_app_from_playbook`](#synap_propose_app_from_playbook)     | Propose a playbook's UI           | build        | no        |
+| [`synap_propose_app_from_playbook`](#synap_propose_app_from_playbook)     | Propose a template's UI           | build        | no        |
 | [`synap_promote_session_to_playbook`](#synap_promote_session_to_playbook) | Save session as template          | sessions     | no        |
 | [`synap_list_playbooks`](#synap_list_playbooks)                           | List templates                    | build        | yes       |
 | [`synap_match_playbooks`](#synap_match_playbooks)                         | Match templates                   | build        | yes       |
@@ -914,7 +914,7 @@ Escalation L4: bind a cell that already proved itself as a renderer. For a kind'
 
 ## synap_propose_app_from_playbook
 
-**Propose a playbook's UI** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+**Propose a template's UI** · Group: `build` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
 The one verb for 'build me an app / a UI for this playbook'. From the playbook and the kind it works (its declared lifecycle), files ONE proposal holding: the kind's pipeline view, a dashboard (bento) over the same kind, a generated board cell drawn live from flow.of (columns = states in order, headed by the owning stage; governed moves), and that board on the playbook's page. Nothing is created until a person approves it; `proposed` is success, pass on reviewUrl. Parts that already exist are skipped (`alreadyExists`), a page that already shows something is never replaced (`leftOut`), and a second call returns the same pending proposal (`status: duplicate`). Refused with the next step when the playbook works no kind or the kind has no lifecycle (synap_declare_lifecycle).
 
