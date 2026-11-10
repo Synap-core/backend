@@ -32,14 +32,13 @@ describe("resolveRunToolProfile carries the active stage's tier", () => {
     return {
       readPlaybook: async () => ({
         name: "Improve a recipe",
-        requiredIntents: [],
+        tools: [],
+        executor: "is-agent",
         stages: STAGES,
         workspaceId: null,
       }),
-      readGrants: async () => [],
       readCurrentStage: async () => currentStage,
       readTrial: async () => false,
-      readTaskIntents: async () => [],
       readRegistry: async () => ({ index: new Map(), capabilities: [] }),
     };
   }

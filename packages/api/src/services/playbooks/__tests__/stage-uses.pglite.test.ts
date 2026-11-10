@@ -75,7 +75,7 @@ beforeAll(async () => {
       expected_outputs jsonb not null default '[]',
       stages jsonb not null default '[]',
       criteria jsonb not null default '[]',
-      required_intents jsonb not null default '[]',
+      tools jsonb not null default '[]',
       guidance jsonb not null default '[]',
       runner jsonb,
       requires jsonb not null default '[]',

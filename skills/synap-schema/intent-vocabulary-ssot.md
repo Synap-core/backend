@@ -57,7 +57,7 @@ Search for this chapter by the field you are holding, not by the word "intent":
 | `intent`          | a **skill** in a capability definition; a `ToolVerb` catalog entry | what ONE verb does                                                              |
 | `provides`        | a **capability template**                                          | every intent the whole PACK serves — must equal the `intent` its skills declare |
 | `taskIntents`     | a **workspace template**                                           | what the SPACE needs the pod to be able to do                                   |
-| `requiredIntents` | a **playbook**                                                     | what the PROCESS needs the pod to be able to do                                 |
+| `tools`         | a **playbook**                                                     | what a RUN may use, "only these" (intents, run tools, capabilities; `requiredIntents` is folded into it)|
 
 All four are validated against this ONE vocabulary, so a workspace and a playbook
 cannot be spelled from two different lists.

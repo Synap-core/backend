@@ -60,8 +60,8 @@ export async function triggerAutoRespond(params: {
   /**
    * Set ONLY by the doors that dispatch a playbook run's turn (the is-agent
    * kickoff and the automatic continuation): the run's declared tools, from
-   * `resolveRunToolProfile`. The IS then sends the run core tools plus these
-   * verbs only (founder, 2026-11-05). A person chatting in the run room is
+   * `resolveRunToolProfile`. The IS then gives the turn exactly `run.tools`
+   * plus these verbs (plan 08e4fba7 decision 3). A person chatting in the run room is
    * not a run turn and gets the normal agent.
    */
   run?: RunToolProfile;

@@ -63,7 +63,7 @@ const playbooks = Array.from({ length: 7 }, (_, i) => ({
     statement: "x".repeat(200),
     check: { kind: "judge" },
   })),
-  requiredIntents: [],
+  tools: [],
   version: 3,
   schedule: null,
   executor: "is-agent",

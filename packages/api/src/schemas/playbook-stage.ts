@@ -27,6 +27,8 @@ import {
   MAX_STAGE_LESSONS,
   PLAYBOOK_FOR_EACH_MAX_ITEMS,
   PLAYBOOK_STAGE_TIERS,
+  PLAYBOOK_TOOL_MAX_CHARS,
+  PLAYBOOK_TOOLS_MAX,
   STAGE_LESSON_MAX_CHARS,
   type PlaybookStage,
   type PlaybookStageCategory,
@@ -54,7 +56,7 @@ export const playbookStageCategorySchema = z.enum(
 );
 
 /**
- * The advisory model tiers, as a zod enum derived from the contract package's
+ * The model tiers, as a zod enum derived from the contract package's
  * list so the door cannot drift from the type.
  */
 export const playbookStageTierSchema = z.enum(
@@ -132,6 +134,16 @@ export const playbookStageSchema = z.looseObject({
   category: playbookStageCategorySchema,
   description: z.string().max(5000).optional(),
   goal: z.string().max(5000).optional(),
+  /**
+   * The tools of this stage, a SUBSET of its playbook's `tools` (refused
+   * otherwise, `foldPlaybookTools`): while it is active the run gets its class
+   * floor plus these only. See `PlaybookStage.tools`.
+   */
+  tools: z
+    .array(z.string().trim().min(1).max(PLAYBOOK_TOOL_MAX_CHARS))
+    .max(PLAYBOOK_TOOLS_MAX)
+    .optional(),
+  /** DEPRECATED input: folded into `tools` at the write door, never stored. */
   grants: z
     .array(
       z.looseObject({
@@ -243,7 +255,7 @@ export const playbookStageSchema = z.looseObject({
     .strictObject({ toStage: z.string().trim().min(1).max(200) })
     .optional(),
   /**
-   * Advisory model tier — see `PlaybookStage.tier`. Closed set: a typo
+   * Model tier — see `PlaybookStage.tier`. Closed set: a typo
    * ("fast", "Deep") is refused at the door rather than stored as a tier no
    * executor will ever map.
    */
@@ -355,8 +367,10 @@ const _TRACK_READ_STAGE_FIELDS = [
 
 /** Stage fields a track never reads — each with its reason. */
 const _TRACK_WITHHELD_STAGE_FIELDS = [
-  // Capability grants apply to a session RUN of the playbook (session tools);
-  // a track stage session is started without a template binding.
+  // A stage's tools narrow a session RUN of the playbook (the run's tool
+  // profile); a track stage session is started without a template binding.
+  // `grants` is their deprecated input, folded into `tools` at the write door.
+  "tools",
   "grants",
   // Order within a category group — the snapshot's array order is the track's.
   "position",
@@ -370,9 +384,8 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // The failed-gate return path is applied by the SESSION run's gate
   // (`stage-on-fail.ts`); a track's gate holds and resumes explicitly.
   "onFail",
-  // Advisory model choice for a session RUN's executor; a track stage session
-  // is started by the tracks service, which does not pick a model, and nothing
-  // consumes the tier yet.
+  // The model tier of a session RUN's turn; a track stage session is started
+  // by the tracks service, which does not pick a model.
   "tier",
   // A track stage session is started once by the tracks service; fanning a
   // stage out over a collection is a session RUN's concern, and nothing

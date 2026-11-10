@@ -71,12 +71,8 @@ export function buildStageSection(stage: PlaybookStage): string {
         .join("\n")}`
     );
   }
-  if (stage.grants?.length) {
-    lines.push(
-      `Capabilities available at this stage: ${stage.grants
-        .map((g) => g.id)
-        .join(", ")}`
-    );
+  if (stage.tools?.length) {
+    lines.push(`Tools of this stage: ${stage.tools.join(", ")}`);
   }
   return lines.join("\n");
 }

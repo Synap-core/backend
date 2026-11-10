@@ -1,62 +1,59 @@
 /**
- * THE TOOLS A PLAYBOOK RUN MAY CARRY — resolved here, applied by the IS.
+ * THE TOOLS A PLAYBOOK RUN MAY CARRY — resolved here, sent to the IS as the
+ * turn's FINAL list (plan 08e4fba7, founder decisions 3 and 4, 9 Nov 2026).
+ *
+ * A run gets the FLOOR of its class plus its playbook's ONE `tools` list,
+ * "only these" (`@synap/playbooks` `run-tools.ts`: `runClassOf`, the floors,
+ * the run-tool vocabulary). While a stage that declares its own `tools` is
+ * active, that list (a subset of the playbook's) replaces the playbook's.
+ *
+ * Each declared entry is, in this order: a run tool (an IS tool name, sent
+ * as is in `tools`); an intent slug (the verbs serving it on this pod); else
+ * a capability by name or id, or a verb id (its verbs). Verbs reach the run
+ * through `run_capability`, narrowed to them by the IS.
  *
  * Founder rule (2026-11-05): "We never send all the tools. That's the goal of
- * the playbooks itself. We send the main tools needed for all runs — the tools
- * of the pod — and only the capabilities listed on the playbook, or listed
- * globally on the template that creates the playbook."
+ * the playbooks itself." Run 9d57a207 sent 50 tools and an 82k-char prompt on
+ * every call (pod finding 3fb5dae8).
  *
- * Run 9d57a207 (Package ideas) sent 50 tools and an 82k-char system prompt on
- * every call (pod finding 3fb5dae8): the IS got no word that the turn was a
- * run, so it sent the universal agent's whole catalogue.
- *
- * WHERE "LISTED" ALREADY LIVES — no new field:
- *  - on the playbook: its `grants` (`playbook --grants--> tool|skill|command`
- *    links, the runner's `RunContext.capabilities`) and the ACTIVE stage's
- *    `grants` (`PlaybookStage.grants`). Concrete capabilities: each one's verbs
- *    are offered. Official playbooks declare their tools only this way
- *    (meetings-knowledge, research-decision, research-base);
- *  - on the playbook: `playbooks.required_intents` (migration 0291), slugs of
- *    the `capability_intents` vocabulary;
- *  - globally on the template: its `taskIntents`, installed as the space's
- *    `settings.taskIntents` (`readWorkspaceTaskIntents`).
- * Intents are ABSTRACT; `foldVerbsByIntent` folds them into the concrete verb
- * ids the run's lens can see (a verb id is a skill name: `skill_<verbId>` or a
- * `run_capability` verb in the IS). Granted verbs come first: they are what
- * the playbook named outright.
+ * NOTHING ELSE DECLARES A RUN'S TOOLS: not the `grants` links (they stay as
+ * governance edges, e.g. a follow's grant widening), not the space's
+ * `taskIntents`, not `required_intents` (migration 0419 folded all four into
+ * `tools`).
  *
  * ONE RESOLVER for every run turn: the kickoff (`is-agent-executor`), the
  * automatic continuation (`run-turn-end`) and the person's answer that wakes a
  * live run (`session-answer`) all read the same declaration here.
  *
- * ROUTING, NEVER AUTHORIZATION: a verb listed here is only OFFERED. Every run
+ * ROUTING, NEVER AUTHORIZATION: a tool listed here is only OFFERED. Every run
  * of it still meets the grant gate and `decideAgentPolicy` at the pod.
  *
  * A FAILED READ IS NOT "DECLARES NOTHING": it comes back `capabilitiesRead:
- * "failed"` so the IS can say so to the agent, instead of a calm empty list.
+ * "failed"` with the class floor only (the SHORT floor when even the playbook
+ * could not be read), so the IS says so to the agent instead of a calm list.
+ *
+ * NO BOUNDS ARE MIRRORED HERE: the IS cuts an over-long list instead of
+ * refusing the turn (IS `run-profile.ts`), so the pod keeps no hand copy of
+ * its limits.
  */
 import { createLogger } from "@synap-core/core";
+import { isKnownIntent } from "@synap-core/types/capability-intents";
 import type { RunToolProfile } from "@synap/intelligence-client";
-import { readRequiredIntents, type CapabilityRef } from "@synap/playbooks";
+import {
+  activeToolsList,
+  isRunToolName,
+  readToolsList,
+  runClassOf,
+  runTurnToolNames,
+  RUN_TOOL_FLOORS,
+  type RunClass,
+} from "@synap/playbooks";
 import type { IntentVerbMatch } from "../capabilities/capability-intent-index.js";
 import { activeStageTier } from "./run-stage-tier.js";
 
 const logger = createLogger({ module: "run-tool-profile" });
 
-/**
- * The bounds of the IS's `RunProfileSchema` (IS `agents/base/run-profile.ts`).
- * A profile past one of them would 400 the WHOLE turn, so the pod never sends
- * one: lists are capped, an over-long item is dropped (a cut slug names
- * nothing), the name is cut.
- * They mirror the IS by hand, with no tripwire: the two repos cannot import each other.
- */
-export const RUN_PROFILE_MAX_VERBS = 100;
-export const RUN_PROFILE_MAX_INTENTS = 50;
-const RUN_PROFILE_MAX_INTENT_CHARS = 100;
-const RUN_PROFILE_MAX_VERB_CHARS = 200;
-const RUN_PROFILE_MAX_NAME_CHARS = 300;
-
-/** What the registry says about one granted capability: its kind, id, name, verbs. */
+/** What the registry says about one capability: its kind, id, name, verbs. */
 export interface GrantableCapability {
   kind?: string;
   id: string;
@@ -65,39 +62,15 @@ export interface GrantableCapability {
   verbs?: ReadonlyArray<{ id: string; kind?: string }>;
 }
 
-/**
- * The registry kinds a grant of each kind names. A `tools` row is listed as
- * `tool`, `builtin-tool` or `source-provider` (`toolKindToCapabilityKind`).
- */
-const REGISTRY_KINDS_OF_GRANT: Record<
-  CapabilityRef["kind"],
-  readonly string[]
-> = {
-  tool: ["tool", "builtin-tool", "source-provider"],
-  skill: ["skill"],
-  command: ["command"],
-};
-
-/** A grant names this capability: same id or name, and, when both say, same kind. */
-function grantNames(grant: CapabilityRef, cap: GrantableCapability): boolean {
-  if (cap.id !== grant.id && cap.name !== grant.id) return false;
-  const kinds = grant.kind ? REGISTRY_KINDS_OF_GRANT[grant.kind] : undefined;
-  return !kinds || !cap.kind || kinds.includes(cap.kind);
-}
-
 export interface RunToolProfileDeps {
-  /** The playbook's name, declared intents, stages and own space; null = no such row. */
+  /** The playbook's name, `tools`, executor, stages and own space; null = no such row. */
   readPlaybook(playbookId: string): Promise<{
     name: string;
-    requiredIntents: unknown;
+    tools: unknown;
+    executor: string | null;
     stages: unknown;
     workspaceId: string | null;
   } | null>;
-  /** The playbook's `grants` links, as the runner resolves them. */
-  readGrants(input: {
-    playbookId: string;
-    userId: string;
-  }): Promise<CapabilityRef[]>;
   /** The session's active stage key (null = stageless). */
   readCurrentStage(sessionId: string): Promise<string | null>;
   /**
@@ -105,8 +78,6 @@ export interface RunToolProfileDeps {
    * offered read verbs only (throws when it cannot be read).
    */
   readTrial(sessionId: string): Promise<boolean>;
-  /** The space's declared `taskIntents` (throws when it cannot be read). */
-  readTaskIntents(workspaceId: string): Promise<string[]>;
   /** ONE registry read under the run's lens: intent → verbs, and every capability. */
   readRegistry(lens: { workspaceId: string | null; userId: string }): Promise<{
     index: ReadonlyMap<string, readonly IntentVerbMatch[]>;
@@ -114,30 +85,21 @@ export interface RunToolProfileDeps {
   }>;
 }
 
-const defaultDeps: RunToolProfileDeps = {
+/** The real reads (exported so a test can swap ONE of them). */
+export const defaultDeps: RunToolProfileDeps = {
   async readPlaybook(playbookId) {
     const { db, eq, playbooks } = await import("@synap/database");
     const row = await db.query.playbooks.findFirst({
       where: eq(playbooks.id, playbookId),
       columns: {
         name: true,
-        requiredIntents: true,
+        tools: true,
+        executor: true,
         stages: true,
         workspaceId: true,
       },
     });
     return row ?? null;
-  },
-  async readGrants({ playbookId, userId }) {
-    // The runner's own read (`run-playbook.ts` step 5), so a run turn offers
-    // exactly what `RunContext.capabilities` granted.
-    const { getLinksFor, resolveGrantedCapabilities } =
-      await import("../links/links-service.js");
-    const links = await getLinksFor(userId, "playbook", playbookId);
-    return resolveGrantedCapabilities(links, {
-      linkType: "grants",
-      fromType: "playbook",
-    });
   },
   async readCurrentStage(sessionId) {
     const { db, eq, focusSessions } = await import("@synap/database");
@@ -156,11 +118,6 @@ const defaultDeps: RunToolProfileDeps = {
     });
     return trialStampOf(row?.metadata) !== null;
   },
-  async readTaskIntents(workspaceId) {
-    const { readWorkspaceTaskIntents } =
-      await import("../capabilities/capability-intent-index.js");
-    return readWorkspaceTaskIntents({ workspaceId });
-  },
   async readRegistry(lens) {
     const { listCapabilities } =
       await import("../capabilities/capability-registry.js");
@@ -172,47 +129,25 @@ const defaultDeps: RunToolProfileDeps = {
 };
 
 /**
- * The active stage's `grants`, read tolerantly off the playbook's stages bag
- * (a stage whose grants are not a list grants nothing).
+ * The verbs of the capabilities a list names. PURE. An entry names a
+ * capability by id or by name (every verb of it is offered), or one verb by
+ * its id. An entry the run's lens cannot see offers nothing.
  */
-function activeStageGrants(
-  stages: unknown,
-  currentStage: string | null
-): CapabilityRef[] {
-  if (!currentStage || !Array.isArray(stages)) return [];
-  const stage = stages.find(
-    (s): s is { key: string; grants?: unknown } =>
-      !!s &&
-      typeof s === "object" &&
-      (s as { key?: unknown }).key === currentStage
-  );
-  if (!stage || !Array.isArray(stage.grants)) return [];
-  return stage.grants.filter(
-    (g): g is CapabilityRef =>
-      !!g &&
-      typeof g === "object" &&
-      typeof (g as { id?: unknown }).id === "string" &&
-      (g as { id: string }).id !== ""
-  );
-}
-
-/**
- * The verbs of granted capabilities. PURE. A grant names its capability by
- * row id (a `grants` link) or by name (a stage grant may carry either), and by
- * its kind (a skill and a tool may share a name); every verb of a matched
- * capability is offered. A grant the run's lens cannot see offers nothing.
- */
-function grantedVerbs(
-  grants: readonly CapabilityRef[],
+function namedVerbs(
+  entries: readonly string[],
   capabilities: readonly GrantableCapability[],
   readsOnly = false
 ): string[] {
   const verbs: string[] = [];
-  for (const grant of grants) {
+  const keep = (v: { kind?: string }) => !readsOnly || v.kind === "read";
+  for (const entry of entries) {
     for (const cap of capabilities) {
-      if (!grantNames(grant, cap)) continue;
+      if (cap.id === entry || cap.name === entry) {
+        for (const v of cap.verbs ?? []) if (keep(v)) verbs.push(v.id);
+        continue;
+      }
       for (const v of cap.verbs ?? []) {
-        if (!readsOnly || v.kind === "read") verbs.push(v.id);
+        if (v.id === entry && keep(v)) verbs.push(v.id);
       }
     }
   }
@@ -220,32 +155,24 @@ function grantedVerbs(
 }
 
 /**
- * The run's verbs, bounded to what the IS accepts. PURE: granted verbs first,
- * then the verbs serving each intent in the intents' order; each verb once;
- * an over-long id dropped; capped. `dropped` counts the verbs the cap left out.
+ * The run's verbs: named verbs first (what the playbook named outright), then
+ * the verbs serving each intent in the intents' order; each verb once. PURE.
  */
 export function foldRunVerbs(
-  granted: readonly string[],
+  named: readonly string[],
   intents: readonly string[],
   index: ReadonlyMap<string, readonly IntentVerbMatch[]>
-): { verbs: string[]; dropped: number } {
-  const candidates = [
-    ...granted,
+): string[] {
+  const out: string[] = [];
+  for (const verbId of [
+    ...named,
     ...intents.flatMap((intent) =>
       (index.get(intent) ?? []).map((m) => m.verbId)
     ),
-  ];
-  const verbs: string[] = [];
-  const seen = new Set<string>();
-  let dropped = 0;
-  for (const verbId of candidates) {
-    if (seen.has(verbId) || verbId.length > RUN_PROFILE_MAX_VERB_CHARS)
-      continue;
-    seen.add(verbId);
-    if (verbs.length < RUN_PROFILE_MAX_VERBS) verbs.push(verbId);
-    else dropped++;
+  ]) {
+    if (!out.includes(verbId)) out.push(verbId);
   }
-  return { verbs, dropped };
+  return out;
 }
 
 /** The intent index keeping only read verbs (a trial run). PURE. */
@@ -260,20 +187,10 @@ function readVerbsOnly(
   );
 }
 
-/** The declared intents, deduplicated and bounded to what the IS accepts. */
-function boundIntents(intents: readonly string[]): string[] {
-  return [...new Set(intents)]
-    .filter((i) => i.trim() !== "" && i.length <= RUN_PROFILE_MAX_INTENT_CHARS)
-    .slice(0, RUN_PROFILE_MAX_INTENTS);
-}
-
 /**
- * The run profile of a playbook run: the capabilities its playbook and active
- * stage grant, and the verbs serving the intents its playbook and its space
- * declare, under the run's lens.
- *
- * The space whose `taskIntents` count is the PLAYBOOK's own space (where its
- * template installed it), else the run's.
+ * The run profile of one turn of a playbook run: the class floor plus the
+ * declared run tools (`tools`), and the verbs the declared intents and
+ * capabilities resolve to under the run's lens (`verbs`).
  */
 export async function resolveRunToolProfile(
   input: {
@@ -281,61 +198,57 @@ export async function resolveRunToolProfile(
     /** The run's workspace (its lens for the registry read). */
     workspaceId: string | null;
     userId: string;
-    /** The run's session: its active stage's grants count. */
+    /** The run's session: its active stage's `tools` narrow the playbook's. */
     sessionId?: string | null;
   },
   deps: RunToolProfileDeps = defaultDeps
 ): Promise<RunToolProfile> {
   let playbookName: string | undefined;
+  let runClass: RunClass | undefined;
   let intents: string[] = [];
   try {
     const playbook = await deps.readPlaybook(input.playbookId);
     if (!playbook) {
       throw new Error(`no playbook ${input.playbookId}`);
     }
-    playbookName = playbook.name.slice(0, RUN_PROFILE_MAX_NAME_CHARS);
-    const spaceId = playbook.workspaceId ?? input.workspaceId;
-    const [taskIntents, grants, currentStage, trial] = await Promise.all([
-      spaceId ? deps.readTaskIntents(spaceId) : [],
-      deps.readGrants({ playbookId: input.playbookId, userId: input.userId }),
+    playbookName = playbook.name;
+    runClass = runClassOf(playbook);
+    const [currentStage, trial] = await Promise.all([
       input.sessionId ? deps.readCurrentStage(input.sessionId) : null,
-      // A TRIAL (the rule lab) is offered reads only: its writes are refused
-      // at the gate anyway, so offering them would only spend turns.
+      // A TRIAL (the rule lab) is offered read verbs only: its writes are
+      // refused at the gate anyway, so offering them would only spend turns.
       input.sessionId ? deps.readTrial(input.sessionId) : false,
     ]);
-    intents = boundIntents([...readRequiredIntents(playbook), ...taskIntents]);
-    const allGrants = [
-      ...grants,
-      ...activeStageGrants(playbook.stages, currentStage),
-    ];
+    const declared = activeToolsList(
+      readToolsList(playbook.tools),
+      playbook.stages,
+      currentStage
+    );
+    // A one-shot run has no tools at all: nothing it declares is offered.
+    const tools =
+      runClass === "one-shot" ? [] : runTurnToolNames(runClass, declared);
+    const rest = declared.filter((t) => !isRunToolName(t));
+    intents = rest.filter((t) => isKnownIntent(t));
+    const named = rest.filter((t) => !isKnownIntent(t));
     let verbs: string[] = [];
-    if (intents.length > 0 || allGrants.length > 0) {
+    if (runClass !== "one-shot" && rest.length > 0) {
       const registry = await deps.readRegistry({
         workspaceId: input.workspaceId,
         userId: input.userId,
       });
       const index = trial ? readVerbsOnly(registry.index) : registry.index;
-      const folded = foldRunVerbs(
-        grantedVerbs(allGrants, registry.capabilities, trial),
+      verbs = foldRunVerbs(
+        namedVerbs(named, registry.capabilities, trial),
         intents,
         index
       );
-      verbs = folded.verbs;
-      if (folded.dropped > 0) {
-        logger.warn(
-          {
-            playbookId: input.playbookId,
-            dropped: folded.dropped,
-            cap: RUN_PROFILE_MAX_VERBS,
-          },
-          "run-tool-profile: the run declares more verbs than the IS accepts — granted verbs come first, the rest (intent verbs first) are not offered"
-        );
-      }
     }
     const tier = activeStageTier(playbook.stages, currentStage);
     return {
       playbookId: input.playbookId,
       ...(playbookName ? { playbookName } : {}),
+      runClass,
+      tools,
       intents,
       verbs,
       capabilitiesRead: "ok",
@@ -344,11 +257,13 @@ export async function resolveRunToolProfile(
   } catch (err) {
     logger.error(
       { err, playbookId: input.playbookId, workspaceId: input.workspaceId },
-      "run-tool-profile: the run's declared capabilities could not be read — the run gets the core tools only and is told so"
+      "run-tool-profile: the run's declared tools could not be read — the run gets its class floor only and is told so"
     );
     return {
       playbookId: input.playbookId,
       ...(playbookName ? { playbookName } : {}),
+      ...(runClass ? { runClass } : {}),
+      tools: [...RUN_TOOL_FLOORS[runClass ?? "short"]],
       intents,
       verbs: [],
       capabilitiesRead: "failed",

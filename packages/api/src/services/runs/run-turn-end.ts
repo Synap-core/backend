@@ -522,7 +522,13 @@ async function recordTurnEnd(
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
       ...(lastCheckpoint ? { lastCheckpoint } : {}),
       ...(state.stageAsks ? { stageAsks: state.stageAsks } : {}),
-      cost: addTurnToCost(state.cost, record),
+      // A report with no turnKey (an older IS) cannot be told from its retry:
+      // its tokens stay out of the total, counted as an unmeasured turn,
+      // rather than risk adding them twice.
+      cost: addTurnToCost(
+        state.cost,
+        body.turnKey ? record : { model: record.model }
+      ),
     };
     await tx
       .update(focusSessions)

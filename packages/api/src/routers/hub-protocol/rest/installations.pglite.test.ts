@@ -700,6 +700,13 @@ describe("the reconciler", () => {
         ($2, $3, 'tool', 'media-download', $4, 'planned', $5::jsonb)`,
       [ffmpeg, download, PERSON, OFFBOX, requires]
     );
+    // ffmpeg's install is running (an `installing` with no job open is
+    // released by the reconciler, 36daa4e2).
+    await q(
+      `INSERT INTO host_jobs (kind, installation_id, user_id, machine_user_id, spec, parameters, status, attempt, lease_expires_at)
+       VALUES ('install', $1, $2, $3, '{}'::jsonb, '{}'::jsonb, 'running', 1, now() + interval '2 minutes')`,
+      [ffmpeg, PERSON, OFFBOX]
+    );
     const runner = { machineUserId: OFFBOX, ownerUserId: PERSON };
     const openFor = async (id: string) =>
       (

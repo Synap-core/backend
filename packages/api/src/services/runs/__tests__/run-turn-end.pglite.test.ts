@@ -461,7 +461,8 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
   it("the ledger's running cost counts EVERY turn, past the turns it keeps (plan fbfadf54 5c)", async () => {
     const { sessionId } = await seedRun();
     const n = TURN_HISTORY_MAX + 3;
-    for (let i = 0; i < n; i++) await completeRun(sessionId, STOPPED);
+    for (let i = 0; i < n; i++)
+      await completeRun(sessionId, { ...STOPPED, turnKey: `msg-cost-${i}` });
     const l = await ledger(sessionId);
     // Non-vacuity: the kept window really is shorter than the run.
     expect(l.turns).toHaveLength(TURN_HISTORY_MAX);
@@ -471,6 +472,22 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       rawInputTokens: n * 131_072,
       cacheReadInputTokens: n * 100_000,
       models: ["claude-haiku-5-5"],
+    });
+  });
+
+  it("a report with NO turnKey (an older IS) never adds its tokens to the run's cost: its retry would add them twice", async () => {
+    const { sessionId } = await seedRun();
+    await completeRun(sessionId, { ...STOPPED, turnKey: "msg-keyed-1" });
+    // The same unkeyed report twice: a retry the pod cannot tell from a turn.
+    await completeRun(sessionId, STOPPED);
+    await completeRun(sessionId, STOPPED);
+    expect((await ledger(sessionId)).cost).toEqual({
+      turns: 3,
+      freshInputTokens: 131_072 - 100_000,
+      rawInputTokens: 131_072,
+      cacheReadInputTokens: 100_000,
+      models: ["claude-haiku-5-5"],
+      unmeasuredTurns: 2,
     });
   });
 

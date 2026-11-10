@@ -37,21 +37,29 @@ import type { ISCallContext } from "./is-call-budget.js";
 /** Body fields for a headless `/api/chat/stream` turn (a2ai worker). */
 /**
  * A PLAYBOOK RUN's tool profile, sent on the IS chat request as `run` (the
- * kickoff and each automatic continuation). The IS gives the turn its run core
- * tools plus only these verbs, no tool discovery, and a lean prompt (IS
+ * kickoff and each automatic continuation). `tools` is the turn's FINAL list
+ * of IS tool names: the floor of the run's class plus the playbook's declared
+ * run tools (plan 08e4fba7 decision 3, "only these"). The IS gives the turn
+ * exactly those, plus `run_capability` / `list_capabilities` narrowed to
+ * `verbs` when there are any; no tool discovery, a lean prompt (IS
  * `agents/base/run-profile.ts`, which mirrors this shape). Resolved by the
  * pod's `resolveRunToolProfile` (`@synap/api` services/playbooks/run-tool-profile.ts).
  */
 export interface RunToolProfile {
   playbookId: string;
   playbookName?: string;
-  /** The declared intents (playbook `requiredIntents` + its space's `taskIntents`). */
+  /** The run's class (`runClassOf`, `@synap/playbooks`); absent only when unread. */
+  runClass?: "one-shot" | "short" | "long";
+  /** The IS tool names this turn carries, and nothing else. */
+  tools: string[];
+  /** The intent slugs the playbook's `tools` declares. */
   intents: string[];
-  /** The concrete verb ids serving those intents, under the run's lens. */
+  /** The concrete verb ids its intents and named capabilities resolve to. */
   verbs: string[];
   /**
-   * `failed` = the declaration could not be read: `verbs` is empty because
-   * nothing was read, NOT because the run declares nothing.
+   * `failed` = the declaration could not be read: `tools` is the class floor
+   * and `verbs` is empty because nothing was read, NOT because the run
+   * declares nothing.
    */
   capabilitiesRead: "ok" | "failed";
   /**

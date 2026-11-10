@@ -176,7 +176,7 @@ async function playbook(o: {
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, required_intents, version, executor, status, subject_profile, metadata, created_at, updated_at)
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, tools, version, executor, status, subject_profile, metadata, created_at, updated_at)
      values ($1,$2,$3,$4,'g','[]','{"kind":"none"}','{}','[]',$5::jsonb,'[]','[]',$6,'is-agent',$7,$8::jsonb,'{}',now(),now())`,
     [
       id,

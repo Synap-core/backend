@@ -59,12 +59,12 @@ Widget definitions are the source of truth for which cells are installed and how
 
 ## Four things you can build
 
-Tailored UI is pod-native first (founder, 9 Nov 2026): one of the four below, or an HTML page bound as a kind's renderer, shown on the desktop. A standalone site or app only when the person asks for one (`system/synap-app/overview`).
+Tailored UI is pod-native first (founder, 9 Nov 2026): one of the four below, or an HTML page bound as a kind's renderer, shown on the desktop. A standalone site or app only when the person asks for one (`system/synap-app/overview`). The UI of a playbook (its pipeline, a dashboard, a board on its page) is one verb, one review: `system/synap-ui/playbook-ui`.
 
 1. **Views** — named queries + rendering config over entities of a given profile. Kanban of tasks, gallery of articles, calendar of events.
 2. **Bento dashboards** — 12-col grid compositions of cells (view-cards, entity-cards, widgets). The Home dashboard is a bento. Workspace landing pages are bentos.
 3. **Workspaces** — full lenses with profiles, views, a bento, and seed entities. The biggest building block.
-4. **New cell types** (Capability B) — AI can define entirely new rendering cells when no existing widget covers the need. Cells run in a sandboxed frame. One recipe, in `system/synap/viewframe-cells` ("Define a cell: the one recipe"): check `synap_list_widgets`, write an ES module or an HTML page (the pod picks how it is drawn), define it with `synap_create_cell`, then place it on a bento (`placeOn`) or bind it to a kind (`synap_promote_cell_to_renderer`). An agent's define is a proposal: `proposed` is success.
+4. **New cell types** (Capability B) — AI can define entirely new rendering cells when no existing widget covers the need. Cells run in a sandboxed frame. One recipe, in `system/synap/viewframe-cells` ("Define a cell: the one recipe"): check `synap_list_widgets`, write an ES module or an HTML page (the pod picks how it is drawn), define it with `synap_create_cell`, then place it on a bento (`placeOn`) or bind it as the renderer of a kind, a capability, a playbook or a view (`synap_promote_cell_to_renderer`, the target table is in that recipe). An agent's define is a proposal: `proposed` is success.
 
    - Leave `deps` out. The frame loads no code from the network (no CDN, no esm.sh): React and `@synap/kit` come from the host, and a cell that declares runtime `deps` is refused on web and desktop. Bundle any library into the source (`synap cell build --bundle-deps`); the same chapter lists what the frame provides and the in-frame query/mutate/shell-actions API.
    - **"Make this my Posts dashboard"** = a cell bound to the kind's `dashboard` slot, not a new workspace:
@@ -73,6 +73,18 @@ Tailored UI is pod-native first (founder, 9 Nov 2026): one of the four below, or
      - On a kind with a lifecycle the cell fills the **Dashboard** tab and the Pipeline tab stays the board (its moves and card frame are the kind's). On a kind without one, the cell is the page.
      - **A board drawn from a playbook or a pipeline reads `flow.of`**, in a cell too: `window.synap.query("flow.of", { profileSlug })` returns the kind's states in declared order, the playbook stage that owns each, and the things in each (params and shape: `synap` skill, ViewFrame Cells → "Intent reads"). An app outside the frame reads the same `flow.of` (tRPC, Hub `GET /api/hub/flow`). No status list or stage list is written by hand.
      - A saved view can take the same slot from the app (Keep → Become renderer of… → Whole profile dashboard). Any view type renders there.
+
+---
+
+## UI for a playbook: one verb first
+
+"Build me an app for my lead pipeline", "a UI for this process", "a dashboard for Win a deal": when the work is a playbook over a kind, call **`synap_propose_app_from_playbook { playbookId }`** (group `build`) before composing anything by hand.
+
+- It reads the facts (the playbook, the kind it works, the kind's declared lifecycle, the states its stages own) and files **ONE proposal** holding: the kind's `pipeline` view, a bento over the same kind, a generated board cell that reads `flow.of` (columns = states in declared order, headed by the stage that owns each; moves are governed `update_entity` writes), and that cell on the playbook's own page (`detail`). Nothing is created until the person approves it: `proposed` is success, pass on `reviewUrl`.
+- Run it again any time: a part that exists is skipped (`alreadyExists`), a page that already shows something is never replaced (`leftOut`, with the call to do it by hand), and while the proposal is pending the same one comes back (`status: "duplicate"`).
+- Refused with the next step when a fact is missing: the playbook works no kind (`synap_update_playbook` its `subjectProfile`), or the kind declares no lifecycle (`synap_declare_lifecycle` first). Model first, UI second (`rules/apps-are-views-of-pod-state`).
+
+Compose by hand only when the verb does not fit (no playbook, a kind's own card or dashboard, a view the bundle does not hold): `synap_create_view` (a `pipeline` needs `config.profileSlug`), `synap_update_view` (a bento's blocks), `synap_create_cell` + `synap_promote_cell_to_renderer` (the recipe in `system/synap/viewframe-cells`), `synap_set_start_page`.
 
 ---
 

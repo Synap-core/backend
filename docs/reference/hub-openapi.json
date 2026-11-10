@@ -16347,6 +16347,22 @@
                                         "minLength": 1,
                                         "maxLength": 200,
                                         "pattern": "^[^\\r\\n]+$"
+                                      },
+                                      "examples": {
+                                        "type": "object",
+                                        "properties": {
+                                          "approved": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          },
+                                          "rejected": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          }
+                                        },
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": ["target", "section"],
@@ -16389,6 +16405,15 @@
                                   "goal": {
                                     "type": "string",
                                     "maxLength": 5000
+                                  },
+                                  "tools": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "maxItems": 64
                                   },
                                   "grants": {
                                     "type": "array",
@@ -18525,6 +18550,15 @@
                                 "additionalProperties": false
                               },
                               "maxItems": 12
+                            },
+                            "tools": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "maxItems": 64
                             },
                             "requiredIntents": {
                               "type": "array",
@@ -21410,6 +21444,22 @@
                                         "minLength": 1,
                                         "maxLength": 200,
                                         "pattern": "^[^\\r\\n]+$"
+                                      },
+                                      "examples": {
+                                        "type": "object",
+                                        "properties": {
+                                          "approved": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          },
+                                          "rejected": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          }
+                                        },
+                                        "additionalProperties": false
                                       }
                                     },
                                     "required": ["target", "section"],
@@ -21452,6 +21502,15 @@
                                   "goal": {
                                     "type": "string",
                                     "maxLength": 5000
+                                  },
+                                  "tools": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "maxItems": 64
                                   },
                                   "grants": {
                                     "type": "array",
@@ -23588,6 +23647,15 @@
                                 "additionalProperties": false
                               },
                               "maxItems": 12
+                            },
+                            "tools": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "maxItems": 64
                             },
                             "requiredIntents": {
                               "type": "array",
@@ -28447,6 +28515,15 @@
                         },
                         "description": { "type": "string", "maxLength": 5000 },
                         "goal": { "type": "string", "maxLength": 5000 },
+                        "tools": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "maxItems": 64
+                        },
                         "grants": {
                           "type": "array",
                           "items": {
@@ -30711,6 +30788,15 @@
                       "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
                     },
                     "maxItems": 16
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "maxItems": 64
                   },
                   "workspaceId": {
                     "type": "string",
@@ -40576,6 +40662,22 @@
                               "minLength": 1,
                               "maxLength": 200,
                               "pattern": "^[^\\r\\n]+$"
+                            },
+                            "examples": {
+                              "type": "object",
+                              "properties": {
+                                "approved": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                },
+                                "rejected": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                }
+                              },
+                              "additionalProperties": false
                             }
                           },
                           "required": ["target", "section"],
@@ -44565,6 +44667,22 @@
                               "minLength": 1,
                               "maxLength": 200,
                               "pattern": "^[^\\r\\n]+$"
+                            },
+                            "examples": {
+                              "type": "object",
+                              "properties": {
+                                "approved": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                },
+                                "rejected": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                }
+                              },
+                              "additionalProperties": false
                             }
                           },
                           "required": ["target", "section"],

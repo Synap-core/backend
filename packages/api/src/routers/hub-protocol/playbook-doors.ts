@@ -140,6 +140,8 @@ export async function createPlaybookDoor(
     runner?: PlaybookDefinition["runner"];
     /** The tools every step needs (`requiresSchema`, validated by `playbooks.create`). */
     requires?: PlaybookDefinition["requires"];
+    /** What a run may use, "only these" (`playbookToolsSchema`, validated by `playbooks.create`). */
+    tools?: PlaybookDefinition["tools"];
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -185,6 +187,7 @@ export async function createPlaybookDoor(
     ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
     ...(input.runner !== undefined ? { runner: input.runner } : {}),
     ...(input.requires !== undefined ? { requires: input.requires } : {}),
+    ...(input.tools !== undefined ? { tools: input.tools } : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }
