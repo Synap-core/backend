@@ -35,6 +35,7 @@
  */
 
 import { db, eq, users } from "@synap/database";
+import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
 
 export interface TurnPrincipal {
   /** The user the turn runs as — floor, governance, IS routing. */
@@ -64,32 +65,26 @@ export async function resolveTurnPrincipal(p: {
 }
 
 /**
- * Which agent identity a SUMMONED teammate turn is attributed to.
+ * WHICH AGENT an interactive Synap AI turn acts as: the turn principal's ONE
+ * personal AI (decision 6b45c6c3, founder 2026-11-09: "My one personal AI";
+ * "Modes of my one AI").
  *
- * The interactive door's routing engine picks a roster teammate — in a session
- * room that is the OWNER's personal orchestrator (`ensureSessionChannel` seeds
- * it). The teammate still decides the persona (`agentType`), but the acting
- * agent principal must be one the summoner holds: attributing a member's turn
- * to the owner's agent would put the member's writes in the owner's agent
- * governance lane (and the hub refuses an `agentUserId` the caller cannot act
- * as — `resolveActorId`). So:
- *   - the owner summoning → the teammate (unchanged);
- *   - a teammate the summoner owns (`createdByUserId`) → the teammate;
- *   - anyone else → the summoner's own agent (`summonerAgentUserId`, which the
- *     caller resolved for the summoner), or `undefined` so the caller falls
- *     back to the summoner's IS-routed agent.
+ * The routing engine still picks a roster teammate, and the teammate still
+ * decides the persona (`agentType`) and the presence the room shows. But a
+ * pod persona (Planner, Executor, Meta Orchestrator, the owner's own
+ * orchestrator...) is a MODE of the person's AI, never an identity of its own:
+ * the turn writes as the principal's personal agent, under its governance and
+ * the principal's Synap AI ceiling. A member summoning the owner's @ai acts as
+ * the MEMBER's AI (founder decision D: the summoner, never the owner on their
+ * behalf). An external worker (Claude Code, Hermes...) is never an IS turn: it
+ * is reached its own way and writes as itself with its own key.
+ *
+ * Nothing enrolls the AI in the room's space: a write where it is not a member
+ * goes to the governance gate (a `workspace.join` proposal or a refusal).
  */
-export async function resolveSummonedAgentUserId(p: {
-  roomOwnerId: string;
-  summonerId: string;
-  teammateId: string;
-  summonerAgentUserId: string | undefined;
-}): Promise<string | undefined> {
-  if (p.summonerId === p.roomOwnerId) return p.teammateId;
-  const teammate = await db.query.users.findFirst({
-    where: eq(users.id, p.teammateId),
-    columns: { createdByUserId: true },
-  });
-  if (teammate?.createdByUserId === p.summonerId) return p.teammateId;
-  return p.summonerAgentUserId;
+export async function resolveTurnAgentUserId(p: {
+  /** The turn principal (`resolveTurnPrincipal`, or the sender). */
+  principalUserId: string;
+}): Promise<string> {
+  return ensurePersonalAgentUser(p.principalUserId);
 }

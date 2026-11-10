@@ -253,6 +253,7 @@ export const REQUIRED_CHECK_NAMES = [
   "Full suite",
   "API e2e",
   "Reference docs are current",
+  "Dependent repos typecheck",
 ] as const;
 
 /**

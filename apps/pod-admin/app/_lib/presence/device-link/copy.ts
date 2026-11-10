@@ -50,6 +50,8 @@ export const en = {
     "Adding a passkey needs a recent sign-in. Sign in again, then set up this device again.",
   "panel.signInAgain": "Sign in again",
   "panel.create.refused": "Your pod didn’t accept the new passkey. Try again.",
+  "panel.create.closed":
+    "No passkey was created: the prompt was closed or didn’t open. Try again.",
 
   "requests.region": "Devices asking to confirm it’s you",
   "requests.title": "{label} asks to confirm it’s you",
@@ -116,6 +118,8 @@ export const fr: Catalog<typeof en> = {
   "panel.signInAgain": "Se reconnecter",
   "panel.create.refused":
     "Votre pod n’a pas accepté la nouvelle clé d’accès. Réessayez.",
+  "panel.create.closed":
+    "Aucune clé d’accès n’a été créée : la fenêtre a été fermée ou ne s’est pas ouverte. Réessayez.",
 
   "requests.region": "Appareils qui demandent à confirmer que c’est vous",
   "requests.title": "{label} demande à confirmer que c’est vous",

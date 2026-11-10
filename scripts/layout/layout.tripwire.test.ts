@@ -128,6 +128,55 @@ describe("Depends-On grammar", () => {
   });
 });
 
+describe("Companion: the dependent change that lands AFTER this one", () => {
+  const companions = (text: string) =>
+    L.companionRefs(
+      L.parseCompanions(text, { self: "synap-backend", layout }),
+      {
+        exclude: ["synap-backend"],
+      }
+    );
+
+  it("reads a branch, a commit and a pull request (its head)", () => {
+    expect([
+      ...companions(
+        [
+          "Companion: app-bases@fix/new-filter-field",
+          "companion: relay@1a2b3c4d5e6f",
+          "Companion: Synap-core/browser#88",
+        ].join("\n")
+      ),
+    ]).toEqual([
+      ["synap-app", "fix/new-filter-field"],
+      ["relay-app", "1a2b3c4d5e6f"],
+      ["browser", "refs/pull/88/head"],
+    ]);
+  });
+
+  it("is not a Depends-On, and a Depends-On is not a companion", () => {
+    const text = "Depends-On: app-bases#105\nCompanion: browser@feat/x";
+    expect(parse(text).deps.map((d: { label: string }) => d.label)).toEqual([
+      "app-bases#105",
+    ]);
+    expect([...companions(text)]).toEqual([["browser", "feat/x"]]);
+  });
+
+  it("ignores a fenced example and returns none when there is none", () => {
+    expect(companions("```\nCompanion: app-bases@x\n```").size).toBe(0);
+    expect(companions("no lines").size).toBe(0);
+  });
+
+  it("fails on a line it cannot read: a bad companion is never read as none", () => {
+    for (const bad of [
+      "Companion: app-bases feat/x",
+      "Companion: nowhere@feat/x",
+      "Companion: app-bases@--upload-pack=x",
+      "Companion: app-bases@a\nCompanion: app@b",
+    ])
+      expect(() => companions(bad), bad).toThrow();
+  });
+});
+
 describe("landed, waiting, blocked", () => {
   const dep = (text: string) => parse(text).deps[0];
   const BE = "Synap-core/backend";

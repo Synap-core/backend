@@ -22,6 +22,7 @@
  * router's `cause: {reasonCode}`): RATE, NO_SESSION and GONE each have their
  * state; any other failure is a failed request or read.
  */
+import type { CreateFlowResult, KratosFlow } from "../../../../lib/kratos-flow";
 import {
   PRESENCE_DEVICE_LINK_GONE,
   PRESENCE_DEVICE_LINK_NO_SESSION,
@@ -57,6 +58,12 @@ export type LinkState =
       id: string | null;
       /** ISO: when the approval can no longer be redeemed; null with no id. */
       expiresAt: string | null;
+      /**
+       * The last prompt ended with no passkey (closed, or never opened: a
+       * browser that refused it says the same NotAllowedError). Said, never
+       * silent; `detail` is the browser's words for "Copy details".
+       */
+      closed?: { detail: string | null };
     }
   | { kind: "creating"; id: string | null; expiresAt: string | null }
   | {
@@ -95,8 +102,11 @@ export type LinkEvent =
   | { type: "clock"; now: number }
   | { type: "create" }
   | { type: "created" }
-  /** The person closed the passkey prompt: back to where they pressed. */
-  | { type: "create-cancelled" }
+  /**
+   * The prompt ended with no passkey (NotAllowedError: the person closed it,
+   * or the browser never opened it): back to where they pressed, saying so.
+   */
+  | { type: "create-cancelled"; detail: string | null }
   | { type: "create-failed"; reason: CreateFailure; detail: string | null }
   | { type: "reauth" };
 
@@ -237,7 +247,12 @@ export function linkReducer(state: LinkState, event: LinkEvent): LinkState {
       return state.kind === "creating" ? { kind: "done" } : state;
     case "create-cancelled":
       return state.kind === "creating"
-        ? { kind: "approved", id: state.id, expiresAt: state.expiresAt }
+        ? {
+            kind: "approved",
+            id: state.id,
+            expiresAt: state.expiresAt,
+            closed: { detail: event.detail },
+          }
         : state;
     case "create-failed":
       return state.kind === "creating"
@@ -306,4 +321,30 @@ export function registrationEvent(
         detail: r.message ?? null,
       };
   }
+}
+
+/**
+ * Start the passkey step from the person's press. With the settings flow
+ * already held, `register` (which opens the passkey prompt) runs in the SAME
+ * tick as the press: nothing is awaited before it, because WebKit opens the
+ * prompt only while the tap still counts (founder's iPhone, 10 Nov 2026: a
+ * read of the flow between the tap and the prompt left nothing on screen).
+ * With none held (its early read failed), the flow is read first; the
+ * failure, if any, rejects. Not a flow: this sign-in must sign in again.
+ */
+export function startPasskeyStep<R>(
+  held: CreateFlowResult | null,
+  readFlow: () => Promise<CreateFlowResult>,
+  register: (flow: KratosFlow) => Promise<R>
+): Promise<{ kind: "reauth" } | { kind: "registered"; result: R }> {
+  const proceed = (
+    started: CreateFlowResult
+  ): Promise<{ kind: "reauth" } | { kind: "registered"; result: R }> =>
+    "flow" in started
+      ? register(started.flow).then((result) => ({
+          kind: "registered" as const,
+          result,
+        }))
+      : Promise.resolve({ kind: "reauth" as const });
+  return held ? proceed(held) : readFlow().then(proceed);
 }

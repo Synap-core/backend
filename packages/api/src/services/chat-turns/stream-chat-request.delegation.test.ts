@@ -1,7 +1,7 @@
 /**
- * `chatTurnDelegation`: the token an app's chat turn carries to the AI service. It names the person's OWN Synap AI as
- * the acting agent (so the hub can bound the turn by the standing grant they gave it) and carries the app's claim;
- * a turn with no app grant is the person's own token, unchanged.
+ * `chatTurnDelegation`: the token a chat turn carries to the AI service. Every turn names the person's OWN Synap AI as
+ * the acting agent (decision 6b45c6c3), so the hub accepts it as the persona of the turn's writes and bounds the turn
+ * by the standing grant they gave it; an app's turn also carries the app's claim and refuses to fall back.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -51,12 +51,11 @@ beforeEach(() => {
 describe("chatTurnDelegation", () => {
   it("an app's turn: the person's Synap AI is the acting agent and the app's claim rides along", async () => {
     const headers = await chatTurnDelegation({
-      userId: "person",
       appGrant: claim,
+      agentUserId: "synap-ai-agent",
       turn,
     });
     expect(headers).toEqual({ [IS_DELEGATION_HEADER]: "signed-token" });
-    expect(spies.agent).toHaveBeenCalledWith("person");
     expect(spies.mint).toHaveBeenCalledWith({
       ...turn,
       appGrant: claim,
@@ -65,29 +64,30 @@ describe("chatTurnDelegation", () => {
     expect(spies.person).not.toHaveBeenCalled();
   });
 
-  it("a turn with no app grant is the person's own token: no agent named, the agent is not even created", async () => {
+  it("a turn with no app grant ALSO names the person's Synap AI (decision 6b45c6c3: every turn acts as it)", async () => {
     const headers = await chatTurnDelegation({
-      userId: "person",
       appGrant: null,
+      agentUserId: "synap-ai-agent",
       turn,
     });
     expect(headers).toEqual({ [IS_DELEGATION_HEADER]: "person-token" });
-    expect(spies.person).toHaveBeenCalledWith(turn);
+    expect(spies.person).toHaveBeenCalledWith({
+      ...turn,
+      agentUserId: "synap-ai-agent",
+    });
     expect(spies.mint).not.toHaveBeenCalled();
-    expect(spies.agent).not.toHaveBeenCalled();
   });
 
-  it("an app turn that cannot sign or cannot name its agent THROWS (the caller refuses the turn, never a fallback)", async () => {
+  it("an app turn that cannot sign THROWS (the caller refuses the turn, never a fallback)", async () => {
     spies.mint.mockImplementation(() => {
       throw new Error("cannot sign");
     });
     await expect(
-      chatTurnDelegation({ userId: "person", appGrant: claim, turn })
+      chatTurnDelegation({
+        appGrant: claim,
+        agentUserId: "synap-ai-agent",
+        turn,
+      })
     ).rejects.toThrow("cannot sign");
-    spies.mint.mockReturnValue("signed-token");
-    spies.agent.mockRejectedValue(new Error("no agent"));
-    await expect(
-      chatTurnDelegation({ userId: "person", appGrant: claim, turn })
-    ).rejects.toThrow("no agent");
   });
 });

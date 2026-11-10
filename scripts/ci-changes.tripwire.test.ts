@@ -1255,7 +1255,7 @@ describe("ci-changes: the merge queue", () => {
         /"([^"]+)"/g
       ),
     ].map((m) => m[1]);
-    expect(required.length).toBe(4);
+    expect(required.length).toBe(5);
     expect([...QUEUE_REUSE_CHECKS].sort()).toEqual([...required].sort());
   });
 
@@ -1425,6 +1425,13 @@ describe("ci-changes: holds never read as passed", () => {
       ["api-types", ["packages/api-types/src/generated.d.ts"], true],
       ["markdown-core", ["packages/markdown-core/src/x.ts"], true],
       ["the job's own root", ["scripts/ci/dependent-root/package.json"], true],
+      ["the job's verdict", ["scripts/ci/dependents-typecheck.mjs"], true],
+      ["the Companion parser", ["scripts/layout/layout.mjs"], true],
+      [
+        "the layout action",
+        [".github/actions/monorepo-setup/action.yml"],
+        true,
+      ],
       ["ci.yml", [".github/workflows/ci.yml"], true],
       ["api source", ["packages/api/src/x.ts"], false],
       ["a sibling named like types", ["packages/types-extra/src/x.ts"], false],
@@ -1562,6 +1569,10 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
     ["Full suite", "needs.changes.outputs.suites == 'false'"],
     ["API e2e", "needs.changes.outputs.e2e == 'false'"],
     ["Reference docs are current", "needs.changes.outputs.reuse == 'true'"],
+    [
+      "Dependent repos typecheck",
+      "needs.changes.outputs.dependents == 'false'",
+    ],
   ])("%s: an explicit, logged pass; the work gated", (name, decision) => {
     const j = required.find((x) => x.name === name);
     expect(j, name).toBeDefined();
@@ -1688,7 +1699,8 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
   it("the Dependent repos job checks out the three repos, with the Reader App token", () => {
     const job = jobs.find((j) => j.name === "Dependent repos typecheck");
     expect(job, "job exists").toBeDefined();
-    expect(job?.if).toContain("needs.changes.outputs.dependents == 'true'");
+    // a required check (2026-11-09): never skipped by its `if:`
+    expect(job?.if).toBe("${{ !cancelled() }}");
     expect(job?.block).toContain("repository: Synap-core/browser");
     expect(job?.block).toContain("repository: Synap-core/relay-app");
     // app-bases comes through monorepo-setup, whose token covers it.
@@ -1701,5 +1713,51 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
     expect(changes?.block).toContain(
       "dependents: ${{ steps.decide.outputs.dependents }}"
     );
+  });
+
+  it("the Dependent repos job fails on what the change breaks, at a companion when named", () => {
+    const job = jobs.find((j) => j.name === "Dependent repos typecheck")!;
+    const step = (name: string) => {
+      const s = job.steps.find((x) => x.startsWith(`name: ${name}`));
+      expect(s, name).toBeDefined();
+      return s!;
+    };
+    // No typecheck may pass by itself: no continue-on-error left on the job.
+    expect(job.block).not.toContain(
+      "continue-on-error: true\n        working-directory"
+    );
+    for (const s of job.steps)
+      if (/typecheck|type-check|Verdict/i.test(s.split("\n")[0]))
+        expect(s, s.split("\n")[0]).not.toContain("continue-on-error");
+    // The PR body's Companion lines pin the dependents' refs.
+    expect(step("Companion refs")).toContain(
+      "node scripts/layout/layout.mjs companions --body-env PR_BODY --self backend"
+    );
+    expect(step("Monorepo layout")).toContain(
+      "refs: ${{ steps.companions.outputs.layout }}"
+    );
+    expect(step("Checkout browser")).toContain(
+      "ref: ${{ steps.companions.outputs.browser }}"
+    );
+    expect(step("Checkout relay-app")).toContain(
+      "ref: ${{ steps.companions.outputs.relay }}"
+    );
+    // The backend's own node_modules (its @trpc/* hoist) never shadows the
+    // slice's: the linked packages resolve like the devbox's one root install.
+    expect(step("Lay out the root workspace slice")).toContain(
+      "rm -rf node_modules packages/*/node_modules"
+    );
+    // The app dists the devbox builds before typechecking (APP_DIST_FILTER).
+    expect(step("Build the app packages")).toContain(
+      '--filter "./browser^..."'
+    );
+    // Head, then (only when red) the base's shared packages, then the verdict.
+    expect(step("Typecheck the dependents at this head")).toContain(
+      "dependents-typecheck.mjs run"
+    );
+    expect(step("Typecheck the red ones again")).toContain(
+      "steps.head.outputs.red == 'true'"
+    );
+    expect(step("Verdict")).toContain("dependents-typecheck.mjs verdict");
   });
 });

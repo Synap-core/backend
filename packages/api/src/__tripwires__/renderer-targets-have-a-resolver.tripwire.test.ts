@@ -60,7 +60,7 @@ import {
 } from "../services/renderers/renderer-target-checks.js";
 import type { RendererSlot } from "../services/profiles/renderer-slots.js";
 
-const USER = "user-renderer-targets";
+const USER = randomUUID();
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
 /**
@@ -72,8 +72,22 @@ const WRITE: Record<
   RendererStore,
   (target: RendererTarget, slot: RendererSlot, cellKey: string) => Promise<void>
 > = {
-  renderer_bindings: (target, slot, cellKey) =>
-    setProfileRenderer({
+  renderer_bindings: async (target, slot, cellKey) => {
+    // A per-object target must be an object the writer can open (the write
+    // door checks it, `assertRendererBindingTarget`): the writer's own
+    // pod-wide playbook or personal view.
+    if (target.kind === "playbook") {
+      await q(
+        `insert into playbooks (id, name, created_by, goal_template) values ($1, $2, $3, 'g')`,
+        [target.id, "Renderer target playbook", USER]
+      );
+    } else if (target.kind === "view") {
+      await q(
+        `insert into views (id, name, type, user_id) values ($1, $2, 'kanban', $3)`,
+        [target.id, "Renderer target view", USER]
+      );
+    }
+    await setProfileRenderer({
       userId: USER,
       workspaceId: null,
       profileSlug: target.kind === "profile" ? target.slug : target.kind,
@@ -82,7 +96,8 @@ const WRITE: Record<
       ref: { kind: "cell", cellKey, props: {} },
       // A personal binding: no role floor to stand up, same store and reader.
       scope: "user",
-    }),
+    });
+  },
   capability_pages: async (target, slot, cellKey) => {
     const id = (target as { id: string }).id;
     await q(
@@ -109,6 +124,10 @@ function targetFor(
 
 beforeAll(async () => {
   await h.client!.exec(pgliteAllTablesDdl());
+  await q(
+    `insert into users (id, email, name, user_type) values ($1, 'renderer-targets@x.test', 'Renderer targets', 'human')`,
+    [USER]
+  );
 });
 
 describe("renderer targets have a resolver", () => {

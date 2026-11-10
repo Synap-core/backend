@@ -61,8 +61,9 @@ env:
 
 jobs:
   # A release is only ever built from a commit whose POST-MERGE CI run (event
-  # push) was ALL green: "Release gate", "Full suite", "API e2e" and
-  # "Reference docs are current" all `success` on that one run
+  # push) was ALL green: "Release gate", "Full suite", "API e2e",
+  # "Reference docs are current" and "Dependent repos typecheck" (a logged
+  # "Not affected" on a push) all `success` on that one run
   # (scripts/ci/release-gate-wait.mjs; founder, 2026-10-29, "One trunk, three
   # CI tiers"; until then the Release gate alone, decision 2026-10-19 option
   # A). The merge queue's run of the same sha does not count: its checks may

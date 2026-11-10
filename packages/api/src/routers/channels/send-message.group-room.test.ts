@@ -182,6 +182,11 @@ vi.mock("../../utils/chat-realtime-broadcast.js", async (importOriginal) => ({
     m.chatEvents.push(e)
   ),
 }));
+// The person's ONE personal AI (decision 6b45c6c3): the acting agent of
+// every turn this door runs, whichever teammate the room routes to.
+vi.mock("../../utils/personal-agent-user.js", () => ({
+  ensurePersonalAgentUser: async (userId: string) => `personal-ai-of-${userId}`,
+}));
 vi.mock("./helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./helpers.js")>()),
   resolveAgentId: vi.fn(async () => "9b0f7a52-3c61-4d0e-8f7e-5a1c2b3d4e5f"),
@@ -500,5 +505,20 @@ describe("chat.sendMessage — a plain comment in a CAPTURE room", () => {
     await send({ content: "just a thought" });
 
     expect(m.trigger).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat.sendMessage — the turn acts as the sender's ONE personal AI (decision 6b45c6c3)", () => {
+  const WS = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+
+  it("a routed persona teammate is the persona, never the acting identity", async () => {
+    await send({ content: "@researcher check this", workspaceId: WS });
+
+    expect(answering()).toEqual([RESEARCHER]);
+    expect(m.streamRequests).toHaveLength(1);
+    expect(m.streamRequests[0]).toMatchObject({
+      agentType: "researcher",
+      agentUserId: "personal-ai-of-user-1",
+    });
   });
 });
