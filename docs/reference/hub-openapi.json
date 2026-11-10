@@ -45980,6 +45980,105 @@
         }
       }
     },
+    "/focus-sessions/{id}/outputs/complete": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Claim a declared deliverable as done",
+        "description": "The agent's claim on one declared deliverable, named by its key or exact label (`output`). The same service as MCP `synap_update_session { completeOutput }`: with evidence in place the pod verifies it at once (`completed`), otherwise it waits for review (`claimed`). A person's slot (`owner: 'human'`) is `refused`; no such deliverable is `no_match`. Owner-floored: another person's session is 404.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "output": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                },
+                "required": ["output"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The claim's verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "result": {
+                      "type": "string",
+                      "enum": ["completed", "claimed", "refused", "no_match"]
+                    },
+                    "output": { "type": "string" },
+                    "message": { "type": "string" }
+                  },
+                  "required": ["ok", "result", "output"]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/focus-sessions/{id}/outputs/answer": {
       "post": {
         "tags": ["FocusSessions"],
