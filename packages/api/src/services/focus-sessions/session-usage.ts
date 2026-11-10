@@ -33,6 +33,9 @@
  *   5. PLAYBOOK — `focus_sessions.playbook_id`, else the newest
  *      `playbook_runs.session_id` row.
  *   6. AGENTS — `attachSessionParticipants`' roster, reused, never re-derived.
+ *   7. COST — what the session's latest run spent (turns, fresh and raw input
+ *      tokens, models), from its turn ledger (`readRunCost`, the one
+ *      derivation). null = no run turn ever reported on this session.
  *
  * A failed read THROWS. Nothing here catches into an empty list: an empty
  * "In this session" block must mean the session used nothing, never that a
@@ -71,6 +74,7 @@ import {
 } from "./participants.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { readRunCost, type RunCostRead } from "../runs/run-cost.js";
 
 /** One capability (skill) the session ran, with how often and how recently. */
 export interface SessionUsageCapability {
@@ -135,6 +139,8 @@ export interface SessionUsage {
   /** `name` is null when the playbook row is gone or not visible. */
   playbook: { id: string; name: string | null } | null;
   agents: SessionParticipant[];
+  /** What the session's latest run spent; null = no run turn reported. */
+  cost: RunCostRead | null;
 }
 
 const EXECUTED_PROPOSAL_STATUSES = [
@@ -488,6 +494,7 @@ export async function readSessionUsage(params: {
       id: focusSessions.id,
       agentIds: focusSessions.agentIds,
       playbookId: focusSessions.playbookId,
+      metadata: focusSessions.metadata,
     })
     .from(focusSessions)
     .where(
@@ -590,5 +597,6 @@ export async function readSessionUsage(params: {
     })),
     playbook,
     agents: staffed.participants,
+    cost: readRunCost(session.metadata),
   };
 }
