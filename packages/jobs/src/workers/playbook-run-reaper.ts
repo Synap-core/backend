@@ -20,7 +20,9 @@
  * orphaned and force-failed; a genuinely long external-agent run that keeps its
  * session warm is EXEMPT. The threshold is generous (24h) precisely because an
  * external agent turn is legitimately long — a false-fail would abandon live
- * work, so we err toward waiting.
+ * work, so we err toward waiting. A run held by the pod's own AI (the IS) is
+ * judged after 2 hours instead (`IS_RUN_REAPER_QUIET_HOURS`): its turns last
+ * minutes and report their end, failed included.
  *
  * The capture-back / session-finalize doors both UPDATE ... WHERE the status is
  * LIVE, so a late report against a reaped (now 'failed') run cleanly no-ops
@@ -40,6 +42,7 @@
 import {
   db,
   and,
+  or,
   eq,
   inArray,
   drizzleSql,
@@ -79,12 +82,39 @@ const STALE_RUN_ERROR_MESSAGE =
  * reapable. Interval arithmetic in SQL (no bound Date param — postgres.js 3.4.8
  * crashes on Date binds on the pod image, same as automation-run-reaper).
  */
-export const RUN_SESSION_NOT_ACTIVE = drizzleSql`NOT EXISTS (
+function sessionQuietFor(hours: number) {
+  return drizzleSql`NOT EXISTS (
   SELECT 1 FROM focus_sessions fs
   WHERE fs.id = ${playbookRuns.sessionId}
     AND fs.status IN ('active', 'paused')
-    AND fs.updated_at > now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')
+    AND fs.updated_at > now() - (${hours}::int * interval '1 hour')
 )`;
+}
+
+/**
+ * A run one of whose steps WAITS — on a child run or on tools being installed
+ * (its open `session_stage_runs` row, 0417) — is waiting, not idle: a parent
+ * paused on a child for days must not be reaped (runner engine spec 7111934d,
+ * risk 3). Never stale-marked, never failed, whatever its holder's window.
+ */
+const RUN_STAGE_NOT_WAITING = drizzleSql`NOT ${stageRunWaitsWhere(playbookRuns.sessionId)}`;
+
+/**
+ * A running run started more than `hours` ago whose session went quiet and
+ * none of whose steps waits.
+ */
+function runQuietFor(hours: number) {
+  return and(
+    eq(playbookRuns.status, "running"),
+    drizzleSql`${playbookRuns.startedAt} < now() - (${hours}::int * interval '1 hour')`,
+    sessionQuietFor(hours),
+    RUN_STAGE_NOT_WAITING
+  )!;
+}
+
+export const RUN_SESSION_NOT_ACTIVE = sessionQuietFor(
+  PLAYBOOK_RUN_REAPER_STALE_HOURS
+);
 
 /**
  * The run is held by an EXTERNAL agent, not by a worker the pod launched:
@@ -105,15 +135,17 @@ export const RUN_SESSION_NOT_ACTIVE = drizzleSql`NOT EXISTS (
  * revival, and only an open session can be written to again. A run under a
  * closed or missing session has nothing to come back to — it fails as before.
  */
-export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
-  (
-    ${playbookRuns.executor} = 'external-agent'
-    OR EXISTS (
-      SELECT 1 FROM focus_sessions fs
-      WHERE fs.id = ${playbookRuns.sessionId}
-        AND fs.metadata ->> 'clientKey' LIKE 'key:%'
-    )
+const RUN_EXTERNAL_HOLDER = drizzleSql`(
+  ${playbookRuns.executor} = 'external-agent'
+  OR EXISTS (
+    SELECT 1 FROM focus_sessions fs
+    WHERE fs.id = ${playbookRuns.sessionId}
+      AND fs.metadata ->> 'clientKey' LIKE 'key:%'
   )
+)`;
+
+export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
+  ${RUN_EXTERNAL_HOLDER}
   AND EXISTS (
     SELECT 1 FROM focus_sessions fs
     WHERE fs.id = ${playbookRuns.sessionId}
@@ -121,21 +153,26 @@ export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
   )
 )`;
 
-/**
- * A run one of whose steps WAITS — on a child run or on tools being installed
- * (its open `session_stage_runs` row, 0417) — is waiting, not idle: a parent
- * paused on a child for days must not be reaped (runner engine spec 7111934d,
- * risk 3). Never stale-marked, never failed.
- */
-export const RUN_STAGE_NOT_WAITING = drizzleSql`NOT ${stageRunWaitsWhere(playbookRuns.sessionId)}`;
-
 /** A running run past the window whose session shows no recent activity. */
-const RUN_IS_STALE = and(
-  eq(playbookRuns.status, "running"),
-  drizzleSql`${playbookRuns.startedAt} < now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')`,
-  RUN_SESSION_NOT_ACTIVE,
-  RUN_STAGE_NOT_WAITING
+const RUN_IS_STALE = runQuietFor(PLAYBOOK_RUN_REAPER_STALE_HOURS);
+
+/**
+ * A run the pod handed to its OWN AI (the IS) is quiet much sooner: an IS turn
+ * lasts minutes and reports its end, so a run nobody moved for 2 hours is a
+ * dead worker (finding db27cac2: outage runs stayed active for a day). An
+ * external agent works on its own clock and keeps the 24-hour window. Not a
+ * work-clock rung: the run reaper's own clock.
+ */
+export const IS_RUN_REAPER_QUIET_HOURS = 2;
+
+/** An IS-held running run past its 2-hour window whose session went quiet. */
+const IS_RUN_IS_QUIET = and(
+  runQuietFor(IS_RUN_REAPER_QUIET_HOURS),
+  drizzleSql`NOT ${RUN_EXTERNAL_HOLDER}`
 );
+
+/** A run the sweeps below judge: past its holder's window, session quiet. */
+const RUN_IS_REAPABLE = or(RUN_IS_STALE, IS_RUN_IS_QUIET)!;
 
 /** Called by the cron scheduler every ~30 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
@@ -173,7 +210,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       .update(playbookRuns)
       .set({ status: "waiting_on_you" })
       .where(
-        and(RUN_IS_STALE, sessionWaitsOnPersonWhere(playbookRuns.sessionId))
+        and(RUN_IS_REAPABLE, sessionWaitsOnPersonWhere(playbookRuns.sessionId))
       )
       .returning({ id: playbookRuns.id });
     if (waiting.length > 0) {
@@ -228,7 +265,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
         error: STALE_RUN_ERROR_MESSAGE,
         completedAt: new Date(),
       })
-      .where(RUN_IS_STALE)
+      .where(RUN_IS_REAPABLE)
       .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
 
     if (reaped.length === 0) {
