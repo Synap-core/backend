@@ -38,6 +38,7 @@ import {
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
 import { findInFlightRunSession } from "../../utils/run-in-flight.js";
 import { logger } from "../automation-executor-logger.js";
+import { isUuid } from "@synap-core/types/property-render";
 import type {
   StepContext,
   ExecutionPayload,
@@ -100,9 +101,6 @@ async function backStampEventSession(
     );
   }
 }
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function executePlaybookRun(
   data: {
@@ -314,7 +312,7 @@ export async function executePlaybookRun(
     // second proposal could only start a duplicate run (see run-in-flight.ts).
     // A name-only node (no id) is resolved at approval, where the replay
     // checks the same thing.
-    if (resolvedSubjectId && UUID_RE.test(data.playbookId ?? "")) {
+    if (resolvedSubjectId && isUuid(data.playbookId ?? "")) {
       const inFlight = await findInFlightRunSession({
         playbookId: data.playbookId!,
         subjectId: resolvedSubjectId,
