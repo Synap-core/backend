@@ -180,6 +180,7 @@ import {
   verbToolLabel,
 } from "./file-parameters.js";
 import { refuseFlaggedCapabilityRecipient } from "./send-recipient-consent.js";
+import { isVerbRefusal } from "./verb-refusal.js";
 
 const logger = createLogger({ module: "execute-capability" });
 
@@ -1965,25 +1966,41 @@ async function runResolvedSkillInner(
         message: `No builtin handler registered for verb "${skill.name}".`,
       };
     }
-    const result = await handler(runParameters ?? {}, {
-      userId: ctx.userId,
-      workspaceId: ctx.workspaceId,
-      agentUserId: ctx.agentUserId ?? null,
-      sessionId: ctx.sessionId ?? null,
-      ...(ctx.automationRun ? { automationRun: ctx.automationRun } : {}),
-      ...(ctx.selfGate
-        ? {
-            mustPropose: true,
-            governanceReason: ctx.selfGate.governanceReason,
-            intentRequest: ctx.selfGate.intentRequest,
-          }
-        : {}),
-      // The verb identity is known HERE and was previously dropped at the
-      // handler boundary. Handlers that create durable objects need it to stamp
-      // provenance (channel origin), so it is threaded rather than re-derived.
-      verbId: skill.id,
-      verbName: skill.name,
-    });
+    let result: unknown;
+    try {
+      result = await handler(runParameters ?? {}, {
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        agentUserId: ctx.agentUserId ?? null,
+        sessionId: ctx.sessionId ?? null,
+        ...(ctx.automationRun ? { automationRun: ctx.automationRun } : {}),
+        ...(ctx.selfGate
+          ? {
+              mustPropose: true,
+              governanceReason: ctx.selfGate.governanceReason,
+              intentRequest: ctx.selfGate.intentRequest,
+            }
+          : {}),
+        // The verb identity is known HERE and was previously dropped at the
+        // handler boundary. Handlers that create durable objects need it to stamp
+        // provenance (channel origin), so it is threaded rather than re-derived.
+        verbId: skill.id,
+        verbName: skill.name,
+      });
+    } catch (err) {
+      // A handler's REFUSAL (`verb-refusal.ts`) is a definite not-run with its
+      // own sentence and class: the error outcome, as a provider verb's refusal
+      // is. An approval then records the sentence and releases its claim.
+      // Any other throw is a crash and stays one.
+      if (isVerbRefusal(err)) {
+        return {
+          kind: "error",
+          message: err.message,
+          errorClass: err.errorClass,
+        };
+      }
+      throw err;
+    }
     return { kind: "run", skillId: skill.id, result };
   }
 

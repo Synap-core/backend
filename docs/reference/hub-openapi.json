@@ -16334,7 +16334,40 @@
                                     "maxLength": 80,
                                     "pattern": "^[a-z][a-z0-9_-]*$"
                                   },
-                                  "optional": { "type": "boolean" }
+                                  "optional": { "type": "boolean" },
+                                  "lands": {
+                                    "type": "object",
+                                    "properties": {
+                                      "target": {
+                                        "type": "string",
+                                        "enum": ["subject_document_section"]
+                                      },
+                                      "section": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200,
+                                        "pattern": "^[^\\r\\n]+$"
+                                      },
+                                      "examples": {
+                                        "type": "object",
+                                        "properties": {
+                                          "approved": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          },
+                                          "rejected": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          }
+                                        },
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": ["target", "section"],
+                                    "additionalProperties": false
+                                  }
                                 },
                                 "additionalProperties": {}
                               }
@@ -18796,7 +18829,12 @@
                             },
                             "executor": {
                               "type": "string",
-                              "enum": ["is-agent", "external-agent", "hybrid"]
+                              "enum": [
+                                "is-agent",
+                                "external-agent",
+                                "hybrid",
+                                "generate"
+                              ]
                             },
                             "status": {
                               "type": "string",
@@ -21393,7 +21431,40 @@
                                     "maxLength": 80,
                                     "pattern": "^[a-z][a-z0-9_-]*$"
                                   },
-                                  "optional": { "type": "boolean" }
+                                  "optional": { "type": "boolean" },
+                                  "lands": {
+                                    "type": "object",
+                                    "properties": {
+                                      "target": {
+                                        "type": "string",
+                                        "enum": ["subject_document_section"]
+                                      },
+                                      "section": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200,
+                                        "pattern": "^[^\\r\\n]+$"
+                                      },
+                                      "examples": {
+                                        "type": "object",
+                                        "properties": {
+                                          "approved": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          },
+                                          "rejected": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 5
+                                          }
+                                        },
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": ["target", "section"],
+                                    "additionalProperties": false
+                                  }
                                 },
                                 "additionalProperties": {}
                               }
@@ -23862,7 +23933,12 @@
                             },
                             "executor": {
                               "type": "string",
-                              "enum": ["is-agent", "external-agent", "hybrid"]
+                              "enum": [
+                                "is-agent",
+                                "external-agent",
+                                "hybrid",
+                                "generate"
+                              ]
                             },
                             "status": {
                               "type": "string",
@@ -40574,6 +40650,39 @@
                           "type": "string",
                           "maxLength": 80
                         },
+                        "lands": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "type": "string",
+                              "enum": ["subject_document_section"]
+                            },
+                            "section": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[^\\r\\n]+$"
+                            },
+                            "examples": {
+                              "type": "object",
+                              "properties": {
+                                "approved": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                },
+                                "rejected": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["target", "section"],
+                          "additionalProperties": false
+                        },
                         "subjectEdge": {
                           "type": "object",
                           "properties": {
@@ -44545,6 +44654,39 @@
                         "relationToSubject": {
                           "type": "string",
                           "maxLength": 80
+                        },
+                        "lands": {
+                          "type": "object",
+                          "properties": {
+                            "target": {
+                              "type": "string",
+                              "enum": ["subject_document_section"]
+                            },
+                            "section": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200,
+                              "pattern": "^[^\\r\\n]+$"
+                            },
+                            "examples": {
+                              "type": "object",
+                              "properties": {
+                                "approved": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                },
+                                "rejected": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["target", "section"],
+                          "additionalProperties": false
                         },
                         "subjectEdge": {
                           "type": "object",

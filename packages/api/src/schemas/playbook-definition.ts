@@ -32,6 +32,7 @@ import {
   findDroppedParamEntries,
   isRunToolName,
   MAX_REQUIRED_INTENTS,
+  OUTPUT_LANDING_EXAMPLES_MAX,
   PLAYBOOK_TOOL_MAX_CHARS,
   PLAYBOOK_TOOLS_MAX,
   readToolsList,
@@ -63,6 +64,7 @@ export const playbookExecutorSchema = z.enum([
   "is-agent",
   "external-agent",
   "hybrid",
+  "generate",
 ]);
 export const playbookStatusSchema = z.enum([
   "draft",
@@ -83,6 +85,39 @@ export const playbookScopeSchema = z.enum(["session", "project"]);
 // own schemas.
 const jsonRecord = z.record(z.string(), z.unknown());
 
+/** `ExpectedOutput.lands` (@synap/playbooks `OutputLanding`). */
+export const outputLandingSchema = z.strictObject({
+  target: z.literal("subject_document_section"),
+  section: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .regex(/^[^\r\n]+$/, "a section title is one line"),
+  /**
+   * Past outcomes read as examples (`OutputLanding.examples`): how many of
+   * the person's last approved and rejected drafts of this playbook in this
+   * space. Off when absent; each count capped so the examples never crowd out
+   * the subject in the one call's input bound.
+   */
+  examples: z
+    .strictObject({
+      approved: z
+        .number()
+        .int()
+        .min(0)
+        .max(OUTPUT_LANDING_EXAMPLES_MAX)
+        .optional(),
+      rejected: z
+        .number()
+        .int()
+        .min(0)
+        .max(OUTPUT_LANDING_EXAMPLES_MAX)
+        .optional(),
+    })
+    .optional(),
+});
+
 /**
  * One declared slot of a playbook. Stored loosely like its siblings, EXCEPT
  * `ask`: a template's slots are instantiated straight into sessions, so an
@@ -101,6 +136,12 @@ export const playbookExpectedOutputSchema = z.looseObject({
   relationToSubject: relationTypeSlugSchema.optional(),
   /** See `ExpectedOutput.optional` — produced if it applies, never owed. */
   optional: z.boolean().optional(),
+  /**
+   * Where a one-shot (`executor: "generate"`) playbook's result lands — see
+   * `ExpectedOutput.lands`. Strict: an unknown target or key is refused here,
+   * never stored and ignored by the run.
+   */
+  lands: outputLandingSchema.optional(),
 });
 
 /**

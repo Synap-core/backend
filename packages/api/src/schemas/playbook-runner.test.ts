@@ -345,6 +345,10 @@ describe("the 0416 backfill keeps the same fields a version keeps", () => {
     ).not.toBeNull();
     const keys = [...block![1]!.matchAll(/'([A-Za-z]+)',/g)].map((m) => m[1]);
     expect(keys.length).toBeGreaterThan(10);
-    expect([...keys].sort()).toEqual([...PLAYBOOK_VERSION_FIELDS].sort());
+    // 0419 replaced `requiredIntents` with the one `tools` field. Versions
+    // kept before it keep the old key (history is not rewritten): their one
+    // reader, `stage-uses.ts`, reads name, stages and params only.
+    const since0419 = keys.map((k) => (k === "requiredIntents" ? "tools" : k));
+    expect([...since0419].sort()).toEqual([...PLAYBOOK_VERSION_FIELDS].sort());
   });
 });

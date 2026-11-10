@@ -634,6 +634,21 @@ export interface ApplyDocumentPatchInput {
   sourceMessageId?: string;
   /** The request's session (provenance on the proposal); not the session door's. */
   provenanceSessionId?: string | null;
+  /**
+   * The pod files a MODEL's draft for the person's review (a one-shot
+   * `generate` run, `services/playbooks/generate-run.ts`): always a pending
+   * proposal, authored by this machine marker, whatever a rule would
+   * auto-approve. Requires `systemAuthor` (the section it writes is AI-owned).
+   * The same three options the goal loop's proposed run uses
+   * (`source: "intelligence"`, `forcePropose`, `machineAuthor`).
+   */
+  forReview?: { machineAuthor: `system:${string}` };
+  /**
+   * The playbook run that drafted this patch (a one-shot run), copied onto
+   * the proposal's data as `run`: from a proposal, `GET /runs/:id` reopens
+   * how the draft was made. Provenance only; nothing reads it to decide.
+   */
+  run?: { id: string; playbookId: string };
 }
 
 interface PatchResultCommon {
@@ -688,6 +703,8 @@ export interface DocumentPatchProposalData {
   author: string;
   sessionState?: string;
   systemAuthor?: string;
+  /** The playbook run that drafted it (`ApplyDocumentPatchInput.run`). */
+  run?: { id: string; playbookId: string };
 }
 
 function parseOps(ops: unknown): DocumentPatchOp[] {
@@ -861,6 +878,9 @@ export async function applyDocumentPatch(
     author: writer.author,
     ...(writer.sessionState ? { sessionState: writer.sessionState } : {}),
     ...(systemAuthor ? { systemAuthor } : {}),
+    ...(input.run
+      ? { run: { id: input.run.id, playbookId: input.run.playbookId } }
+      : {}),
   };
   // A proposal filed against a legacy checkpoint base keeps comparing on it.
   const proposalData: Record<string, unknown> =
@@ -880,6 +900,14 @@ export async function applyDocumentPatch(
     action,
     // An agent rewriting the whole body is always reviewed, whatever a rule says.
     ...(agentUserId && hasReplaceAll ? { forcePropose: true } : {}),
+    // A model's draft the pod files for the person: always reviewed.
+    ...(!agentUserId && systemAuthor && input.forReview
+      ? {
+          source: "intelligence" as const,
+          forcePropose: true,
+          machineAuthor: input.forReview.machineAuthor,
+        }
+      : {}),
     ...(provenanceSessionId ? { sessionId: provenanceSessionId } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     ...(input.sourceMessageId

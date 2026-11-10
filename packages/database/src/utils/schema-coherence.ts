@@ -2398,6 +2398,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "run_on",
     addedBy: "0403_playbook_runs_run_on.sql",
   },
+  // A one-shot (generate) run's record (0417): every playbook_runs select
+  // reads it, so its absence would 500 every run list.
+  {
+    table: "playbook_runs",
+    column: "generation",
+    addedBy: "0417_playbook_runs_generation.sql",
+  },
   {
     table: "users",
     column: "agent_template_slug",

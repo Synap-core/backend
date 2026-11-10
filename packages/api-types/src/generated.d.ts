@@ -5692,6 +5692,15 @@ declare enum ProfileScope {
 	WORKSPACE = "workspace",// Owned by a single workspace
 	USER = "user"
 }
+declare const COMPOSITE_VIEW_TYPES: readonly [
+	"list",
+	"table",
+	"kanban",
+	"gallery",
+	"pipeline",
+	"bento"
+];
+export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];
 export type WidgetRendererType = "builtin" | "frame" | "iframe" | "mcp-app" | "native";
 /**
  * Trust level of a widget/cell definition — the server-side authority for
@@ -7647,8 +7656,13 @@ export type Tool = typeof tools.$inferSelect;
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
-/** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
-export type PlaybookExecutorRef = "external-agent" | "hybrid" | "is-agent";
+/**
+ * Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef.
+ * `generate` = a ONE-SHOT playbook (plan 08e4fba7 slice 1): the pod reads the
+ * subject, makes ONE `ai.generate` call and files the result as a proposal on
+ * the subject, with no session, room or agent turn (`generate-run.ts`).
+ */
+export type PlaybookExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
 		channelSpec: import("drizzle-orm/pg-core").PgColumn<{
@@ -7751,7 +7765,8 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			enumValues: [
 				"is-agent",
 				"external-agent",
-				"hybrid"
+				"hybrid",
+				"generate"
 			];
 			generated: undefined;
 			hasDefault: true;
@@ -8457,7 +8472,7 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  */
  | "serves";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
-export type PlaybookRunExecutorRef = "external-agent" | "hybrid" | "is-agent";
+export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /**
  * Lifecycle of a run.
  *
@@ -8528,6 +8543,100 @@ export interface PlaybookRunExternalAgent {
 	};
 	startedAt: string;
 }
+/**
+ * `playbook_runs.generation` (0417) — the record of a ONE-SHOT run
+ * (`executor: "generate"`, `services/playbooks/generate-run.ts`). Such a run
+ * has no focus session, so what a session's turn ledger would hold lives here:
+ * what the prompt was made of, the prompt itself (kept for one-shot runs only:
+ * it is small, founder 9 Nov 2026), what the one model call cost, and the
+ * proposal its result was filed as. A number the IS did not report stays
+ * NULL, never a fabricated 0. NULL on every other run.
+ */
+export interface PlaybookRunGeneration {
+	/** The entity the run worked on (no session carries it). */
+	subjectId: string | null;
+	/** Where the result lands, as the playbook declared it (`ExpectedOutput.lands`). */
+	lands: {
+		section: string;
+		target: "subject_document_section";
+	} | null;
+	/** What the prompt was made of, in order, with each part's size. */
+	context: Array<{
+		chars: number;
+		/** The entity or document read, when the part is one. */
+		id?: string;
+		kind: "examples" | "method" | "subject" | "subject_document";
+		/** The part was cut to fit the call's input bound. */
+		truncated?: boolean;
+	}>;
+	/**
+	 * The past outcomes read as examples, when the playbook's landing asks for
+	 * them (`lands.examples`); absent when it does not. Either what was shown
+	 * or why the read failed: a failed read is never recorded as "none".
+	 */
+	examples?: PlaybookRunGenerationExamples;
+	/** The text sent: the system line and the prompt. */
+	prompt: {
+		chars: number;
+		system: string;
+		text: string;
+	};
+	/** The model that answered, when the IS reported it. */
+	model: string | null;
+	inputTokens: number | null;
+	/** Input tokens served from the provider's cache, when reported. */
+	cachedInputTokens: number | null;
+	outputTokens: number | null;
+	totalTokens: number | null;
+	/** Real cost in USD, when the IS reported it. */
+	costUsd: number | null;
+	/** Why the model stopped (`stop`, `length`, `content-filter`, …), when reported. */
+	finishReason: string | null;
+	/** Size of the answer the model gave. */
+	outputChars: number | null;
+	/** The proposal the result was filed as (absent until it is filed). */
+	proposal?: {
+		documentId: string;
+		id: string;
+		reviewPath: string;
+		reviewUrl: string;
+		sectionId: string;
+	};
+}
+/** See {@link PlaybookRunGeneration.examples}. */
+export type PlaybookRunGenerationExamples = {
+	/** How many of each the landing asked for. */
+	asked: {
+		approved: number;
+		rejected: number;
+	};
+	/** Read but not shown: no section text, or no room left in the input bound. */
+	leftOut?: Array<{
+		outcome: "approved" | "rejected";
+		proposalId: string;
+		runId: string;
+		why: "no_text" | "over_bound";
+	}>;
+	/** The earlier drafts shown to the model, in prompt order. */
+	used: Array<{
+		chars: number;
+		outcome: "approved" | "rejected";
+		proposalId: string;
+		/** A rejection whose reason was given (and shown). */
+		reason?: true;
+		/** The run that filed it. */
+		runId: string;
+		/** The text was cut to its per-example bound. */
+		truncated?: true;
+	}>;
+} | {
+	asked: {
+		approved: number;
+		rejected: number;
+	};
+	/** The read failed: the run went on without examples. */
+	error: string;
+};
 /**
  * `@synap-core/types/renderer-ref` — what a profile or workspace stores as its
  * renderer choice for a (content kind, profile) pair, and the bounded block
@@ -9836,13 +9945,58 @@ export interface ProposalReviewGraph {
 	views?: Array<{
 		/** The group container the list is about, when there is one. */
 		containerRef?: string;
+		/** A pipeline: the kind whose declared lifecycle its columns are. */
+		lifecycleOf?: string;
 		/** How many things the list holds (in-batch refs + existing ids). */
 		memberCount: number;
 		name: string;
 		ref: string;
 		/** Kinds the list shows, when the op named them. */
 		scopeProfileSlugs?: string[];
-		viewType: "gallery" | "kanban" | "list" | "table";
+		viewType: CompositeViewType;
+		/** A bento: the widget keys it places, in block order. */
+		widgets?: string[];
+	}>;
+	/**
+	 * `create_cell` / `bind_renderer` — a GENERATED cell (its source is code a
+	 * person approves) and the pages it shows on. A binding of a cell in this
+	 * bundle is drawn under that cell; a binding of an existing cell gets an
+	 * entry of its own (`existingCellKey`).
+	 */
+	cells?: Array<{
+		bindings: Array<{
+			ref: string;
+			scope: "pod" | "workspace";
+			slot: "detail";
+			targetId: string;
+			targetKind: BindRendererTargetKind;
+			/** The object's name, when the pod read it for this viewer. */
+			targetName?: string;
+		}>;
+		/**
+		 * WHAT IT DOES once approved, read off the source: the bridge reads and
+		 * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
+		 * order they first appear). A name built at run time is not seen. The
+		 * frame gives a generated cell no network (connect-src none but the
+		 * bridge), so these are everything it can reach.
+		 */
+		bridgeOps?: {
+			reads: string[];
+			writes: string[];
+		};
+		contentKind?: string;
+		description?: string;
+		/** Set when this entry binds a cell that already exists (no source here). */
+		existingCellKey?: string;
+		/** How the frame draws it: `module` (React) or `page` (HTML). */
+		mechanism?: "module" | "page";
+		name: string;
+		/** The `create_cell` op's ref, or the `bind_renderer` op's for an existing cell. */
+		ref: string;
+		sourceBytes?: number;
+		/** The first characters of the source. The whole source is the op's. */
+		sourceExcerpt?: string;
+		sourceTruncated?: boolean;
 	}>;
 	/**
 	 * `update_*` — CHANGES to rows an earlier bundle made (a Library rebuild:
@@ -10155,7 +10309,13 @@ export interface CompositeCreateViewOp {
 	/** Stable handle for this view within the proposal (e.g. "list1"). */
 	ref: string;
 	name: string;
-	viewType: "gallery" | "kanban" | "list" | "table";
+	/**
+	 * A list type, or a playbook's UI view: `pipeline` (config `{profileSlug}`:
+	 * the kind's declared lifecycle as columns, refused by the views door for a
+	 * kind with none) or `bento` (config `{blocks}`, every widget from the
+	 * catalog). Both carry no member set.
+	 */
+	viewType: CompositeViewType;
 	/** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
 	workspaceId?: string;
 	/** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
@@ -10166,6 +10326,66 @@ export interface CompositeCreateViewOp {
 	containerRef?: string;
 	/** Render config overrides, validated by the views door. */
 	config?: Record<string, unknown>;
+}
+/**
+ * ── UI ops (a playbook's UI, 2026-11-09) ────────────────────────────────────
+ *
+ * The UI an agent proposes for a playbook (`synap_propose_app_from_playbook`)
+ * is pod-native pieces filed as ONE governed bundle: the kind's pipeline and a
+ * bento (`create_view`), a GENERATED cell (`create_cell`) and where it shows
+ * (`bind_renderer`). One review, one undo, nothing created unless approved.
+ *
+ * `create_cell` materializes through the ONE cell door (`defineCell`), which
+ * runs the same mount and sandbox checks `synap_create_cell` runs; the source
+ * the reviewer approves is the source stored. `bind_renderer` binds a cell to
+ * ONE object's page (a playbook's or a view's `detail`), through the one
+ * binding door (`setProfileRenderer`): a per-object binding, which never
+ * writes a legacy store, so undo is a revoke of exactly the row it made.
+ *
+ * Both per-op RESILIENT: a cell that fails leaves the views beside it, and a
+ * binding whose cell did not land is skipped, named.
+ */
+export interface CompositeCreateCellOp {
+	op: "create_cell";
+	/** Stable handle for this cell within the proposal (e.g. "board"). */
+	ref: string;
+	/** The cell's name; its key is derived from it (`generated:<slug>`). */
+	name: string;
+	/** The cell's whole source: an ES module, or an HTML page. */
+	rendererSource: string;
+	description?: string;
+	/** Space the cell lives in; absent ⇒ pod-global. */
+	workspaceId?: string;
+	/**
+	 * Its renderer slot kind (`CONTENT_KINDS` of `@synap/database`, e.g.
+	 * `entity-detail`), checked by the cell door. Absent ⇒ `widget`.
+	 */
+	contentKind?: string;
+}
+declare const BIND_RENDERER_TARGET_KINDS: readonly [
+	"playbook",
+	"view"
+];
+export type BindRendererTargetKind = (typeof BIND_RENDERER_TARGET_KINDS)[number];
+export interface CompositeBindRendererOp {
+	op: "bind_renderer";
+	/** Stable handle for this binding within the proposal (e.g. "board-on-playbook"). */
+	ref: string;
+	/** The object whose page shows the cell: an existing playbook or view. */
+	target: {
+		id: string;
+		kind: BindRendererTargetKind;
+	};
+	/** Its slot: one object's page has only `detail`. */
+	slot: "detail";
+	/** `pod` = the object's own page everywhere; `workspace` = in one space. */
+	scope: "pod" | "workspace";
+	/** Required for `scope: "workspace"`. */
+	workspaceId?: string;
+	/** The cell: a `create_cell` op in this batch… */
+	cellRef?: string;
+	/** …or an existing cell's key. Exactly one of the two. */
+	cellKey?: string;
 }
 /**
  * ── Connected PLAN ops ──────────────────────────────────────────────────────
@@ -10354,7 +10574,7 @@ export interface CompositeUpdateEntityOp {
 	};
 }
 export type CompositeUpdateOperation = CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -11524,6 +11744,19 @@ export type RevertTarget = {
  | {
 	id: string;
 	kind: "view";
+}
+/**
+ * A generated cell (`widget_definitions` row) a playbook's UI created.
+ * Retired by delete while untouched and shown nowhere else.
+ */
+ | {
+	id: string;
+	kind: "cell";
+}
+/** A renderer binding (`renderer_bindings` row). Retired by revoke, kept as history. */
+ | {
+	id: string;
+	kind: "renderer_binding";
 } | {
 	id: string;
 	kind: "project";
@@ -13068,6 +13301,33 @@ export interface MaterializeViewResult {
 	/** The group container recorded on the view config, when there was one. */
 	containerEntityId?: string;
 }
+/** Per-op result for a `create_cell` op (a playbook's generated cell). */
+export interface MaterializeCellResult {
+	ref: string;
+	opIndex: number;
+	/** The `widget_definitions` row the cell door wrote. */
+	cellId: string;
+	/** The cell's key, what a binding names (`generated:<slug>`). */
+	typeKey: string;
+	workspaceId: string | null;
+	/**
+	 * True when this run CREATED the row. False when the door updated a cell of
+	 * the same key that was already there: that row is not this run's to undo.
+	 */
+	created: boolean;
+}
+/** Per-op result for a `bind_renderer` op (a cell on one object's page). */
+export interface MaterializeRendererResult {
+	ref: string;
+	opIndex: number;
+	/** The `renderer_bindings` row this run wrote — what undo revokes. */
+	bindingId: string;
+	targetKind: "playbook" | "view";
+	targetId: string;
+	slot: "detail";
+	scope: "pod" | "workspace";
+	cellKey: string;
+}
 /**
  * Per-op result for an `update_*` op (a Library rebuild's change). `before`
  * and `after` hold ONLY the fields the op patched, read right around the
@@ -13163,6 +13423,10 @@ export interface MaterializeResult {
 	playbooks: MaterializePlaybookResult[];
 	/** Lists created by `create_view` ops. Empty by default. */
 	views: MaterializeViewResult[];
+	/** Cells defined by `create_cell` ops (a playbook's UI). */
+	cells?: MaterializeCellResult[];
+	/** Bindings written by `bind_renderer` ops (a playbook's UI). */
+	renderers?: MaterializeRendererResult[];
 	/** Rows CHANGED by `update_*` ops (a Library rebuild). Empty by default. */
 	updates: MaterializeUpdateResult[];
 	/** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
@@ -13355,7 +13619,7 @@ export type CaptureReceiptState = "applied" | "partial" | "pending";
 export interface PlanStepSummary {
 	ref: string | null;
 	opIndex: number;
-	kind: "automation" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
+	kind: "automation" | "binding" | "cell" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
 	label: string;
 	/** Set on a step that CHANGES an existing row (a Library rebuild). */
 	update?: {
@@ -13745,7 +14009,7 @@ export type UndoPromotePropertyToBodyResult = {
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
 /** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "external-agent" | "hybrid" | "is-agent";
+export type ExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /**
  * The verb axis of a Tool — the structured, enumerable capability matrix. A
  * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
@@ -14225,6 +14489,17 @@ export interface ExpectedOutput {
 	 */
 	relationToSubject?: string;
 	/**
+	 * WHERE a one-shot playbook's result is written (`executor: "generate"`,
+	 * plan 08e4fba7 slice 1). DECLARED by the playbook author on the ONE output
+	 * a generate playbook produces; read only by the generate run
+	 * (api `services/playbooks/generate-run.ts`), which files the result there
+	 * as a PROPOSAL on the subject, approvable inline. Ignored by every other
+	 * executor. Today one target: a section of the subject's own document
+	 * (`section` is its title; its id is the title's slug), replaced in place
+	 * when it is there, else added at the end, and owned by the AI.
+	 */
+	lands?: OutputLanding;
+	/**
 	 * RECEIPT of the output → subject edge {@link relationToSubject} asked for —
 	 * SERVER-STAMPED by the satisfy door, never authored. `linked` names the
 	 * relation row; `skipped` says why no edge was written (no subject, no
@@ -14253,6 +14528,26 @@ export interface ExpectedOutput {
 	blockerKey?: string;
 	/** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
 	clearedBy?: SlotClearedBy;
+}
+/** See {@link ExpectedOutput.lands}. */
+export interface OutputLanding {
+	target: "subject_document_section";
+	/** The section's title, e.g. "Caption draft". */
+	section: string;
+	/**
+	 * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
+	 * reads the person's last decided drafts of THIS playbook in THIS space, the
+	 * approved ones as they were applied (after the person's revisions), the
+	 * rejected ones with the reason when one was given, and shows them to the
+	 * model as examples. Each count is at most
+	 * {@link OUTPUT_LANDING_EXAMPLES_MAX}; 0 or absent reads none of that kind.
+	 */
+	examples?: OutputLandingExamples;
+}
+/** See {@link OutputLanding.examples}. */
+export interface OutputLandingExamples {
+	approved?: number;
+	rejected?: number;
 }
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
@@ -14994,6 +15289,129 @@ export interface SessionActivityWire {
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
 }
+export interface RunCost {
+	/** Turns the run reported. */
+	turns: number;
+	/**
+	 * Input tokens read fresh: each turn's input minus the cache reads the
+	 * provider reported (a turn whose cache reads were not reported counts in
+	 * full: unknown never reads as free).
+	 */
+	freshInputTokens: number;
+	/** Every input token, cache reads included. */
+	rawInputTokens: number;
+	/** Input tokens read from the prompt cache. */
+	cacheReadInputTokens: number;
+	/** The models that served the turns, first seen first. */
+	models: string[];
+	/** Turns that reported no token counts: their tokens are not in the sums. */
+	unmeasuredTurns?: number;
+	/**
+	 * Summed from a ledger written before the running total existed, which had
+	 * already dropped some turns: the sums may miss them.
+	 */
+	partial?: true;
+}
+/** A run's cost as the session reads show it: which run it is, and its cost. */
+export type RunCostRead = RunCost & {
+	runId: string;
+};
+/** One turn's end, as the ledger kept it. `null` = not recorded. */
+export interface RunCostTurn {
+	at: string | null;
+	outcome: "completed" | "stopped" | null;
+	/** Why a stopped turn stopped (`turn_budget` | `max_steps`). */
+	reason: string | null;
+	agentType: string | null;
+	/** The model of the turn's LAST provider call (no per-call model is kept). */
+	model: string | null;
+	/** Every input token of the turn, cache reads included. */
+	inputTokens: number | null;
+	/** What counted against `ceiling` (cache reads at their real price). */
+	chargedInputTokens: number | null;
+	cacheReadInputTokens: number | null;
+	cacheWriteInputTokens: number | null;
+	/** The turn's input budget. */
+	ceiling: number | null;
+	/** What the pod did after a stopped turn (`continue` | `ask`). */
+	next: string | null;
+}
+/** What the run's FIRST provider call was made of. */
+export interface RunCostFirstCall {
+	promptTokens: number;
+	/** The provider reported `promptTokens` (else it is the IS's estimate). */
+	reported: boolean;
+	toolCount: number;
+	chars: {
+		history: number;
+		message: number;
+		system: number;
+		tools: number;
+	};
+	/** The system prompt's sections by name and size; `null` = not recorded. */
+	sections: {
+		chars: number;
+		name: string;
+	}[] | null;
+	/** The tool names offered; `null` = not recorded. */
+	tools: string[] | null;
+	/** The guidance refs the prompt carried; `null` = not recorded. */
+	guidance: string[] | null;
+}
+/** One agent-run telemetry row: what one turn produced and cost. */
+export interface RunSpendTurn {
+	at: string;
+	agentType: string | null;
+	model: string | null;
+	inputTokens: number | null;
+	outputTokens: number | null;
+	/** Real cost in USD; `null` = the provider gave no price. */
+	costUsd: number | null;
+	finishReason: string | null;
+	toolCount: number | null;
+}
+/** Output tokens and real cost, from the agent-run telemetry. */
+export type RunSpend = 
+/** No telemetry row in the run's window: nothing reported, not "free". */
+{
+	status: "none";
+}
+/** The telemetry read failed: unknown, never shown as none. */
+ | {
+	status: "unreadable";
+} | {
+	/** Summed over the turns that reported a price; `null` = none did. */
+	costUsd: number | null;
+	/** Newest first, at most {@link RUN_SPEND_TURNS_CAP}. */
+	items: RunSpendTurn[];
+	/** Summed over the turns that reported them; `null` = none did. */
+	outputTokens: number | null;
+	status: "ok";
+	/** Turns that reported telemetry. */
+	turns: number;
+	/** Turns with no price: when > 0, `costUsd` is a floor. */
+	uncostedTurns: number;
+	/** Turns that reported no output tokens. */
+	unmeasuredOutputTurns: number;
+};
+/** An agent run's cost record (`playbookDetail.cost`). */
+export interface RunCostRecord {
+	runId: string;
+	/** Why a failed run stopped when it is not a fault (`playbook_runs.stop_reason`). */
+	stopReason: string | null;
+	/**
+	 * The input side over EVERY turn (`ledgerCost`): turns, fresh and raw input
+	 * tokens, cache reads, models. `null` = the run reported no turn.
+	 */
+	total: RunCost | null;
+	/** The turns the ledger kept, oldest first (the first turn and the last ones). */
+	turns: RunCostTurn[];
+	/** Turns the run had that the ledger no longer keeps (`total.turns - turns.length`). */
+	turnsNotKept: number;
+	/** The first call's inventory; `null` = not recorded (an older run, or none). */
+	firstCall: RunCostFirstCall | null;
+	spend: RunSpend;
+}
 /**
  * Which ledger a run came from.
  *
@@ -15314,6 +15732,22 @@ export interface PlaybookRunDetail {
 		draftedText: string | null;
 		guidanceOverride: Record<string, string>;
 	};
+	/**
+	 * A ONE-SHOT run (`executor: "generate"`, no session): what its prompt was
+	 * made of, the prompt itself, the model and tokens of its one call (NULL
+	 * where the IS did not report them), and the proposal it filed — which is
+	 * also the one item of `proposals`. Absent on every other run.
+	 */
+	generation?: PlaybookRunGeneration;
+	/**
+	 * Why an agent run cost what it cost (`run-cost-record.ts`): its turns as
+	 * the ledger kept them (model, input, cache reads and writes, what counted
+	 * against the budget), the first call's inventory (prompt sections, tool
+	 * names, guidance), the input total over every turn, and the output tokens
+	 * and real cost its agent-run telemetry reported. Present when the run's
+	 * session is readable; a one-shot run's record is `generation`.
+	 */
+	cost?: RunCostRecord;
 }
 /** The session card behind a playbook run. */
 export interface RunSessionCard {
@@ -16356,6 +16790,14 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	/** Lists created by `create_view` ops (revert deletes them while untouched). */
 	viewIds?: string[];
 	/**
+	 * Cells a `create_cell` op CREATED (`widget_definitions` ids). Revert deletes
+	 * one while it is untouched and nothing else shows it. A cell the door
+	 * updated instead was never this run's, and is not listed.
+	 */
+	cellIds?: string[];
+	/** Renderer bindings a `bind_renderer` op wrote (revert revokes them while active). */
+	rendererBindingIds?: string[];
+	/**
 	 * Body documents created WITH an entity. They ride the entity's soft delete
 	 * (a restored entity keeps its body), so revert never deletes them on their
 	 * own — unlike `documentIds`, which a document-create proposal owns.
@@ -16447,7 +16889,7 @@ export interface RowPatchRecord {
 export type UpdateOpName = MaterializeResult["updates"][number]["op"];
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "create_automation" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | UpdateOpName;
+	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | UpdateOpName;
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;
@@ -16460,6 +16902,10 @@ export interface MaterializedOpRecord {
 	playbookId?: string;
 	/** `create_view`: the List it created. */
 	viewId?: string;
+	/** `create_cell`: the cell row it created. */
+	cellId?: string;
+	/** `bind_renderer`: the binding row it wrote. */
+	rendererBindingId?: string;
 	sessionId?: string;
 	projectId?: string;
 	documentId?: string;
@@ -24611,6 +25057,8 @@ export interface SessionUsage {
 		name: string | null;
 	} | null;
 	agents: SessionParticipant[];
+	/** What the session's latest run spent; null = no run turn reported. */
+	cost: RunCostRead | null;
 }
 export interface CriterionScore {
 	key: string;
@@ -24646,6 +25094,22 @@ export interface PlaybookScorecard {
 	escalations: number;
 	overrides: number;
 	criteria: CriterionScore[];
+}
+/** What the run door answers for a one-shot run. */
+export interface GeneratedRunAnswer {
+	runId: string;
+	status: "proposed";
+	/** The proposal the result was filed as: approve, edit or reject it inline. */
+	proposalId: string;
+	reviewUrl: string;
+	reviewPath: string;
+	subjectId: string;
+	/** Where it lands once approved. */
+	documentId: string;
+	sectionId: string;
+	section: string;
+	/** An earlier run's still-pending proposal was returned (`idempotentBySubject`). */
+	reused?: true;
 }
 /** Who a run was handed to, as the run reply names it. */
 export interface RunHandedTo {
@@ -38997,6 +39461,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
@@ -39435,6 +39907,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				continuation: LeanContinuation;
+				cost: RunCostRead | null;
 				outcomes: LeanOutcomesSection;
 			};
 		}>;
@@ -40306,6 +40779,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
@@ -47187,6 +47668,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error: string | null;
 				executor: PlaybookRunExecutorRef;
 				externalAgent: PlaybookRunExternalAgent | null;
+				generation: PlaybookRunGeneration | null;
 				id: string;
 				input: unknown;
 				playbookId: string;
@@ -47458,7 +47940,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statement: string;
 				}[] | undefined;
 				description?: string | undefined;
-				executor?: "external-agent" | "hybrid" | "is-agent" | undefined;
+				executor?: "external-agent" | "generate" | "hybrid" | "is-agent" | undefined;
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
@@ -47611,6 +48093,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
+					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 				}[] | undefined;
 				goalTemplate: string;
 				guidance?: {
@@ -48490,6 +48980,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				enableProposals: Awaited<ReturnType<typeof proposeCapabilityEnable>>;
+				generated?: undefined;
 				message: string;
 				proposalId: string | null;
 				run: null;
@@ -48498,6 +48989,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills: CapabilityRef[];
 			} | {
 				enableProposals?: undefined;
+				generated?: undefined;
 				message: string;
 				proposalId: string;
 				run: null;
@@ -48506,6 +48998,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				generated: GeneratedRunAnswer;
+				message: string;
+				proposalId: string | null;
+				run: {
+					completedAt: Date | null;
+					createdBy: string;
+					definitionSnapshot: unknown;
+					error: string | null;
+					executor: PlaybookRunExecutorRef;
+					externalAgent: PlaybookRunExternalAgent | null;
+					generation: PlaybookRunGeneration | null;
+					id: string;
+					input: unknown;
+					playbookId: string;
+					replayOf: string | null;
+					runOn: RunOn | null;
+					sessionId: string | null;
+					startedAt: Date;
+					status: PlaybookRunStatus;
+					stopReason: "budget" | null;
+					summary: string | null;
+					workspaceId: string | null;
+				} | null;
+				session: FocusSession | null;
+				status: "generated";
+				unenabledSkills?: undefined;
+			} | {
+				enableProposals?: undefined;
+				generated?: undefined;
 				message: string;
 				proposalId: string | null;
 				run: null;
@@ -48514,6 +49035,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				generated?: undefined;
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
@@ -48562,6 +49084,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				generated?: undefined;
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
@@ -48582,6 +49105,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					error: string | null;
 					executor: PlaybookRunExecutorRef;
 					externalAgent: PlaybookRunExternalAgent | null;
+					generation: PlaybookRunGeneration | null;
 					id: string;
 					input: unknown;
 					playbookId: string;
@@ -48721,7 +49245,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statement: string;
 				}[] | undefined;
 				description?: string | undefined;
-				executor?: "external-agent" | "hybrid" | "is-agent" | undefined;
+				executor?: "external-agent" | "generate" | "hybrid" | "is-agent" | undefined;
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
@@ -48874,6 +49398,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
+					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 				}[] | undefined;
 				goalTemplate?: string | undefined;
 				guidance?: {
@@ -52860,6 +53392,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reverted: {
 					automationIds?: string[];
 					byOp?: Record<string, MaterializedOpRecord>;
+					cellIds?: string[];
 					documentEdit?: DocumentEditRecord;
 					documentIds: never[];
 					entityDocumentIds?: string[];
@@ -52892,6 +53425,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					projectSubjectIds?: Record<string, string>;
 					propertyDiffs?: EntityPropertyDiff[];
 					relationIds?: string[];
+					rendererBindingIds?: string[];
 					rowPatches?: RowPatchRecord[];
 					ruleIds?: string[];
 					sessionIds?: string[];
@@ -59895,7 +60429,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							statement: string;
 						}[] | undefined;
 						description?: string | undefined;
-						executor?: "external-agent" | "hybrid" | "is-agent" | undefined;
+						executor?: "external-agent" | "generate" | "hybrid" | "is-agent" | undefined;
 						expectedOutputs?: {
 							[x: string]: unknown;
 							ask?: {
@@ -60048,6 +60582,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
+							lands?: {
+								examples?: {
+									approved?: number | undefined;
+									rejected?: number | undefined;
+								} | undefined;
+								section: string;
+								target: "subject_document_section";
+							} | undefined;
 						}[] | undefined;
 						goalTemplate: string;
 						grants?: (string | {

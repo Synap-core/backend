@@ -145,8 +145,8 @@ All three are optional: without them a playbook runs exactly as before.
   stages and no gate gets 6 reads; a longer one the pod's 22 core tools,
   which include `list_playbooks`, `list_sessions` and `get_session`).
   Each entry is a run tool (`update_document`, `web_search`; the MCP
-  spelling `synap_web_search` reads the same), an intent slug
-  (`search_external`) or a capability name. A stage's `tools` narrows the
+  spelling synap_web_search reads the same), an intent slug
+  (such as search_external) or a capability name. A stage's `tools` narrows the
   playbook's while it is active and must be a subset (refused otherwise).
   A run on the pod's AI whose tools lack what a stage declares does not
   start; a stage with no `tools` of its own declares the playbook's run

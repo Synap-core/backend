@@ -56,7 +56,7 @@ export const playbookStageCategorySchema = z.enum(
 );
 
 /**
- * The advisory model tiers, as a zod enum derived from the contract package's
+ * The model tiers, as a zod enum derived from the contract package's
  * list so the door cannot drift from the type.
  */
 export const playbookStageTierSchema = z.enum(
@@ -255,7 +255,7 @@ export const playbookStageSchema = z.looseObject({
     .strictObject({ toStage: z.string().trim().min(1).max(200) })
     .optional(),
   /**
-   * Advisory model tier — see `PlaybookStage.tier`. Closed set: a typo
+   * Model tier — see `PlaybookStage.tier`. Closed set: a typo
    * ("fast", "Deep") is refused at the door rather than stored as a tier no
    * executor will ever map.
    */
@@ -384,9 +384,8 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // The failed-gate return path is applied by the SESSION run's gate
   // (`stage-on-fail.ts`); a track's gate holds and resumes explicitly.
   "onFail",
-  // Advisory model choice for a session RUN's executor; a track stage session
-  // is started by the tracks service, which does not pick a model, and nothing
-  // consumes the tier yet.
+  // The model tier of a session RUN's turn; a track stage session is started
+  // by the tracks service, which does not pick a model.
   "tier",
   // A track stage session is started once by the tracks service; fanning a
   // stage out over a collection is a session RUN's concern, and nothing

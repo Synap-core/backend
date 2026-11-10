@@ -10,6 +10,7 @@
 
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
 import { toolError } from "../tool-errors.js";
@@ -378,6 +379,61 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: scope === "workspace" ? workspaceId : null,
     });
     return ok({ ...result, target, slot, nowBound });
+  },
+  synap_propose_app_from_playbook: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const playbookId =
+      typeof args.playbookId === "string" ? args.playbookId.trim() : "";
+    if (!isUuid(playbookId)) {
+      return toolError(
+        `Tool '${toolName}': playbookId must be a playbook's UUID (synap_list_playbooks).`
+      );
+    }
+    // The playbook through its get door: the caller's own floor. A playbook
+    // another person keeps in a space this caller is not in is "not found".
+    let playbook: Awaited<ReturnType<typeof getPlaybookDoor>>;
+    try {
+      playbook = await getPlaybookDoor(playbookDoorIdentity(ctx), playbookId);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
+        return ok({
+          status: "refused",
+          reasonCode: "PLAYBOOK_NOT_FOUND",
+          message: `No playbook ${playbookId} that you can see.`,
+          nextStep:
+            "Find the playbook with synap_list_playbooks (or synap_match_playbooks), then call this with its id.",
+        });
+      }
+      throw err;
+    }
+    if (playbook.kind !== "result") {
+      return ok({ error: "error" in playbook ? playbook.error : "not found" });
+    }
+    const { readPlaybookAppFacts, proposePlaybookApp } =
+      await import("../../../services/playbook-app/propose-app-from-playbook.js");
+    const asked =
+      ctx.confinedWorkspaceId ??
+      (typeof args.workspaceId === "string" && args.workspaceId.trim()
+        ? args.workspaceId.trim()
+        : null);
+    const facts = await readPlaybookAppFacts({
+      playbook: playbook.result,
+      workspaceId: asked,
+      userId,
+    });
+    if ("status" in facts) return ok(facts);
+    return ok(
+      await proposePlaybookApp({
+        facts,
+        userId,
+        agentUserId: agentUserId ?? null,
+        sessionId: ctx.sessionId ?? null,
+        reasoning: readReasoning(args) ?? null,
+      })
+    );
   },
   synap_promote_session_to_playbook: async (
     ctx: McpToolContext

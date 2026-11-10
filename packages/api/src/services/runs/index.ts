@@ -97,6 +97,7 @@ import {
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { loadSessionActivity } from "./session-activity.js";
+import { loadRunCostRecord } from "./run-cost-record.js";
 import { withRunWhere } from "./run-where.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import {
@@ -543,7 +544,10 @@ async function listPlaybookRuns(
       error: playbookRuns.error,
       // The run's room lives on its session (playbook → 1 channel per run).
       channelId: focusSessions.channelId,
-      subjectEntityId: focusSessions.subjectEntityId,
+      // A one-shot run has no session: its subject is on its record.
+      subjectEntityId: drizzleSql<
+        string | null
+      >`coalesce(${focusSessions.subjectEntityId}::text, ${playbookRuns.generation}->>'subjectId')`,
       projectId: focusSessions.projectId,
       // Progress signal: `playbook_runs` has no updated_at, so "actively
       // worked" is read off the linked session — the SAME column
@@ -583,7 +587,14 @@ async function listPlaybookRuns(
           ? eq(focusSessions.projectId, scope.projectId)
           : undefined,
         scope.subjectEntityId
-          ? eq(focusSessions.subjectEntityId, scope.subjectEntityId)
+          ? or(
+              eq(focusSessions.subjectEntityId, scope.subjectEntityId),
+              // A one-shot run (no session) names its subject on its record.
+              and(
+                isNull(playbookRuns.sessionId),
+                drizzleSql`${playbookRuns.generation}->>'subjectId' = ${scope.subjectEntityId}`
+              )
+            )
           : undefined,
         statusValues ? inArray(playbookRuns.status, statusValues) : undefined,
         startedBeforeWhere(playbookRuns.startedAt, scope)
@@ -2618,6 +2629,8 @@ async function loadPlaybookRunDetail(
       channelId: focusSessions.channelId,
       metadata: focusSessions.metadata,
       runSnapshot: playbookRuns.definitionSnapshot,
+      runStartedAt: playbookRuns.startedAt,
+      runStopReason: playbookRuns.stopReason,
     })
     .from(playbookRuns)
     .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
@@ -2631,10 +2644,33 @@ async function loadPlaybookRunDetail(
     // so the run page renders a private-session placeholder instead of a blank.
     // Only the run's own `session_id` is read — never a session column.
     const [link] = await db
-      .select({ sessionId: playbookRuns.sessionId })
+      .select({
+        sessionId: playbookRuns.sessionId,
+        generation: playbookRuns.generation,
+        runSnapshot: playbookRuns.definitionSnapshot,
+      })
       .from(playbookRuns)
       .where(eq(playbookRuns.id, runId))
       .limit(1);
+    // A ONE-SHOT run (`executor: "generate"`) has no session by design: its
+    // record is the run row's `generation` (prompt, model, tokens) and its
+    // result is the ONE proposal it filed on its subject. No room, so no
+    // agents and no door to a session.
+    const generation = !link?.sessionId ? (link?.generation ?? null) : null;
+    if (generation) {
+      const filed = generation.proposal
+        ? await loadRunProposals({ proposalId: generation.proposal.id }, userId)
+        : { items: [] };
+      return {
+        session: null,
+        sessionPrivate: false,
+        produced: [],
+        proposals: filed.items,
+        agents: [],
+        guidance: stampedGuidanceOf(link?.runSnapshot),
+        generation,
+      };
+    }
     return {
       session: null,
       sessionPrivate: !!link?.sessionId,
@@ -2644,14 +2680,27 @@ async function loadPlaybookRunDetail(
     };
   }
 
-  const [produced, proposalResult, trial] = await Promise.all([
+  const [produced, proposalResult, trial, cost] = await Promise.all([
     loadRunProduced([sess.id], userId),
-    loadRunProposals(sess.id, userId),
+    loadRunProposals({ sessionId: sess.id }, userId),
     // A trial run's drafted text (the rule lab). THROWS on a failed read.
     readTrialDraft({
       metadata: sess.metadata,
       channelId: sess.channelId ?? null,
     }),
+    // Why the run cost what it cost (plan 08e4fba7 §3.5): its turn ledger and
+    // its agent-run telemetry, read on the session the viewer may open.
+    loadNextRunStart(sess.id, runId, sess.runStartedAt).then(
+      (nextRunStartedAt) =>
+        loadRunCostRecord({
+          runId,
+          sessionId: sess.id,
+          metadata: sess.metadata,
+          startedAt: sess.runStartedAt,
+          nextRunStartedAt,
+          stopReason: sess.runStopReason ?? null,
+        })
+    ),
   ]);
   const agents = await loadRunAgents(
     sess.channelId ?? null,
@@ -2675,7 +2724,33 @@ async function loadPlaybookRunDetail(
     agents,
     guidance: stampedGuidanceOf(sess.runSnapshot),
     ...(trial ? { trial } : {}),
+    cost,
   };
+}
+
+/**
+ * When the session's NEXT run started, after `runId` (a session can host a
+ * later run, a re-run): the telemetry from then on is that run's, not this
+ * one's. `null` = this is the session's latest run.
+ */
+async function loadNextRunStart(
+  sessionId: string,
+  runId: string,
+  startedAt: Date
+): Promise<Date | null> {
+  const [next] = await db
+    .select({ startedAt: playbookRuns.startedAt })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, sessionId),
+        gt(playbookRuns.startedAt, startedAt),
+        ne(playbookRuns.id, runId)
+      )
+    )
+    .orderBy(asc(playbookRuns.startedAt))
+    .limit(1);
+  return next?.startedAt ?? null;
 }
 
 /**
@@ -2783,7 +2858,8 @@ function deriveChangeKind(
  * ids (proposals.agentUserId) so the caller can resolve "who worked it".
  */
 async function loadRunProposals(
-  sessionId: string,
+  /** The session's proposals, or — a one-shot run has none — the one it filed. */
+  of: { sessionId: string } | { proposalId: string },
   userId: string
 ): Promise<{ items: RunProposalItem[]; agentUserIds: string[] }> {
   const rows = await db
@@ -2802,7 +2878,9 @@ async function loadRunProposals(
     .from(proposals)
     .where(
       and(
-        eq(proposals.sessionId, sessionId),
+        "sessionId" in of
+          ? eq(proposals.sessionId, of.sessionId)
+          : eq(proposals.id, of.proposalId),
         userVisibleWhere(proposals.workspaceId, userId)
       )
     )

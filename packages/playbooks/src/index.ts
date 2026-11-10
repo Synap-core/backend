@@ -17,7 +17,7 @@
 
 // ── Executor — the agnostic "hands" ──────────────────────────────────────────
 /** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid" | "generate";
 
 // ── Tool — a registered integration the AI can use ───────────────────────────
 export type ToolKind =
@@ -728,6 +728,17 @@ export interface ExpectedOutput {
    */
   relationToSubject?: string;
   /**
+   * WHERE a one-shot playbook's result is written (`executor: "generate"`,
+   * plan 08e4fba7 slice 1). DECLARED by the playbook author on the ONE output
+   * a generate playbook produces; read only by the generate run
+   * (api `services/playbooks/generate-run.ts`), which files the result there
+   * as a PROPOSAL on the subject, approvable inline. Ignored by every other
+   * executor. Today one target: a section of the subject's own document
+   * (`section` is its title; its id is the title's slug), replaced in place
+   * when it is there, else added at the end, and owned by the AI.
+   */
+  lands?: OutputLanding;
+  /**
    * RECEIPT of the output → subject edge {@link relationToSubject} asked for —
    * SERVER-STAMPED by the satisfy door, never authored. `linked` names the
    * relation row; `skipped` says why no edge was written (no subject, no
@@ -757,6 +768,31 @@ export interface ExpectedOutput {
   /** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
   clearedBy?: SlotClearedBy;
 }
+
+/** See {@link ExpectedOutput.lands}. */
+export interface OutputLanding {
+  target: "subject_document_section";
+  /** The section's title, e.g. "Caption draft". */
+  section: string;
+  /**
+   * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
+   * reads the person's last decided drafts of THIS playbook in THIS space, the
+   * approved ones as they were applied (after the person's revisions), the
+   * rejected ones with the reason when one was given, and shows them to the
+   * model as examples. Each count is at most
+   * {@link OUTPUT_LANDING_EXAMPLES_MAX}; 0 or absent reads none of that kind.
+   */
+  examples?: OutputLandingExamples;
+}
+
+/** See {@link OutputLanding.examples}. */
+export interface OutputLandingExamples {
+  approved?: number;
+  rejected?: number;
+}
+
+/** The most past outcomes of one kind a one-shot run reads as examples. */
+export const OUTPUT_LANDING_EXAMPLES_MAX = 5;
 
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
@@ -1115,10 +1151,11 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
- * How much model a stage's work needs — ADVISORY. `deep` = architecture or
- * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
- * a smaller model can do. An executor MAY map it to a model; nothing reads it
- * yet, and absent means "no preference" (the executor's own default).
+ * How much model a stage's work needs. `deep` = architecture or judgment-heavy
+ * work, `standard` = ordinary work, `quick` = a mechanical step a smaller model
+ * can do. A session run's turn in the stage sends it to the IS, which picks
+ * that model tier unless a person or the space chose a model
+ * (`run-stage-tier.ts`); absent means "no preference" (the IS's own choice).
  */
 export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
 export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
@@ -1350,9 +1387,9 @@ export interface PlaybookStage {
    */
   onFail?: PlaybookStageOnFail;
   /**
-   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
-   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
-   * a model later. Never a control: a stage with or without it runs the same.
+   * Model tier for this stage's work (`deep` | `standard` | `quick`): a
+   * session run's turn in this stage runs on that tier unless a person or the
+   * space chose a model. Absent ⇒ no preference.
    */
   tier?: PlaybookStageTier;
   /**
@@ -2321,7 +2358,8 @@ export interface CapabilityToolDef {
    * template-local vault `ref` (resolved to the created `vault://<id>`).
    */
   credentialRef?: string;
-  executor?: ExecutorRef;
+  /** A tool is never a one-shot playbook: `generate` is a playbook executor only. */
+  executor?: Exclude<ExecutorRef, "generate">;
   config?: Record<string, unknown>;
   /** Descriptive behavioral config stored in tool.metadata (does NOT reset approval). */
   metadata?: Record<string, unknown>;
@@ -2739,7 +2777,8 @@ export interface LoopDefinition {
 //     defined, else the base value.
 //   - stages: additive by `key` — base stages keep their order; an overlay stage
 //     whose `key` matches a base stage merges onto it (overlay stage fields win,
-//     stage `tools` union); overlay stages with new keys append after.
+//     stage `tools` and deprecated `grants` union); overlay stages with new
+//     keys append after.
 //   - grants / params / expectedOutputs / tools: UNION (grants dedup by
 //     kind+id, params by name, expectedOutputs by kind, tools by entry) — base
 //     first, overlay appended.
@@ -2808,8 +2847,19 @@ function mergeStages(
     const existing = byKey.get(key);
     if (existing) {
       const tools = unionTools(existing.tools, stage.tools);
+      // The deprecated stage `grants` still union (the write door folds them
+      // into `tools`), so a composed definition loses none of the base's.
+      const grants = unionCapabilityRefs(
+        Array.isArray(existing.grants)
+          ? (existing.grants as CapabilityRef[])
+          : undefined,
+        Array.isArray(stage.grants)
+          ? (stage.grants as CapabilityRef[])
+          : undefined
+      );
       const merged: Record<string, unknown> = { ...existing, ...stage };
       if (tools) merged.tools = tools;
+      if (grants) merged.grants = grants;
       byKey.set(key, merged);
     } else {
       byKey.set(key, { ...stage });

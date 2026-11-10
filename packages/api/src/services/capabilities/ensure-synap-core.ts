@@ -447,7 +447,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           },
           executor: {
             type: "string",
-            enum: ["is-agent", "external-agent", "hybrid"],
+            enum: ["is-agent", "external-agent", "hybrid", "generate"],
           },
           reasoning: { type: "string" },
         },

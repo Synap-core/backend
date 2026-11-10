@@ -26,10 +26,12 @@ import type {
 import type { SessionActivityWire } from "@synap-core/types/run-activity";
 import type { RunWhere } from "@synap-core/types/computers";
 import type { GuidanceSnapshot } from "@synap-core/types/guidance";
+import type { RunCostRecord } from "./run-cost-record.js";
 import type {
   BoxRunEvidence,
   BoxRunRow,
   BoxRunSpec,
+  PlaybookRunGeneration,
 } from "@synap/database/schema";
 
 /**
@@ -393,6 +395,22 @@ export interface PlaybookRunDetail {
     draftedText: string | null;
     draftedAt: string | null;
   };
+  /**
+   * A ONE-SHOT run (`executor: "generate"`, no session): what its prompt was
+   * made of, the prompt itself, the model and tokens of its one call (NULL
+   * where the IS did not report them), and the proposal it filed — which is
+   * also the one item of `proposals`. Absent on every other run.
+   */
+  generation?: PlaybookRunGeneration;
+  /**
+   * Why an agent run cost what it cost (`run-cost-record.ts`): its turns as
+   * the ledger kept them (model, input, cache reads and writes, what counted
+   * against the budget), the first call's inventory (prompt sections, tool
+   * names, guidance), the input total over every turn, and the output tokens
+   * and real cost its agent-run telemetry reported. Present when the run's
+   * session is readable; a one-shot run's record is `generation`.
+   */
+  cost?: RunCostRecord;
 }
 
 /** The session card behind a playbook run. */
