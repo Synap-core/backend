@@ -1140,10 +1140,11 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
- * How much model a stage's work needs — ADVISORY. `deep` = architecture or
- * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
- * a smaller model can do. An executor MAY map it to a model; nothing reads it
- * yet, and absent means "no preference" (the executor's own default).
+ * How much model a stage's work needs. `deep` = architecture or judgment-heavy
+ * work, `standard` = ordinary work, `quick` = a mechanical step a smaller model
+ * can do. A session run's turn in the stage sends it to the IS, which picks
+ * that model tier unless a person or the space chose a model
+ * (`run-stage-tier.ts`); absent means "no preference" (the IS's own choice).
  */
 export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
 export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
@@ -1347,9 +1348,9 @@ export interface PlaybookStage {
    */
   onFail?: PlaybookStageOnFail;
   /**
-   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
-   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
-   * a model later. Never a control: a stage with or without it runs the same.
+   * Model tier for this stage's work (`deep` | `standard` | `quick`): a
+   * session run's turn in this stage runs on that tier unless a person or the
+   * space chose a model. Absent ⇒ no preference.
    */
   tier?: PlaybookStageTier;
   /**

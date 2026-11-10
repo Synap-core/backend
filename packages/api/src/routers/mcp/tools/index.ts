@@ -405,7 +405,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     ),
     tier: deriveJsonSchema(
       playbookStageSchema.shape.tier.unwrap(),
-      "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+      "Optional: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. A run's turn in this stage uses that model tier unless the person or the space chose a model. Omit for no preference."
     ),
     forEach: deriveJsonSchema(
       playbookStageSchema.shape.forEach.unwrap(),
