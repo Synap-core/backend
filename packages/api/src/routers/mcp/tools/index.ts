@@ -6879,11 +6879,11 @@ export const tools = {
             handToAgentId: {
               type: "string",
               description:
-                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the run goes to the agent the person ASSIGNED to this playbook, when there is one that can take it (the reply's `handedTo` and message name it); otherwise the playbook's own executor runs it.",
+                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the playbook's runner, else the agent the person ASSIGNED to it, else its own executor (`handedTo` names who).",
             },
             runner: {
               description:
-                "Who runs THIS run, as a playbook runner (system/synap/processes); never with handToAgentId.",
+                "A playbook runner for this run (system/synap/processes); not with handToAgentId.",
             },
           },
           required: [],
