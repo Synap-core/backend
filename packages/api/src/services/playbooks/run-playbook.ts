@@ -455,6 +455,7 @@ export type RunPlaybookResult =
       reused?: undefined;
       parentLink?: undefined;
       held?: undefined;
+      heldBecause?: undefined;
       handedTo?: undefined;
       generated?: undefined;
     };
