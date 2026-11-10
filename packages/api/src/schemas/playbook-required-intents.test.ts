@@ -1,5 +1,8 @@
 /**
- * `requiredIntents` at the WRITE DOOR — the closed-vocabulary check.
+ * `requiredIntents` at the WRITE DOOR — the closed-vocabulary check. Since
+ * 0419 it is DEPRECATED INPUT, folded into the one `tools` list
+ * (`foldPlaybookTools`, `playbook-tools.test.ts`), and still held to the
+ * vocabulary while a package may send it.
  *
  * The field's contract has two halves that pull in opposite directions, and
  * this file is where they are both pinned:

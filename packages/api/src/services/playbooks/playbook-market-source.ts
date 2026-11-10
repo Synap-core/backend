@@ -50,6 +50,7 @@ import {
   type MarketSource,
 } from "../capabilities/market-source.js";
 import {
+  foldPlaybookTools,
   packagePlaybookDefinitionSchema,
   type PackagePlaybookDefinition,
 } from "../../schemas/playbook-definition.js";
@@ -65,17 +66,15 @@ export const PLAYBOOK_MANAGED_FIELDS = [
   "expectedOutputs",
   "stages",
   "criteria",
-  // MANAGED, deliberately. A template declares what its playbooks NEED the pod
-  // to be able to do, so a change to that declaration must REACH an installed
-  // pod — the same reason `stages`/`criteria` are managed. Leaving it out is
-  // precisely the defect backend-rules.md records: a field the applier writes
-  // but the reconcile never compares reaches ZERO pods, silently and forever,
-  // because the baseline is stamped from the same projection that skipped it.
-  //
-  // Reconciling the DECLARATION is not gating SATISFIABILITY: the reconcile
-  // diffs what a template declares against what a pod has, and a gap is
-  // reported (see `matchRequiredIntents`), never refused.
-  "requiredIntents",
+  // MANAGED, deliberately. What a run of a template's playbook may use
+  // ("only these", 0419) must REACH an installed pod when the template
+  // changes it — the same reason `stages`/`criteria` are managed. Leaving it
+  // out is precisely the defect backend-rules.md records: a field the applier
+  // writes but the reconcile never compares reaches ZERO pods, silently and
+  // forever, because the baseline is stamped from the same projection that
+  // skipped it. The deprecated `requiredIntents` / `grants` a package may
+  // still send are folded into it first (`projectPlaybookDefinition`).
+  "tools",
   // MANAGED for the same reason: a template that changes the rules its
   // playbook follows (a ref added, a filter narrowed) must reach installed
   // pods. Refs, never ids, so the declaration is the same on every pod.
@@ -99,7 +98,10 @@ export const PLAYBOOK_MANAGED_FIELDS = [
  *                 default must never re-activate a playbook the owner paused.
  *  - `metadata` — the owner's bag, and it CARRIES `marketSource` itself.
  *  - `grants`   — link edges, not row fields; re-ensured idempotently on every
- *                 apply by `grantPlaybookLinks`.
+ *                 apply by `grantPlaybookLinks`. As run tools they are
+ *                 folded into `tools` (managed).
+ *  - `requiredIntents` — deprecated input with no column since 0419: folded
+ *                 into `tools` (managed) by {@link projectPlaybookDefinition}.
  *  - `activators` / `humanOnlyStatuses` — NOT unreconciled: they have no
  *                 column and are FOLDED into `subjectProfile` (managed) by
  *                 {@link projectPlaybookDefinition} through the one fold
@@ -112,6 +114,7 @@ export const PLAYBOOK_UNMANAGED_FIELDS = [
   "status",
   "metadata",
   "grants",
+  "requiredIntents",
   "activators",
   "humanOnlyStatuses",
 ] as const satisfies ReadonlyArray<keyof PackagePlaybookDefinition>;
@@ -150,6 +153,18 @@ export function projectPlaybookDefinition<
     def as Parameters<typeof foldProcessIntoSubjectProfile>[0]
   );
   if (folded !== undefined) out.subjectProfile = folded;
+  // The ONE tools list: a package's deprecated `requiredIntents`, its
+  // `grants` names and its stages' `grants` fold into `tools`, so the create,
+  // the stamped baseline and the reconcile's `desired` carry one field.
+  const d = def as {
+    tools?: string[];
+    requiredIntents?: string[];
+    grants?: string[];
+    stages?: Array<Record<string, unknown>>;
+  };
+  const tools = foldPlaybookTools(d);
+  if (tools.tools !== undefined) out.tools = tools.tools;
+  if (tools.stages !== undefined) out.stages = tools.stages;
   return out as Pick<T, PlaybookManagedField & keyof T>;
 }
 

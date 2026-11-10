@@ -261,7 +261,7 @@ async function insertPlaybook(o: {
   stages: unknown;
 }) {
   await q(
-    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, subject_profile, stages, params, criteria, expected_outputs, required_intents, guidance, input_strategy, channel_spec, metadata)
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, subject_profile, stages, params, criteria, expected_outputs, tools, guidance, input_strategy, channel_spec, metadata)
      values ($1, $2, $3, $4, 'Work {name}', 'active', $5::jsonb, $6::jsonb, '[]', '[]', '[]', '[]', '[]', '{"kind":"none"}', '{}', '{}')`,
     [
       o.id,

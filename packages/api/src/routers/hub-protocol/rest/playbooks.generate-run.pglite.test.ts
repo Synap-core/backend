@@ -379,7 +379,7 @@ beforeAll(async () => {
     examples?: { approved?: number; rejected?: number }
   ) =>
     q(
-      `insert into playbooks (id, workspace_id, created_by, name, goal_template, executor, status, metadata, params, input_strategy, channel_spec, expected_outputs, stages, criteria, required_intents, guidance, requires, subject_profile, version)
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, executor, status, metadata, params, input_strategy, channel_spec, expected_outputs, stages, criteria, tools, guidance, requires, subject_profile, version)
        values ($1,$2,$3,$4,'Draft the caption of this post ({post}) from its hook and its script.',$5,'active','{}'::jsonb,$6::jsonb,'{"kind":"none"}'::jsonb,'{}'::jsonb,$7::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'{"profileSlug":"post"}'::jsonb,1)`,
       [
         id,

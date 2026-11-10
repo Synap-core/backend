@@ -426,6 +426,12 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     type: "array",
     items: { type: "string" },
   },
+  // What a run may use beyond its class floor, ONLY these (shapes taught in
+  // `system/synap/processes`; validated by `playbookToolsSchema`).
+  tools: {
+    type: "array",
+    items: { type: "string" },
+  },
   statusProperty: deriveJsonSchema(
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
     "Slug of the subject's lifecycle property (e.g. 'post-status'). Omit it: the process follows the lifecycle the kind or role declares. If you name it, name that same property. Needs subjectProfileSlug."
@@ -453,7 +459,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -3886,6 +3892,7 @@ export const tools = {
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
+            tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
             sessionId: {
               type: "string",
               description:
@@ -3929,6 +3936,7 @@ export const tools = {
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
+            tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
             subjectProfileSlug: {
               type: "string",
               description:

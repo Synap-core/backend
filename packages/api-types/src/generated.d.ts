@@ -7939,23 +7939,6 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			notNull: true;
 			tableName: "playbooks";
 		}, {}, {}>;
-		requiredIntents: import("drizzle-orm/pg-core").PgColumn<{
-			baseColumn: never;
-			columnType: "PgJsonb";
-			data: unknown;
-			dataType: "json";
-			driverParam: unknown;
-			enumValues: undefined;
-			generated: undefined;
-			hasDefault: true;
-			hasRuntimeDefault: false;
-			identity: undefined;
-			isAutoincrement: false;
-			isPrimaryKey: false;
-			name: "required_intents";
-			notNull: true;
-			tableName: "playbooks";
-		}, {}, {}>;
 		requires: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgJsonb";
@@ -8083,6 +8066,23 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			isPrimaryKey: false;
 			name: "subject_profile";
 			notNull: false;
+			tableName: "playbooks";
+		}, {}, {}>;
+		tools: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgJsonb";
+			data: unknown;
+			dataType: "json";
+			driverParam: unknown;
+			enumValues: undefined;
+			generated: undefined;
+			hasDefault: true;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "tools";
+			notNull: true;
 			tableName: "playbooks";
 		}, {}, {}>;
 		updatedAt: import("drizzle-orm/pg-core").PgColumn<{
@@ -40918,6 +40918,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
 					description?: string | undefined;
 					goal?: string | undefined;
+					tools?: string[] | undefined;
 					grants?: {
 						[x: string]: unknown;
 						kind: "command" | "skill" | "tool";
@@ -48137,6 +48138,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
 					description?: string | undefined;
 					goal?: string | undefined;
+					tools?: string[] | undefined;
 					grants?: {
 						[x: string]: unknown;
 						kind: "command" | "skill" | "tool";
@@ -48523,6 +48525,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
 				} | undefined;
+				tools?: string[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -48642,7 +48645,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				params: unknown;
 				projectsUsingCount: number;
-				requiredIntents: unknown;
 				requires: unknown;
 				runner: unknown;
 				schedule: unknown;
@@ -48650,6 +48652,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
 				subjectProfile: unknown;
+				tools: unknown;
 				updatedAt: Date;
 				version: number;
 				workspaceId: string | null;
@@ -48738,7 +48741,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				params: unknown;
 				projectsUsingCount: number;
-				requiredIntents: unknown;
 				requires: unknown;
 				runner: unknown;
 				schedule: unknown;
@@ -48746,6 +48748,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
 				subjectProfile: unknown;
+				tools: unknown;
 				updatedAt: Date;
 				version: number;
 				workspaceId: string | null;
@@ -48777,7 +48780,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					params: unknown;
-					requiredIntents: unknown;
 					requires: unknown;
 					runHealth: RunHealth | null;
 					runner: unknown;
@@ -48787,6 +48789,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					status: "active" | "archived" | "draft" | "paused";
 					subjectProfile: unknown;
+					tools: unknown;
 					updatedAt: Date;
 					version: number;
 					workspaceId: string | null;
@@ -48818,7 +48821,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					params: unknown;
-					requiredIntents: unknown;
 					requires: unknown;
 					runner: unknown;
 					schedule: unknown;
@@ -48826,6 +48828,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					status: "active" | "archived" | "draft" | "paused";
 					subjectProfile: unknown;
+					tools: unknown;
 					updatedAt: Date;
 					version: number;
 					workspaceId: string | null;
@@ -48931,7 +48934,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					params: unknown;
-					requiredIntents: unknown;
 					requires: unknown;
 					runner: unknown;
 					schedule: unknown;
@@ -48939,6 +48941,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					status: "active" | "archived" | "draft" | "paused";
 					subjectProfile: unknown;
+					tools: unknown;
 					updatedAt: Date;
 					version: number;
 					workspaceId: string | null;
@@ -49432,6 +49435,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
 					description?: string | undefined;
 					goal?: string | undefined;
+					tools?: string[] | undefined;
 					grants?: {
 						[x: string]: unknown;
 						kind: "command" | "skill" | "tool";
@@ -49818,6 +49822,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					}[] | undefined;
 					humanOnlyStatuses?: string[] | undefined;
 				} | undefined;
+				tools?: string[] | undefined;
 			};
 			meta: object;
 			output: {
@@ -49843,7 +49848,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					params: unknown;
-					requiredIntents: unknown;
 					requires: unknown;
 					runner: unknown;
 					schedule: unknown;
@@ -49851,6 +49855,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					status: "active" | "archived" | "draft" | "paused";
 					subjectProfile: unknown;
+					tools: unknown;
 					updatedAt: Date;
 					version: number;
 					workspaceId: string | null;
@@ -60623,6 +60628,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							category: "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
 							description?: string | undefined;
 							goal?: string | undefined;
+							tools?: string[] | undefined;
 							grants?: {
 								[x: string]: unknown;
 								kind: "command" | "skill" | "tool";
@@ -61009,6 +61015,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[] | undefined;
 							humanOnlyStatuses?: string[] | undefined;
 						} | undefined;
+						tools?: string[] | undefined;
 					}[] | undefined;
 					automations?: {
 						action: {
