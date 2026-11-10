@@ -3283,6 +3283,23 @@ export const playbooksRouter = router({
       });
       const { run, session, parentLink, skipped, held, handedTo } = started;
 
+      // ONE-SHOT (`executor: "generate"`): no session. The draft was filed as
+      // a proposal on the subject, answered here at once so the app shows it
+      // inline (approve, edit or reject) — `generated` names the proposal, its
+      // review link and the run that made it.
+      if (started.generated) {
+        return {
+          run,
+          session: null as FocusSession | null,
+          status: "generated" as const,
+          message: started.generated.reused
+            ? `A draft of "${started.generated.section}" already waits for review.`
+            : `Drafted "${started.generated.section}" for review.`,
+          proposalId: started.generated.proposalId as string | null,
+          generated: started.generated,
+        };
+      }
+
       if (skipped !== undefined || session === null) {
         return {
           run: null,

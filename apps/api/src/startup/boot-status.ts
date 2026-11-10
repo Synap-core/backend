@@ -28,7 +28,9 @@ export interface PendingConversion {
   opKey: string;
   op: string;
   slug: string | null;
-  reason: "destructive-tail" | "defer-at-boot" | "unknown";
+  /** `target-def-missing` needs no operator: the next boot retries it. */
+  reason:
+    "destructive-tail" | "defer-at-boot" | "target-def-missing" | "unknown";
 }
 
 export interface ConversionsBootState {

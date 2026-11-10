@@ -281,6 +281,35 @@ describe("runPlaybook seam: the row gets a title, the agent gets the prompt", ()
     expect(session.goal).toBe("CRM hygiene");
   });
 
+  it("a run with no subject is NAMED by what it works on; its goal is unchanged", async () => {
+    const RECIPE_ID = "1b91229e-f202-4a7a-9b57-1d6f5a48ec7c";
+    const withParam = {
+      ...PLAYBOOK,
+      params: [{ name: "recipe", type: "text", required: true }],
+    };
+    db.query.playbooks.findFirst = async () => withParam as typeof PLAYBOOK;
+    // The param's id resolves to a playbook the starter can see (no entity).
+    (db as unknown as Record<string, unknown>).select = () => ({
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () =>
+            table === playbooks ? [{ name: "Consolidate findings" }] : [],
+        }),
+      }),
+    });
+    await runPlaybook({
+      playbookId: PLAYBOOK.id,
+      workspaceId: "ws-1",
+      userId: "user-1",
+      params: { recipe: RECIPE_ID },
+    });
+
+    const session = inserted.filter((i) => i.table === focusSessions)[0].values;
+    expect(session.title).toBe("CRM hygiene · Consolidate findings");
+    // `goal` is the dedup/proposal key: it stays the bare playbook name.
+    expect(session.goal).toBe("CRM hygiene");
+  });
+
   it("the scheduled path's goalOverride is a PROMPT, not a title", async () => {
     await runPlaybook({
       playbookId: PLAYBOOK.id,

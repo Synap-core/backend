@@ -255,6 +255,27 @@ describe("lean session read (C8)", () => {
     expect(room.hasMore).toBe(true);
     expect(room.unread).toBe(0);
   });
+
+  it("carries what the session's run spent, read from its turn ledger", async () => {
+    const row = await rowOf(MINE);
+    expect((await readLeanSession(row, { userId: OWNER })).cost).toBeNull();
+    const ledger = {
+      runId: "run-1",
+      turns: [{ at: "t1", spentInputTokens: 1_000, cacheReadInputTokens: 400 }],
+      cost: {
+        turns: 3,
+        freshInputTokens: 900,
+        rawInputTokens: 5_000,
+        cacheReadInputTokens: 4_100,
+        models: ["claude-haiku-5-5"],
+      },
+    };
+    const lean = await readLeanSession(
+      { ...row, metadata: { ...(row.metadata as object), runTurns: ledger } },
+      { userId: OWNER }
+    );
+    expect(lean.cost).toEqual({ runId: "run-1", ...ledger.cost });
+  });
 });
 
 describe("deploys gate read (C8)", () => {

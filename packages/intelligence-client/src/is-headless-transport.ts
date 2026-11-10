@@ -62,6 +62,11 @@ export interface RunToolProfile {
    * declares nothing.
    */
   capabilitiesRead: "ok" | "failed";
+  /**
+   * The active stage's model tier (`@synap/playbooks` `PlaybookStageTier`).
+   * Absent = no preference: the IS picks the model as for any turn.
+   */
+  tier?: "deep" | "standard" | "quick";
 }
 
 export interface HeadlessChatRequest {

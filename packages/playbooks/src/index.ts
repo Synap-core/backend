@@ -17,7 +17,7 @@
 
 // ── Executor — the agnostic "hands" ──────────────────────────────────────────
 /** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid" | "generate";
 
 // ── Tool — a registered integration the AI can use ───────────────────────────
 export type ToolKind =
@@ -728,6 +728,17 @@ export interface ExpectedOutput {
    */
   relationToSubject?: string;
   /**
+   * WHERE a one-shot playbook's result is written (`executor: "generate"`,
+   * plan 08e4fba7 slice 1). DECLARED by the playbook author on the ONE output
+   * a generate playbook produces; read only by the generate run
+   * (api `services/playbooks/generate-run.ts`), which files the result there
+   * as a PROPOSAL on the subject, approvable inline. Ignored by every other
+   * executor. Today one target: a section of the subject's own document
+   * (`section` is its title; its id is the title's slug), replaced in place
+   * when it is there, else added at the end, and owned by the AI.
+   */
+  lands?: OutputLanding;
+  /**
    * RECEIPT of the output → subject edge {@link relationToSubject} asked for —
    * SERVER-STAMPED by the satisfy door, never authored. `linked` names the
    * relation row; `skipped` says why no edge was written (no subject, no
@@ -756,6 +767,13 @@ export interface ExpectedOutput {
   blockerKey?: string;
   /** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
   clearedBy?: SlotClearedBy;
+}
+
+/** See {@link ExpectedOutput.lands}. */
+export interface OutputLanding {
+  target: "subject_document_section";
+  /** The section's title, e.g. "Caption draft". */
+  section: string;
 }
 
 /** See {@link ExpectedOutput.subjectEdge}. */
@@ -2305,7 +2323,8 @@ export interface CapabilityToolDef {
    * template-local vault `ref` (resolved to the created `vault://<id>`).
    */
   credentialRef?: string;
-  executor?: ExecutorRef;
+  /** A tool is never a one-shot playbook: `generate` is a playbook executor only. */
+  executor?: Exclude<ExecutorRef, "generate">;
   config?: Record<string, unknown>;
   /** Descriptive behavioral config stored in tool.metadata (does NOT reset approval). */
   metadata?: Record<string, unknown>;

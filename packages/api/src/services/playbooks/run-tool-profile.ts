@@ -49,6 +49,7 @@ import {
   type RunClass,
 } from "@synap/playbooks";
 import type { IntentVerbMatch } from "../capabilities/capability-intent-index.js";
+import { activeStageTier } from "./run-stage-tier.js";
 
 const logger = createLogger({ module: "run-tool-profile" });
 
@@ -242,6 +243,7 @@ export async function resolveRunToolProfile(
         index
       );
     }
+    const tier = activeStageTier(playbook.stages, currentStage);
     return {
       playbookId: input.playbookId,
       ...(playbookName ? { playbookName } : {}),
@@ -250,6 +252,7 @@ export async function resolveRunToolProfile(
       intents,
       verbs,
       capabilitiesRead: "ok",
+      ...(tier ? { tier } : {}),
     };
   } catch (err) {
     logger.error(

@@ -30,6 +30,7 @@ import type {
   BoxRunEvidence,
   BoxRunRow,
   BoxRunSpec,
+  PlaybookRunGeneration,
 } from "@synap/database/schema";
 
 /**
@@ -393,6 +394,13 @@ export interface PlaybookRunDetail {
     draftedText: string | null;
     draftedAt: string | null;
   };
+  /**
+   * A ONE-SHOT run (`executor: "generate"`, no session): what its prompt was
+   * made of, the prompt itself, the model and tokens of its one call (NULL
+   * where the IS did not report them), and the proposal it filed — which is
+   * also the one item of `proposals`. Absent on every other run.
+   */
+  generation?: PlaybookRunGeneration;
 }
 
 /** The session card behind a playbook run. */

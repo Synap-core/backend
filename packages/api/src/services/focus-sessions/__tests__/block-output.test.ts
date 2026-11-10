@@ -436,6 +436,7 @@ describe("addOutput — declaring a blocked slot stamps its clock", () => {
         ],
       },
       relationToSubject: "produced_for",
+      lands: { target: "subject_document_section", section: "Invite" },
       optional: true,
       blocks: { entityId: "33333333-3333-4333-8333-333333333333" },
       blockerKey: "not_connected",

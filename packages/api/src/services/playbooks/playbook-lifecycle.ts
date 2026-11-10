@@ -84,6 +84,9 @@ import {
   PARAM_SLOT_CIRCUMSTANCE,
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
+import { isUuid } from "@synap-core/types/property-render";
+import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
+import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { recordPlaybookVersion } from "./playbook-versions.js";
 import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
@@ -289,6 +292,67 @@ export function buildRunSessionName(
     subject: subjectTitle,
     at: new Date(),
   });
+}
+
+/**
+ * What a run with NO subject works on, for its name (plan fbfadf54 5b): six
+ * runs all named "Improve a recipe (from its runs) — 9 Nov" could not be told
+ * apart. In order: the first declared param whose value is the id of a pod
+ * object the starter can see (its title); else the first required text or
+ * choice param's own value; else null (the date names the run, as before).
+ * An id never names a run: one that resolves to nothing is skipped.
+ */
+export async function runWorksOnLabel(
+  declared: readonly PlaybookParam[],
+  values: Record<string, unknown>,
+  nameOf: (id: string) => Promise<string | null>
+): Promise<string | null> {
+  for (const p of declared) {
+    const v = values[p.name];
+    const id = typeof v === "string" ? v.trim() : "";
+    if (!isUuid(id)) continue;
+    const name = (await nameOf(id))?.trim();
+    if (name) return name;
+  }
+  const first = declared.find((p) => p.required);
+  if (!first || (first.type !== "text" && first.type !== "choice")) {
+    return null;
+  }
+  const v = values[first.name];
+  const text = typeof v === "string" ? v.trim() : "";
+  return text && !isUuid(text) ? text : null;
+}
+
+/**
+ * The title of an entity or a playbook the user can see, by id; null = none
+ * visible. The floor matters: a param id was not checked by the run door (only
+ * the subject is), so naming it unread would leak a title past it.
+ */
+async function visibleObjectName(
+  db: Awaited<ReturnType<typeof getDb>>,
+  userId: string,
+  id: string
+): Promise<string | null> {
+  const [entity] = await db
+    .select({ title: entities.title })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, id),
+        isNull(entities.deletedAt),
+        entityReadVisibleWhere(userId)
+      )
+    )
+    .limit(1);
+  if (entity?.title) return entity.title;
+  const [playbook] = await db
+    .select({ name: playbooks.name })
+    .from(playbooks)
+    .where(
+      and(eq(playbooks.id, id), userVisibleWhere(playbooks.workspaceId, userId))
+    )
+    .limit(1);
+  return playbook?.name ?? null;
 }
 
 /**
@@ -648,7 +712,19 @@ export async function instantiateSessionRow(
   // beside it, marked `derived` so the background titler may improve it. A
   // proposer's own title (`ownTitle`) wins, marked `agent`.
   const ownTitle = input.ownTitle?.trim() || null;
-  const title = ownTitle ?? buildRunSessionName(playbook.name, subjectTitle);
+  const title =
+    ownTitle ??
+    buildRunSessionName(
+      playbook.name,
+      subjectTitle ??
+        (input.subjectId
+          ? null
+          : await runWorksOnLabel(
+              declaredParams,
+              paramResolution.values,
+              (id) => visibleObjectName(db, input.userId, id)
+            ))
+    );
   // Through the ONE declaration sanitizer, like every other door that births
   // slots: a template's stored JSON must not carry a server-stamped receipt
   // or an unparsed `ask` into a live session.

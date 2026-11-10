@@ -586,6 +586,20 @@ export async function executePlaybookRun(
     onMissingRequired: "refuse",
   });
 
+  // A ONE-SHOT run (`executor: "generate"`) made its draft in this call and
+  // filed it as a proposal on the subject: there is no session to stamp. The
+  // step output names the run and the proposal (a reuse: the earlier run's
+  // still-pending proposal).
+  if (result.generated) {
+    return {
+      runId: result.generated.runId,
+      status: result.generated.reused ? "reused" : "proposed",
+      proposalId: result.generated.proposalId,
+      reviewUrl: result.generated.reviewUrl,
+      ...(result.generated.reused ? { reused: true } : {}),
+    };
+  }
+
   // Nobody was eligible. Do not throw — an empty list is a quiet week, not a
   // failed automation — and do not stamp a session onto the firing event,
   // because no session exists.

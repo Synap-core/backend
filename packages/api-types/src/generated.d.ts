@@ -7647,8 +7647,13 @@ export type Tool = typeof tools.$inferSelect;
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
-/** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
-export type PlaybookExecutorRef = "external-agent" | "hybrid" | "is-agent";
+/**
+ * Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef.
+ * `generate` = a ONE-SHOT playbook (plan 08e4fba7 slice 1): the pod reads the
+ * subject, makes ONE `ai.generate` call and files the result as a proposal on
+ * the subject, with no session, room or agent turn (`generate-run.ts`).
+ */
+export type PlaybookExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
 		channelSpec: import("drizzle-orm/pg-core").PgColumn<{
@@ -7751,7 +7756,8 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			enumValues: [
 				"is-agent",
 				"external-agent",
-				"hybrid"
+				"hybrid",
+				"generate"
 			];
 			generated: undefined;
 			hasDefault: true;
@@ -8457,7 +8463,7 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  */
  | "serves";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
-export type PlaybookRunExecutorRef = "external-agent" | "hybrid" | "is-agent";
+export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /**
  * Lifecycle of a run.
  *
@@ -8527,6 +8533,60 @@ export interface PlaybookRunExternalAgent {
 		previewUrl?: string;
 	};
 	startedAt: string;
+}
+/**
+ * `playbook_runs.generation` (0417) — the record of a ONE-SHOT run
+ * (`executor: "generate"`, `services/playbooks/generate-run.ts`). Such a run
+ * has no focus session, so what a session's turn ledger would hold lives here:
+ * what the prompt was made of, the prompt itself (kept for one-shot runs only:
+ * it is small, founder 9 Nov 2026), what the one model call cost, and the
+ * proposal its result was filed as. A number the IS did not report stays
+ * NULL, never a fabricated 0. NULL on every other run.
+ */
+export interface PlaybookRunGeneration {
+	/** The entity the run worked on (no session carries it). */
+	subjectId: string | null;
+	/** Where the result lands, as the playbook declared it (`ExpectedOutput.lands`). */
+	lands: {
+		section: string;
+		target: "subject_document_section";
+	} | null;
+	/** What the prompt was made of, in order, with each part's size. */
+	context: Array<{
+		chars: number;
+		/** The entity or document read, when the part is one. */
+		id?: string;
+		kind: "method" | "subject" | "subject_document";
+		/** The part was cut to fit the call's input bound. */
+		truncated?: boolean;
+	}>;
+	/** The text sent: the system line and the prompt. */
+	prompt: {
+		chars: number;
+		system: string;
+		text: string;
+	};
+	/** The model that answered, when the IS reported it. */
+	model: string | null;
+	inputTokens: number | null;
+	/** Input tokens served from the provider's cache, when reported. */
+	cachedInputTokens: number | null;
+	outputTokens: number | null;
+	totalTokens: number | null;
+	/** Real cost in USD, when the IS reported it. */
+	costUsd: number | null;
+	/** Why the model stopped (`stop`, `length`, `content-filter`, …), when reported. */
+	finishReason: string | null;
+	/** Size of the answer the model gave. */
+	outputChars: number | null;
+	/** The proposal the result was filed as (absent until it is filed). */
+	proposal?: {
+		documentId: string;
+		id: string;
+		reviewPath: string;
+		reviewUrl: string;
+		sectionId: string;
+	};
 }
 /**
  * `@synap-core/types/renderer-ref` — what a profile or workspace stores as its
@@ -13745,7 +13805,7 @@ export type UndoPromotePropertyToBodyResult = {
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
 /** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "external-agent" | "hybrid" | "is-agent";
+export type ExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /**
  * The verb axis of a Tool — the structured, enumerable capability matrix. A
  * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
@@ -14225,6 +14285,17 @@ export interface ExpectedOutput {
 	 */
 	relationToSubject?: string;
 	/**
+	 * WHERE a one-shot playbook's result is written (`executor: "generate"`,
+	 * plan 08e4fba7 slice 1). DECLARED by the playbook author on the ONE output
+	 * a generate playbook produces; read only by the generate run
+	 * (api `services/playbooks/generate-run.ts`), which files the result there
+	 * as a PROPOSAL on the subject, approvable inline. Ignored by every other
+	 * executor. Today one target: a section of the subject's own document
+	 * (`section` is its title; its id is the title's slug), replaced in place
+	 * when it is there, else added at the end, and owned by the AI.
+	 */
+	lands?: OutputLanding;
+	/**
 	 * RECEIPT of the output → subject edge {@link relationToSubject} asked for —
 	 * SERVER-STAMPED by the satisfy door, never authored. `linked` names the
 	 * relation row; `skipped` says why no edge was written (no subject, no
@@ -14253,6 +14324,12 @@ export interface ExpectedOutput {
 	blockerKey?: string;
 	/** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
 	clearedBy?: SlotClearedBy;
+}
+/** See {@link ExpectedOutput.lands}. */
+export interface OutputLanding {
+	target: "subject_document_section";
+	/** The section's title, e.g. "Caption draft". */
+	section: string;
 }
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
@@ -15314,6 +15391,13 @@ export interface PlaybookRunDetail {
 		draftedText: string | null;
 		guidanceOverride: Record<string, string>;
 	};
+	/**
+	 * A ONE-SHOT run (`executor: "generate"`, no session): what its prompt was
+	 * made of, the prompt itself, the model and tokens of its one call (NULL
+	 * where the IS did not report them), and the proposal it filed — which is
+	 * also the one item of `proposals`. Absent on every other run.
+	 */
+	generation?: PlaybookRunGeneration;
 }
 /** The session card behind a playbook run. */
 export interface RunSessionCard {
@@ -24235,6 +24319,33 @@ export type StructureAgainResult = {
 	sourceDocumentId: string;
 	status: "structured";
 } & Omit<RerunItemResult, "door" | "sourceDocumentIds">);
+export interface RunCost {
+	/** Turns the run reported. */
+	turns: number;
+	/**
+	 * Input tokens read fresh: each turn's input minus the cache reads the
+	 * provider reported (a turn whose cache reads were not reported counts in
+	 * full: unknown never reads as free).
+	 */
+	freshInputTokens: number;
+	/** Every input token, cache reads included. */
+	rawInputTokens: number;
+	/** Input tokens read from the prompt cache. */
+	cacheReadInputTokens: number;
+	/** The models that served the turns, first seen first. */
+	models: string[];
+	/** Turns that reported no token counts: their tokens are not in the sums. */
+	unmeasuredTurns?: number;
+	/**
+	 * Summed from a ledger written before the running total existed, which had
+	 * already dropped some turns: the sums may miss them.
+	 */
+	partial?: true;
+}
+/** A run's cost as the session reads show it: which run it is, and its cost. */
+export type RunCostRead = RunCost & {
+	runId: string;
+};
 export interface LeanRoomMessage {
 	id: string;
 	at: string;
@@ -24611,6 +24722,8 @@ export interface SessionUsage {
 		name: string | null;
 	} | null;
 	agents: SessionParticipant[];
+	/** What the session's latest run spent; null = no run turn reported. */
+	cost: RunCostRead | null;
 }
 export interface CriterionScore {
 	key: string;
@@ -24646,6 +24759,22 @@ export interface PlaybookScorecard {
 	escalations: number;
 	overrides: number;
 	criteria: CriterionScore[];
+}
+/** What the run door answers for a one-shot run. */
+export interface GeneratedRunAnswer {
+	runId: string;
+	status: "proposed";
+	/** The proposal the result was filed as: approve, edit or reject it inline. */
+	proposalId: string;
+	reviewUrl: string;
+	reviewPath: string;
+	subjectId: string;
+	/** Where it lands once approved. */
+	documentId: string;
+	sectionId: string;
+	section: string;
+	/** An earlier run's still-pending proposal was returned (`idempotentBySubject`). */
+	reused?: true;
 }
 /** Who a run was handed to, as the run reply names it. */
 export interface RunHandedTo {
@@ -38997,6 +39126,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					lands?: {
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
@@ -39435,6 +39568,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				continuation: LeanContinuation;
+				cost: RunCostRead | null;
 				outcomes: LeanOutcomesSection;
 			};
 		}>;
@@ -40306,6 +40440,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					key?: string | undefined;
 					kind: string;
 					label: string;
+					lands?: {
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
 					owedSince?: string | undefined;
@@ -47187,6 +47325,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				error: string | null;
 				executor: PlaybookRunExecutorRef;
 				externalAgent: PlaybookRunExternalAgent | null;
+				generation: PlaybookRunGeneration | null;
 				id: string;
 				input: unknown;
 				playbookId: string;
@@ -47458,7 +47597,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statement: string;
 				}[] | undefined;
 				description?: string | undefined;
-				executor?: "external-agent" | "hybrid" | "is-agent" | undefined;
+				executor?: "external-agent" | "generate" | "hybrid" | "is-agent" | undefined;
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
@@ -47611,6 +47750,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
+					lands?: {
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 				}[] | undefined;
 				goalTemplate: string;
 				guidance?: {
@@ -48490,6 +48633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				enableProposals: Awaited<ReturnType<typeof proposeCapabilityEnable>>;
+				generated?: undefined;
 				message: string;
 				proposalId: string | null;
 				run: null;
@@ -48498,6 +48642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills: CapabilityRef[];
 			} | {
 				enableProposals?: undefined;
+				generated?: undefined;
 				message: string;
 				proposalId: string;
 				run: null;
@@ -48506,6 +48651,35 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				generated: GeneratedRunAnswer;
+				message: string;
+				proposalId: string | null;
+				run: {
+					completedAt: Date | null;
+					createdBy: string;
+					definitionSnapshot: unknown;
+					error: string | null;
+					executor: PlaybookRunExecutorRef;
+					externalAgent: PlaybookRunExternalAgent | null;
+					generation: PlaybookRunGeneration | null;
+					id: string;
+					input: unknown;
+					playbookId: string;
+					replayOf: string | null;
+					runOn: RunOn | null;
+					sessionId: string | null;
+					startedAt: Date;
+					status: PlaybookRunStatus;
+					stopReason: "budget" | null;
+					summary: string | null;
+					workspaceId: string | null;
+				} | null;
+				session: FocusSession | null;
+				status: "generated";
+				unenabledSkills?: undefined;
+			} | {
+				enableProposals?: undefined;
+				generated?: undefined;
 				message: string;
 				proposalId: string | null;
 				run: null;
@@ -48514,6 +48688,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				generated?: undefined;
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
@@ -48562,6 +48737,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
+				generated?: undefined;
 				handedTo?: RunHandedTo | undefined;
 				message: string;
 				parentLink?: {
@@ -48582,6 +48758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					error: string | null;
 					executor: PlaybookRunExecutorRef;
 					externalAgent: PlaybookRunExternalAgent | null;
+					generation: PlaybookRunGeneration | null;
 					id: string;
 					input: unknown;
 					playbookId: string;
@@ -48721,7 +48898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statement: string;
 				}[] | undefined;
 				description?: string | undefined;
-				executor?: "external-agent" | "hybrid" | "is-agent" | undefined;
+				executor?: "external-agent" | "generate" | "hybrid" | "is-agent" | undefined;
 				expectedOutputs?: {
 					[x: string]: unknown;
 					ask?: {
@@ -48874,6 +49051,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
+					lands?: {
+						section: string;
+						target: "subject_document_section";
+					} | undefined;
 				}[] | undefined;
 				goalTemplate?: string | undefined;
 				guidance?: {
@@ -59895,7 +60076,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							statement: string;
 						}[] | undefined;
 						description?: string | undefined;
-						executor?: "external-agent" | "hybrid" | "is-agent" | undefined;
+						executor?: "external-agent" | "generate" | "hybrid" | "is-agent" | undefined;
 						expectedOutputs?: {
 							[x: string]: unknown;
 							ask?: {
@@ -60048,6 +60229,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							} | null | undefined;
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
+							lands?: {
+								section: string;
+								target: "subject_document_section";
+							} | undefined;
 						}[] | undefined;
 						goalTemplate: string;
 						grants?: (string | {
