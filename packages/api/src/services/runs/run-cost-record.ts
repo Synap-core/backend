@@ -42,8 +42,8 @@ export const RUN_SPEND_TURNS_CAP = 50;
 /** One turn's end, as the ledger kept it. `null` = not recorded. */
 export interface RunCostTurn {
   at: string | null;
-  outcome: "completed" | "stopped" | null;
-  /** Why a stopped turn stopped (`turn_budget` | `max_steps`). */
+  outcome: "completed" | "stopped" | "failed" | null;
+  /** Why a stopped turn stopped, or why a failed one failed. */
   reason: string | null;
   agentType: string | null;
   /** The model of the turn's LAST provider call (no per-call model is kept). */
@@ -140,7 +140,11 @@ function turnOf(t: RunTurnRecord): RunCostTurn {
   return {
     at: text(t.at),
     outcome:
-      t.outcome === "completed" || t.outcome === "stopped" ? t.outcome : null,
+      t.outcome === "completed" ||
+      t.outcome === "stopped" ||
+      t.outcome === "failed"
+        ? t.outcome
+        : null,
     reason: text(t.reason),
     agentType: text(t.agentType),
     model: text(t.model),
