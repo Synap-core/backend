@@ -2606,6 +2606,27 @@ const SKILL_BODY_EXCERPT_CHARS = 280;
 /** A cell's source is CODE a person approves: a longer excerpt than a skill's. */
 const CELL_SOURCE_EXCERPT_CHARS = 1200;
 
+/**
+ * The bridge ops a cell's source NAMES (`query("op"` / `mutate("op"`), first
+ * appearance first: what the approver is told it reads and writes. A text
+ * read, like the cell door's own checks: an op name built at run time is not
+ * seen.
+ */
+export function cellBridgeOpsNamedIn(source: string): {
+  reads: string[];
+  writes: string[];
+} {
+  const reads: string[] = [];
+  const writes: string[] = [];
+  for (const m of source.matchAll(
+    /\b(query|mutate)\(\s*(["'`])([\w.:-]+)\2/g
+  )) {
+    const list = m[1] === "query" ? reads : writes;
+    if (!list.includes(m[3]!)) list.push(m[3]!);
+  }
+  return { reads, writes };
+}
+
 type UpdateReviewKind = NonNullable<
   ProposalReviewGraph["updates"]
 >[number]["kind"];
@@ -2785,6 +2806,7 @@ function buildConfigReviewItems(
           sourceExcerpt: source.slice(0, CELL_SOURCE_EXCERPT_CHARS),
           sourceTruncated: source.length > CELL_SOURCE_EXCERPT_CHARS,
           sourceBytes: Buffer.byteLength(source, "utf8"),
+          bridgeOps: cellBridgeOpsNamedIn(source),
           bindings: [],
         });
         return;

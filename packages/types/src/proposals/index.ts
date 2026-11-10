@@ -643,6 +643,14 @@ export interface ProposalReviewGraph {
     sourceExcerpt?: string;
     sourceTruncated?: boolean;
     sourceBytes?: number;
+    /**
+     * WHAT IT DOES once approved, read off the source: the bridge reads and
+     * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
+     * order they first appear). A name built at run time is not seen. The
+     * frame gives a generated cell no network (connect-src none but the
+     * bridge), so these are everything it can reach.
+     */
+    bridgeOps?: { reads: string[]; writes: string[] };
     bindings: Array<{
       ref: string;
       targetKind: BindRendererTargetKind;

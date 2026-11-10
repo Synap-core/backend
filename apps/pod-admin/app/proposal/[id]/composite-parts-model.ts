@@ -336,6 +336,14 @@ const DRAWERS = {
                 )
               : null
         ),
+        ...field(
+          "size",
+          c.sourceBytes !== undefined
+            ? text(`${(c.sourceBytes / 1024).toFixed(1)} KB, no network`)
+            : null
+        ),
+        ...field("reads", tags(c.bridgeOps?.reads)),
+        ...field("writes", tags(c.bridgeOps?.writes)),
         ...field("existingCell", text(c.existingCellKey)),
         ...field("description", text(c.description)),
         ...field(
