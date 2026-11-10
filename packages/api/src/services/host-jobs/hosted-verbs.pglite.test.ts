@@ -384,9 +384,16 @@ describe("hosted verb runs on the computer", () => {
 
   it("a run whose tool is not installed is not leased", async () => {
     await run(ask(), ctx);
+    // An update is running on the Mac, its lease live: the run waits for it.
+    // (An `updating` with no job open is released by the reconciler, 36daa4e2.)
     await q(`UPDATE installations SET status = 'updating' WHERE id = $1`, [
       INST_MAC,
     ]);
+    await q(
+      `INSERT INTO host_jobs (kind, installation_id, user_id, machine_user_id, spec, parameters, status, attempt, lease_id, leased_by, lease_expires_at)
+       VALUES ('update', $1, $2, $3, '{}'::jsonb, '{}'::jsonb, 'running', 1, $4, $3, now() + interval '2 minutes')`,
+      [INST_MAC, PERSON, MAC, randomUUID()]
+    );
     expect(await lease()).toBeNull();
   });
 

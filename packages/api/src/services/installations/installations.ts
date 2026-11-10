@@ -58,8 +58,10 @@ import {
   type MachineView,
 } from "../machine-roster.js";
 import {
+  HELD_INSTALLATION_STATUSES,
   installationHealth,
   isoDurationSeconds,
+  releaseOrphanedInstallation,
   TOOL_REVERIFY_DEFAULT_SECONDS,
   type InstallationHealthVerdict,
 } from "../host-jobs/host-jobs.js";
@@ -534,11 +536,7 @@ export async function applyInstallationRequest(input: {
     if (upgrade || input.action === "update") kindHint = "update";
     // The person approved a repair (their own ask, or the pod's "try
     // again" card): it runs now, whatever the self-heal ladder says.
-    else if (
-      input.action === "install" &&
-      (live.status === "installed" || live.status === "failed")
-    )
-      kindHint = "install";
+    else if (input.action === "install") kindHint = repairKindFor(live);
   }
   const jobId = await reconcileInstallation(row, { kind: kindHint });
   if (input.action === "install" && !jobId) {
@@ -550,6 +548,23 @@ export async function applyInstallationRequest(input: {
     }
   }
   return { installation: row, jobId };
+}
+
+/**
+ * The job a person's repair ask (an install of the version already
+ * approved) runs now, past the ladder: an install on an installed or failed
+ * installation; a CHECK first on one left installing or updating by a job
+ * that ended without its finish (the tool may well be there: finding
+ * 36daa4e2's media-matte), which `reconcileInstallation` releases to
+ * `failed` before it queues, so a failed check is then repaired. Nothing
+ * while a lifecycle job is still open (the one open job stays the one).
+ */
+export function repairKindFor(
+  row: Pick<InstallationRow, "status">
+): HostJobKind | undefined {
+  if (row.status === "installed" || row.status === "failed") return "install";
+  if (row.status === "installing" || row.status === "updating") return "verify";
+  return undefined;
 }
 
 export class InstallationRequestError extends Error {
@@ -728,9 +743,14 @@ export const TOOL_RECHECK_MIN_AGE_SECONDS = 10 * 60;
  * ladder holds it back, or a job is already open.
  */
 export async function reconcileInstallation(
-  row: InstallationRow,
+  current: InstallationRow,
   opts: { now?: Date; kind?: HostJobKind; recheckTools?: boolean } = {}
 ): Promise<string | null> {
+  // A status only a job's finish moves, with no job open to finish it: it
+  // is failed (checked, then repaired), never left for good (36daa4e2).
+  const row = HELD_INSTALLATION_STATUSES.includes(current.status)
+    ? ((await releaseOrphanedInstallation(current)) ?? current)
+    : current;
   const history = await loadInstallationJobHistory(row.id);
   const prerequisites =
     row.desiredState === "installed"
