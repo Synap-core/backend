@@ -9873,6 +9873,17 @@ export interface ProposalReviewGraph {
 			/** The object's name, when the pod read it for this viewer. */
 			targetName?: string;
 		}>;
+		/**
+		 * WHAT IT DOES once approved, read off the source: the bridge reads and
+		 * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
+		 * order they first appear). A name built at run time is not seen. The
+		 * frame gives a generated cell no network (connect-src none but the
+		 * bridge), so these are everything it can reach.
+		 */
+		bridgeOps?: {
+			reads: string[];
+			writes: string[];
+		};
 		contentKind?: string;
 		description?: string;
 		/** Set when this entry binds a cell that already exists (no source here). */
