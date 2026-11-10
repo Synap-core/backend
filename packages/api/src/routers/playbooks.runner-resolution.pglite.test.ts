@@ -265,7 +265,7 @@ describe("the playbook names a role", () => {
   it("resolves to the person's agent of that role, on its computer", async () => {
     await setRunner({ role: "video-render", computer: "mac" });
     const out = await asPerson().run({ playbookId: PLAYBOOK });
-    expect(out.handedTo).toMatchObject({
+    expect("handedTo" in out ? out.handedTo : undefined).toMatchObject({
       agentUserId: EDITOR_MAC,
       via: "authored",
     });
@@ -281,7 +281,7 @@ describe("the playbook names a role", () => {
   it("never takes an agent that is not the person's: the route refuses it, the run falls to the next rung", async () => {
     await setRunner({ agentId: FOREIGN });
     const out = await asPerson().run({ playbookId: PLAYBOOK });
-    expect(out.handedTo).toBeUndefined();
+    expect("handedTo" in out ? out.handedTo : undefined).toBeUndefined();
     expect((await lastRun()).run_on).toEqual({
       executor: "is-agent",
       agentUserId: null,
