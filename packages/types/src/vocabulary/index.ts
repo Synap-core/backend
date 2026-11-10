@@ -26,6 +26,7 @@
  * contexts (same contract as `proposals/proposal-utils.ts`).
  */
 
+import { DRAFT_DECISION_WORDS } from "./draft-words.js";
 import {
   OBJECT_KINDS,
   OBJECT_KIND_ALIASES,
@@ -108,6 +109,9 @@ export * from "./oauth-scope-words.js";
 
 /** Template or pack, from what a package holds; `package.install` in words. */
 export * from "./package-words.js";
+
+/** A draft decided in place: its state from the proposal's status, approve / discard (`./draft-words.ts`). */
+export * from "./draft-words.js";
 
 /**
  * Words a sentence-cased token must still spell the way people write them —
@@ -351,11 +355,10 @@ const ACTION_VERB_ROWS = {
   "capture.graph": { imperative: "Capture", past: "Captured" },
   "import.graph": { imperative: "Import", past: "Imported" },
   send: { imperative: "Send", past: "Sent", progressive: "Sending" },
-  approve: {
-    imperative: "Approve",
-    past: "Approved",
-    progressive: "Approving",
-  },
+  // The draft decisions' words are defined ONCE, in `./draft-words.ts` (a
+  // dependency-free leaf the SDK vendors for generated apps): approve here and
+  // discard below are those rows.
+  approve: DRAFT_DECISION_WORDS.en.approve,
   // The decision verb for OBJECT-WORK proposals — a proposed entity that
   // renders as the entity, editable, in a draft state. Approving that is not
   // reviewing a diff, it is finishing a draft, and the verb should say so.
@@ -386,7 +389,9 @@ const ACTION_VERB_ROWS = {
   // nothing was proposed, a session simply appeared and a person says whether it
   // is theirs to work.
   accept: { imperative: "Accept", past: "Accepted" },
-  discard: { imperative: "Discard", past: "Discarded" },
+  // Also a DRAFT's negative decision (`./draft-words.ts`: a person throws away
+  // text written for them; the API verb stays `reject`).
+  discard: DRAFT_DECISION_WORDS.en.discard,
   // Undo of a conversion — the inverse verb, not a delete.
   revert: { imperative: "Revert", past: "Reverted" },
   // TWO distinct acts, two verbs. `revert` takes an APPLIED proposal's effect
