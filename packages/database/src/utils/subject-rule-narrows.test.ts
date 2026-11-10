@@ -121,14 +121,12 @@ describe("a rule naming one playbook at one version", () => {
       targetPattern: "playbook.run",
       verdict: "auto",
     });
-    expect(await resolveRun([broad], { id: P, version: 3 })).toMatchObject({
-      ruleId: "broad",
-      namesSubject: false,
-    });
-    expect(await resolveRun([exact], { id: P, version: 3 })).toMatchObject({
-      ruleId: "exact",
-      namesSubject: false,
-    });
+    const viaBroad = await resolveRun([broad], { id: P, version: 3 });
+    expect(viaBroad).toMatchObject({ ruleId: "broad" });
+    expect(viaBroad).not.toHaveProperty("namesSubject");
+    const viaExact = await resolveRun([exact], { id: P, version: 3 });
+    expect(viaExact).toMatchObject({ ruleId: "exact" });
+    expect(viaExact).not.toHaveProperty("namesSubject");
   });
 
   it("outranks a broad rule, and a newer exact propose of equal reach takes it back", async () => {
@@ -146,8 +144,11 @@ describe("a rule naming one playbook at one version", () => {
       verdict: "propose",
       createdAt: new Date("2026-11-11T00:00:00Z"),
     });
-    expect(
-      await resolveRun([PRE_APPROVAL, laterPropose], { id: P, version: 3 })
-    ).toMatchObject({ ruleId: "later", namesSubject: false });
+    const later = await resolveRun([PRE_APPROVAL, laterPropose], {
+      id: P,
+      version: 3,
+    });
+    expect(later).toMatchObject({ ruleId: "later" });
+    expect(later).not.toHaveProperty("namesSubject");
   });
 });
