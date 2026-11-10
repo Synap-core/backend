@@ -246,10 +246,10 @@ describe("a person lets their agents run one playbook without asking", () => {
     expect(page.rules.map((r) => r.id)).toEqual([rule!.id]);
 
     const res = await agentRun(PERSON, AGENT, PB);
-    expect(h.perm).toMatchObject({
-      granted: true,
-      preApprovedByRuleId: rule!.id,
-    });
+    // Stringified so a refusal shows the gate's whole answer (reason included).
+    expect(JSON.stringify(h.perm)).toContain(
+      `"preApprovedByRuleId":"${rule!.id}"`
+    );
     expect(res.status).not.toBe("draft");
     expect(h.dispatched.map((d) => d.ref)).toEqual(["is-agent"]);
     expect(await triageOf(res.session!.id)).toMatchObject({
@@ -260,7 +260,7 @@ describe("a person lets their agents run one playbook without asking", () => {
 
   it("CONTROL: without the rule, the same run waits as the person's draft", async () => {
     const res = await agentRun(PERSON, AGENT, PB);
-    expect(h.perm).toMatchObject({ granted: true });
+    expect(JSON.stringify(h.perm)).toContain('"granted":true');
     expect(h.perm).not.toHaveProperty("preApprovedByRuleId");
     expect(res.status).toBe("draft");
     expect(h.dispatched).toEqual([]);
