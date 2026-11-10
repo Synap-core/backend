@@ -46,6 +46,7 @@ import {
   createCapabilityFromDefinition,
   definitionSkillChangesExecution,
   deriveToolVerbs,
+  declaredContainerMetadata,
   GRANT_DEFAULT_EXEC_MODE,
 } from "./create-from-definition.js";
 import { knownIntentSetFor } from "./intent-registry.js";
@@ -53,6 +54,7 @@ import {
   capabilityDefinitionDrift,
   capabilityVerbCatalogDrift,
   capabilityToolMergeDrift,
+  capabilityComputerDrift,
   DRIFT_COMPARATOR_VERSION,
   installTimePlaceholders,
   type InstalledSkillRow,
@@ -126,8 +128,9 @@ export function missingToolMemberships(
  * state a re-apply must not stomp, while a container's carries the template's
  * DECLARED config, which the template owns. Keys the template does not
  * declare are preserved.
- * `defMetadata` carries the template's declared container-level config (e.g.
- * `mode`) — merging it here (not just on a full re-apply) is what lets an
+ * `defMetadata` carries the template's declared container-level config, as the
+ * applier writes it (`declaredContainerMetadata`: its `metadata`, e.g. `mode`,
+ * and its computer blocks under `computer`) — merging it here (not just on a full re-apply) is what lets an
  * already-installed capability pick up a template's newly-declared `mode` on
  * the very next reconcile, even when nothing else drifted (a metadata-only
  * template edit changes `contentHash`, which alone triggers this stamp — see
@@ -540,6 +543,13 @@ export async function reconcileCapabilitiesToTemplates(
         cachedDef.tools ?? []
       );
 
+      // The container's computer blocks (comparator v15): what a computer
+      // installs, checks and runs (its recipes). The pod's definition only:
+      // what runs on a computer is its installation's approved snapshot, and
+      // moving that asks the person (`requestNeedsApproval`), so this is
+      // stamped like a `metadata` key, never held.
+      const computerDrift = capabilityComputerDrift(metadata, cachedDef);
+
       const hasDrift =
         drift.missing.length > 0 ||
         drift.drifted.length > 0 ||
@@ -561,6 +571,7 @@ export async function reconcileCapabilitiesToTemplates(
         if (
           !dryRun &&
           (backfilled ||
+            computerDrift ||
             cachedDef.contentHash !== storedContentHash ||
             // Only meaningful where a hash is actually stamped — a hash-less
             // template stamps no version either, and must not re-write on
@@ -573,8 +584,17 @@ export async function reconcileCapabilitiesToTemplates(
             metadata,
             templateKey,
             cachedDef.contentHash,
-            cachedDef.metadata
+            declaredContainerMetadata(cachedDef)
           );
+        }
+        if (computerDrift) {
+          report.applied.push({
+            containerId: container.id,
+            name: container.name,
+            templateKey,
+            reason: `${dryRun ? "would reconcile" : "reconciled"}: computerBlocks`,
+          });
+          continue;
         }
         report.skipped.push({
           containerId: container.id,
@@ -699,7 +719,7 @@ export async function reconcileCapabilitiesToTemplates(
         metadata,
         templateKey,
         cachedDef.contentHash,
-        cachedDef.metadata
+        declaredContainerMetadata(cachedDef)
       );
       report.applied.push({
         containerId: container.id,
