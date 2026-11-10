@@ -3555,7 +3555,13 @@
           "name": "currentStage",
           "type": "string",
           "required": false,
-          "description": "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to."
+          "description": "Advance the session to this playbook stage by its stage `key`. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to."
+        },
+        {
+          "name": "stageRunner",
+          "type": "",
+          "required": false,
+          "description": "With currentStage: who works it (system/synap/processes)."
         },
         {
           "name": "subjectEntityId",
@@ -3897,7 +3903,10 @@
           },
           "currentStage": {
             "type": "string",
-            "description": "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to."
+            "description": "Advance the session to this playbook stage by its stage `key`. With a subject, the step IS the subject's status: prefer moving the subject (synap_update_entity + expectedStatus); a stage with a subjectStatus moves it through the same door, and the reply's `subjectMove` says what happened (written, proposed, skipped or failed, with why). Changing it emits a stage-transition event automations can react to."
+          },
+          "stageRunner": {
+            "description": "With currentStage: who works it (system/synap/processes)."
           },
           "subjectEntityId": {
             "type": ["string", "null"],
@@ -13098,7 +13107,13 @@
           "name": "runner",
           "type": "",
           "required": false,
-          "description": "A playbook runner for this run (system/synap/processes); not with handToAgentId."
+          "description": "Who runs it (system/synap/processes)."
+        },
+        {
+          "name": "stageRunners",
+          "type": "",
+          "required": false,
+          "description": "Per stage key (same skill)."
         },
         {
           "name": "sessionId",
@@ -13163,9 +13178,8 @@
             "type": "string",
             "description": "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the playbook's runner, else the agent the person ASSIGNED to it, else its own executor (`handedTo` names who)."
           },
-          "runner": {
-            "description": "A playbook runner for this run (system/synap/processes); not with handToAgentId."
-          },
+          "runner": { "description": "Who runs it (system/synap/processes)." },
+          "stageRunners": { "description": "Per stage key (same skill)." },
           "sessionId": {
             "type": "string",
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
