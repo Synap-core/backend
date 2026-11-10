@@ -258,8 +258,8 @@ describe("synap_find object catalogs under a key's grant", () => {
       if (catalog === "skills") continue; // pod-wide rows only: no space B row
       const all = matchIds(ungranted[catalog]);
       const narrowed = matchIds(granted[catalog]);
-      const inA = Object.values(rows.A);
-      const inB = Object.values(rows.B);
+      const inA: string[] = Object.values(rows.A);
+      const inB: string[] = Object.values(rows.B);
       // Non-vacuity: without the grant the person reads both spaces.
       expect(
         all.some((id) => inB.includes(id)),
