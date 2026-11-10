@@ -5014,6 +5014,11 @@ ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "guidance" jsonb NOT NULL DEFAU
 -- version of a playbook's definition — what a step pinned with `uses` runs.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "runner" jsonb;
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "requires" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- 0419: the ONE list of what a run of the playbook may use beyond its class
+-- floor (run tools, intents, capabilities); "only these". Replaces
+-- required_intents (kept one release for a rollback), grants links as run
+-- tools, stages[].grants and the space's taskIntents.
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "tools" jsonb NOT NULL DEFAULT '[]'::jsonb;
 CREATE TABLE IF NOT EXISTS "playbook_versions" (
   "playbook_id" uuid        NOT NULL,
   "version"     integer     NOT NULL,

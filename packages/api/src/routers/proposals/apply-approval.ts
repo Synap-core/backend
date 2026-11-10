@@ -1191,6 +1191,8 @@ async function applyProposalApprovalInner(
                 reconciledOperations.some((op) => op.op === "create_skill") &&
                 (await personIsApproving(ctx, userId)),
             },
+            // A `bind_renderer` op's binding names the proposal that made it.
+            sourceProposalId: proposal.id,
           }),
           // Per-op link idempotency keyed by THIS proposal (client-stable): a
           // retried or double-clicked approval links what the first attempt

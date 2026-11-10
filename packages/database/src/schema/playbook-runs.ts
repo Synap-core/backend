@@ -127,13 +127,19 @@ export interface PlaybookRunGeneration {
   lands: { target: "subject_document_section"; section: string } | null;
   /** What the prompt was made of, in order, with each part's size. */
   context: Array<{
-    kind: "method" | "subject" | "subject_document";
+    kind: "method" | "subject" | "subject_document" | "examples";
     /** The entity or document read, when the part is one. */
     id?: string;
     chars: number;
     /** The part was cut to fit the call's input bound. */
     truncated?: boolean;
   }>;
+  /**
+   * The past outcomes read as examples, when the playbook's landing asks for
+   * them (`lands.examples`); absent when it does not. Either what was shown
+   * or why the read failed: a failed read is never recorded as "none".
+   */
+  examples?: PlaybookRunGenerationExamples;
   /** The text sent: the system line and the prompt. */
   prompt: { system: string; text: string; chars: number };
   /** The model that answered, when the IS reported it. */
@@ -158,6 +164,37 @@ export interface PlaybookRunGeneration {
     sectionId: string;
   };
 }
+
+/** See {@link PlaybookRunGeneration.examples}. */
+export type PlaybookRunGenerationExamples =
+  | {
+      /** How many of each the landing asked for. */
+      asked: { approved: number; rejected: number };
+      /** The earlier drafts shown to the model, in prompt order. */
+      used: Array<{
+        outcome: "approved" | "rejected";
+        proposalId: string;
+        /** The run that filed it. */
+        runId: string;
+        chars: number;
+        /** A rejection whose reason was given (and shown). */
+        reason?: true;
+        /** The text was cut to its per-example bound. */
+        truncated?: true;
+      }>;
+      /** Read but not shown: no section text, or no room left in the input bound. */
+      leftOut?: Array<{
+        outcome: "approved" | "rejected";
+        proposalId: string;
+        runId: string;
+        why: "no_text" | "over_bound";
+      }>;
+    }
+  | {
+      asked: { approved: number; rejected: number };
+      /** The read failed: the run went on without examples. */
+      error: string;
+    };
 
 export const playbookRuns = pgTable(
   "playbook_runs",

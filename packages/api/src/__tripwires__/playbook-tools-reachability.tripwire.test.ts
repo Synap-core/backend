@@ -1,33 +1,30 @@
 /**
- * `requiredIntents` REACHES THE ROW — the anti-"declared on the wire, populated
- * by nobody" tripwire.
+ * `tools` REACHES THE ROW — the anti-"declared on the wire, populated by
+ * nobody" tripwire, for the ONE list of what a run of a playbook may use
+ * (0419; plan 08e4fba7 decisions 3 and 4). It replaced `requiredIntents`, and
+ * this file is that field's tripwire carried over.
  *
- * The field is declared in four places that can silently disagree: the ONE wire
+ * The field is declared in places that can silently disagree: the ONE wire
  * schema, the update PATCH schema, the proposal payloads, and the actual
  * drizzle write. zod STRIPS undeclared keys and every write site builds its own
  * object literal, so the failure mode is precise and quiet: an author declares
- * a requirement, the door accepts it, the row stores `[]`, and the run reports
- * the playbook as needing nothing. Every type checks. This is the same defect
- * class as the playbook-definition round trip (doors dropping `scope` /
- * `stages`), and the same reason the repo has a one-schema tripwire.
+ * a list, the door accepts it, the row stores `[]`, and the run gets only its
+ * floor. Every type checks.
  *
  * WHAT IT PROVES, per site, by SOURCE SCAN of the writer's own literal:
  *   - the definition schema declares the field;
- *   - the update PATCH declares it (an all-optional PATCH that omits a
- *     definition field drops it on every update);
- *   - the insert literal writes it (else a create stores the column default);
- *   - the update `set` literal writes it (else an update is a no-op);
- *   - BOTH proposal payloads carry it (else an AI-authored write is approved
- *     into a row that silently drops it);
- *   - it is a version-bumping definition field (else "what ran" cannot be
- *     diffed against "today");
- *   - the run snapshot records it (else a run cannot say what it asked for).
+ *   - the update PATCH declares it;
+ *   - the insert literal writes it;
+ *   - the update `set` literal writes it;
+ *   - BOTH proposal payloads carry it;
+ *   - it is a version-bumping definition field;
+ *   - the run snapshot records it.
  *
  * WHAT IT DOES NOT PROVE: that the value stored is the value submitted — this
- * is a source scan, not an execution. A future refactor that builds the insert
- * from a spread rather than literal keys would make this vacuous, which is why
- * every site asserts BOTH that the literal names the key AND a non-vacuity
- * check that the scan can still see that shape.
+ * is a source scan, not an execution (`playbook-tools.pglite.test.ts` drives
+ * the real door). A refactor that builds the insert from a spread would make
+ * this vacuous, which is why every site asserts BOTH that the literal names
+ * the key AND a non-vacuity check that the scan can still see that shape.
  */
 
 import { describe, it, expect } from "vitest";
@@ -96,7 +93,7 @@ const router = read(ROUTER);
  * insert elsewhere in the file and made this slice run to EOF.) */
 const INSERT_END = ".returning();";
 
-describe("requiredIntents — reaches the row, not just the schema", () => {
+describe("tools — reaches the row, not just the schema", () => {
   it("non-vacuity: every scanned site is a real, BOUNDED slice", () => {
     // A slice that came back empty, or that swallowed its neighbour, would
     // make every "does this site name the field" assertion below pass on a
@@ -136,17 +133,17 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
         "export const playbookDefinitionSchema = z.object({",
         "/** A parsed playbook definition"
       ),
-      ["playbookRequiredIntentsSchema = z\n"]
+      ["playbookToolsSchema = z\n"]
     );
 
-    // And the scan can still see the shape it hunts: a literal `requiredIntents:`
+    // And the scan can still see the shape it hunts: a literal `tools:`
     // in one of them, matched by the SAME regex the assertions use.
     expect(slice(router, ".insert(playbooks)", INSERT_END)).toMatch(
-      /requiredIntents\s*:/
+      /\btools\s*:/
     );
     // Negative control on the regex: a key that is NOT declared must not match,
     // so "it matches" above is not a tautology over any camelCase token.
-    expect("notAField: 1").not.toMatch(/requiredIntents\s*:/);
+    expect("notAField: 1").not.toMatch(/\btools\s*:/);
   });
 
   it("the ONE wire schema declares it", () => {
@@ -158,7 +155,7 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
       "export const playbookDefinitionSchema = z.object({",
       "/** A parsed playbook definition"
     );
-    expect(def).toMatch(/requiredIntents\s*:/);
+    expect(def).toMatch(/\btools\s*:/);
   });
 
   it("the update PATCH declares it (an all-optional patch that omits it drops it)", () => {
@@ -167,14 +164,14 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
       "export const updateInputSchema = z.object({",
       "// ── Links sub-router"
     );
-    expect(patch).toMatch(/requiredIntents\s*:/);
+    expect(patch).toMatch(/\btools\s*:/);
   });
 
   it("the insert literal writes it", () => {
     // Without it, a create stores the column default `[]` and the declaration
     // is gone the moment the author saves.
     expect(slice(router, ".insert(playbooks)", INSERT_END)).toMatch(
-      /requiredIntents\s*:\s*input\.requiredIntents/
+      /\btools\s*:\s*input\.tools\b/
     );
   });
 
@@ -186,7 +183,7 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
       "// D3c: bump"
     );
     expect(update).toMatch(
-      /if \(input\.requiredIntents !== undefined\)\s*\n?\s*set\.requiredIntents = input\.requiredIntents;/
+      /if \(input\.tools !== undefined\)\s*\n?\s*set\.tools = input\.tools;/
     );
   });
 
@@ -199,9 +196,7 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
       "data: {",
       "// IDEMPOTENCY ABOVE THE PROPOSE PATH"
     );
-    expect(createProposal).toMatch(
-      /requiredIntents\s*:\s*input\.requiredIntents/
-    );
+    expect(createProposal).toMatch(/\btools\s*:\s*input\.tools\b/);
 
     const updateProposal = slice(
       router,
@@ -211,7 +206,7 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
     // The spread-conditional form, so a PATCH that omits the field still keeps
     // the stored one rather than clearing it.
     expect(updateProposal).toMatch(
-      /input\.requiredIntents !== undefined\s*\n?\s*\?\s*\{\s*requiredIntents: input\.requiredIntents\s*\}/
+      /input\.tools !== undefined\s*\n?\s*\?\s*\{\s*tools: input\.tools\s*\}/
     );
   });
 
@@ -219,7 +214,7 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
     // Otherwise editing the requirements leaves `version` untouched and the run
     // snapshot cannot tell the two definitions apart — "what ran" stops being
     // diffable against "today" for exactly this field.
-    expect(read(VERSION)).toMatch(/["']requiredIntents["']/);
+    expect(read(VERSION)).toMatch(/["']tools["']/);
   });
 
   it("the run snapshot records it", () => {
@@ -228,6 +223,6 @@ describe("requiredIntents — reaches the row, not just the schema", () => {
       "export function buildDefinitionSnapshot",
       "/**\n * Idempotency-by-subject"
     );
-    expect(snapshot).toMatch(/requiredIntents\s*:\s*playbook\.requiredIntents/);
+    expect(snapshot).toMatch(/\btools\s*:\s*playbook\.tools\b/);
   });
 });

@@ -526,7 +526,7 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   params: unknown;
   expectedOutputs: unknown;
   criteria: unknown;
-  requiredIntents: unknown;
+  tools: unknown;
   guidance: unknown;
   subjectProfile: unknown;
   runner: unknown;
@@ -539,11 +539,10 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     params: playbook.params,
     expectedOutputs: playbook.expectedOutputs,
     criteria: playbook.criteria,
-    // WHAT THIS RUN ASKED THE POD TO BE ABLE TO DO. Snapshotted with the rest
-    // so "what ran" includes the requirements the run was launched under, not
-    // only the template it was launched from — a run whose playbook has since
-    // been re-declared must still read as what it actually needed.
-    requiredIntents: playbook.requiredIntents,
+    // WHAT THIS RUN COULD USE ("only these", 0419). Snapshotted with the rest
+    // so "what ran" includes the tools the run was launched under, not only
+    // the template it was launched from.
+    tools: playbook.tools,
     // The rules the run was DECLARED to follow (refs). What it actually USED
     // (each current version's id and content hash) is stamped next to it by
     // the executor that renders the method (`recordRunGuidance`), replacing

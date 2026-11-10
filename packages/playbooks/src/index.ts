@@ -173,21 +173,14 @@ export interface PlaybookParam {
 // re-exported here so `@synap/playbooks` stays the one import.
 export * from "./params.js";
 
-// `requiredIntents` — what a playbook NEEDS the pod to be able to do, and the
-// pure matcher that turns that declaration plus a resolver index into a
-// per-intent verdict. Also its own file: the "a gap is a fact, never a
-// rejection" rule and the seam to the resolver are long enough that inlining
-// them into this barrel would bury them.
-export * from "./required-intents.js";
+// The ONE `tools` field of a playbook and its stages, the floor of each run
+// class, and the vocabulary of run tools (plan 08e4fba7, decisions 3 and 4).
+// Its own file: the pod, the catalog mirror and the IS tripwire read it.
+export * from "./run-tools.js";
 
-// `export *` does not bring a name into LOCAL scope, so the composition merge
-// below needs these bound explicitly. Imported rather than re-qualified
-// (`requiredIntents.mergeRequiredIntents`) so the call sites read like the
-// `unionCapabilityRefs` / `mergeStages` helpers they sit beside.
-import {
-  mergeRequiredIntents,
-  type PlaybookRequiredIntents,
-} from "./required-intents.js";
+// `export *` does not bring a name into LOCAL scope: the composition merge
+// below unions `tools` with this reader.
+import { readToolsList } from "./run-tools.js";
 
 /**
  * Fallback used only when a pinned list has nobody eligible. The filter and
@@ -781,7 +774,25 @@ export interface OutputLanding {
   target: "subject_document_section";
   /** The section's title, e.g. "Caption draft". */
   section: string;
+  /**
+   * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
+   * reads the person's last decided drafts of THIS playbook in THIS space, the
+   * approved ones as they were applied (after the person's revisions), the
+   * rejected ones with the reason when one was given, and shows them to the
+   * model as examples. Each count is at most
+   * {@link OUTPUT_LANDING_EXAMPLES_MAX}; 0 or absent reads none of that kind.
+   */
+  examples?: OutputLandingExamples;
 }
+
+/** See {@link OutputLanding.examples}. */
+export interface OutputLandingExamples {
+  approved?: number;
+  rejected?: number;
+}
+
+/** The most past outcomes of one kind a one-shot run reads as examples. */
+export const OUTPUT_LANDING_EXAMPLES_MAX = 5;
 
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
@@ -1140,10 +1151,11 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
- * How much model a stage's work needs — ADVISORY. `deep` = architecture or
- * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
- * a smaller model can do. An executor MAY map it to a model; nothing reads it
- * yet, and absent means "no preference" (the executor's own default).
+ * How much model a stage's work needs. `deep` = architecture or judgment-heavy
+ * work, `standard` = ordinary work, `quick` = a mechanical step a smaller model
+ * can do. A session run's turn in the stage sends it to the IS, which picks
+ * that model tier unless a person or the space chose a model
+ * (`run-stage-tier.ts`); absent means "no preference" (the IS's own choice).
  */
 export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
 export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
@@ -1283,7 +1295,19 @@ export interface PlaybookStage {
   description?: string;
   /** Stage-scoped goal when this stage is active. */
   goal?: string;
-  /** Capabilities granted while this stage is active. */
+  /**
+   * The tools of this stage, a SUBSET of its playbook's `tools`: while the
+   * stage is active the run gets its class floor plus these, and nothing else
+   * the playbook lists (`activeToolsList`). Absent ⇒ the playbook's list. The
+   * write door refuses an entry the playbook does not list
+   * (`stageToolsOutsidePlaybook`). Replaces the advisory `grants` (folded in by
+   * migration 0419; a definition still sending `grants` has them folded here).
+   */
+  tools?: string[];
+  /**
+   * @deprecated INPUT only: a definition written before 0419 may still send
+   * it; the write door folds it into `tools` and never stores it.
+   */
   grants?: CapabilityRef[];
   /** Deliverables expected from this stage. */
   expectedOutputs?: ExpectedOutput[];
@@ -1347,9 +1371,9 @@ export interface PlaybookStage {
    */
   onFail?: PlaybookStageOnFail;
   /**
-   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
-   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
-   * a model later. Never a control: a stage with or without it runs the same.
+   * Model tier for this stage's work (`deep` | `standard` | `quick`): a
+   * session run's turn in this stage runs on that tier unless a person or the
+   * space chose a model. Absent ⇒ no preference.
    */
   tier?: PlaybookStageTier;
   /**
@@ -2635,18 +2659,11 @@ export interface LoopPlaybookDef {
   /** Conforms to ExpectedOutput[]; stored loosely (validated at the boundary). */
   expectedOutputs?: Record<string, unknown>[];
   /**
-   * The ABSTRACT intents this playbook needs the pod to be able to do — the
-   * process half of the intent spine (a template's `taskIntents` is what the
-   * SPACE needs; a capability's `provides` is what the PACK serves). Slugs of
-   * the closed vocabulary, validated at the write door exactly like
-   * `taskIntents`; see {@link readRequiredIntents} and
-   * {@link mergeRequiredIntents}.
-   *
-   * TYPE-only here, stored loosely like its `stages`/`expectedOutputs`
-   * siblings: this package stays dependency-free, so the vocabulary and the
-   * zod schema both live at the door (`@synap/api` `schemas/playbook-definition`).
+   * The ONE list of what a run of this playbook may use, beyond its class
+   * floor: run tools, intent slugs, capabilities — see `run-tools.ts`. "Only
+   * these" (plan 08e4fba7 decision 3). Composition UNIONs it.
    */
-  requiredIntents?: PlaybookRequiredIntents;
+  tools?: string[];
   /** Capabilities granted to the playbook (resolved local refs → `grants` links). */
   grants?: CapabilityRef[];
   /** Inline schedule — materializes the backing cron automation via the create path. */
@@ -2744,10 +2761,11 @@ export interface LoopDefinition {
 //     defined, else the base value.
 //   - stages: additive by `key` — base stages keep their order; an overlay stage
 //     whose `key` matches a base stage merges onto it (overlay stage fields win,
-//     stage `grants` union); overlay stages with new keys append after.
-//   - grants / params / expectedOutputs / requiredIntents: UNION (grants dedup
-//     by kind+id, params by name, expectedOutputs by kind, requiredIntents by
-//     slug) — base first, overlay appended.
+//     stage `tools` and deprecated `grants` union); overlay stages with new
+//     keys append after.
+//   - grants / params / expectedOutputs / tools: UNION (grants dedup by
+//     kind+id, params by name, expectedOutputs by kind, tools by entry) — base
+//     first, overlay appended.
 //   - `ref` is the overlay's (the concrete playbook); `extends` is dropped.
 
 /** Dedup a CapabilityRef list by (kind,id), keeping first occurrence. */
@@ -2786,12 +2804,13 @@ function unionByField(
   return order.map((k) => byKey.get(k)!);
 }
 
-/** Read a loose object's `grants` as a CapabilityRef[] (or undefined). */
-function readStageGrants(
-  stage: Record<string, unknown>
-): CapabilityRef[] | undefined {
-  const g = stage.grants;
-  return Array.isArray(g) ? (g as CapabilityRef[]) : undefined;
+/** Union two `tools` lists (each entry once, base first), or undefined. */
+function unionTools(base: unknown, overlay: unknown): string[] | undefined {
+  if (!Array.isArray(base) && !Array.isArray(overlay)) return undefined;
+  return readToolsList([
+    ...(Array.isArray(base) ? base : []),
+    ...(Array.isArray(overlay) ? overlay : []),
+  ]);
 }
 
 /** Additive stage merge: base order preserved; overlay merges by `key`, new keys append. */
@@ -2811,11 +2830,19 @@ function mergeStages(
     const key = String(stage.key);
     const existing = byKey.get(key);
     if (existing) {
+      const tools = unionTools(existing.tools, stage.tools);
+      // The deprecated stage `grants` still union (the write door folds them
+      // into `tools`), so a composed definition loses none of the base's.
       const grants = unionCapabilityRefs(
-        readStageGrants(existing),
-        readStageGrants(stage)
+        Array.isArray(existing.grants)
+          ? (existing.grants as CapabilityRef[])
+          : undefined,
+        Array.isArray(stage.grants)
+          ? (stage.grants as CapabilityRef[])
+          : undefined
       );
       const merged: Record<string, unknown> = { ...existing, ...stage };
+      if (tools) merged.tools = tools;
       if (grants) merged.grants = grants;
       byKey.set(key, merged);
     } else {
@@ -2865,13 +2892,10 @@ export function composePlaybookDef(
       "kind"
     ),
     // Declarations UNION — an overlay cannot narrow what a base journey needs.
-    // Same additive rule as grants: a process's requirements are a SET of
-    // capabilities it depends on, and dropping the base's would let an overlay
-    // silently strip a real dependency off a shared method.
-    requiredIntents: mergeRequiredIntents(
-      base.requiredIntents,
-      overlay.requiredIntents
-    ),
+    // Same additive rule as grants: what a process may use is a SET, and
+    // dropping the base's would let an overlay silently strip a real tool off
+    // a shared method.
+    tools: unionTools(base.tools, overlay.tools),
   };
   // Strip keys left undefined so the flattened def matches a hand-authored one.
   for (const key of Object.keys(merged) as (keyof LoopPlaybookDef)[]) {

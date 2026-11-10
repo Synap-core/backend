@@ -17,11 +17,19 @@
  *    cost, finish reason and prompt text on its `generation`;
  *  - a session, a room, a recall, or a dispatched executor for a generate run;
  *  - the door's answer missing the proposal id, its review link or the run id;
+ *  - a filed proposal that does not name the run that drafted it
+ *    (`data.run = { id, playbookId }`);
  *  - a second run on the same subject (`idempotentBySubject`) filing a second
  *    proposal while the first still waits;
  *  - a failed call leaving no record (the run row is `failed` with the error);
  *  - a NON-generate run changed (control: it still opens a session and a room
- *    and dispatches its executor, and makes no model call here).
+ *    and dispatches its executor, and makes no model call here);
+ *  - past outcomes (slice 8, `lands.examples`): a playbook that opts in shows
+ *    the person's last decided drafts of THIS playbook (approved as revised,
+ *    rejected with the reason when given; never a pending one or another
+ *    playbook's), records which in `generation.examples`; one that does not
+ *    opt in reads none; a FAILED read is recorded as an error, never as
+ *    "none", and the run still drafts; examples give way before the subject.
  *
  * Mocked: the key lookup and its side reads (guest check, sub-token mapping,
  * person-token classification), the audit log, the event log, realtime, the
@@ -75,6 +83,8 @@ const h = vi.hoisted(() => {
     answer: "" as string | Error,
     dispatched: [] as string[],
     recalls: 0,
+    /** The past-outcomes read throws (slice 8's failed-read row). */
+    examplesFail: false,
     noopEvents: () =>
       new Proxy(
         {},
@@ -212,12 +222,32 @@ vi.mock("../../../services/focus-sessions/notify-needs-you.js", () => ({
 vi.mock("../../../services/playbooks/playbook-skill-preflight.js", () => ({
   findUnenabledPlaybookSkills: async () => [],
 }));
+// The real past-outcomes read, made to fail on demand.
+vi.mock("../../../services/playbooks/generate-examples.js", async (orig) => {
+  const actual =
+    await orig<
+      typeof import("../../../services/playbooks/generate-examples.js")
+    >();
+  return {
+    ...actual,
+    readPastOutcomes: async (
+      args: Parameters<typeof actual.readPastOutcomes>[0]
+    ) => {
+      if (h.examplesFail) throw new Error("examples read failed (test)");
+      return actual.readPastOutcomes(args);
+    },
+  };
+});
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { registerPlaybooksRoutes } from "./playbooks.js";
+import {
+  buildGeneratePrompt,
+  GENERATE_PROMPT_MAX_CHARS,
+} from "../../../services/playbooks/generate-run.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const BASIC =
@@ -256,6 +286,7 @@ const DOC = randomUUID();
 const DOC_2 = randomUUID();
 const CAPTION = randomUUID(); // executor: generate
 const AGENTIC = randomUUID(); // executor: is-agent (the control)
+const CAPTION_EX = randomUUID(); // executor: generate, opts in to past outcomes
 
 const SCRIPT = [
   "S1: You do not own your digital life.",
@@ -341,9 +372,14 @@ beforeAll(async () => {
       ]
     );
   }
-  const playbook = (id: string, name: string, executor: string) =>
+  const playbook = (
+    id: string,
+    name: string,
+    executor: string,
+    examples?: { approved?: number; rejected?: number }
+  ) =>
     q(
-      `insert into playbooks (id, workspace_id, created_by, name, goal_template, executor, status, metadata, params, input_strategy, channel_spec, expected_outputs, stages, criteria, required_intents, guidance, requires, subject_profile, version)
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, executor, status, metadata, params, input_strategy, channel_spec, expected_outputs, stages, criteria, tools, guidance, requires, subject_profile, version)
        values ($1,$2,$3,$4,'Draft the caption of this post ({post}) from its hook and its script.',$5,'active','{}'::jsonb,$6::jsonb,'{"kind":"none"}'::jsonb,'{}'::jsonb,$7::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,'{"profileSlug":"post"}'::jsonb,1)`,
       [
         id,
@@ -362,6 +398,7 @@ beforeAll(async () => {
             lands: {
               target: "subject_document_section",
               section: "Caption draft",
+              ...(examples ? { examples } : {}),
             },
           },
         ]),
@@ -369,12 +406,17 @@ beforeAll(async () => {
     );
   await playbook(CAPTION, "Write the caption", "generate");
   await playbook(AGENTIC, "Write the caption (agent)", "is-agent");
+  await playbook(CAPTION_EX, "Write the caption (with examples)", "generate", {
+    approved: 1,
+    rejected: 2,
+  });
 }, 180_000);
 
 beforeEach(async () => {
   h.generateCalls = [];
   h.dispatched = [];
   h.recalls = 0;
+  h.examplesFail = false;
   h.answer = DRAFT;
   h.getApiKeyStatus = async () => ({
     status: "valid",
@@ -526,6 +568,9 @@ describe("a one-shot (generate) playbook run through the Hub door", () => {
       proposal: { id: p.id, documentId: DOC, sectionId: "caption-draft" },
     });
     expect(run.generation!.prompt.text).toBe(call.prompt);
+    // The proposal names the run that drafted it: from a proposal, the run's
+    // record (`GET /runs/:id`) is one read away.
+    expect(payload.run).toEqual({ id: run.id, playbookId: CAPTION });
     expect(
       run.generation!.context.map((c: { kind: string }) => c.kind)
     ).toEqual(["subject", "subject_document"]);
@@ -588,5 +633,196 @@ describe("control: a NON-generate run is unchanged", () => {
     expect(runs[0]!.session_id).not.toBeNull();
     expect(runs[0]!.executor).toBe("is-agent");
     expect(runs[0]!.generation).toBeNull();
+  });
+});
+
+/** File one draft through the real door and return its proposal id. */
+async function draft(playbookId: string, subjectId: string, text: string) {
+  h.answer = text;
+  const { status, body } = await runPlaybook(playbookId, subjectId);
+  expect(status, JSON.stringify(body)).toBe(200);
+  return body.generated.proposalId as string;
+}
+
+/**
+ * Decide a filed draft as the person would: approve (optionally after a
+ * revision, which rewrites the stored section body as the revise door does)
+ * or reject (with or without a reason), at a given time.
+ */
+async function decide(
+  proposalId: string,
+  outcome: "approved" | "rejected",
+  at: string,
+  opts: { revisedBody?: string; reason?: string } = {}
+) {
+  const [row] = (
+    await q<{ data: Record<string, any> }>(
+      `select data from proposals where id = $1`,
+      [proposalId]
+    )
+  ).rows;
+  const data = row!.data;
+  if (opts.revisedBody !== undefined) {
+    const payload = (data.data ?? data) as Record<string, any>;
+    payload.ops[0].body = opts.revisedBody;
+  }
+  await q(
+    `update proposals set status = $2, reviewed_at = $3, rejection_reason = $4, data = $5::jsonb where id = $1`,
+    [proposalId, outcome, at, opts.reason ?? null, JSON.stringify(data)]
+  );
+}
+
+describe("past outcomes as context (lands.examples, slice 8)", () => {
+  it("shows the person's last decided drafts of THIS playbook: approved as revised, rejected with the reason; records which", async () => {
+    const pOld = await draft(CAPTION_EX, POST, "Old approved draft");
+    const pNew = await draft(CAPTION_EX, POST, "First words of a draft");
+    const pReason = await draft(CAPTION_EX, POST, "Buy now, limited offer");
+    const pBare = await draft(CAPTION_EX, POST, "A draft rejected bare");
+    const pOlderReject = await draft(CAPTION_EX, POST, "An older rejection");
+    await draft(CAPTION_EX, POST, "A draft still pending");
+    const pOther = await draft(CAPTION, POST, "Another playbook's draft");
+
+    await decide(pOld, "approved", "2026-11-01T10:00:00Z");
+    await decide(pNew, "approved", "2026-11-05T10:00:00Z", {
+      revisedBody: "Your data should live where you decide, as I wrote it.",
+    });
+    await decide(pReason, "rejected", "2026-11-06T10:00:00Z", {
+      reason: "Too salesy:\nnever say buy now",
+    });
+    await decide(pBare, "rejected", "2026-11-04T10:00:00Z");
+    await decide(pOlderReject, "rejected", "2026-11-02T10:00:00Z");
+    await decide(pOther, "approved", "2026-11-07T10:00:00Z");
+
+    h.generateCalls = [];
+    const pFinal = await draft(CAPTION_EX, POST_2, DRAFT);
+    expect(h.generateCalls).toHaveLength(1);
+    const prompt = h.generateCalls[0]!.prompt as string;
+
+    // The block sits after the subject's document, before the answer line.
+    const at = prompt.indexOf(
+      '## Earlier "Caption draft" drafts the person decided'
+    );
+    expect(at).toBeGreaterThan(prompt.indexOf("S2: Your data lives"));
+    expect(at).toBeLessThan(prompt.indexOf("## Your answer"));
+    // approved: 1 = the most recently decided one, AS REVISED.
+    expect(prompt).toContain(
+      '### Approved for "Carousel 01", as the person kept it\nYour data should live where you decide, as I wrote it.'
+    );
+    expect(prompt).not.toContain("First words of a draft");
+    expect(prompt).not.toContain("Old approved draft");
+    // rejected: 2 = the two most recent, the reason on one line when given.
+    expect(prompt).toContain(
+      '### Rejected for "Carousel 01". Their reason: Too salesy: never say buy now\nBuy now, limited offer'
+    );
+    expect(prompt).toContain(
+      '### Rejected for "Carousel 01"\nA draft rejected bare'
+    );
+    expect(prompt).not.toContain("An older rejection");
+    // Never a pending draft, never another playbook's.
+    expect(prompt).not.toContain("A draft still pending");
+    expect(prompt).not.toContain("Another playbook's draft");
+    expect(prompt.length).toBeLessThanOrEqual(GENERATE_PROMPT_MAX_CHARS);
+
+    const run = (await runRows()).find(
+      (r) => r.generation?.proposal?.id === pFinal
+    )!;
+    const runOf = async (pid: string) =>
+      (await runRows()).find((r) => r.generation?.proposal?.id === pid)!.id;
+    expect(run.generation!.examples).toEqual({
+      asked: { approved: 1, rejected: 2 },
+      used: [
+        {
+          outcome: "approved",
+          proposalId: pNew,
+          runId: await runOf(pNew),
+          chars: expect.any(Number),
+        },
+        {
+          outcome: "rejected",
+          proposalId: pReason,
+          runId: await runOf(pReason),
+          chars: expect.any(Number),
+          reason: true,
+        },
+        {
+          outcome: "rejected",
+          proposalId: pBare,
+          runId: await runOf(pBare),
+          chars: expect.any(Number),
+        },
+      ],
+    });
+    expect(
+      run.generation!.context.map((c: { kind: string }) => c.kind)
+    ).toEqual(["subject", "subject_document", "examples"]);
+
+    // A playbook that does not opt in reads none, decided drafts or not.
+    h.generateCalls = [];
+    await draft(CAPTION, POST_2, DRAFT);
+    expect(h.generateCalls[0]!.prompt).not.toContain("## Earlier");
+    const plain = (await runRows()).at(-1)!;
+    expect(plain.generation!.examples).toBeUndefined();
+  });
+
+  it("a FAILED read is recorded as an error, never as none, and the run still drafts", async () => {
+    const pDecided = await draft(CAPTION_EX, POST, "A draft the person kept");
+    await decide(pDecided, "approved", "2026-11-05T10:00:00Z");
+    h.examplesFail = true;
+    h.generateCalls = [];
+    const { status, body } = await runPlaybook(CAPTION_EX, POST_2);
+    expect(status, JSON.stringify(body)).toBe(200);
+    expect(h.generateCalls).toHaveLength(1);
+    expect(h.generateCalls[0]!.prompt).not.toContain("## Earlier");
+    const run = (await runRows()).find(
+      (r) => r.generation?.proposal?.id === body.generated.proposalId
+    )!;
+    expect(run.status).toBe("proposed");
+    expect(run.generation!.examples).toEqual({
+      asked: { approved: 1, rejected: 2 },
+      error: "examples read failed (test)",
+    });
+  });
+
+  it("examples give way before the subject: left out (and recorded) when the subject fills the bound", () => {
+    const example = (n: number) => ({
+      outcome: "approved" as const,
+      proposalId: `p${n}`,
+      runId: `r${n}`,
+      subjectTitle: `Post ${n}`,
+      text: "x".repeat(1_400),
+      reason: null,
+    });
+    const base = {
+      method: { contextSkill: null, guidance: "" },
+      goal: "Write the caption.",
+      section: "Caption draft",
+      subject: { id: "s", title: "Post", kind: "post", properties: {} },
+      examples: [example(1), example(2)],
+    };
+    // Room for one example after the document: the second is left out.
+    const roomy = buildGeneratePrompt({
+      ...base,
+      document: { id: "d", title: "Script", content: "y".repeat(19_000) },
+    });
+    expect(roomy.text.length).toBeLessThanOrEqual(GENERATE_PROMPT_MAX_CHARS);
+    expect(roomy.text).toContain("y".repeat(19_000));
+    expect(roomy.examples.used.map((u) => u.proposalId)).toEqual(["p1"]);
+    expect(roomy.examples.overBound.map((o) => o.proposalId)).toEqual(["p2"]);
+    expect(roomy.context.find((c) => c.kind === "examples")).toMatchObject({
+      truncated: true,
+    });
+    // A document that fills the bound: no example at all, the subject first.
+    const full = buildGeneratePrompt({
+      ...base,
+      document: { id: "d", title: "Script", content: "y".repeat(30_000) },
+    });
+    expect(full.text.length).toBeLessThanOrEqual(GENERATE_PROMPT_MAX_CHARS);
+    expect(full.text).not.toContain("## Earlier");
+    expect(full.examples.used).toEqual([]);
+    expect(full.examples.overBound).toHaveLength(2);
+    expect(full.context.map((c) => c.kind)).toEqual([
+      "subject",
+      "subject_document",
+    ]);
   });
 });

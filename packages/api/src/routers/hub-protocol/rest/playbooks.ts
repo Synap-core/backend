@@ -85,6 +85,7 @@ export const CreatePlaybookBodySchema = playbookDefinitionSchema
     criteria: true,
     runner: true,
     requires: true,
+    tools: true,
   })
   .extend({
     workspaceId: z.string().uuid().describe("The playbook's home workspace."),
@@ -616,6 +617,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           ...(body.criteria ? { criteria: body.criteria } : {}),
           ...(body.runner !== undefined ? { runner: body.runner } : {}),
           ...(body.requires ? { requires: body.requires } : {}),
+          ...(body.tools !== undefined ? { tools: body.tools } : {}),
         }
       );
       return renderOutcome(c, outcome);
@@ -629,7 +631,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
    * Body: { agentUserId?, source?, reasoning?, name?, description?, goalTemplate?,
    *         params?, inputStrategy?, channelSpec?, expectedOutputs?, stages?,
    *         criteria?, subjectProfile?, schedule?, executor?, status?, scope?,
-   *         runner?, requires? }
+   *         runner?, requires?, tools? }
    *
    * Governed mirror of `playbooks.update` — the door the
    * analyzer persona uses to submit an evidence-backed definition diff. Never
@@ -695,6 +697,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           typeof caller.playbooks.update
         >[0]["runner"],
         requires: body.requires as string[] | undefined,
+        // What a run may use, "only these" (0419). Validated for real by
+        // `playbooks.update` (`playbookToolsSchema`; a stage list a subset).
+        tools: body.tools as string[] | undefined,
       });
       return jsonGoverned(c, result);
     } catch (err) {

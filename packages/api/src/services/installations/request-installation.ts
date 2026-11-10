@@ -51,6 +51,7 @@ import {
   loadInstallableCapability,
   loadLiveInstallation,
   reconcileInstallation,
+  repairKindFor,
   requestNeedsApproval,
   type ComputerRef,
   type InstallableCapability,
@@ -649,10 +650,7 @@ export async function requestInstallation(
   // Approved once for this pair at this version: a repair asks nobody.
   if (live && !input.filedByPod && !requestNeedsApproval(live, input)) {
     const jobId = await reconcileInstallation(live, {
-      kind:
-        live.status === "installed" || live.status === "failed"
-          ? "install"
-          : undefined,
+      kind: repairKindFor(live),
     });
     return { status: "approved", installationId: live.id, jobId };
   }

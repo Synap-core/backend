@@ -97,6 +97,7 @@ import {
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { loadSessionActivity } from "./session-activity.js";
+import { loadRunCostRecord } from "./run-cost-record.js";
 import { withRunWhere } from "./run-where.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import {
@@ -2628,6 +2629,8 @@ async function loadPlaybookRunDetail(
       channelId: focusSessions.channelId,
       metadata: focusSessions.metadata,
       runSnapshot: playbookRuns.definitionSnapshot,
+      runStartedAt: playbookRuns.startedAt,
+      runStopReason: playbookRuns.stopReason,
     })
     .from(playbookRuns)
     .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
@@ -2677,7 +2680,7 @@ async function loadPlaybookRunDetail(
     };
   }
 
-  const [produced, proposalResult, trial] = await Promise.all([
+  const [produced, proposalResult, trial, cost] = await Promise.all([
     loadRunProduced([sess.id], userId),
     loadRunProposals({ sessionId: sess.id }, userId),
     // A trial run's drafted text (the rule lab). THROWS on a failed read.
@@ -2685,6 +2688,19 @@ async function loadPlaybookRunDetail(
       metadata: sess.metadata,
       channelId: sess.channelId ?? null,
     }),
+    // Why the run cost what it cost (plan 08e4fba7 §3.5): its turn ledger and
+    // its agent-run telemetry, read on the session the viewer may open.
+    loadNextRunStart(sess.id, runId, sess.runStartedAt).then(
+      (nextRunStartedAt) =>
+        loadRunCostRecord({
+          runId,
+          sessionId: sess.id,
+          metadata: sess.metadata,
+          startedAt: sess.runStartedAt,
+          nextRunStartedAt,
+          stopReason: sess.runStopReason ?? null,
+        })
+    ),
   ]);
   const agents = await loadRunAgents(
     sess.channelId ?? null,
@@ -2708,7 +2724,33 @@ async function loadPlaybookRunDetail(
     agents,
     guidance: stampedGuidanceOf(sess.runSnapshot),
     ...(trial ? { trial } : {}),
+    cost,
   };
+}
+
+/**
+ * When the session's NEXT run started, after `runId` (a session can host a
+ * later run, a re-run): the telemetry from then on is that run's, not this
+ * one's. `null` = this is the session's latest run.
+ */
+async function loadNextRunStart(
+  sessionId: string,
+  runId: string,
+  startedAt: Date
+): Promise<Date | null> {
+  const [next] = await db
+    .select({ startedAt: playbookRuns.startedAt })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, sessionId),
+        gt(playbookRuns.startedAt, startedAt),
+        ne(playbookRuns.id, runId)
+      )
+    )
+    .orderBy(asc(playbookRuns.startedAt))
+    .limit(1);
+  return next?.startedAt ?? null;
 }
 
 /**

@@ -608,14 +608,19 @@ export const STRUCTURED_VIEW_TYPES = VIEW_DEFINITIONS.filter(
 ).map((d) => d.key);
 
 /**
- * The view types a proposal's `create_view` composite op may ask for. A
- * subset of the structured types (pinned by renderables.test.ts); re-exported
- * from `@synap-core/types/proposals`.
+ * The view types a proposal's `create_view` composite op may ask for: the
+ * LISTS an import or capture bundle files over its own things (structured
+ * types), plus the two views a playbook's UI is made of (`pipeline`, a kind's
+ * declared lifecycle as columns; `bento`, widgets over the same kind). Every
+ * one is a type an agent may create (pinned by renderables.test.ts);
+ * re-exported from `@synap-core/types/proposals`.
  */
 export const COMPOSITE_VIEW_TYPES = [
   "list",
   "table",
   "kanban",
   "gallery",
+  "pipeline",
+  "bento",
 ] as const;
 export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];

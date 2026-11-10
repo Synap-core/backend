@@ -405,7 +405,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     ),
     tier: deriveJsonSchema(
       playbookStageSchema.shape.tier.unwrap(),
-      "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+      "Optional: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. A run's turn in this stage uses that model tier unless the person or the space chose a model. Omit for no preference."
     ),
     forEach: deriveJsonSchema(
       playbookStageSchema.shape.forEach.unwrap(),
@@ -423,6 +423,12 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     description: "Who runs it (shapes: load_skill system/synap/processes).",
   },
   requires: {
+    type: "array",
+    items: { type: "string" },
+  },
+  // What a run may use beyond its class floor, ONLY these (shapes taught in
+  // `system/synap/processes`; validated by `playbookToolsSchema`).
+  tools: {
     type: "array",
     items: { type: "string" },
   },
@@ -453,7 +459,7 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 const PLAYBOOK_STAGES_PROPERTY = {
   type: "array",
   description:
-    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
   items: {
     type: "object",
     properties: {
@@ -3672,6 +3678,43 @@ export const tools = {
         },
       },
       {
+        name: "synap_propose_app_from_playbook",
+        annotations: {
+          title: "Propose a template's UI",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "The one verb for 'build me an app / a UI for this playbook'. From the playbook and the kind it works (its declared lifecycle), files ONE proposal holding: the kind's pipeline view, a dashboard (bento) over the same kind, a generated board cell drawn live from flow.of (columns = states in order, headed by the owning stage; governed moves), and that board on the playbook's page. Nothing is created until a person approves it; `proposed` is success, pass on reviewUrl. Parts that already exist are skipped (`alreadyExists`), a page that already shows something is never replaced (`leftOut`), and a second call returns the same pending proposal (`status: duplicate`). Refused with the next step when the playbook works no kind or the kind has no lifecycle (synap_declare_lifecycle).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            playbookId: {
+              type: "string",
+              description:
+                "The playbook (synap_list_playbooks / synap_match_playbooks).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Only for a pod-wide playbook: the space its views go in. A playbook in a space builds there.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["playbookId"],
+        },
+      },
+      {
         name: "synap_promote_session_to_playbook",
         annotations: {
           title: "Save session as template",
@@ -3849,6 +3892,7 @@ export const tools = {
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
+            tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
             sessionId: {
               type: "string",
               description:
@@ -3892,6 +3936,7 @@ export const tools = {
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
             runner: PLAYBOOK_PROCESS_JSON_SCHEMA.runner,
             requires: PLAYBOOK_PROCESS_JSON_SCHEMA.requires,
+            tools: PLAYBOOK_PROCESS_JSON_SCHEMA.tools,
             subjectProfileSlug: {
               type: "string",
               description:

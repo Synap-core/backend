@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 119,
+  "toolCount": 120,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -131,6 +131,7 @@
       "synap_list_widgets",
       "synap_create_cell",
       "synap_promote_cell_to_renderer",
+      "synap_propose_app_from_playbook",
       "synap_list_playbooks",
       "synap_match_playbooks",
       "synap_create_playbook",
@@ -5522,6 +5523,66 @@
       }
     },
     {
+      "name": "synap_propose_app_from_playbook",
+      "title": "Propose a template's UI",
+      "group": "build",
+      "annotations": {
+        "title": "Propose a template's UI",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "The one verb for 'build me an app / a UI for this playbook'. From the playbook and the kind it works (its declared lifecycle), files ONE proposal holding: the kind's pipeline view, a dashboard (bento) over the same kind, a generated board cell drawn live from flow.of (columns = states in order, headed by the owning stage; governed moves), and that board on the playbook's page. Nothing is created until a person approves it; `proposed` is success, pass on reviewUrl. Parts that already exist are skipped (`alreadyExists`), a page that already shows something is never replaced (`leftOut`), and a second call returns the same pending proposal (`status: duplicate`). Refused with the next step when the playbook works no kind or the kind has no lifecycle (synap_declare_lifecycle).",
+      "parameters": [
+        {
+          "name": "playbookId",
+          "type": "string",
+          "required": true,
+          "description": "The playbook (synap_list_playbooks / synap_match_playbooks)."
+        },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "Only for a pod-wide playbook: the space its views go in. A playbook in a space builds there."
+        },
+        {
+          "name": "reasoning",
+          "type": "string",
+          "required": false,
+          "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "playbookId": {
+            "type": "string",
+            "description": "The playbook (synap_list_playbooks / synap_match_playbooks)."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Only for a pod-wide playbook: the space its views go in. A playbook in a space builds there."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
+          }
+        },
+        "required": ["playbookId"]
+      }
+    },
+    {
       "name": "synap_promote_session_to_playbook",
       "title": "Save session as template",
       "group": "sessions",
@@ -5758,7 +5819,7 @@
           "name": "stages",
           "type": "array<object>",
           "required": false,
-          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook."
+          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook."
         },
         {
           "name": "status",
@@ -5835,6 +5896,7 @@
           "description": "Who runs it (shapes: load_skill system/synap/processes)."
         },
         { "name": "requires", "type": "array<string>", "required": false },
+        { "name": "tools", "type": "array<string>", "required": false },
         {
           "name": "sessionId",
           "type": "string",
@@ -5856,7 +5918,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -6043,7 +6105,7 @@
                 "tier": {
                   "type": "string",
                   "enum": ["deep", "standard", "quick"],
-                  "description": "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+                  "description": "Optional: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. A run's turn in this stage uses that model tier unless the person or the space chose a model. Omit for no preference."
                 },
                 "forEach": {
                   "type": "object",
@@ -6335,6 +6397,7 @@
             "description": "Who runs it (shapes: load_skill system/synap/processes)."
           },
           "requires": { "type": "array", "items": { "type": "string" } },
+          "tools": { "type": "array", "items": { "type": "string" } },
           "sessionId": {
             "type": "string",
             "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
@@ -6383,7 +6446,7 @@
           "name": "stages",
           "type": "array<object>",
           "required": false,
-          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook."
+          "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook."
         },
         {
           "name": "params",
@@ -6410,6 +6473,7 @@
           "description": "Who runs it (shapes: load_skill system/synap/processes)."
         },
         { "name": "requires", "type": "array<string>", "required": false },
+        { "name": "tools", "type": "array<string>", "required": false },
         {
           "name": "subjectProfileSlug",
           "type": "string",
@@ -6485,7 +6549,7 @@
           },
           "stages": {
             "type": "array",
-            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
+            "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook.",
             "items": {
               "type": "object",
               "properties": {
@@ -6672,7 +6736,7 @@
                 "tier": {
                   "type": "string",
                   "enum": ["deep", "standard", "quick"],
-                  "description": "Optional, advisory: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. Omit for no preference. Nothing acts on it yet."
+                  "description": "Optional: how much model this stage's work needs. 'deep' = architecture or judgment-heavy, 'standard' = ordinary, 'quick' = a mechanical step a smaller model can do. A run's turn in this stage uses that model tier unless the person or the space chose a model. Omit for no preference."
                 },
                 "forEach": {
                   "type": "object",
@@ -6762,6 +6826,7 @@
             "description": "Who runs it (shapes: load_skill system/synap/processes)."
           },
           "requires": { "type": "array", "items": { "type": "string" } },
+          "tools": { "type": "array", "items": { "type": "string" } },
           "subjectProfileSlug": {
             "type": "string",
             "description": "Repoint the kind or role this playbook runs ON. A slug that resolves to no profile is refused."

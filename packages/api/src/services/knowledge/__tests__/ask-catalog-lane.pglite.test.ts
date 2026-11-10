@@ -183,7 +183,7 @@ beforeAll(async () => {
   // visible to every member through the playbooks VisibilityRule).
   await q(
     `insert into playbooks (id, workspace_id, created_by, name, description, goal_template, status, scope,
-       params, expected_outputs, stages, criteria, required_intents, guidance)
+       params, expected_outputs, stages, criteria, tools, guidance)
      values ($1, null, $2, 'Pipeline dashboard build', 'Build a dashboard for a sales pipeline',
        'Build the pipeline dashboard', 'active', 'session', '[]', '[]', '[]', '[]', '[]', '[]')`,
     [PLAYBOOK, USER]
