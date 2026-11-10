@@ -621,8 +621,11 @@ export interface GovernanceRuleMatch {
    * into a terminal lifecycle option (rung 2.8 / 2.85).
    */
   namesWrite: boolean;
-  /** The winning row names the write's subject at its version (0420). */
-  namesSubject: boolean;
+  /**
+   * The winning row names the write's subject at its version (0420). Present
+   * only then, so every match from before 0420 keeps its exact shape.
+   */
+  namesSubject?: true;
 }
 
 /**
@@ -790,7 +793,7 @@ export async function resolveGovernanceRule(
         verdict: best.verdict,
         matchedPattern: best.matchedPattern,
         namesWrite: best.namesWrite,
-        namesSubject: best.namesSubject,
+        ...(best.namesSubject ? { namesSubject: true as const } : {}),
       }
     : undefined;
 }
