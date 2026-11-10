@@ -25,6 +25,8 @@ const pause = {
   fromCategory: "active",
   toCategory: "paused",
   since: NOW,
+  // Every fixture date is relative to NOW; the real clock would age them out.
+  now: NOW,
 } as const;
 
 describe("decideMoveHold", () => {
