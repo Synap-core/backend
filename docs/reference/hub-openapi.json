@@ -31601,6 +31601,170 @@
                     "enum": ["synap_ai"],
                     "description": "Run it on Synap AI this time, whatever was remembered. Never with handToAgentId; refused on a playbook that runs only on agents."
                   },
+                  "runner": {
+                    "anyOf": [
+                      { "type": "string", "enum": ["synap_ai"] },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "synapAi": {
+                            "type": "object",
+                            "properties": {
+                              "persona": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80,
+                                "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                              }
+                            },
+                            "required": ["persona"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["synapAi"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "agentId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "preset": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                          }
+                        },
+                        "required": ["agentId"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                          },
+                          "computer": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": ["role"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "engine": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80,
+                            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                          },
+                          "computer": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          }
+                        },
+                        "required": ["engine"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            { "type": "string", "enum": ["synap_ai"] },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "synapAi": {
+                                  "type": "object",
+                                  "properties": {
+                                    "persona": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 80,
+                                      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                    }
+                                  },
+                                  "required": ["persona"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["synapAi"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "agentId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                "preset": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                }
+                              },
+                              "required": ["agentId"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "role": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "computer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["role"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "engine": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                  "pattern": "^[a-z0-9][a-z0-9._-]*$"
+                                },
+                                "computer": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["engine"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        "minItems": 1,
+                        "maxItems": 4
+                      }
+                    ],
+                    "description": "Who runs THIS run, in the playbook runner grammar: 'synap_ai', {synapAi:{persona}}, {agentId}, {role, computer?}, {engine, computer?}, or an ordered list of fallbacks. A role, engine or list is resolved now (only an agent that is yours, awake and allowed takes it); nobody it names can take it → refused. Never with handToAgentId or runOn. It comes before the playbook's own runner and your remembered choice."
+                  },
                   "remember": {
                     "type": "boolean",
                     "description": "Remember this run's choice (runOn or handToAgentId) as yours for this playbook, so the next launch does not ask (GET /playbooks/{id}/run-choice). A person's act: refused for an agent."

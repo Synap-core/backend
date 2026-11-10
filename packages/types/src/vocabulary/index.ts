@@ -3951,6 +3951,7 @@ export const SYNAP_AI_LABEL = "Synap AI";
  */
 export const RUN_CHOICE_VIA_LABELS = {
   named: "Chosen for this run",
+  authored: "Set by the process",
   stored: "Your choice",
   fallback: "Your agent couldn't take it",
   default: "The process's default",
