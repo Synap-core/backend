@@ -461,6 +461,13 @@ export type SettleStageChildResult =
       status: "advanced" | "told" | "on_fail" | "dropped";
       satisfied: string[];
       toStage?: string;
+    }
+  /** A child of a `forEach` step: others still run, or the step is done. */
+  | {
+      status: "fan_out_waiting" | "fan_out_done";
+      /** The batches whose run failed or was cancelled (1-based part numbers). */
+      failed: number[];
+      toStage?: string;
     };
 
 /**
@@ -520,6 +527,17 @@ async function settleStageChildUnsafe(
     ),
   });
   if (!parent) return { status: "not_a_step" };
+
+  // A child of a `forEach` step: its batch is settled on the step's fan-out.
+  if (stageOf.forEachIndex !== undefined) {
+    const { settleFanOutChild } = await import("./stage-for-each.js");
+    return settleFanOutChild({
+      child,
+      ended,
+      parent,
+      stageOf: { ...stageOf, forEachIndex: stageOf.forEachIndex },
+    });
+  }
 
   // Compare and set: only the entry still waiting on THIS child is settled.
   const delivered = ended === "closed";
