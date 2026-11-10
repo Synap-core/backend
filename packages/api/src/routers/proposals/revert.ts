@@ -61,6 +61,9 @@ export type ProposalRevertPlan =
       /** Draft playbooks / lists a bundle created — optional, like the plan rows. */
       playbookIds?: string[];
       viewIds?: string[];
+      /** A playbook's UI: the cells it created and the bindings it wrote. */
+      cellIds?: string[];
+      rendererBindingIds?: string[];
       /** Config rows a rebuild's `update_*` ops changed — restored, never deleted. */
       rowPatches?: RowPatchRecord[];
       /** Connected plan rows — optional so every older plan literal still types. */
@@ -345,6 +348,8 @@ export function planProposalRevert(
       plan.propertyDiffs.length === 0 &&
       (plan.playbookIds?.length ?? 0) === 0 &&
       (plan.viewIds?.length ?? 0) === 0 &&
+      (plan.cellIds?.length ?? 0) === 0 &&
+      (plan.rendererBindingIds?.length ?? 0) === 0 &&
       (plan.sessionIds?.length ?? 0) === 0 &&
       (plan.projectIds?.length ?? 0) === 0 &&
       (plan.linkIds?.length ?? 0) === 0;
@@ -639,6 +644,8 @@ export function creationsPlanFromRecord(
     propertyDiffs: [...(record.propertyDiffs ?? [])],
     playbookIds: [...(record.playbookIds ?? [])],
     viewIds: [...(record.viewIds ?? [])],
+    cellIds: [...(record.cellIds ?? [])],
+    rendererBindingIds: [...(record.rendererBindingIds ?? [])],
     rowPatches: [...(record.rowPatches ?? [])],
     sessionIds: [...(record.sessionIds ?? [])],
     projectIds: [...(record.projectIds ?? [])],
@@ -721,6 +728,12 @@ export function planProposalOpRevert(
     propertyDiffs: [],
     playbookIds: entry.playbookId ? [entry.playbookId] : [],
     viewIds: entry.viewId ? [entry.viewId] : [],
+    rendererBindingIds: entry.rendererBindingId
+      ? [entry.rendererBindingId]
+      : [],
+    // A cell alone: undo refuses it while a page still shows it (its own
+    // binding is undone on its own item, or with the whole proposal).
+    cellIds: entry.cellId ? [entry.cellId] : [],
   };
   const opKeys = [opKey];
 
@@ -803,6 +816,8 @@ export function planProposalOpRevert(
       plan.ruleIds.length +
       (plan.playbookIds?.length ?? 0) +
       (plan.viewIds?.length ?? 0) +
+      (plan.cellIds?.length ?? 0) +
+      (plan.rendererBindingIds?.length ?? 0) +
       (plan.rowPatches?.length ?? 0) +
       plan.propertyDiffs.length ===
     0;

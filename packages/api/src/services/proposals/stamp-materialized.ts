@@ -83,6 +83,14 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   /** Lists created by `create_view` ops (revert deletes them while untouched). */
   viewIds?: string[];
   /**
+   * Cells a `create_cell` op CREATED (`widget_definitions` ids). Revert deletes
+   * one while it is untouched and nothing else shows it. A cell the door
+   * updated instead was never this run's, and is not listed.
+   */
+  cellIds?: string[];
+  /** Renderer bindings a `bind_renderer` op wrote (revert revokes them while active). */
+  rendererBindingIds?: string[];
+  /**
    * Body documents created WITH an entity. They ride the entity's soft delete
    * (a restored entity keeps its body), so revert never deletes them on their
    * own — unlike `documentIds`, which a document-create proposal owns.
@@ -213,6 +221,8 @@ export interface MaterializedOpRecord {
     | "create_rule"
     | "create_playbook"
     | "create_view"
+    | "create_cell"
+    | "bind_renderer"
     | "create_session"
     | "create_document"
     | "create_project"
@@ -230,6 +240,10 @@ export interface MaterializedOpRecord {
   playbookId?: string;
   /** `create_view`: the List it created. */
   viewId?: string;
+  /** `create_cell`: the cell row it created. */
+  cellId?: string;
+  /** `bind_renderer`: the binding row it wrote. */
+  rendererBindingId?: string;
   sessionId?: string;
   projectId?: string;
   documentId?: string;
@@ -280,6 +294,8 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "rules"
       | "playbooks"
       | "views"
+      | "cells"
+      | "renderers"
       | "updates"
       | "projects"
       | "sessions"
@@ -403,9 +419,17 @@ function planRecordFields(
   // leaves them behind. Present only when the run made some.
   const playbookIds = unique((result.playbooks ?? []).map((p) => p.playbookId));
   const viewIds = unique((result.views ?? []).map((v) => v.viewId));
+  const cellIds = unique(
+    (result.cells ?? []).filter((c) => c.created).map((c) => c.cellId)
+  );
+  const rendererBindingIds = unique(
+    (result.renderers ?? []).map((r) => r.bindingId)
+  );
   const configRows: Partial<CompleteMaterializedRecord> = {
     ...(playbookIds.length > 0 ? { playbookIds } : {}),
     ...(viewIds.length > 0 ? { viewIds } : {}),
+    ...(cellIds.length > 0 ? { cellIds } : {}),
+    ...(rendererBindingIds.length > 0 ? { rendererBindingIds } : {}),
   };
   return { ...configRows, ...planOnlyRecordFields(result) };
 }
@@ -496,6 +520,15 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const v of result.views ?? []) {
     byOp[v.ref] = { op: "create_view", viewId: v.viewId };
+  }
+  for (const c of result.cells ?? []) {
+    // A cell the door UPDATED was somebody's already: recorded as linked.
+    byOp[c.ref] = c.created
+      ? { op: "create_cell", cellId: c.cellId }
+      : { op: "create_cell", linked: true };
+  }
+  for (const r of result.renderers ?? []) {
+    byOp[r.ref] = { op: "bind_renderer", rendererBindingId: r.bindingId };
   }
   for (const u of result.updates ?? []) {
     byOp[u.ref] =
@@ -644,6 +677,8 @@ const ID_FIELDS = [
   "ruleIds",
   "playbookIds",
   "viewIds",
+  "cellIds",
+  "rendererBindingIds",
   "entityDocumentIds",
   "sessionIds",
   "projectIds",
@@ -776,6 +811,8 @@ export function buildStoppedRunRecord(
     result.rules ?? [],
     result.playbooks ?? [],
     result.views ?? [],
+    result.cells ?? [],
+    result.renderers ?? [],
     result.updates ?? [],
     result.projects ?? [],
     result.sessions ?? [],

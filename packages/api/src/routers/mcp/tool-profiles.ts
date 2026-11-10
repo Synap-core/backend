@@ -181,6 +181,7 @@ export const TOOL_GROUPS = {
     "synap_list_widgets",
     "synap_create_cell",
     "synap_promote_cell_to_renderer",
+    "synap_propose_app_from_playbook",
     "synap_list_playbooks",
     "synap_match_playbooks",
     "synap_create_playbook",

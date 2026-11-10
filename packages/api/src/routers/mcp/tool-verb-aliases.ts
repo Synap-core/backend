@@ -49,6 +49,10 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_list_widgets: ["list_widgets", "synap_list_widgets"],
   synap_create_cell: ["create_cell", "generate_widget"],
   synap_promote_cell_to_renderer: ["synap_promote_cell_to_renderer"],
+  synap_propose_app_from_playbook: [
+    "propose_app_from_playbook",
+    "synap_propose_app_from_playbook",
+  ],
   synap_promote_session_to_playbook: ["synap_promote_session_to_playbook"],
   synap_create_playbook: ["synap_create_playbook"],
   synap_update_playbook: ["synap_update_playbook"],

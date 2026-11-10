@@ -1084,6 +1084,9 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     ),
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
+    // Files ONE composite proposal through the governed pending lane; it never
+    // applies anything, and reads only through the playbook get door.
+    synap_propose_app_from_playbook: WRITE,
     synap_promote_session_to_playbook: WRITE,
     synap_create_playbook: WRITE,
     synap_update_playbook: WRITE,
