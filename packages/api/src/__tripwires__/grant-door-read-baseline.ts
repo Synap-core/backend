@@ -104,7 +104,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /routing/lanes",
   "GET /rules",
   "GET /runs",
-  "GET /runs/:id",
   "GET /search/collection",
   "GET /search/documents",
   "GET /sessions",
@@ -142,4 +141,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 122;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 121;

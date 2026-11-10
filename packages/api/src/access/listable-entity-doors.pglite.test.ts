@@ -761,6 +761,8 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/retrieval/grant-bounded-search-hits.ts":
     "narrows hits a door already passed through withoutUnlistableEntityHits (search.search applies the rule first)",
   "services/runs/index.ts": "one run's produced records, by id",
+  "services/runs/run-record-for-key.ts":
+    "a one-shot run's subject, by id: may the key read the run's record",
   "services/status/status-facts.ts":
     "a step's wait: the asked things and the one each step names, by id",
   "services/status/status-floor.ts":

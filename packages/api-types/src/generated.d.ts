@@ -15235,6 +15235,129 @@ export interface SessionActivityWire {
 	/** Sub-reads that FAILED. Non-empty ⇒ the list is partial, never "complete". */
 	unreadable: SessionActivitySource[];
 }
+export interface RunCost {
+	/** Turns the run reported. */
+	turns: number;
+	/**
+	 * Input tokens read fresh: each turn's input minus the cache reads the
+	 * provider reported (a turn whose cache reads were not reported counts in
+	 * full: unknown never reads as free).
+	 */
+	freshInputTokens: number;
+	/** Every input token, cache reads included. */
+	rawInputTokens: number;
+	/** Input tokens read from the prompt cache. */
+	cacheReadInputTokens: number;
+	/** The models that served the turns, first seen first. */
+	models: string[];
+	/** Turns that reported no token counts: their tokens are not in the sums. */
+	unmeasuredTurns?: number;
+	/**
+	 * Summed from a ledger written before the running total existed, which had
+	 * already dropped some turns: the sums may miss them.
+	 */
+	partial?: true;
+}
+/** A run's cost as the session reads show it: which run it is, and its cost. */
+export type RunCostRead = RunCost & {
+	runId: string;
+};
+/** One turn's end, as the ledger kept it. `null` = not recorded. */
+export interface RunCostTurn {
+	at: string | null;
+	outcome: "completed" | "stopped" | null;
+	/** Why a stopped turn stopped (`turn_budget` | `max_steps`). */
+	reason: string | null;
+	agentType: string | null;
+	/** The model of the turn's LAST provider call (no per-call model is kept). */
+	model: string | null;
+	/** Every input token of the turn, cache reads included. */
+	inputTokens: number | null;
+	/** What counted against `ceiling` (cache reads at their real price). */
+	chargedInputTokens: number | null;
+	cacheReadInputTokens: number | null;
+	cacheWriteInputTokens: number | null;
+	/** The turn's input budget. */
+	ceiling: number | null;
+	/** What the pod did after a stopped turn (`continue` | `ask`). */
+	next: string | null;
+}
+/** What the run's FIRST provider call was made of. */
+export interface RunCostFirstCall {
+	promptTokens: number;
+	/** The provider reported `promptTokens` (else it is the IS's estimate). */
+	reported: boolean;
+	toolCount: number;
+	chars: {
+		history: number;
+		message: number;
+		system: number;
+		tools: number;
+	};
+	/** The system prompt's sections by name and size; `null` = not recorded. */
+	sections: {
+		chars: number;
+		name: string;
+	}[] | null;
+	/** The tool names offered; `null` = not recorded. */
+	tools: string[] | null;
+	/** The guidance refs the prompt carried; `null` = not recorded. */
+	guidance: string[] | null;
+}
+/** One agent-run telemetry row: what one turn produced and cost. */
+export interface RunSpendTurn {
+	at: string;
+	agentType: string | null;
+	model: string | null;
+	inputTokens: number | null;
+	outputTokens: number | null;
+	/** Real cost in USD; `null` = the provider gave no price. */
+	costUsd: number | null;
+	finishReason: string | null;
+	toolCount: number | null;
+}
+/** Output tokens and real cost, from the agent-run telemetry. */
+export type RunSpend = 
+/** No telemetry row in the run's window: nothing reported, not "free". */
+{
+	status: "none";
+}
+/** The telemetry read failed: unknown, never shown as none. */
+ | {
+	status: "unreadable";
+} | {
+	/** Summed over the turns that reported a price; `null` = none did. */
+	costUsd: number | null;
+	/** Newest first, at most {@link RUN_SPEND_TURNS_CAP}. */
+	items: RunSpendTurn[];
+	/** Summed over the turns that reported them; `null` = none did. */
+	outputTokens: number | null;
+	status: "ok";
+	/** Turns that reported telemetry. */
+	turns: number;
+	/** Turns with no price: when > 0, `costUsd` is a floor. */
+	uncostedTurns: number;
+	/** Turns that reported no output tokens. */
+	unmeasuredOutputTurns: number;
+};
+/** An agent run's cost record (`playbookDetail.cost`). */
+export interface RunCostRecord {
+	runId: string;
+	/** Why a failed run stopped when it is not a fault (`playbook_runs.stop_reason`). */
+	stopReason: string | null;
+	/**
+	 * The input side over EVERY turn (`ledgerCost`): turns, fresh and raw input
+	 * tokens, cache reads, models. `null` = the run reported no turn.
+	 */
+	total: RunCost | null;
+	/** The turns the ledger kept, oldest first (the first turn and the last ones). */
+	turns: RunCostTurn[];
+	/** Turns the run had that the ledger no longer keeps (`total.turns - turns.length`). */
+	turnsNotKept: number;
+	/** The first call's inventory; `null` = not recorded (an older run, or none). */
+	firstCall: RunCostFirstCall | null;
+	spend: RunSpend;
+}
 /**
  * Which ledger a run came from.
  *
@@ -15562,6 +15685,15 @@ export interface PlaybookRunDetail {
 	 * also the one item of `proposals`. Absent on every other run.
 	 */
 	generation?: PlaybookRunGeneration;
+	/**
+	 * Why an agent run cost what it cost (`run-cost-record.ts`): its turns as
+	 * the ledger kept them (model, input, cache reads and writes, what counted
+	 * against the budget), the first call's inventory (prompt sections, tool
+	 * names, guidance), the input total over every turn, and the output tokens
+	 * and real cost its agent-run telemetry reported. Present when the run's
+	 * session is readable; a one-shot run's record is `generation`.
+	 */
+	cost?: RunCostRecord;
 }
 /** The session card behind a playbook run. */
 export interface RunSessionCard {
@@ -24495,33 +24627,6 @@ export type StructureAgainResult = {
 	sourceDocumentId: string;
 	status: "structured";
 } & Omit<RerunItemResult, "door" | "sourceDocumentIds">);
-export interface RunCost {
-	/** Turns the run reported. */
-	turns: number;
-	/**
-	 * Input tokens read fresh: each turn's input minus the cache reads the
-	 * provider reported (a turn whose cache reads were not reported counts in
-	 * full: unknown never reads as free).
-	 */
-	freshInputTokens: number;
-	/** Every input token, cache reads included. */
-	rawInputTokens: number;
-	/** Input tokens read from the prompt cache. */
-	cacheReadInputTokens: number;
-	/** The models that served the turns, first seen first. */
-	models: string[];
-	/** Turns that reported no token counts: their tokens are not in the sums. */
-	unmeasuredTurns?: number;
-	/**
-	 * Summed from a ledger written before the running total existed, which had
-	 * already dropped some turns: the sums may miss them.
-	 */
-	partial?: true;
-}
-/** A run's cost as the session reads show it: which run it is, and its cost. */
-export type RunCostRead = RunCost & {
-	runId: string;
-};
 export interface LeanRoomMessage {
 	id: string;
 	at: string;
