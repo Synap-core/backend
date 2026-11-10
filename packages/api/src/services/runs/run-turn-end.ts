@@ -250,10 +250,9 @@ export const completeRunBodySchema = z
         /**
          * What the turn's input COUNTED against `ceiling`: its FRESH input,
          * `spentInputTokens` minus the cache reads the provider reported
-         * (founder, 10 Nov 2026: cache reads count zero; an IS before the
-         * hard ceiling weighed them at their real price instead), so it can
-         * be lower than `spentInputTokens`. Absent from an IS that counts
-         * every token in full. Lenient like `model`.
+         * (founder, 10 Nov 2026: cache reads count zero), so it can be lower
+         * than `spentInputTokens`. Absent from an IS that counts every token
+         * in full. Lenient like `model`.
          */
         chargedInputTokens: count.optional().catch(undefined),
       })
@@ -655,11 +654,10 @@ function failureWords(reason: RunFailureReason): string {
 }
 
 /**
- * The end of a run that cannot go on (lane E of the playbook runtime fixes,
- * findings db27cac2, a00f5eb6, 15835191): the run ends `failed` with the
- * reason, one pod notice in the room says what failed and how to retry, and
- * the session closes `failed` through the ONE close door. Before, such a run
- * stayed `running` and its session `active` until the reaper, a day later.
+ * The end of a run that cannot go on (findings db27cac2, a00f5eb6, 15835191):
+ * the run ends `failed` with the reason, one pod notice in the room says what
+ * failed and how to retry, and the session closes `failed` through the ONE
+ * close door.
  *
  * The close is automatic, so like every automatic close it never closes a
  * session that still owes the person a slot (W2 calm, `closeSessionViaDoor`):

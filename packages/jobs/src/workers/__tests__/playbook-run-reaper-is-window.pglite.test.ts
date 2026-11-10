@@ -1,7 +1,6 @@
 /**
- * AN IS RUN IS REAPED AFTER 2 HOURS, AN EXTERNAL AGENT'S AFTER 24 (playbook
- * runtime fixes, lane E; finding db27cac2: outage runs stayed active for a
- * day). A run the pod handed to its own AI reports every turn's end, failed
+ * AN IS RUN IS REAPED AFTER 2 HOURS, AN EXTERNAL AGENT'S AFTER 24 (finding
+ * db27cac2: outage runs stayed active for a day). A run the pod handed to its own AI reports every turn's end, failed
  * included, so a run nobody moved for 2 hours is a dead worker. An external
  * agent works on its own clock and keeps the 24-hour window (D6).
  *
@@ -36,11 +35,7 @@ import {
   automationRuns,
   lifecycleTransitionOutbox,
 } from "@synap/database/schema";
-import {
-  handlePlaybookRunReaper,
-  IS_RUN_REAPER_QUIET_HOURS,
-  PLAYBOOK_RUN_REAPER_STALE_HOURS,
-} from "../playbook-run-reaper.js";
+import { handlePlaybookRunReaper } from "../playbook-run-reaper.js";
 import { registerSessionCloser } from "../../utils/session-close.js";
 
 const BASIC =
@@ -127,11 +122,6 @@ beforeEach(async () => {
 });
 
 describe("the playbook run reaper's window follows who holds the run", () => {
-  it("the windows: 2 hours for an IS run, 24 for an external agent's", () => {
-    expect(IS_RUN_REAPER_QUIET_HOURS).toBe(2);
-    expect(PLAYBOOK_RUN_REAPER_STALE_HOURS).toBe(24);
-  });
-
   it("FAILS an IS run quiet for 3 hours and closes its session", async () => {
     const quiet = await run({
       executor: "is-agent",

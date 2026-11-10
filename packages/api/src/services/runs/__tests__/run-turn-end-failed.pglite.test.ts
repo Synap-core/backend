@@ -1,11 +1,10 @@
 /**
- * A RUN THAT CANNOT GO ON ENDS `failed` (playbook runtime fixes, lane E;
- * findings db27cac2, a00f5eb6, 15835191). An IS turn that reports
- * `outcome: failed` (every pod read failed, the turn threw, its first call did
- * not fit its budget), and a stopped run the pod can neither continue nor ask
- * about, end the run `failed` with the reason, post one notice in the room and
- * close the session `failed` through the ONE close door. Before, the run stayed
- * `running` and its session `active` until the 24-hour reaper.
+ * A RUN THAT CANNOT GO ON ENDS `failed` (findings db27cac2, a00f5eb6,
+ * 15835191). An IS turn that reports `outcome: failed` (every pod read failed,
+ * the turn threw, its first call did not fit its budget), and a stopped run the
+ * pod can neither continue nor ask about, end the run `failed` with the reason,
+ * post one notice in the room and close the session `failed` through the ONE
+ * close door.
  *
  * Driven through the REAL Hub door `POST /focus-sessions/:id/complete-run`,
  * the real `settleRunTurnEnd`, `applyRunCapture` and `completeFocusSession`,

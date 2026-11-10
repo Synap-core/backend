@@ -457,13 +457,9 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(h.settled).toEqual([{ playbookRunId: runId }]);
   });
 
-  it("an ask that does NOT land ends the run failed: never a fresh continuation (M7, lane E)", async () => {
-    // Before M7: the count was reset to 0 when the pod DECIDED to ask, inside
-    // the recording transaction. An ask that then failed left the run running
-    // with a fresh count, so the next stops continued twice more on fresh
-    // budgets, asked (failed) again, and so on: unbounded spend, nobody asked.
-    // M7 kept the count and left the run running for the reaper; lane E (plan
-    // fbfadf54 item 4) ends it now: nothing would move it again.
+  it("an ask that does NOT land ends the run failed: never a fresh continuation (M7)", async () => {
+    // A failed ask must not reset the count (unbounded spend, nobody asked),
+    // and nothing would move the run again, so it ends failed.
     const { sessionId, runId } = await seedRun();
     for (let n = 1; n <= MAX_AUTO_CONTINUATIONS; n++) {
       expect((await completeRun(sessionId, STOPPED)).json).toEqual({

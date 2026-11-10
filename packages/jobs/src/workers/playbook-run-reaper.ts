@@ -81,12 +81,27 @@ const STALE_RUN_ERROR_MESSAGE =
  * reapable. Interval arithmetic in SQL (no bound Date param — postgres.js 3.4.8
  * crashes on Date binds on the pod image, same as automation-run-reaper).
  */
-export const RUN_SESSION_NOT_ACTIVE = drizzleSql`NOT EXISTS (
+function sessionQuietFor(hours: number) {
+  return drizzleSql`NOT EXISTS (
   SELECT 1 FROM focus_sessions fs
   WHERE fs.id = ${playbookRuns.sessionId}
     AND fs.status IN ('active', 'paused')
-    AND fs.updated_at > now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')
+    AND fs.updated_at > now() - (${hours}::int * interval '1 hour')
 )`;
+}
+
+/** A running run started more than `hours` ago whose session went quiet. */
+function runQuietFor(hours: number) {
+  return and(
+    eq(playbookRuns.status, "running"),
+    drizzleSql`${playbookRuns.startedAt} < now() - (${hours}::int * interval '1 hour')`,
+    sessionQuietFor(hours)
+  )!;
+}
+
+export const RUN_SESSION_NOT_ACTIVE = sessionQuietFor(
+  PLAYBOOK_RUN_REAPER_STALE_HOURS
+);
 
 /**
  * The run is held by an EXTERNAL agent, not by a worker the pod launched:
@@ -126,36 +141,25 @@ export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
 )`;
 
 /** A running run past the window whose session shows no recent activity. */
-const RUN_IS_STALE = and(
-  eq(playbookRuns.status, "running"),
-  drizzleSql`${playbookRuns.startedAt} < now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')`,
-  RUN_SESSION_NOT_ACTIVE
-);
+const RUN_IS_STALE = runQuietFor(PLAYBOOK_RUN_REAPER_STALE_HOURS);
 
 /**
  * A run the pod handed to its OWN AI (the IS) is quiet much sooner: an IS turn
  * lasts minutes and reports its end, so a run nobody moved for 2 hours is a
- * dead worker (lane E of the playbook runtime fixes, finding db27cac2: outage
- * runs stayed active for a day). An external agent works on its own clock and
- * keeps the 24-hour window. Not a work-clock rung: the run reaper's own clock.
+ * dead worker (finding db27cac2: outage runs stayed active for a day). An
+ * external agent works on its own clock and keeps the 24-hour window. Not a
+ * work-clock rung: the run reaper's own clock.
  */
 export const IS_RUN_REAPER_QUIET_HOURS = 2;
 
 /** An IS-held running run past its 2-hour window whose session went quiet. */
 const IS_RUN_IS_QUIET = and(
-  eq(playbookRuns.status, "running"),
-  drizzleSql`${playbookRuns.startedAt} < now() - (${IS_RUN_REAPER_QUIET_HOURS}::int * interval '1 hour')`,
-  drizzleSql`NOT EXISTS (
-    SELECT 1 FROM focus_sessions fs
-    WHERE fs.id = ${playbookRuns.sessionId}
-      AND fs.status IN ('active', 'paused')
-      AND fs.updated_at > now() - (${IS_RUN_REAPER_QUIET_HOURS}::int * interval '1 hour')
-  )`,
+  runQuietFor(IS_RUN_REAPER_QUIET_HOURS),
   drizzleSql`NOT ${RUN_EXTERNAL_HOLDER}`
 );
 
 /** A run the sweeps below judge: past its holder's window, session quiet. */
-export const RUN_IS_REAPABLE = or(RUN_IS_STALE, IS_RUN_IS_QUIET)!;
+const RUN_IS_REAPABLE = or(RUN_IS_STALE, IS_RUN_IS_QUIET)!;
 
 /** Called by the cron scheduler every ~30 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
