@@ -457,11 +457,13 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(h.settled).toEqual([{ playbookRunId: runId }]);
   });
 
-  it("an ask that does NOT land keeps the count: the next stop asks again, never a fresh continuation (M7)", async () => {
-    // Before: the count was reset to 0 when the pod DECIDED to ask, inside the
-    // recording transaction. An ask that then failed left the run running with
-    // a fresh count, so the next stops continued twice more on fresh budgets,
-    // asked (failed) again, and so on: unbounded spend, nobody asked.
+  it("an ask that does NOT land ends the run failed: never a fresh continuation (M7, lane E)", async () => {
+    // Before M7: the count was reset to 0 when the pod DECIDED to ask, inside
+    // the recording transaction. An ask that then failed left the run running
+    // with a fresh count, so the next stops continued twice more on fresh
+    // budgets, asked (failed) again, and so on: unbounded spend, nobody asked.
+    // M7 kept the count and left the run running for the reaper; lane E (plan
+    // fbfadf54 item 4) ends it now: nothing would move it again.
     const { sessionId, runId } = await seedRun();
     for (let n = 1; n <= MAX_AUTO_CONTINUATIONS; n++) {
       expect((await completeRun(sessionId, STOPPED)).json).toEqual({
@@ -471,23 +473,17 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
 
     h.failDeclare = true;
     const failed = await completeRun(sessionId, STOPPED);
-    expect(failed.json).toEqual({ status: "left_running" });
-    expect((await runRow(runId)).status).toBe("running");
+    expect(failed.json).toEqual({ status: "failed" });
+    expect((await runRow(runId)).status).toBe("failed");
     expect((await ledger(sessionId)).autoContinues).toBe(
       MAX_AUTO_CONTINUATIONS
     );
+    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
 
-    // The next stop tries the ask again — it does NOT continue on its own.
+    // A later stop finds no live run: it neither continues nor asks.
     const again = await completeRun(sessionId, STOPPED);
-    expect(again.json).toEqual({ status: "left_running" });
+    expect(again.json).toEqual({ status: "no-running-run" });
     expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
-
-    // Once an ask lands, the count resets for after the person answers.
-    h.failDeclare = false;
-    const asked = await completeRun(sessionId, STOPPED);
-    expect(asked.json).toEqual({ status: "waiting_on_you" });
-    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
-    expect((await ledger(sessionId)).autoContinues).toBe(0);
   });
 
   it("a RETRIED report of one turn (same turnKey) is settled once: one stop, one continuation (S9)", async () => {
