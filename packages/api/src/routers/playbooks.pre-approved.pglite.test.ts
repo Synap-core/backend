@@ -38,6 +38,8 @@ const h = vi.hoisted(() => ({
     close: () => Promise<void>;
   },
   dispatched: [] as Array<{ ref: string }>,
+  /** What the REAL governance gate answered the run door, last call. */
+  perm: null as unknown,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -68,6 +70,17 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   Object.defineProperty(mocked, "db", { get: () => db, enumerable: true });
   return mocked;
+});
+vi.mock("../utils/permission-check.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const real = actual.checkPermissionOrPropose as (o: unknown) => unknown;
+  return {
+    ...actual,
+    checkPermissionOrPropose: async (opts: unknown) => {
+      h.perm = await real(opts);
+      return h.perm;
+    },
+  };
 });
 vi.mock("../services/playbooks/executors/registry.js", () => ({
   resolveExecutor: (ref: string) => ({
@@ -233,6 +246,10 @@ describe("a person lets their agents run one playbook without asking", () => {
     expect(page.rules.map((r) => r.id)).toEqual([rule!.id]);
 
     const res = await agentRun(PERSON, AGENT, PB);
+    expect(h.perm).toMatchObject({
+      granted: true,
+      preApprovedByRuleId: rule!.id,
+    });
     expect(res.status).not.toBe("draft");
     expect(h.dispatched.map((d) => d.ref)).toEqual(["is-agent"]);
     expect(await triageOf(res.session!.id)).toMatchObject({
@@ -243,6 +260,8 @@ describe("a person lets their agents run one playbook without asking", () => {
 
   it("CONTROL: without the rule, the same run waits as the person's draft", async () => {
     const res = await agentRun(PERSON, AGENT, PB);
+    expect(h.perm).toMatchObject({ granted: true });
+    expect(h.perm).not.toHaveProperty("preApprovedByRuleId");
     expect(res.status).toBe("draft");
     expect(h.dispatched).toEqual([]);
   });
