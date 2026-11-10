@@ -294,7 +294,7 @@ export interface CapabilityPlaybookDef {
   schedule?: unknown;
   /** Free-form playbook metadata → `playbooks.metadata` (e.g. propose-only governance marker). */
   metadata?: Record<string, unknown>;
-  executor?: "is-agent" | "external-agent" | "hybrid";
+  executor?: "is-agent" | "external-agent" | "hybrid" | "generate";
   status?: "draft" | "active" | "paused" | "archived";
   /**
    * What this template instantiates (0240): `session` (a template of ONE focus

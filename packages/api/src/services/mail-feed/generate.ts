@@ -89,10 +89,16 @@ export async function generateViaIS(args: GenerateArgs): Promise<unknown> {
   const data = (await res.json()) as {
     output?: unknown;
     finishReason?: unknown;
+    /** The model that answered — sent by an IS that names it; else absent. */
+    model?: unknown;
     usage?: {
       promptTokens?: unknown;
       completionTokens?: unknown;
       totalTokens?: unknown;
+      /** Prompt tokens read from the provider cache, when the IS reports them. */
+      cachedPromptTokens?: unknown;
+      /** Real cost in USD, when the IS reports it. */
+      costUsd?: unknown;
     };
   };
   const num = (v: unknown): number | undefined =>
@@ -109,6 +115,11 @@ export async function generateViaIS(args: GenerateArgs): Promise<unknown> {
     promptTokens: num(data.usage?.promptTokens),
     completionTokens: num(data.usage?.completionTokens),
     totalTokens: num(data.usage?.totalTokens),
+    ...(typeof data.model === "string" && data.model
+      ? { model: data.model }
+      : {}),
+    cachedPromptTokens: num(data.usage?.cachedPromptTokens),
+    costUsd: num(data.usage?.costUsd),
   });
   // AN EMPTY GENERATION IS A FAILURE, NOT AN EMPTY RESULT (run 92fb258a,
   // 2026-08-03). A 200 OK carrying `""` used to be returned as the step output,

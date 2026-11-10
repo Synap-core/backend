@@ -22,6 +22,8 @@ describe("PATCH /focus-sessions/:id — unsupported fields are refused", () => {
     // without knowing where the capability actually lives.
     expect(err).toContain("synap_update_session");
     expect(err).toContain("nothing was changed");
+    // The Hub twin an in-pod run (Hub REST only) can reach.
+    expect(err).toContain("POST /focus-sessions/:id/outputs/complete");
   });
 
   it("refuses it even alongside fields this door DOES support", () => {

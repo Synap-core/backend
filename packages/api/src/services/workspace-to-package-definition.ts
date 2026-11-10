@@ -762,7 +762,8 @@ export function playbookRowToPackagePlaybook(
     params: p.params as NonNullable<
       PackageDefinition["playbooks"]
     >[number]["params"],
-    executor: p.executor as "is-agent" | "external-agent" | "hybrid",
+    executor: p.executor as
+      "is-agent" | "external-agent" | "hybrid" | "generate",
     // The stored object, not its bare `kind` string — no apply door's
     // schema accepts a string here, so the old export could not round-trip.
     inputStrategy:

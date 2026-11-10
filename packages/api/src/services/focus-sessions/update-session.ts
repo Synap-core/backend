@@ -41,6 +41,7 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
+import { outputLandingSchema } from "../../schemas/playbook-definition.js";
 import { openLink } from "../../utils/deep-links.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
@@ -618,6 +619,10 @@ export const expectedOutputWireSchema = z.object({
   // The relation type written output → subject on satisfy. DECLARED (a
   // playbook slot's own declaration carried onto the session), never stamped.
   relationToSubject: z.string().max(80).optional(),
+  // Where a one-shot playbook's result lands (`executor: "generate"`).
+  // DECLARED, carried onto a session that follows the playbook; read only by
+  // the generate run.
+  lands: outputLandingSchema.optional(),
   // The satisfy door's receipt for that edge. Round-trip only, like `answer`.
   subjectEdge: z
     .object({
@@ -771,6 +776,10 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   "blocks",
   "blockerKey",
   "clearedBy",
+  // Where a one-shot playbook's result lands (`executor: "generate"`):
+  // DECLARED by the author, read only by the generate run, like
+  // `relationToSubject`.
+  "lands",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -885,6 +894,9 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   "blocks",
   "blockerKey",
   "clearedBy",
+  // Same erasure reason: renaming a sibling must not drop where a one-shot
+  // playbook's draft lands.
+  "lands",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**

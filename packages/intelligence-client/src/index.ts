@@ -100,7 +100,11 @@ export {
   currentAiUsage,
 } from "./ai-usage-collector.js";
 
-export type { AiUsageSample, AiUsageTotals } from "./ai-usage-collector.js";
+export type {
+  AiUsageSample,
+  AiUsageTotals,
+  AiUsageDetail,
+} from "./ai-usage-collector.js";
 
 export {
   judgeSessionCriteria,

@@ -39,6 +39,7 @@ import { createLogger } from "@synap-core/core";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import { readRequiredIntents, type CapabilityRef } from "@synap/playbooks";
 import type { IntentVerbMatch } from "../capabilities/capability-intent-index.js";
+import { activeStageTier } from "./run-stage-tier.js";
 
 const logger = createLogger({ module: "run-tool-profile" });
 
@@ -331,12 +332,14 @@ export async function resolveRunToolProfile(
         );
       }
     }
+    const tier = activeStageTier(playbook.stages, currentStage);
     return {
       playbookId: input.playbookId,
       ...(playbookName ? { playbookName } : {}),
       intents,
       verbs,
       capabilitiesRead: "ok",
+      ...(tier ? { tier } : {}),
     };
   } catch (err) {
     logger.error(
