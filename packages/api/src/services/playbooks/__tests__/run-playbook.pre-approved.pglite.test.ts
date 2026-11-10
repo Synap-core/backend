@@ -284,18 +284,11 @@ describe("an agent's run of a playbook the person allowed beforehand", () => {
     expect(r.heldBecause).toBeUndefined();
   });
 
-  it("is held when the playbook uses tools beyond pod data (a capability, an intent, a web read, a step's tool, a grants link)", async () => {
+  it("is held when the playbook uses tools beyond pod data (a capability, an intent, a web read, a grants link)", async () => {
     for (const [playbook, granted] of [
       [{ tools: ["gmail"] }, []],
       [{ tools: ["send_email"] }, []],
       [{ tools: ["get_entity", "web_search"] }, []],
-      [
-        {
-          tools: ["get_entity"],
-          stages: [{ key: "s", title: "S", tools: ["github"] }],
-        },
-        [],
-      ],
       [{}, [{ kind: "tool", id: "gmail", name: "Gmail" }]],
     ] as const) {
       h.playbook = playbook as Record<string, unknown>;

@@ -136,13 +136,16 @@ const asPerson = (userId = PERSON) =>
     userId,
     workspaceId: WS,
   } as unknown as Context);
-const asAgentOf = (userId: string, agentUserId: string) =>
-  playbooksRouter.createCaller({
-    authenticated: true,
-    userId,
-    agentUserId,
-    workspaceId: WS,
-  } as unknown as Context);
+/** An agent's launch as its doors make it: the person's call naming the agent. */
+const agentRun = (userId: string, agentUserId: string, playbookId: string) =>
+  playbooksRouter
+    .createCaller({
+      authenticated: true,
+      userId,
+      agentUserId,
+      workspaceId: WS,
+    } as unknown as Context)
+    .run({ playbookId, agentUserId });
 
 const triageOf = async (sessionId: string) =>
   (
@@ -212,7 +215,7 @@ describe("a person lets their agents run one playbook without asking", () => {
     expect(page.preApproval).toEqual({ eligible: true, reason: null });
     expect(page.rules.map((r) => r.id)).toEqual([rule!.id]);
 
-    const res = await asAgentOf(PERSON, AGENT).run({ playbookId: PB });
+    const res = await agentRun(PERSON, AGENT, PB);
     expect(res.status).not.toBe("draft");
     expect(h.dispatched.map((d) => d.ref)).toEqual(["is-agent"]);
     expect(await triageOf(res.session!.id)).toMatchObject({
@@ -222,14 +225,14 @@ describe("a person lets their agents run one playbook without asking", () => {
   });
 
   it("CONTROL: without the rule, the same run waits as the person's draft", async () => {
-    const res = await asAgentOf(PERSON, AGENT).run({ playbookId: PB });
+    const res = await agentRun(PERSON, AGENT, PB);
     expect(res.status).toBe("draft");
     expect(h.dispatched).toEqual([]);
   });
 
   it("another member's agent in the same space is not covered by the person's rule", async () => {
     await allow(PB);
-    const res = await asAgentOf(OTHER, OTHER_AGENT).run({ playbookId: PB });
+    const res = await agentRun(OTHER, OTHER_AGENT, PB);
     expect(res.status).toBe("draft");
     expect(h.dispatched).toEqual([]);
     // Nor does the other member read it as their own approval.
@@ -243,7 +246,7 @@ describe("a person lets their agents run one playbook without asking", () => {
     expect(
       (await asPerson().forSubject({ subjectId: PB_TOOLS })).preApproval
     ).toEqual({ eligible: false, reason: "declares_tools" });
-    const res = await asAgentOf(PERSON, AGENT).run({ playbookId: PB_TOOLS });
+    const res = await agentRun(PERSON, AGENT, PB_TOOLS);
     expect(res.status).toBe("draft");
     expect(h.dispatched).toEqual([]);
     expect(await triageOf(res.session!.id)).toEqual({
