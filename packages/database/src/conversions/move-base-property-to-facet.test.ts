@@ -16,7 +16,8 @@
  *   (b) an entity WITHOUT that facet keeps its base value entirely untouched
  *       (never lost) and is counted as `entitiesSkippedNoFacet`;
  *   (c) an existing facet value for `targetKey` is never clobbered (collision
- *       skip), but the base key is still stripped;
+ *       skip), but the base key is still stripped and the base value is
+ *       recorded as dropped (result + entity system_data), never lost;
  *   (d) idempotent — a second real run (ledger cleared) is a clean no-op.
  *
  * MUTATION-TESTED: dropping the `EXISTS (... entity_facets ...)` guard on the
@@ -29,7 +30,7 @@ import { LIFECYCLE_PROJECTION_TEST_SCHEMA } from "./lifecycle-projection-test-sc
 import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "postgres";
 import { runConversions, computeCounts } from "./engine.js";
-import type { ConversionManifest } from "./manifest.js";
+import { CONVERSION_MANIFEST, type ConversionManifest } from "./manifest.js";
 
 // ─── postgres.js-shaped `Sql` shim over PGlite (same shim as
 // engine.integration.test.ts / merge-cross-scope.test.ts) ────────────────────
@@ -111,6 +112,7 @@ CREATE TABLE entities (
   workspace_id uuid,
   type text,
   properties jsonb DEFAULT '{}',
+  system_data jsonb DEFAULT '{}',
   deleted_at timestamptz,
   updated_at timestamptz DEFAULT now()
 );
@@ -265,6 +267,36 @@ describe("moveBasePropertyToFacet", () => {
     expect(aliceRow.properties.driveLink).toBeUndefined();
   });
 
+  it("(c2) records the base value it dropped: on the result and on the entity", async () => {
+    const { sql, q, ids } = await setupPod();
+    await q(
+      `UPDATE entity_facets SET properties = '{"clientStatus":"active","driveLink":"https://drive/CANONICAL"}' WHERE id = $1`,
+      [ids.aliceFacet]
+    );
+    const summary = await runConversions(sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    expect(summary.results[0].counts.valuesDropped).toBe(1);
+    expect(summary.results[0].dropped).toEqual([
+      {
+        entityId: ids.alice,
+        facetId: ids.aliceFacet,
+        key: "driveLink",
+        value: "https://drive/alice",
+        keptKey: "driveLink",
+        kept: "https://drive/CANONICAL",
+      },
+    ]);
+    const [aliceRow] = await q(
+      `SELECT system_data FROM entities WHERE id = $1`,
+      [ids.alice]
+    );
+    expect(aliceRow.system_data.droppedByConversion).toEqual({
+      [OP.opKey]: { driveLink: "https://drive/alice" },
+    });
+  });
+
   it("(d) is idempotent — a second real run touches nothing", async () => {
     const { sql, q, ids } = await setupPod();
     await runConversions(sql, manifestOf(OP), {
@@ -398,7 +430,17 @@ describe("renamePropertyKey", () => {
     expect(summary.results[0].counts).toEqual({
       entitiesKeyRenamed: 2,
       entitiesKeyConflicts: 1,
+      valuesDropped: 1,
     });
+    expect(summary.results[0].dropped).toEqual([
+      {
+        entityId: ids.conflict,
+        key: "rationale",
+        value: "SRC",
+        keptKey: "decisionRationale",
+        kept: "TGT",
+      },
+    ]);
 
     expect(await props(q, ids.moved)).toEqual({
       title: "a",
@@ -489,5 +531,366 @@ describe("renamePropertyKey", () => {
       rationale: ["x", "y"],
     });
     expect(await q(`SELECT op_key FROM "_conversions"`)).toEqual([]);
+  });
+});
+
+// ─── Status-first wave: next step lives on the WORK (sf1.crm.next-step.*) ────
+// Drives the SHIPPED manifest ops (filtered by opKey), on the live CRM shapes:
+//   - Month'Immo: base nextStep / nextFollowUpDate AND a lead facet holding
+//     its own different nextAction / nextActionAt → the facet's wins, both
+//     base values are recorded as dropped;
+//   - an empty facet field ("") is filled from the base value;
+//   - Attitude Sport: base nextAction / nextActionAt equal to the facet's →
+//     stripped, nothing dropped;
+//   - a person with a base nextStep and no lead facet keeps it;
+//   - deals: nextStep → nextAction, an existing different nextAction wins.
+describe("sf1 next-step fold (manifest ops)", () => {
+  const FOLD: ConversionManifest = {
+    version: 1,
+    ops: CONVERSION_MANIFEST.ops.filter((o) =>
+      o.opKey.startsWith("sf1.crm.next-step.")
+    ),
+  };
+
+  async function crmPod() {
+    const db = new PGlite();
+    await db.exec(SCHEMA + LIFECYCLE_PROJECTION_TEST_SCHEMA);
+    const q = async (text: string, params: unknown[] = []) =>
+      (await db.query(text, params)).rows as any[];
+    const profile = async (slug: string, kind = "kind") =>
+      (
+        await q(
+          `INSERT INTO profiles (slug, profile_kind) VALUES ($1,$2) RETURNING id`,
+          [slug, kind]
+        )
+      )[0].id as string;
+    const person = await profile("person");
+    const company = await profile("company");
+    const deal = await profile("deal");
+    const lead = await profile("lead", "role");
+    const field = async (profileId: string, slug: string) => {
+      const [d] = await q(
+        `INSERT INTO property_defs (slug) VALUES ($1) RETURNING id`,
+        [slug]
+      );
+      await q(
+        `INSERT INTO profile_properties (profile_id, property_def_id) VALUES ($1,$2)`,
+        [profileId, d.id]
+      );
+    };
+    await field(lead, "nextAction");
+    await field(lead, "nextActionAt");
+    await field(deal, "nextAction");
+    const entity = async (profileId: string, props: unknown) =>
+      (
+        await q(
+          `INSERT INTO entities (profile_id, user_id, type, properties) VALUES ($1,$2,'x',$3::jsonb) RETURNING id`,
+          [profileId, USER, JSON.stringify(props)]
+        )
+      )[0].id as string;
+    const facet = async (entityId: string, props: unknown) =>
+      (
+        await q(
+          `INSERT INTO entity_facets (entity_id, profile_id, user_id, properties) VALUES ($1,$2,$3,$4::jsonb) RETURNING id`,
+          [entityId, lead, USER, JSON.stringify(props)]
+        )
+      )[0].id as string;
+
+    const monthImmo = await entity(company, {
+      title: "Month'Immo",
+      nextStep: "Send the first LinkedIn message to Tristan",
+      nextFollowUpDate: "2026-10-27T00:00:00.000Z",
+    });
+    const monthImmoLead = await facet(monthImmo, {
+      leadStage: "new",
+      nextAction: "Send the first message to Tristan on LinkedIn",
+      nextActionAt: "2026-10-27",
+    });
+    const emptyLeadCo = await entity(company, {
+      title: "Nordlys",
+      nextStep: "Call Ana",
+      nextFollowUpDate: "2026-11-12",
+    });
+    const emptyLead = await facet(emptyLeadCo, {
+      leadStage: "new",
+      nextAction: "",
+    });
+    const attitude = await entity(company, {
+      title: "Attitude Sport",
+      nextAction: "Send the first message to Jean-Luc",
+      nextActionAt: "2026-10-27",
+    });
+    const attitudeLead = await facet(attitude, {
+      leadStage: "new",
+      nextAction: "Send the first message to Jean-Luc",
+      nextActionAt: "2026-10-27",
+    });
+    const noLead = await entity(person, {
+      name: "Bob",
+      nextStep: "Ask Bob for an intro",
+    });
+    const dealMoved = await entity(deal, {
+      title: "Acme renewal",
+      nextStep: "Send revised quote Thu",
+    });
+    const dealKept = await entity(deal, {
+      title: "Atelier 9",
+      nextStep: "Old step",
+      nextAction: "Discovery call Wed",
+    });
+    return {
+      sql: makePgliteSql(db),
+      q,
+      lead,
+      ids: {
+        monthImmo,
+        monthImmoLead,
+        emptyLeadCo,
+        emptyLead,
+        attitude,
+        attitudeLead,
+        noLead,
+        dealMoved,
+        dealKept,
+      },
+    };
+  }
+
+  const row = async (
+    q: (t: string, p?: unknown[]) => Promise<any[]>,
+    table: "entities" | "entity_facets",
+    id: string
+  ) =>
+    (await q(`SELECT properties FROM ${table} WHERE id = $1`, [id]))[0]
+      .properties;
+
+  it("ships one op per key move, run at boot, each waiting for an undeclared target", () => {
+    expect(FOLD.ops.map((o) => o.opKey)).toEqual([
+      "sf1.crm.next-step.person.nextAction-to-lead",
+      "sf1.crm.next-step.person.nextActionAt-to-lead",
+      "sf1.crm.next-step.person.nextStep-to-lead",
+      "sf1.crm.next-step.person.nextFollowUpDate-to-lead",
+      "sf1.crm.next-step.company.nextAction-to-lead",
+      "sf1.crm.next-step.company.nextActionAt-to-lead",
+      "sf1.crm.next-step.company.nextStep-to-lead",
+      "sf1.crm.next-step.company.nextFollowUpDate-to-lead",
+      "sf1.crm.next-step.deal.nextStep-to-nextAction",
+    ]);
+    for (const op of FOLD.ops) {
+      expect(op.deferAtBoot ?? false).toBe(false);
+      expect((op as { requireTargetDef?: boolean }).requireTargetDef).toBe(
+        true
+      );
+    }
+  });
+
+  it("folds the base next step onto the lead facet (facet wins, drops recorded) and the deal's onto nextAction", async () => {
+    const { sql, q, ids } = await crmPod();
+    const summary = await runConversions(sql, FOLD, {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    const errors = summary.results.filter((r) => r.status === "error");
+    expect(errors.map((r) => r.error)).toEqual([]);
+
+    // Month'Immo: the facet's own values stay, both base values are dropped
+    // on the record, the base keys are gone.
+    expect(await row(q, "entity_facets", ids.monthImmoLead)).toEqual({
+      leadStage: "new",
+      nextAction: "Send the first message to Tristan on LinkedIn",
+      nextActionAt: "2026-10-27",
+    });
+    expect(await row(q, "entities", ids.monthImmo)).toEqual({
+      title: "Month'Immo",
+    });
+    const dropped = summary.results.flatMap((r) => r.dropped ?? []);
+    expect(dropped).toEqual([
+      {
+        entityId: ids.monthImmo,
+        facetId: ids.monthImmoLead,
+        key: "nextStep",
+        value: "Send the first LinkedIn message to Tristan",
+        keptKey: "nextAction",
+        kept: "Send the first message to Tristan on LinkedIn",
+      },
+      {
+        entityId: ids.monthImmo,
+        facetId: ids.monthImmoLead,
+        key: "nextFollowUpDate",
+        value: "2026-10-27T00:00:00.000Z",
+        keptKey: "nextActionAt",
+        kept: "2026-10-27",
+      },
+      {
+        entityId: ids.dealKept,
+        key: "nextStep",
+        value: "Old step",
+        keptKey: "nextAction",
+        kept: "Discovery call Wed",
+      },
+    ]);
+    const [mi] = await q(`SELECT system_data FROM entities WHERE id = $1`, [
+      ids.monthImmo,
+    ]);
+    expect(mi.system_data.droppedByConversion).toEqual({
+      "sf1.crm.next-step.company.nextStep-to-lead": {
+        nextStep: "Send the first LinkedIn message to Tristan",
+      },
+      "sf1.crm.next-step.company.nextFollowUpDate-to-lead": {
+        nextFollowUpDate: "2026-10-27T00:00:00.000Z",
+      },
+    });
+
+    // An empty facet field ("") is filled; an absent one too.
+    expect(await row(q, "entity_facets", ids.emptyLead)).toEqual({
+      leadStage: "new",
+      nextAction: "Call Ana",
+      nextActionAt: "2026-11-12",
+    });
+    expect(await row(q, "entities", ids.emptyLeadCo)).toEqual({
+      title: "Nordlys",
+    });
+
+    // Attitude Sport: same values on base and facet → stripped, not dropped.
+    expect(await row(q, "entity_facets", ids.attitudeLead)).toEqual({
+      leadStage: "new",
+      nextAction: "Send the first message to Jean-Luc",
+      nextActionAt: "2026-10-27",
+    });
+    expect(await row(q, "entities", ids.attitude)).toEqual({
+      title: "Attitude Sport",
+    });
+
+    // No lead facet: the person keeps its value, counted for a person to decide.
+    expect(await row(q, "entities", ids.noLead)).toEqual({
+      name: "Bob",
+      nextStep: "Ask Bob for an intro",
+    });
+    const personStep = summary.results.find(
+      (r) => r.opKey === "sf1.crm.next-step.person.nextStep-to-lead"
+    );
+    expect(personStep?.counts.entitiesSkippedNoFacet).toBe(1);
+
+    // Deals.
+    expect(await row(q, "entities", ids.dealMoved)).toEqual({
+      title: "Acme renewal",
+      nextAction: "Send revised quote Thu",
+    });
+    expect(await row(q, "entities", ids.dealKept)).toEqual({
+      title: "Atelier 9",
+      nextAction: "Discovery call Wed",
+    });
+  });
+
+  it("is idempotent: a second run (ledger cleared) changes nothing", async () => {
+    const { sql, q } = await crmPod();
+    await runConversions(sql, FOLD, { dryRun: false, destructiveTail: false });
+    const snap = async () => ({
+      entities: await q(
+        `SELECT id, properties, system_data FROM entities ORDER BY id`
+      ),
+      facets: await q(`SELECT id, properties FROM entity_facets ORDER BY id`),
+    });
+    const before = await snap();
+    await q(`DELETE FROM "_conversions"`);
+    const again = await runConversions(sql, FOLD, {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    expect(again.results.filter((r) => r.status === "error")).toEqual([]);
+    expect(again.results.flatMap((r) => r.dropped ?? [])).toEqual([]);
+    expect(await snap()).toEqual(before);
+  });
+
+  it("order-safe: with the target field undeclared the op waits (no write, not ledgered), the run goes on, and a later run applies it", async () => {
+    const { sql, q, lead, ids } = await crmPod();
+    const [nextActionDef] = await q(
+      `SELECT d.id FROM property_defs d JOIN profile_properties pp ON pp.property_def_id = d.id
+        WHERE pp.profile_id = $1 AND d.slug = 'nextAction'`,
+      [lead]
+    );
+    await q(
+      `DELETE FROM profile_properties WHERE profile_id = $1 AND property_def_id = $2`,
+      [lead, nextActionDef.id]
+    );
+
+    // Boot before the catalog declares lead.nextAction.
+    const first = await runConversions(sql, FOLD, {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    expect(first.hadError).toBe(false);
+    expect(first.results.filter((r) => r.status === "error")).toEqual([]);
+    expect(first.results).toHaveLength(FOLD.ops.length); // nothing halted
+    const waiting = first.results.filter(
+      (r) => r.deferReason === "target-def-missing"
+    );
+    // person.* has no lead facet to move onto (no-op); the company moves onto
+    // lead.nextAction wait, every other op applies.
+    expect(waiting.map((r) => [r.opKey, r.status])).toEqual([
+      ["sf1.crm.next-step.company.nextAction-to-lead", "deferred"],
+      ["sf1.crm.next-step.company.nextStep-to-lead", "deferred"],
+    ]);
+    expect(waiting[0]!.pending).toMatch(
+      /^target def missing: .*'lead\.nextAction'/
+    );
+    const ledger = async () =>
+      (await q(`SELECT op_key FROM "_conversions" ORDER BY op_key`)).map(
+        (r) => r.op_key as string
+      );
+    const firstLedger = await ledger();
+    for (const r of waiting) expect(firstLedger).not.toContain(r.opKey);
+    expect(firstLedger).toContain(
+      "sf1.crm.next-step.company.nextActionAt-to-lead"
+    );
+    expect(firstLedger).toContain(
+      "sf1.crm.next-step.deal.nextStep-to-nextAction"
+    );
+    // Nothing written to the undeclared field; the base values stay.
+    expect(await row(q, "entity_facets", ids.emptyLead)).toEqual({
+      leadStage: "new",
+      nextAction: "",
+      nextActionAt: "2026-11-12",
+    });
+    expect(await row(q, "entities", ids.emptyLeadCo)).toEqual({
+      title: "Nordlys",
+      nextStep: "Call Ana",
+    });
+    expect(await row(q, "entities", ids.attitude)).toEqual({
+      title: "Attitude Sport",
+      nextAction: "Send the first message to Jean-Luc",
+    });
+    // Ops after the waiting ones still ran.
+    expect(await row(q, "entities", ids.dealMoved)).toEqual({
+      title: "Acme renewal",
+      nextAction: "Send revised quote Thu",
+    });
+
+    // The reconcile declares the field; the next boot applies what waited.
+    await q(
+      `INSERT INTO profile_properties (profile_id, property_def_id) VALUES ($1,$2)`,
+      [lead, nextActionDef.id]
+    );
+    const second = await runConversions(sql, FOLD, {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    expect(second.hadError).toBe(false);
+    expect(
+      second.results
+        .filter((r) => waiting.some((w) => w.opKey === r.opKey))
+        .map((r) => r.status)
+    ).toEqual(["applied", "applied"]);
+    expect(await row(q, "entity_facets", ids.emptyLead)).toEqual({
+      leadStage: "new",
+      nextAction: "Call Ana",
+      nextActionAt: "2026-11-12",
+    });
+    expect(await row(q, "entities", ids.attitude)).toEqual({
+      title: "Attitude Sport",
+    });
+    expect(await ledger()).toEqual(
+      expect.arrayContaining(waiting.map((r) => r.opKey))
+    );
   });
 });
