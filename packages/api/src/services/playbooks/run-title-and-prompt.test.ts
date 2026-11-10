@@ -287,7 +287,7 @@ describe("runPlaybook seam: the row gets a title, the agent gets the prompt", ()
       ...PLAYBOOK,
       params: [{ name: "recipe", type: "text", required: true }],
     };
-    db.query.playbooks.findFirst = async () => withParam;
+    db.query.playbooks.findFirst = async () => withParam as typeof PLAYBOOK;
     // The param's id resolves to a playbook the starter can see (no entity).
     (db as unknown as Record<string, unknown>).select = () => ({
       from: (table: unknown) => ({
