@@ -299,7 +299,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_propose_app_from_playbook: {
     "pod-mcp": "synap_propose_app_from_playbook",
-    "cp-connector": null,
+    "cp-connector": "pod__propose_app_from_playbook",
   },
   synap_reject_proposal: {
     "pod-mcp": "synap_reject_proposal",
