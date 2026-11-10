@@ -160,13 +160,18 @@ export async function queueRecipeRun(
   const recipes = manifestRecipes(candidate.manifest);
   const recipe = recipes.find((r) => r.name === input.recipe);
   if (!recipe) {
+    // The recipes are the APPROVED version's (the manifest snapshot), never
+    // the catalog's today: a recipe the catalog added since needs the update
+    // approved first (proposal c6ba64e6: range-cut, added after the install).
+    // The fix comes first, the list last: an approval keeps ~180 characters.
     return {
       ok: false,
       code: "UNKNOWN_RECIPE",
-      error:
+      error: `${input.capabilityKey} on ${computer.name}: its approved version has no recipe "${input.recipe}"; ask for its update (synap_request_installation, action "update"). ${
         recipes.length > 0
-          ? `${input.capabilityKey} on ${computer.name} has no recipe "${input.recipe}". Its recipes: ${recipes.map((r) => r.name).join(", ")}.`
-          : `${input.capabilityKey} on ${computer.name} declares no recipes.`,
+          ? `Its recipes: ${recipes.map((r) => r.name).join(", ")}.`
+          : "It declares no recipes."
+      }`,
     };
   }
   const problem = recipeValuesProblem(recipe, input.values);

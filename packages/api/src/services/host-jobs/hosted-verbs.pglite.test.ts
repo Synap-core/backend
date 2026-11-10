@@ -288,32 +288,51 @@ const ask = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/** A refusal (`verb-refusal.ts`): its code, its class, its sentence. */
+const refusal = (code: string, errorClass: string, sentence: RegExp) => ({
+  name: "VerbRefusal",
+  code,
+  errorClass,
+  message: expect.stringMatching(sentence),
+});
+
 describe("computer.run_recipe — the ask", () => {
   it("refuses with the next step when the tool is on no computer", async () => {
     await expect(
       run(ask({ capability: "media-transcribe" }), ctx)
-    ).rejects.toThrow(/NOT_INSTALLED.*synap_request_installation/);
+    ).rejects.toMatchObject(
+      refusal("NOT_INSTALLED", "target_missing", /synap_request_installation/)
+    );
   });
 
   it("never sends a run to a computer whose check failed", async () => {
-    await expect(run(ask({ computer: "devbox" }), ctx)).rejects.toThrow(
-      /NOT_RUNNABLE.*devbox.*repair it first/
+    await expect(run(ask({ computer: "devbox" }), ctx)).rejects.toMatchObject(
+      refusal("NOT_RUNNABLE", "conflict", /devbox.*repair it first/)
     );
     await setInstallation(INST_MAC, { status: "failed", verifyOk: false });
-    await expect(run(ask(), ctx)).rejects.toThrow(/NOT_RUNNABLE/);
+    await expect(run(ask(), ctx)).rejects.toMatchObject({
+      code: "NOT_RUNNABLE",
+    });
     expect((await q(`SELECT 1 FROM host_jobs`)).rows).toHaveLength(0);
   });
 
   it("refuses an unknown recipe with the list, and values that do not fill it", async () => {
-    await expect(run(ask({ recipe: "range-cut" }), ctx)).rejects.toThrow(
-      /UNKNOWN_RECIPE.*loudness-normalize/
+    await expect(run(ask({ recipe: "range-cut" }), ctx)).rejects.toMatchObject(
+      refusal(
+        "UNKNOWN_RECIPE",
+        "target_missing",
+        /approved version has no recipe "range-cut".*action "update".*loudness-normalize/
+      )
     );
     await expect(
       run(ask({ params: { in: CLIP, out: "../../x.mp4" } }), ctx)
-    ).rejects.toThrow(/BAD_PARAMS/);
+    ).rejects.toMatchObject({ code: "BAD_PARAMS", errorClass: "validation" });
     await expect(
       run(ask({ params: { in: NOT_MINE, out: "x.mp4" } }), ctx)
-    ).rejects.toThrow(/FILE_NOT_READABLE/);
+    ).rejects.toMatchObject({
+      code: "FILE_NOT_READABLE",
+      errorClass: "target_missing",
+    });
     expect((await q(`SELECT 1 FROM host_jobs`)).rows).toHaveLength(0);
   });
 
@@ -349,6 +368,136 @@ describe("computer.run_recipe — the ask", () => {
     expect(h.notices).toEqual([
       { sessionId: SESSION, content: expect.stringContaining("MacBook-Pro") },
     ]);
+  });
+});
+
+/**
+ * The person APPROVES an agent's run (proposal c6ba64e6, 2026-11-10): the
+ * agent asked for `range-cut`, which the catalog added after media-ffmpeg was
+ * approved on that computer. The handler refused with the next step, and the
+ * approval recorded "Couldn't apply — an internal error occurred.", class
+ * `unknown`, and kept its dispatch claim (Retry could not re-run).
+ *
+ * Through the REAL approve path after its human gates
+ * (`completeProposalApproval` → `dispatchProposalApproval` → the
+ * `capability.run` executor → `runResolvedSkill` → the handler), a refusal is
+ * recorded on the proposal as its own sentence and class, and the claim is
+ * released; an accepted run is approved and queued.
+ *
+ * Negative control: with `runResolvedSkill` re-throwing a `VerbRefusal`
+ * (the catch in execute-capability.ts removed), the refusal case is red: the
+ * row reads "an internal error occurred", class `unknown`, claim kept.
+ */
+describe("approving an agent's computer.run_recipe", () => {
+  const SKILL = randomUUID();
+
+  beforeAll(async () => {
+    await q(
+      `INSERT INTO workspaces (id, owner_id, name) VALUES ($1, $2, 'Builder')`,
+      [SPACE, PERSON]
+    );
+    await q(
+      `INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+      [SPACE, PERSON]
+    );
+    await q(
+      `INSERT INTO skills (id, user_id, name, code, kind, scope, status, approved)
+       VALUES ($1, $2, 'computer.run_recipe', '', 'builtin', 'pod', 'active', true)`,
+      [SKILL, PERSON]
+    );
+  });
+
+  async function proposeRun(parameters: Record<string, unknown>) {
+    const id = randomUUID();
+    await q(
+      `INSERT INTO proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, created_by, agent_user_id)
+       VALUES ($1, $2, 'capability', $3, 'capability.run', $4::jsonb, 'pending', $5, $5)`,
+      [
+        id,
+        SPACE,
+        SKILL,
+        JSON.stringify({
+          verbId: "computer.run_recipe",
+          skillId: SKILL,
+          summary: "Run computer run recipe",
+          parameters,
+          workspaceId: SPACE,
+          connectionSelector: null,
+        }),
+        AGENT,
+      ]
+    );
+    return id;
+  }
+
+  async function approve(proposalId: string) {
+    const { db, proposals, eq } = await import("@synap/database");
+    const [proposal] = await (db as any)
+      .select()
+      .from(proposals)
+      .where(eq(proposals.id, proposalId));
+    const { completeProposalApproval } =
+      await import("../../routers/proposals/apply-approval.js");
+    return completeProposalApproval(
+      {
+        proposal,
+        userId: PERSON,
+        input: { proposalId },
+        ctx: { userId: PERSON, workspaceId: SPACE } as never,
+      },
+      null
+    ).then(
+      (result) => ({ result, error: null as Error | null }),
+      (error: Error) => ({ result: null, error })
+    );
+  }
+
+  const rowOf = async (id: string) =>
+    (
+      await q<{
+        status: string;
+        rejection_reason: string | null;
+        data: { failure?: { errorClass?: string } };
+        external_dispatched_at: string | null;
+      }>(
+        `SELECT status, rejection_reason, data, external_dispatched_at FROM proposals WHERE id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+
+  it("a refusal is recorded as its own sentence and class, and the claim is released (Retry re-runs)", async () => {
+    const id = await proposeRun({
+      capability: "media-ffmpeg",
+      recipe: "range-cut",
+      params: { in: CLIP, out: "take-cut.mp4", start: "2", end: "7" },
+      computer: "mac",
+    });
+    const { error } = await approve(id);
+    expect(error?.message).toMatch(
+      /approved version has no recipe "range-cut".*action "update"/
+    );
+    const row = await rowOf(id);
+    expect(row.status).toBe("approval_failed");
+    expect(row.rejection_reason).toMatch(
+      /^Couldn't apply — media-ffmpeg on MacBook-Pro: its approved version has no recipe "range-cut"; ask for its update/
+    );
+    expect(row.rejection_reason).not.toMatch(/internal error/);
+    expect(row.data.failure?.errorClass).toBe("target_missing");
+    // Nothing ran, so nothing holds the claim: approving again really retries.
+    expect(row.external_dispatched_at).toBeNull();
+    expect((await q(`SELECT 1 FROM host_jobs`)).rows).toHaveLength(0);
+  });
+
+  it("an accepted run is approved and queued on the computer", async () => {
+    const id = await proposeRun(ask({ computer: "mac" }));
+    const { result, error } = await approve(id);
+    expect(error).toBeNull();
+    expect(result?.success).toBe(true);
+    expect((await rowOf(id)).status).toBe("approved");
+    const jobs = await q<{ kind: string; installation_id: string }>(
+      `SELECT kind, installation_id FROM host_jobs`
+    );
+    expect(jobs.rows).toEqual([{ kind: "verb", installation_id: INST_MAC }]);
   });
 });
 
