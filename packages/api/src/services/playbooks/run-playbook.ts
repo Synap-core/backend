@@ -125,6 +125,10 @@ import {
 } from "./pinned-subject-query.js";
 import { QueryFilterParseError } from "@synap/jobs/workers/query-dsl.js";
 import { trialSessionMetadata, type TrialRunInput } from "./trial-run.js";
+import {
+  decidePreApprovedRun,
+  type PreApprovalHeldReason,
+} from "./pre-approved-run.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -228,6 +232,14 @@ export interface RunPlaybookInput {
    * — and carries the asker in `agentIds` instead (`executors/playbook.ts`).
    */
   agentUserId?: string;
+  /**
+   * A person let agents run this playbook at this version (founder, 10 Nov
+   * 2026): the `governance_rules` row the run door's grant named
+   * (`PermissionResult.preApprovedByRuleId`). With `agentUserId`, the run
+   * starts at once, its draft accepted in advance, when it stays what was
+   * allowed ({@link decidePreApprovedRun}); otherwise it is held as before.
+   */
+  preApprovedByRuleId?: string;
   /**
    * Idempotency by subject: when true AND `subjectId` is set, reuse the existing
    * active session for this playbook+subject instead of starting a new run. Makes
@@ -380,6 +392,8 @@ type PlaybookRunStarted = {
    * draft (B6; {@link startHeldRun}). `run` is null.
    */
   held?: true;
+  /** Why a held run was not started by the person's pre-approval, when one applied or was outdated. */
+  heldBecause?: PreApprovalHeldReason;
   /**
    * The agent this run was handed to — named by the caller, or the agent a
    * person assigned to the playbook — so the reply says who has it. Absent
@@ -1407,7 +1421,20 @@ async function executeSingleRun(
   // agent that started it is the first on the roster — the starter every
   // surface names (`attachSessionParticipants`) — and the run waits as a draft.
   const actorId = input.userId;
+  // An agent's run waits as the person's draft (B6) unless the person allowed
+  // this playbook beforehand and the run stays what they allowed.
+  const preApproval = input.agentUserId
+    ? await decidePreApprovedRun({
+        db,
+        playbook,
+        preApprovedByRuleId: input.preApprovedByRuleId,
+        handedOff: !!handOff,
+        userId: input.userId,
+      })
+    : null;
   const startedByAgent = !!input.agentUserId;
+  const preApprovedRuleId =
+    preApproval?.runs === true ? preApproval.ruleId : null;
   const startRoster = input.agentUserId
     ? [
         input.agentUserId,
@@ -1497,6 +1524,17 @@ async function executeSingleRun(
     // A trial (the rule lab): the drafts it renders, and the stamp every
     // write door refuses a write on.
     ...(input.trial ? trialSessionMetadata(input.trial) : {}),
+    // Pre-approved: the person's rule is the acceptance, so the agent's run is
+    // born accepted (`triage.ts` receipt) and names the rule that let it start.
+    ...(preApprovedRuleId
+      ? {
+          triage: {
+            acceptedAt: new Date().toISOString(),
+            acceptedBy: input.userId,
+            preApprovedByRuleId: preApprovedRuleId,
+          },
+        }
+      : {}),
     // `profileSlug` = the lifecycle the worker follows: process-sync settles
     // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker
@@ -1712,7 +1750,7 @@ async function executeSingleRun(
   // session (`metadata.heldRun`, server-owned), and the ONE acceptance door
   // (`acceptFromTriage`) starts it through {@link startHeldRun}. Discarding
   // the draft cancels the session, so a held run never runs.
-  if (startedByAgent) {
+  if (startedByAgent && !preApprovedRuleId) {
     const held: HeldRun = {
       params,
       agentType: input.agentType ?? null,
@@ -1732,6 +1770,9 @@ async function executeSingleRun(
       run: null,
       session: heldSession as FocusSession,
       held: true,
+      ...(preApproval && !preApproval.runs && preApproval.reason
+        ? { heldBecause: preApproval.reason }
+        : {}),
       ...(parentLink ? { parentLink } : {}),
     };
   }

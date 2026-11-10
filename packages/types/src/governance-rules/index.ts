@@ -171,8 +171,20 @@ export function governanceRuleTitle(rule: {
   targetKind: string;
   targetPattern: string;
   targetProfile?: string | null;
+  /** The one object it names (0420), by its name, and the version it holds for. */
+  targetSubjectLabel?: string | null;
+  targetSubjectVersion?: number | null;
 }): string | null {
   if (rule.targetKind !== "action") return null;
+  // A rule naming ONE object holds for that object at one version only, so
+  // both are its name: "Run playbook · Weekly review, version 3".
+  if (rule.targetSubjectLabel) {
+    const version =
+      rule.targetSubjectVersion != null
+        ? `, version ${rule.targetSubjectVersion}`
+        : "";
+    return `${writePatternTitle(rule.targetPattern)} · ${rule.targetSubjectLabel}${version}`;
+  }
   // The row a pod switch owns is titled with the switch's own words (S13), so
   // the list and the switch read as one rule.
   const podDefault = rule.targetProfile
@@ -375,4 +387,77 @@ export function provenanceLabel(
 export function verdictLabel(verdict: string): string {
   if (verdict === "deny") return resolveGovernanceRungLabel("denied-by-rule");
   return verdict === "auto" ? "Auto-approve" : "Require proposal";
+}
+
+// ─── Letting agents run one playbook without asking (0420) ──────────────
+
+/** The governed write an agent's playbook launch is (`playbooks.run`). */
+export const PLAYBOOK_RUN_ACTION = "playbook.run";
+
+/**
+ * The `governanceRules.create` input that lets agents run ONE playbook at ONE
+ * version without asking (founder decision, 10 Nov 2026): any of the person's
+ * agents, the playbook's own space (pod-wide for a pod-wide playbook), the
+ * exact action narrowed to that playbook. Any edit that bumps its version
+ * leaves the rule matching nothing, so the next launch asks again. Built here
+ * once, so no surface writes its own shape.
+ */
+export function playbookPreApprovalRule(playbook: {
+  id: string;
+  version: number;
+  workspaceId: string | null;
+}) {
+  return {
+    principalKind: "any" as const,
+    ...(playbook.workspaceId
+      ? { scopeKind: "workspace" as const, workspaceId: playbook.workspaceId }
+      : { scopeKind: "pod" as const }),
+    targetKind: "action" as const,
+    targetPattern: PLAYBOOK_RUN_ACTION,
+    targetSubjectId: playbook.id,
+    targetSubjectVersion: playbook.version,
+    verdict: "auto" as const,
+  };
+}
+
+/** Whether agents may run a playbook without asking, read from its rules. */
+export type PlaybookPreApprovalState =
+  | { state: "allowed"; ruleId: string; version: number }
+  /** Allowed for an earlier version: it changed since, so agents ask again. */
+  | { state: "outdated"; allowedVersion: number }
+  | { state: "none" };
+
+/**
+ * The state of a playbook's pre-approval from its ACTIVE rules
+ * (`governanceRules.forSubject`): an `auto` rule on `playbook.run` naming it
+ * at its current version allows it; one at another version is outdated. The
+ * resolver matches on the same three facts (`scoreRuleTarget`).
+ */
+export function playbookPreApprovalState(
+  rules: ReadonlyArray<{
+    id: string;
+    targetPattern: string;
+    verdict: string;
+    targetSubjectId: string | null;
+    targetSubjectVersion: number | null;
+  }>,
+  playbook: { id: string; version: number }
+): PlaybookPreApprovalState {
+  const named = rules.filter(
+    (r) =>
+      r.targetPattern === PLAYBOOK_RUN_ACTION &&
+      r.verdict === "auto" &&
+      r.targetSubjectId === playbook.id &&
+      r.targetSubjectVersion != null
+  );
+  const current = named.find(
+    (r) => r.targetSubjectVersion === playbook.version
+  );
+  if (current) {
+    return { state: "allowed", ruleId: current.id, version: playbook.version };
+  }
+  const earlier = named[0];
+  return earlier && earlier.targetSubjectVersion != null
+    ? { state: "outdated", allowedVersion: earlier.targetSubjectVersion }
+    : { state: "none" };
 }

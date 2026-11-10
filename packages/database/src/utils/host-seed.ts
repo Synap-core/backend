@@ -75,6 +75,8 @@ export type SeedableRule = Pick<
   | "targetKind"
   | "targetPattern"
   | "targetProfile"
+  | "targetSubjectId"
+  | "targetSubjectVersion"
   | "verdict"
   | "expiresAt"
 >;
@@ -188,6 +190,10 @@ export async function seedHostRules(
       targetKind: r.targetKind,
       targetPattern: r.targetPattern,
       targetProfile: r.targetProfile,
+      // A seed of a rule naming one object names it too: without it the box
+      // would hold the action for EVERY object.
+      targetSubjectId: r.targetSubjectId,
+      targetSubjectVersion: r.targetSubjectVersion,
       verdict: "auto",
       expiresAt: r.expiresAt,
       createdBy: hostSeedCreatedBy(r.id),

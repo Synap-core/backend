@@ -4815,6 +4815,8 @@ ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_at" timestamptz;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "expires_at" timestamptz;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_reason" text; -- 0380
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "target_subject_id" uuid; -- 0420
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "target_subject_version" integer; -- 0420
 
 CREATE INDEX IF NOT EXISTS "governance_rules_scope_principal_idx"
   ON "governance_rules" ("scope_kind", "workspace_id", "principal_kind", "agent_user_id")

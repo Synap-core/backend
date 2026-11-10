@@ -32,7 +32,7 @@ import {
   classifyRuleProvenance,
   type RuleProvenance,
 } from "@synap/database";
-import { governanceRules, users } from "@synap/database/schema";
+import { governanceRules, playbooks, users } from "@synap/database/schema";
 
 /** A raw `governance_rules` row. */
 export type GovernanceRuleRow = typeof governanceRules.$inferSelect;
@@ -126,6 +126,20 @@ export async function mapRulesWithAgentLabels(rows: GovernanceRuleRow[]) {
   const agentLabels = await resolveAgentLabels(
     rows.filter((r) => r.principalKind === "agent").map((r) => r.agentUserId)
   );
+  // A rule naming one object (0420, today a playbook) reads by its name.
+  const subjectIds = Array.from(
+    new Set(
+      rows.map((r) => r.targetSubjectId).filter((id): id is string => !!id)
+    )
+  );
+  const subjectLabels = new Map<string, string>();
+  if (subjectIds.length > 0) {
+    for (const p of await db
+      .select({ id: playbooks.id, name: playbooks.name })
+      .from(playbooks)
+      .where(inArray(playbooks.id, subjectIds)))
+      subjectLabels.set(p.id, p.name);
+  }
 
   return rows.map((r) => ({
     id: r.id,
@@ -141,6 +155,11 @@ export async function mapRulesWithAgentLabels(rows: GovernanceRuleRow[]) {
     targetKind: r.targetKind,
     targetPattern: r.targetPattern,
     targetProfile: r.targetProfile,
+    targetSubjectId: r.targetSubjectId,
+    targetSubjectVersion: r.targetSubjectVersion,
+    targetSubjectLabel: r.targetSubjectId
+      ? (subjectLabels.get(r.targetSubjectId) ?? null)
+      : null,
     verdict: r.verdict,
     createdAt: r.createdAt,
     createdBy: r.createdBy,

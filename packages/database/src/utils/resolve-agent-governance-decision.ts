@@ -194,6 +194,19 @@ export interface ResolveAgentGovernanceInput {
    * ({@link isHumanOwnedEntityBody}) and, if so, decides it on the entity lane.
    */
   subjectDocumentId?: string | null;
+  /**
+   * The ONE object this write acts on and its version, for a rule that names
+   * it (0420): today the playbook of a `playbook.run` and its
+   * `playbooks.version`. Only a rule naming this subject at this version
+   * matches; without it a subject rule never matches.
+   */
+  ruleSubject?: RuleSubject | null;
+}
+
+/** The object a write acts on, as a subject rule names it (0420). */
+export interface RuleSubject {
+  id: string;
+  version: number;
 }
 
 /**
@@ -272,6 +285,12 @@ export type AgentGovernanceResolution =
       explicitAutoApproveFor?: readonly string[];
       /** The `governance_rules` row that decided (rung 2.8), when one did. */
       governanceRuleId?: string;
+      /**
+       * That row NAMES the write's subject at its version (0420): a person
+       * allowed this one object, not a class of writes. Only then may a door
+       * lift a hold no broad rule may lift (an agent's playbook run).
+       */
+      namesSubject?: true;
       decidedBy?: GovernanceDecidedBy;
     };
 
@@ -292,6 +311,8 @@ interface GovernanceRuleCandidate {
   targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
+  targetSubjectId: string | null;
+  targetSubjectVersion: number | null;
   verdict: GovernanceRuleVerdict;
   createdAt: Date;
 }
@@ -351,12 +372,30 @@ function scoreRuleTarget(
   rule: Pick<
     GovernanceRuleCandidate,
     "targetKind" | "targetPattern" | "targetProfile"
-  >,
+  > &
+    Partial<
+      Pick<GovernanceRuleCandidate, "targetSubjectId" | "targetSubjectVersion">
+    >,
   eventKey: string,
   profileSlug: string | null | undefined,
   capabilityId?: string | null,
-  capabilityVerbName?: string | null
+  capabilityVerbName?: string | null,
+  subject?: RuleSubject | null
 ): number | undefined {
+  // A rule that NAMES one object (0420) matches only that object at the
+  // version it was approved for, on its exact action: it can only NARROW, with
+  // the same score as a plain exact rule. Any other shape (a glob, another
+  // kind) matches nothing: widening a whole class from one object's approval
+  // is exactly what it must never do. Guard: `subject-rule-narrows.test.ts`.
+  if (rule.targetSubjectId) {
+    return rule.targetKind === "action" &&
+      rule.targetPattern === eventKey &&
+      subject != null &&
+      rule.targetSubjectId === subject.id &&
+      rule.targetSubjectVersion === subject.version
+      ? 3
+      : undefined;
+  }
   if (rule.targetKind === "profile") {
     return profileSlug != null && rule.targetProfile === profileSlug
       ? 2
@@ -555,6 +594,8 @@ export interface ResolveGovernanceRuleInput {
    * `propose` row still matches and tightens, ranked as usual).
    */
   ownWorkOrganise?: boolean;
+  /** The write's subject, for a rule that names one (0420). */
+  ruleSubject?: RuleSubject | null;
 }
 
 /** A stored rule's verdict: `deny` is a person's "Never" (0381). */
@@ -580,6 +621,8 @@ export interface GovernanceRuleMatch {
    * into a terminal lifecycle option (rung 2.8 / 2.85).
    */
   namesWrite: boolean;
+  /** The winning row names the write's subject at its version (0420). */
+  namesSubject: boolean;
 }
 
 /**
@@ -615,6 +658,7 @@ export async function resolveGovernanceRule(
     capabilityVerbName,
     includeAgentPrincipal = true,
     ownWorkOrganise = false,
+    ruleSubject = null,
   } = input;
   const eventKey = `${subjectType}.${action}`;
   // B3: the class may cover only an attributed write its door proved.
@@ -637,6 +681,8 @@ export async function resolveGovernanceRule(
       targetKind: governanceRules.targetKind,
       targetPattern: governanceRules.targetPattern,
       targetProfile: governanceRules.targetProfile,
+      targetSubjectId: governanceRules.targetSubjectId,
+      targetSubjectVersion: governanceRules.targetSubjectVersion,
       verdict: governanceRules.verdict,
       createdAt: governanceRules.createdAt,
     })
@@ -669,6 +715,7 @@ export async function resolveGovernanceRule(
         verdict: GovernanceRuleVerdict;
         matchedPattern: string;
         namesWrite: boolean;
+        namesSubject: boolean;
       }
     | undefined;
   for (const rule of candidates) {
@@ -700,7 +747,8 @@ export async function resolveGovernanceRule(
           eventKey,
           profileSlug,
           capabilityId,
-          capabilityVerbName
+          capabilityVerbName,
+          ruleSubject
         );
     if (targetScore === undefined) continue;
     const namesWrite = ruleNamesWrite(rule, targetScore, eventKey);
@@ -732,6 +780,7 @@ export async function resolveGovernanceRule(
             ? `profile:${rule.targetProfile}`
             : rule.targetPattern,
         namesWrite,
+        namesSubject: !!rule.targetSubjectId,
       };
     }
   }
@@ -741,6 +790,7 @@ export async function resolveGovernanceRule(
         verdict: best.verdict,
         matchedPattern: best.matchedPattern,
         namesWrite: best.namesWrite,
+        namesSubject: best.namesSubject,
       }
     : undefined;
 }
@@ -2008,6 +2058,7 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
     profileSlug: input.subjectProfileSlug,
     includeAgentPrincipal: input.preferAgentMetadataAutoApproveFor,
     ownWorkOrganise: input.ownWorkOrganise,
+    ruleSubject: input.ruleSubject,
   });
 
   // (c.6) Rung 2.55's I/O half — resolve the acting channel's instruction-
@@ -2149,6 +2200,11 @@ async function resolveForPrincipal(input: PrincipalInput): Promise<{
       // match alone, since a rung above it may have been the one that executed.
       ...(decision.governanceRuleId
         ? { governanceRuleId: decision.governanceRuleId }
+        : {}),
+      ...(decision.governanceRuleId &&
+      decision.governanceRuleId === ruleMatch?.ruleId &&
+      ruleMatch.namesSubject
+        ? { namesSubject: true as const }
         : {}),
     },
     hostUserId,

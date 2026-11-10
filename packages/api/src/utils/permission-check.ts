@@ -59,6 +59,7 @@ import {
   resolveOriginTrust,
   resolvePendingProposalCap,
   isOwnSessionBookkeeping,
+  type RuleSubject,
 } from "@synap/database/agent-governance";
 import {
   GOVERNANCE_DECISION_KEY,
@@ -609,6 +610,14 @@ export type PermissionResult =
        * the write is NOT miscounted as an "ungoverned AI write" (0231).
        */
       autoApprovedProposalId?: string;
+      /**
+       * The `governance_rules` row that decided NAMES this write's subject at
+       * its version (`opts.ruleSubject`, 0420): a person allowed this one
+       * object. Present only then, never for a broad rule or the default, so a
+       * door may lift a hold only a named approval lifts (an agent's playbook
+       * run, `runPlaybook`).
+       */
+      preApprovedByRuleId?: string;
     }
   | {
       granted: false;
@@ -1146,6 +1155,13 @@ export interface PermissionCheckBaseOpts {
    * ONLY by `playbooks.run` for an agent's own (non-replay) run.
    */
   heldAsDraft?: boolean;
+  /**
+   * The ONE object this write acts on and its version (0420), for a rule that
+   * names it: `playbooks.run` passes the playbook and `playbooks.version`.
+   * Only a rule naming this subject at this version matches it, and then the
+   * grant carries `preApprovedByRuleId`.
+   */
+  ruleSubject?: RuleSubject;
   /**
    * The duplicate door (`findDuplicateCandidates`) found a possible twin of
    * this create (same kind, same name or strong identity, as a record or a
@@ -2176,6 +2192,7 @@ async function evaluatePermission(
         // forcePropose above wins at 2.1); the proof only reaches the store.
         ownWorkOrganise: opts.ownWorkOrganise,
         heldAsDraft: opts.heldAsDraft,
+        ...(opts.ruleSubject ? { ruleSubject: opts.ruleSubject } : {}),
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -2627,7 +2644,15 @@ async function evaluatePermission(
           }
         }
 
-        return { granted: true, autoApprovedProposalId };
+        return {
+          granted: true,
+          autoApprovedProposalId,
+          ...(gov.decision === "execute" &&
+          gov.namesSubject &&
+          gov.governanceRuleId
+            ? { preApprovedByRuleId: gov.governanceRuleId }
+            : {}),
+        };
       }
 
       // gov.decision === "not-agent": the user row is not an agent (defence-in-
