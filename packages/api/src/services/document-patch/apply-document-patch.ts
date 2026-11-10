@@ -643,6 +643,12 @@ export interface ApplyDocumentPatchInput {
    * (`source: "intelligence"`, `forcePropose`, `machineAuthor`).
    */
   forReview?: { machineAuthor: `system:${string}` };
+  /**
+   * The playbook run that drafted this patch (a one-shot run), copied onto
+   * the proposal's data as `run`: from a proposal, `GET /runs/:id` reopens
+   * how the draft was made. Provenance only; nothing reads it to decide.
+   */
+  run?: { id: string; playbookId: string };
 }
 
 interface PatchResultCommon {
@@ -697,6 +703,8 @@ export interface DocumentPatchProposalData {
   author: string;
   sessionState?: string;
   systemAuthor?: string;
+  /** The playbook run that drafted it (`ApplyDocumentPatchInput.run`). */
+  run?: { id: string; playbookId: string };
 }
 
 function parseOps(ops: unknown): DocumentPatchOp[] {
@@ -870,6 +878,9 @@ export async function applyDocumentPatch(
     author: writer.author,
     ...(writer.sessionState ? { sessionState: writer.sessionState } : {}),
     ...(systemAuthor ? { systemAuthor } : {}),
+    ...(input.run
+      ? { run: { id: input.run.id, playbookId: input.run.playbookId } }
+      : {}),
   };
   // A proposal filed against a legacy checkpoint base keeps comparing on it.
   const proposalData: Record<string, unknown> =

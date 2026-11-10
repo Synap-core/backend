@@ -781,7 +781,25 @@ export interface OutputLanding {
   target: "subject_document_section";
   /** The section's title, e.g. "Caption draft". */
   section: string;
+  /**
+   * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
+   * reads the person's last decided drafts of THIS playbook in THIS space, the
+   * approved ones as they were applied (after the person's revisions), the
+   * rejected ones with the reason when one was given, and shows them to the
+   * model as examples. Each count is at most
+   * {@link OUTPUT_LANDING_EXAMPLES_MAX}; 0 or absent reads none of that kind.
+   */
+  examples?: OutputLandingExamples;
 }
+
+/** See {@link OutputLanding.examples}. */
+export interface OutputLandingExamples {
+  approved?: number;
+  rejected?: number;
+}
+
+/** The most past outcomes of one kind a one-shot run reads as examples. */
+export const OUTPUT_LANDING_EXAMPLES_MAX = 5;
 
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {

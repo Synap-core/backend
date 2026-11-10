@@ -31,6 +31,7 @@ import { validateGuidanceList } from "@synap-core/types/guidance";
 import {
   findDroppedParamEntries,
   MAX_REQUIRED_INTENTS,
+  OUTPUT_LANDING_EXAMPLES_MAX,
 } from "@synap/playbooks";
 import {
   CAPABILITY_INTENTS,
@@ -87,6 +88,28 @@ export const outputLandingSchema = z.strictObject({
     .min(1)
     .max(200)
     .regex(/^[^\r\n]+$/, "a section title is one line"),
+  /**
+   * Past outcomes read as examples (`OutputLanding.examples`): how many of
+   * the person's last approved and rejected drafts of this playbook in this
+   * space. Off when absent; each count capped so the examples never crowd out
+   * the subject in the one call's input bound.
+   */
+  examples: z
+    .strictObject({
+      approved: z
+        .number()
+        .int()
+        .min(0)
+        .max(OUTPUT_LANDING_EXAMPLES_MAX)
+        .optional(),
+      rejected: z
+        .number()
+        .int()
+        .min(0)
+        .max(OUTPUT_LANDING_EXAMPLES_MAX)
+        .optional(),
+    })
+    .optional(),
 });
 
 /**

@@ -8565,10 +8565,16 @@ export interface PlaybookRunGeneration {
 		chars: number;
 		/** The entity or document read, when the part is one. */
 		id?: string;
-		kind: "method" | "subject" | "subject_document";
+		kind: "examples" | "method" | "subject" | "subject_document";
 		/** The part was cut to fit the call's input bound. */
 		truncated?: boolean;
 	}>;
+	/**
+	 * The past outcomes read as examples, when the playbook's landing asks for
+	 * them (`lands.examples`); absent when it does not. Either what was shown
+	 * or why the read failed: a failed read is never recorded as "none".
+	 */
+	examples?: PlaybookRunGenerationExamples;
 	/** The text sent: the system line and the prompt. */
 	prompt: {
 		chars: number;
@@ -8597,6 +8603,40 @@ export interface PlaybookRunGeneration {
 		sectionId: string;
 	};
 }
+/** See {@link PlaybookRunGeneration.examples}. */
+export type PlaybookRunGenerationExamples = {
+	/** How many of each the landing asked for. */
+	asked: {
+		approved: number;
+		rejected: number;
+	};
+	/** Read but not shown: no section text, or no room left in the input bound. */
+	leftOut?: Array<{
+		outcome: "approved" | "rejected";
+		proposalId: string;
+		runId: string;
+		why: "no_text" | "over_bound";
+	}>;
+	/** The earlier drafts shown to the model, in prompt order. */
+	used: Array<{
+		chars: number;
+		outcome: "approved" | "rejected";
+		proposalId: string;
+		/** A rejection whose reason was given (and shown). */
+		reason?: true;
+		/** The run that filed it. */
+		runId: string;
+		/** The text was cut to its per-example bound. */
+		truncated?: true;
+	}>;
+} | {
+	asked: {
+		approved: number;
+		rejected: number;
+	};
+	/** The read failed: the run went on without examples. */
+	error: string;
+};
 /**
  * `@synap-core/types/renderer-ref` — what a profile or workspace stores as its
  * renderer choice for a (content kind, profile) pair, and the bounded block
@@ -14494,6 +14534,20 @@ export interface OutputLanding {
 	target: "subject_document_section";
 	/** The section's title, e.g. "Caption draft". */
 	section: string;
+	/**
+	 * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
+	 * reads the person's last decided drafts of THIS playbook in THIS space, the
+	 * approved ones as they were applied (after the person's revisions), the
+	 * rejected ones with the reason when one was given, and shows them to the
+	 * model as examples. Each count is at most
+	 * {@link OUTPUT_LANDING_EXAMPLES_MAX}; 0 or absent reads none of that kind.
+	 */
+	examples?: OutputLandingExamples;
+}
+/** See {@link OutputLanding.examples}. */
+export interface OutputLandingExamples {
+	approved?: number;
+	rejected?: number;
 }
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
@@ -39408,6 +39462,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -40722,6 +40780,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: string;
 					label: string;
 					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -48031,6 +48093,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
 					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -49330,6 +49396,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
 					lands?: {
+						examples?: {
+							approved?: number | undefined;
+							rejected?: number | undefined;
+						} | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -60508,6 +60578,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							relationToSubject?: string | undefined;
 							optional?: boolean | undefined;
 							lands?: {
+								examples?: {
+									approved?: number | undefined;
+									rejected?: number | undefined;
+								} | undefined;
 								section: string;
 								target: "subject_document_section";
 							} | undefined;
