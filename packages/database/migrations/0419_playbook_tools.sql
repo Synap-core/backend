@@ -27,9 +27,9 @@
 -- boots; a later migration drops it. The `grants` LINKS stay: they also carry
 -- governance (a follow's grant widening), not run tools.
 --
--- Every KEPT version (`playbook_versions`, 0416) names `tools` too: its
--- `requiredIntents` key becomes `tools` (a stage pinned to a version reads
--- the same field a live playbook has).
+-- Kept versions (`playbook_versions`, 0416) are history and stay as they
+-- were: their only reader (`stage-uses.ts`) reads a version's name, stages
+-- and params, never its tools.
 --
 -- Fresh installs get the column from 0000_baseline_schema.sql. Re-runnable:
 -- every fold is a de-duplicated union.
@@ -175,11 +175,3 @@ UPDATE "playbooks" p
 SET "stages" = r.stages
 FROM rewritten r
 WHERE p."id" = r."id";
-
--- Kept versions: `requiredIntents` → `tools`.
-UPDATE "playbook_versions"
-SET "definition" = ("definition" - 'requiredIntents') || jsonb_build_object(
-  'tools',
-  COALESCE("definition" -> 'tools', "definition" -> 'requiredIntents', '[]'::jsonb)
-)
-WHERE "definition" ? 'requiredIntents';
