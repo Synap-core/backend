@@ -650,6 +650,9 @@ export const buildHandlers: McpHandlerMap = {
       ...(args.requires !== undefined
         ? { requires: args.requires as string[] }
         : {}),
+      // What a run may use, "only these": validated by `playbooks.create`
+      // (`playbookToolsSchema`, a stage list a subset), refused, never dropped.
+      ...(args.tools !== undefined ? { tools: args.tools as string[] } : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -695,6 +698,7 @@ export const buildHandlers: McpHandlerMap = {
       "scope",
       "runner",
       "requires",
+      "tools",
     ] as const satisfies ReadonlyArray<keyof Patch>) {
       if (args[key] !== undefined) patch[key] = args[key];
     }

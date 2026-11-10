@@ -80,9 +80,8 @@ export class IsAgentExecutor implements Executor {
     // WHICH phase it is in and what's expected of it. Additive: when the run is
     // stageless (currentStage null/absent) or no declared stage matches, the
     // section is omitted.
-    // NOTE: stage-scoped-grant ENFORCEMENT (intersecting stage.grants into the
-    // resolved capability set) is a deliberate follow-up — here the stage's grant
-    // ids are listed ADVISORY only.
+    // A stage's `tools` are ENFORCED by the run's tool profile (a stage list
+    // narrows the playbook's, `activeToolsList`); here they are only named.
     const stage = ctx.currentStage
       ? ctx.stages?.find((s) => s.key === ctx.currentStage)
       : undefined;
@@ -138,11 +137,10 @@ export class IsAgentExecutor implements Executor {
       };
     }
 
-    // The run's declared tools (founder, 2026-11-05): the IS gives this turn
-    // the run core tools plus only the capabilities the playbook grants (its
-    // `grants`, the active stage's) and those serving what it and its space
-    // declare. Never throws: a failed read comes back `capabilitiesRead:
-    // "failed"`, and the IS tells the agent so.
+    // The run's tools (plan 08e4fba7 decision 3): the IS gives this turn the
+    // floor of the playbook's class plus its ONE `tools` list, and nothing
+    // else. Never throws: a failed read comes back `capabilitiesRead:
+    // "failed"` with the floor only, and the IS tells the agent so.
     const run = ctx.playbookId
       ? await resolveRunToolProfile({
           playbookId: ctx.playbookId,

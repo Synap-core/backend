@@ -30,10 +30,16 @@ import { AskSchema } from "@synap-core/types/ask";
 import { validateGuidanceList } from "@synap-core/types/guidance";
 import {
   findDroppedParamEntries,
+  isRunToolName,
   MAX_REQUIRED_INTENTS,
+  PLAYBOOK_TOOL_MAX_CHARS,
+  PLAYBOOK_TOOLS_MAX,
+  readToolsList,
+  stageToolsOutsidePlaybook,
 } from "@synap/playbooks";
 import {
   CAPABILITY_INTENTS,
+  isKnownIntent,
   unknownIntents,
 } from "@synap-core/types/capability-intents";
 import {
@@ -141,29 +147,41 @@ export const playbookParamsInputSchema = z
   });
 
 /**
- * The ABSTRACT intents a playbook needs the pod to be able to do — the process
- * half of the intent spine (a workspace template's `taskIntents` is what the
- * SPACE needs; a capability template's `provides` is what the PACK serves).
+ * The ONE list of what a run of a playbook may use beyond its class floor
+ * (plan 08e4fba7, decisions 3 and 4): run tools, intent slugs, capabilities,
+ * by name (`@synap/playbooks` `run-tools.ts` says how each entry is read).
+ * "Only these". A stage's list must be a subset (`foldPlaybookTools`).
  *
- * Validated against the SAME closed vocabulary `taskIntents` uses, and by the
- * same `unknownIntents` helper — so a playbook requirement and a workspace
- * requirement cannot be spelled from two different lists. The vocabulary is the
- * pod's `capability_intents` TABLE (migrations 0283/0284), mirrored into
- * `@synap-core/types/capability-intents` with a parity guard that re-derives
- * the seed SQL; this file deliberately holds no list of its own.
- *
- * ⚠️ WHAT IS REFUSED HERE IS MEMBERSHIP, NOT SATISFIABILITY. This door never
- * asks whether the pod can currently serve an intent — that is a resolver
- * question, answered by `capability-intent-index` and reported by
- * `matchRequiredIntents`. A playbook MUST be able to declare a requirement
- * nothing installed serves today: that gap is what drives a later install, and
- * gating on it would forbid the specification itself (the `taskIntents`
- * precedent — Content Studio declares 4 intents its one pack covers 1 of, and a
- * subset rule went red on it for exactly that reason).
- *
- * A duplicate is refused too, for the same reason `params` refuses one: the
- * reader would silently drop the second, so telling the author "saved" is a lie
- * about the stored declaration.
+ * An entry nothing on this pod serves is a FACT, never a rejection: a
+ * playbook may declare a capability a later install provides (the run is told
+ * what is missing). A duplicate is refused: the reader would drop it, so
+ * "saved" would misreport the stored list.
+ */
+export const playbookToolsSchema = z
+  .array(z.string().trim().min(1).max(PLAYBOOK_TOOL_MAX_CHARS))
+  .max(PLAYBOOK_TOOLS_MAX, {
+    message: `a playbook lists at most ${PLAYBOOK_TOOLS_MAX} tools`,
+  })
+  .superRefine((tools, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, tool] of tools.entries()) {
+      if (seen.has(tool)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [index],
+          message: `tools repeats "${tool}": it is a set, not a list`,
+        });
+      }
+      seen.add(tool);
+    }
+  });
+
+/**
+ * DEPRECATED INPUT, folded into `tools` at the write door and never stored
+ * (`foldPlaybookTools`): the intents a playbook needed (0291). Still accepted
+ * so a catalog package or a pending proposal written before 0419 installs
+ * whole; still held to the closed intent vocabulary. Remove once no catalog
+ * version still sends it (app-bases moved to `tools` in the same wave).
  */
 export const playbookRequiredIntentsSchema = z
   .array(z.string().min(1))
@@ -238,7 +256,9 @@ export const playbookDefinitionSchema = z.object({
   stages: playbookStagesSchema.optional(),
   /** Binary acceptance criteria every instantiated session is graded against. */
   criteria: sessionCriteriaSchema.optional(),
-  /** See `playbookRequiredIntentsSchema` — what this process needs the pod to do. */
+  /** See `playbookToolsSchema`: what a run of it may use, "only these". */
+  tools: playbookToolsSchema.optional(),
+  /** DEPRECATED input, folded into `tools` (`foldPlaybookTools`). */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
   /** See `playbookGuidanceSchema` — the rules this process follows, by ref. */
   guidance: playbookGuidanceSchema.optional(),
@@ -334,3 +354,108 @@ export const packagePlaybookDefinitionSchema = playbookDefinitionSchema
 export type PackagePlaybookDefinition = z.infer<
   typeof packagePlaybookDefinitionSchema
 >;
+
+/** A stage whose `tools` name an entry its playbook's `tools` does not list. */
+export interface StageToolsOutside {
+  stageKey: string;
+  outside: string[];
+}
+
+/**
+ * THE ONE FOLD of a playbook's tool declarations, at every write door
+ * (`playbooks.create` / `.update`, which the package, MCP, Hub and approval
+ * doors all go through). Mutates nothing; returns the stored shape:
+ *   - `tools` = the declared `tools`, then the deprecated `requiredIntents`,
+ *     then a package's `grants` names, then every stage's deprecated `grants`
+ *     ids, each once; `undefined` when the input declares none of them (an
+ *     update that leaves the list alone);
+ *   - `stages` with each stage's deprecated `grants` folded into its `tools`
+ *     and the key removed;
+ *   - `outside`: each stage whose `tools` name an entry the playbook's list
+ *     (`tools`, or `currentTools` when the input does not set it) does not
+ *     list. The caller refuses the write when it is not empty.
+ */
+export function foldPlaybookTools(
+  input: {
+    tools?: readonly string[] | undefined;
+    requiredIntents?: readonly string[] | undefined;
+    grants?: readonly string[] | undefined;
+    stages?: ReadonlyArray<Record<string, unknown>> | undefined;
+  },
+  currentTools?: readonly string[] | null
+): {
+  tools: string[] | undefined;
+  stages: Array<Record<string, unknown>> | undefined;
+  outside: StageToolsOutside[];
+} {
+  const stageGrantIds = (stage: Record<string, unknown>): string[] =>
+    Array.isArray(stage.grants)
+      ? stage.grants.flatMap((g) =>
+          g && typeof g === "object" && typeof (g as { id?: unknown }).id === "string"
+            ? [(g as { id: string }).id]
+            : []
+        )
+      : [];
+  const legacyStageIds = (input.stages ?? []).flatMap(stageGrantIds);
+  const declares =
+    input.tools !== undefined ||
+    input.requiredIntents !== undefined ||
+    (input.grants?.length ?? 0) > 0 ||
+    legacyStageIds.length > 0;
+  const tools = declares
+    ? readToolsList([
+        ...(input.tools ?? []),
+        ...(input.requiredIntents ?? []),
+        ...(input.grants ?? []),
+        ...legacyStageIds,
+      ])
+    : undefined;
+  const stages = input.stages?.map((stage) => {
+    if (!("grants" in stage)) return { ...stage };
+    const { grants: _grants, ...rest } = stage;
+    const folded = readToolsList([
+      ...(Array.isArray(rest.tools) ? rest.tools : []),
+      ...stageGrantIds(stage),
+    ]);
+    return folded.length > 0 ? { ...rest, tools: folded } : rest;
+  });
+  const playbookTools = tools ?? readToolsList(currentTools ?? []);
+  const outside: StageToolsOutside[] = [];
+  for (const stage of stages ?? []) {
+    const outsideOf = stageToolsOutsidePlaybook(
+      playbookTools,
+      readToolsList(stage.tools)
+    );
+    if (outsideOf.length > 0) {
+      outside.push({ stageKey: String(stage.key), outside: outsideOf });
+    }
+  }
+  return { tools, stages, outside };
+}
+
+/** The refusal sentence for {@link foldPlaybookTools}' `outside`. */
+export function describeStageToolsOutside(
+  outside: readonly StageToolsOutside[]
+): string {
+  return (
+    outside
+      .map(
+        (o) =>
+          `Stage "${o.stageKey}" lists ${o.outside.map((t) => `"${t}"`).join(", ")}, which the playbook's tools do not list.`
+      )
+      .join(" ") +
+    " A stage narrows its playbook's tools, never widens them: add them to the playbook's `tools` or remove them from the stage. Nothing was saved."
+  );
+}
+
+/**
+ * The entries of a `tools` list that name a capability (neither a run tool
+ * nor an intent slug). A package install derives the playbook's governance
+ * `grants` links from them (a follow's grant widening reads those links), so
+ * a catalog playbook declares its capabilities ONCE, in `tools`.
+ */
+export function capabilityEntriesOf(tools: readonly string[] | undefined): string[] {
+  return readToolsList(tools ?? []).filter(
+    (t) => !isRunToolName(t) && !isKnownIntent(t)
+  );
+}

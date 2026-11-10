@@ -65,19 +65,16 @@ export const playbooks = pgTable(
      */
     criteria: jsonb("criteria").notNull().default([]),
     /**
-     * PlaybookRequiredIntent[] — the ABSTRACT intents this playbook needs the
-     * pod to be able to do (`@synap/playbooks`), slugs of the pod's
-     * `capability_intents` vocabulary. Added by 0291.
+     * The ONE list of what a run of this playbook may use beyond its class
+     * floor (0419; plan 08e4fba7 decisions 3 and 4): run tools, intent slugs,
+     * capabilities, by name (`@synap/playbooks` `run-tools.ts`). "Only these":
+     * nothing else is offered. Each stage may narrow it (`PlaybookStage.tools`).
      *
-     * WHAT A PLAYBOOK NEEDS, NOT WHAT THE POD HAS: a playbook may — SHOULD —
-     * declare an intent nothing installed currently serves; that gap is what a
-     * later install is checked against, so it is reported, never rejected. Same
-     * split as a workspace template's `taskIntents` (what the SPACE needs) and
-     * a capability template's `provides` (what the PACK serves); validated
-     * against that same closed vocabulary at the write door
-     * (`schemas/playbook-definition.ts`).
+     * 0419 folded into it the four declarations it replaces: `required_intents`
+     * (the column stays one release for a rollback, unread and unwritten), the
+     * `grants` links' targets, `stages[].grants` and the space's `taskIntents`.
      */
-    requiredIntents: jsonb("required_intents").notNull().default([]),
+    tools: jsonb("tools").notNull().default([]),
     /**
      * The rules this playbook follows (0411): an ordered list of
      * `{ ref: "kind:<slug>" | "skill:<slug>", label?, when?, where? }`, refs

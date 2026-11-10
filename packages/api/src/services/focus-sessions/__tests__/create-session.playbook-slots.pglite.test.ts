@@ -258,10 +258,10 @@ describe("start_session with templateId — the playbook's deliverables are slot
  * The run's frozen definition is THE shared snapshot (`buildDefinitionSnapshot`,
  * run-playbook.ts): a hand-written copy at this door froze no `subjectProfile`
  * (so a run started here followed the LIVE lifecycle of a playbook edited
- * since), no criteria and no requiredIntents.
+ * since), no criteria and no tools.
  */
 describe("start_session with templateId — the run freezes the whole definition", () => {
-  it("the run snapshot carries subjectProfile, criteria and requiredIntents", async () => {
+  it("the run snapshot carries subjectProfile, criteria and tools", async () => {
     const processed = randomUUID();
     // No profileSlug: this door asks nothing of the kind; the snapshot is
     // what is under test.
@@ -271,14 +271,14 @@ describe("start_session with templateId — the run freezes the whole definition
     };
     await q(
       `insert into playbooks
-         (id, workspace_id, created_by, name, goal_template, executor, stages, criteria, expected_outputs, params, subject_profile, required_intents, version, status, created_at, updated_at)
+         (id, workspace_id, created_by, name, goal_template, executor, stages, criteria, expected_outputs, params, subject_profile, tools, version, status, created_at, updated_at)
        values ($1, null, $2, 'Fix a finding', 'Fix it', 'is-agent',
                '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $3::jsonb, $4::jsonb, 3, 'active', now(), now())`,
       [
         processed,
         USER,
         JSON.stringify(subjectProfile),
-        JSON.stringify(["research.web"]),
+        JSON.stringify(["web_search", "search_external"]),
       ]
     );
     const res = await start({ templateId: processed });
@@ -293,7 +293,7 @@ describe("start_session with templateId — the run freezes the whole definition
       version: 3,
       subjectProfile,
       criteria: [],
-      requiredIntents: ["research.web"],
+      tools: ["web_search", "search_external"],
     });
   });
 });

@@ -25,6 +25,7 @@ import {
 } from "./cells/install-cell-from-definition.js";
 import type { WorkspaceSettings } from "@synap/database";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import { capabilityEntriesOf } from "../schemas/playbook-definition.js";
 import {
   projectPlaybookDefinition,
   stampPlaybookMarketSource,
@@ -115,6 +116,18 @@ async function resolveGrantRefs(
  * (from_type, from_id, to_type, to_id, link_type), so calling this on BOTH the
  * newly-created AND the reused-playbook path never duplicates an edge.
  */
+/**
+ * The names a package playbook's governance `grants` links are made from: its
+ * deprecated `grants`, then the capabilities its ONE `tools` list names
+ * (`capabilityEntriesOf`). A name no tool or skill row carries links nothing.
+ */
+function governanceGrantsOf(p: {
+  grants?: string[];
+  tools?: string[];
+}): string[] {
+  return [...new Set([...(p.grants ?? []), ...capabilityEntriesOf(p.tools)])];
+}
+
 async function grantPlaybookLinks(
   playbookId: string,
   grants: string[] | undefined,
@@ -405,7 +418,18 @@ export interface PackagePostWorkspaceBody {
      * making it matchable by `playbooks.matchForEntity`.
      */
     subjectProfile?: Record<string, unknown>;
-    /** tool/skill keys this playbook grants (see materialization note below). */
+    /**
+     * What a run of it may use, "only these" (0419): run tools, intents,
+     * capabilities. Its capability entries also make the governance `grants`
+     * links (`governanceGrantsOf`).
+     */
+    tools?: string[];
+    /** DEPRECATED: folded into `tools` by the projection. */
+    requiredIntents?: string[];
+    /**
+     * DEPRECATED tool/skill keys this playbook grants: folded into `tools`,
+     * and still made into `grants` links (see the materialization note below).
+     */
     grants?: string[];
     /**
      * Free-form playbook metadata → `playbooks.metadata`. Carries the propose-only
@@ -903,7 +927,7 @@ export async function applyPackagePostWorkspace(
           if (existing) {
             // Reuse still ensures grants idempotently — a re-applied package
             // must not leave a pre-existing playbook's grants unwired.
-            await grantPlaybookLinks(existing.id, p.grants, workspaceId);
+            await grantPlaybookLinks(existing.id, governanceGrantsOf(p), workspaceId);
             // A re-install / version update REACHES the reused row: converge its
             // managed fields to this definition (3-way merge; owner edits are
             // reported, never overwritten; an unstamped row is adopted). Before
@@ -1002,7 +1026,11 @@ export async function applyPackagePostWorkspace(
           proposalId?: string;
         };
         if (rr.playbook?.id) {
-          await grantPlaybookLinks(rr.playbook.id, p.grants, workspaceId);
+          await grantPlaybookLinks(
+            rr.playbook.id,
+            governanceGrantsOf(p),
+            workspaceId
+          );
         }
         pbs.push({
           name: p.name,

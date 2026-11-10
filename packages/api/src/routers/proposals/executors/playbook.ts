@@ -163,11 +163,13 @@ export function registerPlaybookExecutors(): void {
         stages: innerData.stages as PlaybookStageInput[] | undefined,
         // Re-validated by `playbooks.create` (`sessionCriteriaSchema`).
         criteria: innerData.criteria,
-        // What the playbook NEEDS the pod to do. Re-validated by
-        // `playbooks.create` (`playbookRequiredIntentsSchema`). Read back for
-        // the same reason `criteria` is: without it an APPROVED playbook
-        // materializes with an empty requirement list — the agent's declaration
-        // is silently dropped on the one path a human explicitly approved.
+        // What a run of it may use, "only these". Re-validated by
+        // `playbooks.create` (`playbookToolsSchema`). Read back for the same
+        // reason `criteria` is: without it an APPROVED playbook materializes
+        // with no tools — the declaration silently dropped on the one path a
+        // human explicitly approved. A proposal filed before 0419 carries
+        // `requiredIntents` instead: replayed too, and folded by the door.
+        tools: innerData.tools as string[] | undefined,
         requiredIntents: innerData.requiredIntents as string[] | undefined,
         // The rules the playbook follows. Re-validated by `playbooks.create`
         // (`playbookGuidanceSchema`); read back so an approved playbook keeps
@@ -311,6 +313,8 @@ export function registerPlaybookExecutors(): void {
         "expectedOutputs",
         "stages",
         "criteria",
+        "tools",
+        // A proposal filed before 0419: the update door folds it into `tools`.
         "requiredIntents",
         "guidance",
         "subjectProfile",

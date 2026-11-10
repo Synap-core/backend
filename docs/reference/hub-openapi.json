@@ -16373,6 +16373,15 @@
                                     "type": "string",
                                     "maxLength": 5000
                                   },
+                                  "tools": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "maxItems": 64
+                                  },
                                   "grants": {
                                     "type": "array",
                                     "items": {
@@ -18508,6 +18517,15 @@
                                 "additionalProperties": false
                               },
                               "maxItems": 12
+                            },
+                            "tools": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "maxItems": 64
                             },
                             "requiredIntents": {
                               "type": "array",
@@ -21414,6 +21432,15 @@
                                     "type": "string",
                                     "maxLength": 5000
                                   },
+                                  "tools": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "maxItems": 64
+                                  },
                                   "grants": {
                                     "type": "array",
                                     "items": {
@@ -23549,6 +23576,15 @@
                                 "additionalProperties": false
                               },
                               "maxItems": 12
+                            },
+                            "tools": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "maxItems": 64
                             },
                             "requiredIntents": {
                               "type": "array",
@@ -28403,6 +28439,15 @@
                         },
                         "description": { "type": "string", "maxLength": 5000 },
                         "goal": { "type": "string", "maxLength": 5000 },
+                        "tools": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "maxItems": 64
+                        },
                         "grants": {
                           "type": "array",
                           "items": {
@@ -30667,6 +30712,15 @@
                       "pattern": "^@?[a-z0-9][a-z0-9._/-]*$"
                     },
                     "maxItems": 16
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "maxItems": 64
                   },
                   "workspaceId": {
                     "type": "string",

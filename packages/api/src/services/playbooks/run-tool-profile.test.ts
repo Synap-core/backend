@@ -1,26 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
 /**
- * The run's declared tools (founder, 2026-11-05): the verbs of the
- * capabilities the playbook and its active stage GRANT, and the verbs serving
- * the playbook's `requiredIntents` and its space's `taskIntents`, under the
- * run's lens — and a failed read said as `failed`, never as "declares nothing".
+ * A run's tools (plan 08e4fba7, founder decisions 3 and 4): the FLOOR of the
+ * playbook's class plus its ONE `tools` list, "only these" — a stage's list
+ * narrows it while that stage is active, a one-shot run gets nothing — sent to
+ * the IS as the final `tools`; declared intents and capabilities become
+ * `verbs` under the run's lens; a failed read is said as `failed`, with the
+ * floor only.
  */
-const warned = vi.hoisted(() => [] as Array<[unknown, string]>);
 vi.mock("@synap-core/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap-core/core")>()),
-  createLogger: () => ({
-    warn: (o: unknown, msg: string) => warned.push([o, msg]),
-    error: () => {},
-    info: () => {},
-  }),
+  createLogger: () => ({ warn: () => {}, error: () => {}, info: () => {} }),
 }));
 
-const {
-  resolveRunToolProfile,
-  foldRunVerbs,
-  RUN_PROFILE_MAX_VERBS,
-  RUN_PROFILE_MAX_INTENTS,
-} = await import("./run-tool-profile.js");
+const { resolveRunToolProfile, foldRunVerbs } = await import(
+  "./run-tool-profile.js"
+);
+const { LONG_RUN_FLOOR, SHORT_RUN_FLOOR } = await import("@synap/playbooks");
 type Deps = Parameters<typeof resolveRunToolProfile>[1] & object;
 type Registry = Awaited<ReturnType<Deps["readRegistry"]>>;
 type Match =
@@ -28,12 +23,12 @@ type Match =
     ? M
     : never;
 
-const verb = (intent: string, verbId: string): Match =>
+const verb = (intent: string, verbId: string, verbKind = "action"): Match =>
   ({
     intent,
     verbId,
     verbLabel: verbId,
-    verbKind: "action",
+    verbKind,
     granted: true,
     runPosture: "auto",
     backingSkillExecutable: true,
@@ -44,26 +39,24 @@ const verb = (intent: string, verbId: string): Match =>
 
 const index = new Map<string, Match[]>([
   ["publish_post", [verb("publish_post", "postiz_schedule_post")]],
+  ["send_message", [verb("send_message", "gmail_send")]],
   [
-    "generate_media",
+    "search_external",
     [
-      verb("generate_media", "fal_generate_image"),
-      verb("generate_media", "fal_generate_video"),
+      verb("search_external", "exa_search", "read"),
+      verb("search_external", "exa_index"),
     ],
   ],
-  ["send_message", [verb("send_message", "gmail_send")]],
 ]);
 
-// The capabilities the registry lists under the run's lens: a provider tool
-// with two verbs, a skill (its one verb is its name), and one nobody grants.
 const capabilities: Registry["capabilities"] = [
   {
     kind: "source-provider",
     id: "tool-fireflies",
     name: "fireflies",
     verbs: [
-      { id: "fireflies_import_last_meeting" },
-      { id: "fireflies_search" },
+      { id: "fireflies_import_last_meeting", kind: "action" },
+      { id: "fireflies_search", kind: "read" },
     ],
   },
   {
@@ -72,343 +65,206 @@ const capabilities: Registry["capabilities"] = [
     name: "ibis-decision-analysis",
     verbs: [{ id: "ibis-decision-analysis" }],
   },
-  {
-    kind: "tool",
-    id: "tool-gmail",
-    name: "gmail",
-    verbs: [{ id: "gmail_send" }],
-  },
-  // A skill that shares the gmail tool's name.
-  {
-    kind: "skill",
-    id: "skill-gmail",
-    name: "gmail",
-    verbs: [{ id: "gmail-tone" }],
-  },
+  { kind: "tool", id: "tool-misc", name: "misc", verbs: [{ id: "entity.create" }] },
 ];
 const registry: Registry = { index, capabilities };
 
-function deps(over: Partial<Deps> = {}): Deps {
+type Pb = NonNullable<Awaited<ReturnType<Deps["readPlaybook"]>>>;
+const stage = (key: string, extra: Record<string, unknown> = {}) => ({
+  key,
+  name: key,
+  category: "started",
+  ...extra,
+});
+
+function deps(pb: Partial<Pb> = {}, over: Partial<Deps> = {}): Deps {
   return {
     readPlaybook: async () => ({
-      name: "Produce Content",
-      requiredIntents: ["publish_post"],
+      name: "Write the caption",
+      tools: [],
+      executor: "is-agent",
       stages: [],
       workspaceId: "ws-content",
+      ...pb,
     }),
-    readGrants: async () => [],
     readCurrentStage: async () => null,
     readTrial: async () => false,
-    readTaskIntents: async () => ["generate_media"],
-    readRegistry: async () => registry,
+    readRegistry: vi.fn(async () => registry),
     ...over,
   };
 }
 
 const input = { playbookId: "pb-1", workspaceId: "ws-run", userId: "u-1" };
 
-describe("resolveRunToolProfile", () => {
-  it("a TRIAL run (the rule lab) is offered read verbs only, granted or by intent", async () => {
-    const readVerb = { ...verb("research", "exa_search"), verbKind: "read" };
-    const trialIndex = new Map<string, Match[]>([
-      ["research", [readVerb as Match, verb("research", "exa_index")]],
-    ]);
-    const readTrial = vi.fn(async () => true);
+describe("resolveRunToolProfile — floor of the class plus only these", () => {
+  it("a short run (<= 2 stages, no gate) declaring nothing gets the 6 reads and nothing else", async () => {
+    const d = deps();
+    const p = await resolveRunToolProfile(input, d);
+    expect(p).toMatchObject({ runClass: "short", capabilitiesRead: "ok" });
+    expect(p.tools).toEqual([...SHORT_RUN_FLOOR]);
+    expect(p.tools).toHaveLength(6);
+    expect(p.verbs).toEqual([]);
+    // Nothing declared beyond run tools: the registry is never read.
+    expect(d.readRegistry).not.toHaveBeenCalled();
+  });
+
+  it("a short run gets its floor plus its declared run tools, and no other core tool", async () => {
     const p = await resolveRunToolProfile(
-      { ...input, sessionId: "sess-trial" },
+      input,
+      deps({ tools: ["update_document", "web_search"] })
+    );
+    expect(p.tools).toEqual([...SHORT_RUN_FLOOR, "update_document", "web_search"]);
+    expect(p.tools).not.toContain("create_entity");
+  });
+
+  it("a long run (3+ stages) gets the 19 core tools plus its declared run tools", async () => {
+    const p = await resolveRunToolProfile(
+      input,
       deps({
-        readPlaybook: async () => ({
-          name: "Draft outreach",
-          requiredIntents: ["research"],
-          stages: [],
-          workspaceId: "ws-crm",
-        }),
-        readTaskIntents: async () => [],
-        readGrants: async () => [
-          { kind: "tool" as const, id: "tool-fireflies" },
+        stages: [stage("a"), stage("b"), stage("c")],
+        tools: ["web_fetch"],
+      })
+    );
+    expect(p.runClass).toBe("long");
+    expect(p.tools).toEqual([...LONG_RUN_FLOOR, "web_fetch"]);
+    expect(p.tools).toHaveLength(20);
+  });
+
+  it("a gate makes a 1-stage run long", async () => {
+    const p = await resolveRunToolProfile(
+      input,
+      deps({ stages: [stage("review", { gate: { kind: "human" } })] })
+    );
+    expect(p.runClass).toBe("long");
+    expect(p.tools).toEqual([...LONG_RUN_FLOOR]);
+  });
+
+  it("a one-shot (executor generate) run gets NO tools, whatever it declares", async () => {
+    const d = deps({
+      executor: "generate",
+      tools: ["update_document", "search_external", "fireflies"],
+    });
+    const p = await resolveRunToolProfile(input, d);
+    expect(p.runClass).toBe("one-shot");
+    expect(p.tools).toEqual([]);
+    expect(p.verbs).toEqual([]);
+    expect(d.readRegistry).not.toHaveBeenCalled();
+  });
+
+  it("intents and capabilities become verbs: named ones first (by name, id or verb id), then each intent's", async () => {
+    const p = await resolveRunToolProfile(
+      input,
+      deps({
+        tools: [
+          "send_message",
+          "fireflies",
+          "skill-ibis",
+          "entity.create",
+          "publish_post",
+          "get_document",
         ],
-        readTrial,
-        readRegistry: async () => ({
-          index: trialIndex,
-          capabilities: [
-            {
-              kind: "source-provider",
-              id: "tool-fireflies",
-              name: "fireflies",
-              verbs: [
-                { id: "fireflies_import_last_meeting", kind: "action" },
-                { id: "fireflies_search", kind: "read" },
-              ],
-            },
-          ],
-        }),
       })
     );
-    expect(readTrial).toHaveBeenCalledWith("sess-trial");
-    expect(p.verbs).toEqual(["fireflies_search", "exa_search"]);
-  });
-
-  it("folds the playbook's intents and its space's into the verbs serving them — nothing else", async () => {
-    const readTaskIntents = vi.fn(async () => ["generate_media"]);
-    const readRegistry = vi.fn(async () => registry);
-    const p = await resolveRunToolProfile(
-      input,
-      deps({ readTaskIntents, readRegistry })
-    );
-    expect(p).toEqual({
-      playbookId: "pb-1",
-      playbookName: "Produce Content",
-      intents: ["publish_post", "generate_media"],
-      verbs: [
-        "postiz_schedule_post",
-        "fal_generate_image",
-        "fal_generate_video",
-      ],
-      capabilitiesRead: "ok",
-    });
-    expect(p.verbs).not.toContain("gmail_send");
-    // The template's declaration is read on the PLAYBOOK's own space.
-    expect(readTaskIntents).toHaveBeenCalledWith("ws-content");
-    // The registry is read under the RUN's lens.
-    expect(readRegistry).toHaveBeenCalledWith({
-      workspaceId: "ws-run",
-      userId: "u-1",
-    });
-  });
-
-  it("a playbook that declares its tools ONLY by grants gets the granted verbs (review of backend#816, MUST-FIX 1)", async () => {
-    // meetings-knowledge.yaml "Process a meeting": no requiredIntents, its
-    // tools are its `grants`. Before, it got verbs [] — no run_capability.
-    const readGrants = vi.fn(async () => [
-      { kind: "tool" as const, id: "tool-fireflies" },
-    ]);
-    const p = await resolveRunToolProfile(
-      input,
-      deps({
-        readPlaybook: async () => ({
-          name: "Process a meeting",
-          requiredIntents: [],
-          stages: [],
-          workspaceId: "ws-meetings",
-        }),
-        readTaskIntents: async () => [],
-        readGrants,
-      })
-    );
-    expect(p).toMatchObject({
-      intents: [],
-      verbs: ["fireflies_import_last_meeting", "fireflies_search"],
-      capabilitiesRead: "ok",
-    });
-    expect(p.verbs).not.toContain("gmail_send");
-    expect(readGrants).toHaveBeenCalledWith({
-      playbookId: "pb-1",
-      userId: "u-1",
-    });
-  });
-
-  it("the ACTIVE stage's grants count too, by id or by name; another stage's do not", async () => {
-    const readCurrentStage = vi.fn(async () => "analyse");
-    const p = await resolveRunToolProfile(
-      { ...input, sessionId: "sess-1" },
-      deps({
-        readPlaybook: async () => ({
-          name: "Research a decision",
-          requiredIntents: [],
-          stages: [
-            {
-              key: "analyse",
-              name: "Analyse",
-              grants: [{ kind: "skill", id: "ibis-decision-analysis" }],
-            },
-            {
-              key: "send",
-              name: "Send",
-              grants: [{ kind: "tool", id: "tool-gmail" }],
-            },
-          ],
-          workspaceId: "ws-research",
-        }),
-        readTaskIntents: async () => [],
-        readCurrentStage,
-      })
-    );
-    expect(readCurrentStage).toHaveBeenCalledWith("sess-1");
-    expect(p.verbs).toEqual(["ibis-decision-analysis"]);
-  });
-
-  it("a grant names its capability by kind too: a skill grant never offers the same-named tool's verbs (review of backend#824)", async () => {
-    const offered = async (grant: { kind: "tool" | "skill"; id: string }) =>
-      (
-        await resolveRunToolProfile(
-          input,
-          deps({
-            readGrants: async () => [grant],
-            readTaskIntents: async () => [],
-            readPlaybook: async () => ({
-              name: "Write mail",
-              requiredIntents: [],
-              stages: [],
-              workspaceId: null,
-            }),
-          })
-        )
-      ).verbs;
-    expect(await offered({ kind: "skill", id: "gmail" })).toEqual([
-      "gmail-tone",
-    ]);
-    expect(await offered({ kind: "tool", id: "gmail" })).toEqual([
-      "gmail_send",
-    ]);
-    // A provider tool is granted as a plain `tool`.
-    expect(await offered({ kind: "tool", id: "fireflies" })).toEqual([
+    expect(p.intents).toEqual(["send_message", "publish_post"]);
+    expect(p.verbs).toEqual([
       "fireflies_import_last_meeting",
       "fireflies_search",
+      "ibis-decision-analysis",
+      "entity.create",
+      "gmail_send",
+      "postiz_schedule_post",
     ]);
+    // An intent or a capability is never sent as a tool name.
+    expect(p.tools).toEqual([...SHORT_RUN_FLOOR]);
   });
 
-  it("verbs the cap leaves out are logged, never dropped in silence (review of backend#824)", async () => {
-    warned.length = 0;
-    const many = Array.from({ length: RUN_PROFILE_MAX_VERBS }, (_, i) => ({
-      id: `g${i}`,
-    }));
+  it("an active stage that lists tools narrows the playbook's to that list", async () => {
     const p = await resolveRunToolProfile(
-      input,
-      deps({
-        readGrants: async () => [{ kind: "tool", id: "tool-big" }],
-        readRegistry: async () => ({
-          index,
-          capabilities: [
-            { kind: "tool", id: "tool-big", name: "big", verbs: many },
+      { ...input, sessionId: "sess-1" },
+      deps(
+        {
+          tools: ["update_document", "web_search", "send_message"],
+          stages: [
+            stage("draft", { tools: ["update_document"] }),
+            stage("send"),
           ],
-        }),
-      })
+        },
+        { readCurrentStage: async () => "draft" }
+      )
     );
-    expect(p.verbs).toHaveLength(RUN_PROFILE_MAX_VERBS);
-    expect(p.verbs).not.toContain("postiz_schedule_post");
-    expect(warned).toEqual([
-      [
-        expect.objectContaining({ playbookId: "pb-1", dropped: 3 }),
-        expect.stringContaining("more verbs than the IS accepts"),
-      ],
-    ]);
+    expect(p.tools).toEqual([...SHORT_RUN_FLOOR, "update_document"]);
+    expect(p.verbs).toEqual([]);
   });
 
-  it("granted verbs come first and every verb comes once", async () => {
+  it("a stage with no list gets the playbook's whole list", async () => {
     const p = await resolveRunToolProfile(
-      input,
-      deps({
-        readGrants: async () => [
-          { kind: "tool", id: "tool-gmail" },
-          { kind: "tool", id: "tool-gmail" },
-        ],
-        readRegistry: async () => ({
-          index: new Map([
-            ["publish_post", [verb("publish_post", "gmail_send")]],
-          ]),
-          capabilities,
-        }),
-        readTaskIntents: async () => [],
-      })
+      { ...input, sessionId: "sess-1" },
+      deps(
+        {
+          tools: ["update_document", "send_message"],
+          stages: [stage("draft", { tools: ["update_document"] }), stage("send")],
+        },
+        { readCurrentStage: async () => "send" }
+      )
     );
+    expect(p.tools).toEqual([...SHORT_RUN_FLOOR, "update_document"]);
     expect(p.verbs).toEqual(["gmail_send"]);
   });
 
-  it("a grant that cannot be read is FAILED, never 'declares nothing'", async () => {
+  it("a stored stage entry the playbook does not list is never offered (run-time subset)", async () => {
     const p = await resolveRunToolProfile(
-      input,
-      deps({
-        readGrants: async () => {
-          throw new Error("links read failed");
+      { ...input, sessionId: "sess-1" },
+      deps(
+        {
+          tools: ["update_document"],
+          stages: [stage("draft", { tools: ["update_document", "web_search"] })],
         },
-      })
+        { readCurrentStage: async () => "draft" }
+      )
     );
-    expect(p).toMatchObject({ verbs: [], capabilitiesRead: "failed" });
+    expect(p.tools).not.toContain("web_search");
   });
 
-  it("the profile stays inside what the IS accepts: intents capped, over-long ones dropped, the name cut", async () => {
-    const many = Array.from(
-      { length: RUN_PROFILE_MAX_INTENTS + 9 },
-      (_, i) => `intent_${i}`
-    );
+  it("a TRIAL run is offered read verbs only", async () => {
     const p = await resolveRunToolProfile(
-      input,
-      deps({
-        readPlaybook: async () => ({
-          name: "n".repeat(500),
-          requiredIntents: [],
-          stages: [],
-          workspaceId: "ws-content",
-        }),
-        readTaskIntents: async () => ["x".repeat(101), ...many],
-      })
+      { ...input, sessionId: "sess-trial" },
+      deps(
+        { tools: ["search_external", "fireflies"] },
+        { readTrial: async () => true }
+      )
     );
-    expect(p.intents).toHaveLength(RUN_PROFILE_MAX_INTENTS);
-    expect(p.intents[0]).toBe("intent_0");
-    expect(p.playbookName).toHaveLength(300);
+    expect(p.verbs).toEqual(["fireflies_search", "exa_search"]);
   });
 
-  it("declares nothing ⇒ no verbs and no registry read", async () => {
-    const readRegistry = vi.fn(async () => registry);
+  it("a failed read says `failed` and gives the class floor only", async () => {
     const p = await resolveRunToolProfile(
       input,
-      deps({
-        readPlaybook: async () => ({
-          name: "Package ideas",
-          requiredIntents: [],
-          stages: [],
-          workspaceId: "ws-content",
-        }),
-        readTaskIntents: async () => [],
-        readRegistry,
-      })
+      deps(
+        { tools: ["fireflies"] },
+        {
+          readRegistry: async () => {
+            throw new Error("registry down");
+          },
+        }
+      )
     );
-    expect(p).toMatchObject({ verbs: [], capabilitiesRead: "ok" });
-    expect(readRegistry).not.toHaveBeenCalled();
+    expect(p).toMatchObject({ capabilitiesRead: "failed", verbs: [] });
+    expect(p.tools).toEqual([...SHORT_RUN_FLOOR]);
   });
 
-  it("an unreadable declaration is FAILED, never an empty 'declares nothing'", async () => {
-    const p = await resolveRunToolProfile(
-      input,
-      deps({
-        readTaskIntents: async () => {
-          throw new Error("settings.taskIntents is string, not an array");
-        },
-      })
-    );
-    expect(p).toMatchObject({ verbs: [], capabilitiesRead: "failed" });
-  });
-
-  it("a missing playbook is FAILED too", async () => {
-    const p = await resolveRunToolProfile(
-      input,
-      deps({ readPlaybook: async () => null })
-    );
-    expect(p.capabilitiesRead).toBe("failed");
+  it("an unreadable playbook gets the short floor, said as failed", async () => {
+    const p = await resolveRunToolProfile(input, deps({}, {
+      readPlaybook: async () => null,
+    }));
+    expect(p).toMatchObject({ capabilitiesRead: "failed" });
+    expect(p.tools).toEqual([...SHORT_RUN_FLOOR]);
   });
 });
 
 describe("foldRunVerbs", () => {
-  it("each verb once, granted first then the intents' order, an over-long id dropped, capped at what the IS accepts", () => {
-    const many = new Map<string, Match[]>([
-      [
-        "a",
-        Array.from({ length: RUN_PROFILE_MAX_VERBS + 7 }, (_, i) =>
-          verb("a", `v${i}`)
-        ),
-      ],
-      ["b", [verb("b", "v0")]],
-    ]);
-    const { verbs, dropped } = foldRunVerbs(
-      ["g", "y".repeat(201)],
-      ["a", "b"],
-      many
-    );
-    expect(verbs).toHaveLength(RUN_PROFILE_MAX_VERBS);
-    // g + v0..v106 are 108 distinct verbs: 8 past the cap.
-    expect(dropped).toBe(8);
-    expect(verbs[0]).toBe("g");
-    expect(verbs).not.toContain("y".repeat(201));
-    expect(new Set(verbs).size).toBe(verbs.length);
+  it("named verbs first, then each intent's, each once", () => {
+    expect(
+      foldRunVerbs(["gmail_send", "x"], ["send_message", "publish_post"], index)
+    ).toEqual(["gmail_send", "x", "postiz_schedule_post"]);
   });
 });

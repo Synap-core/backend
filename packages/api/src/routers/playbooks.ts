@@ -97,7 +97,10 @@ import {
   playbookScopeSchema,
   playbookExpectedOutputSchema,
   playbookRequiredIntentsSchema,
+  playbookToolsSchema,
   playbookGuidanceSchema,
+  foldPlaybookTools,
+  describeStageToolsOutside,
 } from "../schemas/playbook-definition.js";
 import {
   playbookRunnerSchema,
@@ -414,12 +417,11 @@ export const updateInputSchema = z.object({
   /** See `createInputSchema.criteria`. */
   criteria: sessionCriteriaSchema.optional(),
   /**
-   * See `playbookDefinitionSchema.requiredIntents` — REPLACES the declared
-   * list (the same all-optional PATCH contract `params` has). Declared here as
-   * a hand-copy-able shape because this is a PATCH, not a definition; the
-   * vocabulary rule it applies is the ONE door's, exported from there so a
-   * change cannot make the patch and the create accept different slugs.
+   * See `playbookDefinitionSchema.tools` — REPLACES the list (the same
+   * all-optional PATCH contract `params` has), the ONE door's schema.
    */
+  tools: playbookToolsSchema.optional(),
+  /** DEPRECATED input, folded into `tools` (`foldPlaybookTools`). */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
   /** See `playbookGuidanceSchema` — REPLACES the declared list, same schema. */
   guidance: playbookGuidanceSchema.optional(),
@@ -1928,6 +1930,22 @@ export const playbooksRouter = router({
         params: input.params,
         subjectProfile: input.subjectProfile,
       });
+      // The ONE tools list (plan 08e4fba7 decisions 3-4): the deprecated
+      // `requiredIntents` and stage `grants` fold into `tools` ONCE, here, so
+      // the gate payload, the approval replay and the insert carry the stored
+      // shape; a stage list outside the playbook's is refused.
+      {
+        const folded = foldPlaybookTools(input);
+        if (folded.outside.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: describeStageToolsOutside(folded.outside),
+          });
+        }
+        input.tools = folded.tools;
+        input.stages = folded.stages as typeof input.stages;
+        delete input.requiredIntents;
+      }
       // A step that IS a playbook is checked and PINNED here, before the gate,
       // so the proposal, its approval replay and the row carry the version.
       input.stages = await resolveStageUses({
@@ -1993,7 +2011,7 @@ export const playbooksRouter = router({
           expectedOutputs: input.expectedOutputs,
           stages: input.stages,
           criteria: input.criteria,
-          requiredIntents: input.requiredIntents,
+          tools: input.tools,
           guidance: input.guidance,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
@@ -2118,7 +2136,7 @@ export const playbooksRouter = router({
               expectedOutputs: input.expectedOutputs ?? [],
               stages: input.stages ?? [],
               criteria: input.criteria ?? [],
-              requiredIntents: input.requiredIntents ?? [],
+              tools: input.tools ?? [],
               guidance: input.guidance ?? [],
               subjectProfile: input.subjectProfile ?? null,
               schedule: input.schedule ?? null,
@@ -2319,6 +2337,34 @@ export const playbooksRouter = router({
         visibility: () =>
           scopedDb(AccessContext.from(ctx)).predicate(playbooks),
       });
+      // 2c''. The ONE tools list: fold the deprecated declarations, and refuse
+      // a stage list outside the playbook's (the patch's list, else the row's;
+      // the patch's stages, else the row's).
+      {
+        const folded = foldPlaybookTools(
+          {
+            tools: input.tools,
+            requiredIntents: input.requiredIntents,
+            stages:
+              input.stages ??
+              (input.tools !== undefined || input.requiredIntents !== undefined
+                ? (existing.stages as Array<Record<string, unknown>>)
+                : undefined),
+          },
+          existing.tools as string[] | null
+        );
+        if (folded.outside.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: describeStageToolsOutside(folded.outside),
+          });
+        }
+        input.tools = folded.tools;
+        if (input.stages !== undefined) {
+          input.stages = folded.stages as typeof input.stages;
+        }
+        delete input.requiredIntents;
+      }
 
       // 2d. A pin list is an ordered whitelist on metadata. The request's
       // strategy wins over the stored one: writing ids onto a playbook that
@@ -2402,9 +2448,7 @@ export const playbooksRouter = router({
             : {}),
           ...(input.stages !== undefined ? { stages: input.stages } : {}),
           ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
-          ...(input.requiredIntents !== undefined
-            ? { requiredIntents: input.requiredIntents }
-            : {}),
+          ...(input.tools !== undefined ? { tools: input.tools } : {}),
           ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
@@ -2450,8 +2494,7 @@ export const playbooksRouter = router({
         set.expectedOutputs = input.expectedOutputs;
       if (input.stages !== undefined) set.stages = input.stages;
       if (input.criteria !== undefined) set.criteria = input.criteria;
-      if (input.requiredIntents !== undefined)
-        set.requiredIntents = input.requiredIntents;
+      if (input.tools !== undefined) set.tools = input.tools;
       if (input.guidance !== undefined) set.guidance = input.guidance;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;

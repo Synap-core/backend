@@ -771,10 +771,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0267_session_criteria_and_evaluations.sql",
   },
 
+  // The ONE tools list of a playbook (0419): every playbook read selects it
+  // and every run turn resolves its tools from it. `required_intents` (0291)
+  // is no longer read: 0419 folded it in.
   {
     table: "playbooks",
-    column: "required_intents",
-    addedBy: "0291_playbook_required_intents.sql",
+    column: "tools",
+    addedBy: "0419_playbook_tools.sql",
   },
   // The rules a playbook follows (0411): without it every playbook read and
   // write that selects the column fails.
