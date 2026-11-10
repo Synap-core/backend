@@ -8557,6 +8557,8 @@ export interface PlaybookRunGeneration {
 	subjectId: string | null;
 	/** Where the result lands, as the playbook declared it (`ExpectedOutput.lands`). */
 	lands: {
+		/** The person's own plain block, replaced on approval (`OutputLanding.owner`). */
+		owner?: "person";
 		section: string;
 		target: "subject_document_section";
 	} | null;
@@ -14534,6 +14536,16 @@ export interface OutputLanding {
 	target: "subject_document_section";
 	/** The section's title, e.g. "Caption draft". */
 	section: string;
+	/**
+	 * WHOSE section it is (decision "An approved one-shot draft lands in the
+	 * person's own target", founder 10 Nov 2026). `ai` (the default): an
+	 * AI-owned `synap-section` the app offers as a draft. `person`: the
+	 * document's own plain `## <section>` block, the person's words as an app
+	 * writes them (e.g. Content Studio's `## Caption`): the proposal replaces
+	 * its body on approval (appends it when absent), so approving IS the one
+	 * write and no app copies a draft over.
+	 */
+	owner?: "ai" | "person";
 	/**
 	 * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
 	 * reads the person's last decided drafts of THIS playbook in THIS space, the
@@ -39466,6 +39478,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -40784,6 +40797,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -48098,6 +48112,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -49403,6 +49418,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -60587,6 +60603,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									approved?: number | undefined;
 									rejected?: number | undefined;
 								} | undefined;
+								owner?: "ai" | "person" | undefined;
 								section: string;
 								target: "subject_document_section";
 							} | undefined;

@@ -48,11 +48,7 @@ import type {
   PlaybookRunGenerationExamples,
 } from "@synap/database/schema";
 import { ProposalStatus } from "@synap/database/schema";
-import type {
-  ExpectedOutput,
-  OutputLanding,
-  OutputLandingExamples,
-} from "@synap/playbooks";
+import type { ExpectedOutput, OutputLandingExamples } from "@synap/playbooks";
 import {
   fillParamsFromSubject,
   needsSubjectKinds,
@@ -168,7 +164,8 @@ export function readGenerateLanding(
   playbook: Pick<Playbook, "expectedOutputs" | "name">
 ): {
   output: ExpectedOutput;
-  lands: OutputLanding;
+  /** Where it lands, as the run records it (`generation.lands`). */
+  lands: NonNullable<PlaybookRunGeneration["lands"]>;
   /** The past outcomes it asks for as examples (`lands.examples`), if any. */
   examples?: OutputLandingExamples;
 } {
