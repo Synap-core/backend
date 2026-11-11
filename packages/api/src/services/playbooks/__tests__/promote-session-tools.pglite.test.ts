@@ -85,6 +85,10 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // The one index the link writer's ON CONFLICT names (baseline idx_links_unique_edge).
+  await h.client!.exec(
+    `create unique index idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type)`
+  );
   await q(`insert into users (id, email) values ($1, 'o@x.test')`, [OWNER]);
   await q(
     `insert into workspaces (id, name, owner_id, settings) values ($1,'Studio',$2,'{}'::jsonb)`,

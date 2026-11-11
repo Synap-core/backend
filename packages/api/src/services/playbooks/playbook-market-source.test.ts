@@ -46,6 +46,8 @@ function row(over: Record<string, unknown> = {}): Record<string, unknown> {
     expectedOutputs: [],
     stages: [],
     criteria: [],
+    // 0419: every row holds the one tools list (`[]` by default).
+    tools: [],
     subjectProfile: null,
     schedule: null,
     executor: "is-agent",
