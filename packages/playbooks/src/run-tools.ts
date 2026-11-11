@@ -10,8 +10,8 @@
  *   one-shot  `executor: generate`: one model call, NO tools.
  *   short     an IS run with at most 2 stages and no gate: reads only.
  *   long      an IS run with 3+ stages or a gate: the pod's 19 core tools,
- *             the relation read, and the run's own session tools (it has
- *             stages and gates to drive).
+ *             the relation read, the run's own session tools (it has
+ *             stages and gates to drive) and the run-history reads.
  *
  * The pod sends the IS the FINAL tool list of a turn (`run.tools`); the IS
  * keeps tool definitions, never a list. Copies, each pinned to this file:
@@ -21,7 +21,8 @@
  *     build (synap-intelligence-service `run-tools-vocabulary.tripwire`).
  *
  * WHAT A `tools` ENTRY NAMES, in this order (the first that matches wins):
- *   1. a run tool of {@link RUN_TOOL_NAMES} (an IS tool, by its name);
+ *   1. a run tool of {@link RUN_TOOL_NAMES} (an IS tool, by its name, or by
+ *      its MCP spelling `synap_<name>`: playbook text uses MCP names);
  *   2. an intent slug of the `capability_intents` vocabulary: the verbs that
  *      serve it on this pod are offered;
  *   3. anything else: a capability (by name or id) or a verb id, resolved in
@@ -85,9 +86,10 @@ export const SHORT_RUN_FLOOR = [
  * deliverable with an ask), `post_in_room` (a progress note in its room),
  * `get_brand_kit` (the brand kit of the run's project). The run audit of 10
  * Nov (pod document 80005d94) found every long run ending by handing these
- * mechanical steps to the person. Nothing that builds spaces, manages
- * connections, starts sessions or reaches outside the pod: a run that needs
- * that declares it.
+ * mechanical steps to the person. Then the run-history reads: which playbooks
+ * exist, their sessions, one session (plan fbfadf54 fix 1.5). Nothing that
+ * builds spaces, manages connections, starts sessions or reaches outside the
+ * pod: a run that needs that declares it.
  */
 export const LONG_RUN_FLOOR = [
   "search_unified",
@@ -113,6 +115,9 @@ export const LONG_RUN_FLOOR = [
   "update_run",
   "post_in_room",
   "get_brand_kit",
+  "list_playbooks",
+  "list_sessions",
+  "get_session",
 ] as const;
 
 /** The floor of each class. */
@@ -127,10 +132,10 @@ export const RUN_TOOL_FLOORS: Readonly<Record<RunClass, readonly string[]>> = {
  * run may be given on top. A name here is a run tool, never an intent or a
  * capability. A run's session, ask and room tools are its OWN (`update_run`,
  * `post_in_room`, in the long floor; decision 832469a0, 10 Nov 2026, which
- * reverses the 9 Nov "a run never needs one"). The general session tools that
- * name any session (`update_session`, `start_session`, `relay_answer`) and
- * `proactive_post` are never run tools, and the pod still closes a run's
- * session at turn end.
+ * reverses the 9 Nov "a run never needs one"); reading sessions is in the
+ * long floor too. The general session tools that name any session
+ * (`update_session`, `start_session`, `relay_answer`) and `proactive_post`
+ * are never run tools, and the pod still closes a run's session at turn end.
  */
 export const RUN_TOOL_NAMES = [
   ...LONG_RUN_FLOOR,
@@ -143,8 +148,6 @@ export const RUN_TOOL_NAMES = [
   "remember_fact",
   "record_observation",
   "get_logs",
-  "get_session",
-  "list_sessions",
   "list_views",
   "inbox_list_threads",
   "inbox_get_thread",
@@ -155,6 +158,19 @@ const RUN_TOOL_NAME_SET: ReadonlySet<string> = new Set(RUN_TOOL_NAMES);
 /** Is this `tools` entry a run tool (an IS tool name)? */
 export function isRunToolName(entry: string): boolean {
   return RUN_TOOL_NAME_SET.has(entry);
+}
+
+/** The MCP prefix of a pod tool (`synap_list_playbooks`). */
+const MCP_TOOL_PREFIX = "synap_";
+
+/**
+ * The run tool an entry spells the MCP way (`synap_list_playbooks` →
+ * `list_playbooks`); any other entry as it is. PURE.
+ */
+export function normalizeToolEntry(entry: string): string {
+  if (!entry.startsWith(MCP_TOOL_PREFIX)) return entry;
+  const stem = entry.slice(MCP_TOOL_PREFIX.length);
+  return RUN_TOOL_NAME_SET.has(stem) ? stem : entry;
 }
 
 /** The door a declared verb runs through, and where its inputs are read. */
@@ -175,14 +191,15 @@ export const PLAYBOOK_TOOL_MAX_CHARS = 200;
 
 /**
  * Read a loose `tools` value (a row's jsonb, a stage's field): the non-empty
- * strings, each once, in order. Anything else reads as no list.
+ * strings, each once, in order, a run tool's MCP spelling read as its name
+ * ({@link normalizeToolEntry}). Anything else reads as no list.
  */
 export function readToolsList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
   for (const v of value) {
     if (typeof v !== "string") continue;
-    const t = v.trim();
+    const t = normalizeToolEntry(v.trim());
     if (t !== "" && !out.includes(t)) out.push(t);
   }
   return out;

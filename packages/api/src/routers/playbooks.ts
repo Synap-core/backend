@@ -159,6 +159,11 @@ import {
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
+import {
+  declaresStepTools,
+  refuseRunMissingTools,
+  runToolsSaveWarnings,
+} from "../services/playbooks/run-tools-missing.js";
 import { setPlaybookRunChoiceGoverned } from "../services/playbooks/set-run-choice.js";
 import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
@@ -1953,6 +1958,19 @@ export const playbooksRouter = router({
         input.stages = folded.stages as typeof input.stages;
         delete input.requiredIntents;
       }
+      // A step naming a tool a run on this pod cannot use is SAVED, with a
+      // warning: its runs would refuse to start (`refuseRunMissingTools`).
+      const toolWarnings = await runToolsSaveWarnings({
+        playbook: {
+          name: input.name,
+          executor: input.executor ?? null,
+          tools: input.tools,
+          stages: input.stages,
+        },
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+      });
+      const warned = toolWarnings.length > 0 ? { warnings: toolWarnings } : {};
       // A step that IS a playbook is checked and PINNED here, before the gate,
       // so the proposal, its approval replay and the row carry the version.
       input.stages = await resolveStageUses({
@@ -2114,6 +2132,7 @@ export const playbooksRouter = router({
             "Playbook creation proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...warned,
         };
       }
 
@@ -2266,6 +2285,7 @@ export const playbooksRouter = router({
           ? "Playbook already exists (idempotent create)"
           : "Playbook created",
         proposalId: null as string | null,
+        ...warned,
       };
     }),
 
@@ -2372,6 +2392,24 @@ export const playbooksRouter = router({
         }
         delete input.requiredIntents;
       }
+      // Same warning as the create door, over the merged row, when the patch
+      // touches what decides it.
+      const toolWarnings =
+        input.tools !== undefined ||
+        input.stages !== undefined ||
+        input.executor !== undefined
+          ? await runToolsSaveWarnings({
+              playbook: {
+                name: input.name ?? existing.name,
+                executor: input.executor ?? existing.executor,
+                tools: input.tools ?? existing.tools,
+                stages: input.stages ?? existing.stages,
+              },
+              workspaceId: existing.workspaceId,
+              userId: ctx.userId,
+            })
+          : [];
+      const warned = toolWarnings.length > 0 ? { warnings: toolWarnings } : {};
 
       // 2d. A pin list is an ordered whitelist on metadata. The request's
       // strategy wins over the stored one: writing ids onto a playbook that
@@ -2482,6 +2520,7 @@ export const playbooksRouter = router({
             "Playbook update proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...warned,
         };
       }
 
@@ -2609,6 +2648,7 @@ export const playbooksRouter = router({
         status: "updated" as const,
         message: "Playbook updated",
         proposalId: null as string | null,
+        ...warned,
       };
     }),
 
@@ -3193,6 +3233,26 @@ export const playbooksRouter = router({
               'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
           });
         }
+      }
+
+      // TOOLS — refuse a run whose tools lack what a step declares BEFORE a
+      // proposal is filed for a run that could never start (`runPlaybook`
+      // asks it again when the run starts, the approved replay included).
+      if (declaresStepTools(playbook)) {
+        const choice = await resolveRunChoice({
+          userId: ctx.userId,
+          agentUserId: input.agentUserId,
+          handToAgentId: input.handToAgentId,
+          runOn: input.runOn,
+          playbook,
+        });
+        await refuseRunMissingTools({
+          playbook,
+          workspaceId: runWorkspaceId,
+          userId: ctx.userId,
+          handedToAgent: choice.handOff !== null,
+          executor: choice.runOn.executor,
+        });
       }
 
       const perm = await checkPermissionOrPropose({

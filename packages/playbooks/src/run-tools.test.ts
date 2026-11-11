@@ -1,13 +1,16 @@
 /**
  * The class of a run and the tools of a turn (plan 08e4fba7, decisions 3 and
- * 4): one-shot gets nothing, short gets 6 reads, long the 19 core tools; a
+ * 4): one-shot gets nothing, short gets 6 reads, long its 26-tool floor; a
  * declared list adds only run tools; a stage list narrows its playbook's.
  */
 import { describe, expect, it } from "vitest";
+import { runsOnPodAi } from "./index.js";
 import {
   activeToolsList,
   isRunToolName,
   LONG_RUN_FLOOR,
+  normalizeToolEntry,
+  readToolsList,
   RUN_TOOL_FLOORS,
   RUN_TOOL_NAMES,
   runClassOf,
@@ -51,11 +54,15 @@ describe("runClassOf", () => {
 });
 
 describe("the floors and the vocabulary", () => {
-  it("one-shot has none, short the 6 reads, long the 19 core tools, the relation read and its own 3; short is inside long", () => {
+  it("one-shot has none, short the 6 reads, long the 19 core tools, the relation read, its own 3 and the 3 run-history reads; short is inside long", () => {
     expect(RUN_TOOL_FLOORS["one-shot"]).toEqual([]);
     expect(SHORT_RUN_FLOOR).toHaveLength(6);
-    expect(LONG_RUN_FLOOR).toHaveLength(23);
+    expect(LONG_RUN_FLOOR).toHaveLength(26);
     for (const t of SHORT_RUN_FLOOR) expect(LONG_RUN_FLOOR).toContain(t);
+  });
+  it("the long floor holds the run-history reads (plan fbfadf54 fix 1.5)", () => {
+    for (const t of ["list_playbooks", "list_sessions", "get_session"])
+      expect(LONG_RUN_FLOOR).toContain(t);
   });
   it("a long run drives its own session (decision 832469a0); a short one reads only", () => {
     for (const t of [
@@ -120,5 +127,38 @@ describe("activeToolsList and the stage subset", () => {
         ["update_document", "web_search"]
       )
     ).toEqual(["web_search"]);
+  });
+});
+
+describe("the MCP spelling of a run tool", () => {
+  it("synap_<run tool> reads as the run tool; any other entry stays as it is", () => {
+    expect(normalizeToolEntry("synap_list_playbooks")).toBe("list_playbooks");
+    expect(normalizeToolEntry("synap_update_session")).toBe(
+      "synap_update_session"
+    );
+    expect(normalizeToolEntry("github.pr_checks")).toBe("github.pr_checks");
+  });
+  it("a tools list reads MCP spellings once, as run tools, so a stage list stays a subset", () => {
+    expect(
+      readToolsList(["synap_get_session", "get_session", "synap_web_search"])
+    ).toEqual(["get_session", "web_search"]);
+    expect(
+      activeToolsList(
+        readToolsList(["get_session"]),
+        [st("read", { tools: ["synap_get_session"] })],
+        "read"
+      )
+    ).toEqual(["get_session"]);
+  });
+});
+
+describe("runsOnPodAi", () => {
+  it("no runner, self, synap_ai and a persona are the pod's AI; an agent, role or engine is not", () => {
+    expect(runsOnPodAi(undefined)).toBe(true);
+    expect(runsOnPodAi("self")).toBe(true);
+    expect(runsOnPodAi(["synap_ai", { synapAi: { persona: "x" } }])).toBe(true);
+    expect(runsOnPodAi(["self", { engine: "claude-code" }])).toBe(false);
+    expect(runsOnPodAi({ role: "reviewer" })).toBe(false);
+    expect(runsOnPodAi({ agentId: "a" })).toBe(false);
   });
 });
