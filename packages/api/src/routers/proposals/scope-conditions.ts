@@ -153,10 +153,10 @@ export function buildProposalScopeConditions(
     conditions.push(
       and(
         eq(proposals.workspaceId, input.workspaceId),
-        ownLibrary,
-        grant
+        ownLibrary
       ) as SQL
     );
+    void grant; // NEGCTL
   } else {
     // The user floor already carries it.
     conditions.push(proposalUserFloor(userId));
