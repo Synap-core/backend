@@ -46,6 +46,7 @@ import {
   runClassOf,
   runTurnToolNames,
   RUN_TOOL_FLOORS,
+  stageToolsOutsidePlaybook,
   type RunClass,
 } from "@synap/playbooks";
 import type { IntentVerbMatch } from "../capabilities/capability-intent-index.js";
@@ -154,6 +155,38 @@ function namedVerbs(
   return verbs;
 }
 
+/** The named entries no capability (by id or name) and no verb (by id) matches. PURE. */
+function unresolvedNames(
+  entries: readonly string[],
+  capabilities: readonly GrantableCapability[]
+): string[] {
+  return entries.filter(
+    (entry) =>
+      !capabilities.some(
+        (cap) =>
+          cap.id === entry ||
+          cap.name === entry ||
+          (cap.verbs ?? []).some((v) => v.id === entry)
+      )
+  );
+}
+
+/** The active stage's entries its playbook's list does not hold. PURE. */
+function stageToolsOutside(
+  playbookTools: readonly string[],
+  stages: unknown,
+  currentStage: string | null
+): string[] {
+  if (!currentStage || !Array.isArray(stages)) return [];
+  const stage = stages.find(
+    (s) =>
+      !!s &&
+      typeof s === "object" &&
+      (s as { key?: unknown }).key === currentStage
+  ) as { tools?: unknown } | undefined;
+  return stageToolsOutsidePlaybook(playbookTools, readToolsList(stage?.tools));
+}
+
 /**
  * The run's verbs: named verbs first (what the playbook named outright), then
  * the verbs serving each intent in the intents' order; each verb once. PURE.
@@ -219,11 +252,24 @@ export async function resolveRunToolProfile(
       // refused at the gate anyway, so offering them would only spend turns.
       input.sessionId ? deps.readTrial(input.sessionId) : false,
     ]);
+    const playbookTools = readToolsList(playbook.tools);
     const declared = activeToolsList(
-      readToolsList(playbook.tools),
+      playbookTools,
       playbook.stages,
       currentStage
     );
+    // A stored stage entry outside the playbook's list is never offered (a
+    // row written before the door checked it): say so, once per entry.
+    for (const entry of stageToolsOutside(
+      playbookTools,
+      playbook.stages,
+      currentStage
+    )) {
+      logger.warn(
+        { playbookId: input.playbookId, stage: currentStage, entry },
+        "run-tool-profile: a stage lists a tool its playbook does not — not offered"
+      );
+    }
     // A one-shot run has no tools at all: nothing it declares is offered.
     const tools =
       runClass === "one-shot" ? [] : runTurnToolNames(runClass, declared);
@@ -242,6 +288,17 @@ export async function resolveRunToolProfile(
         intents,
         index
       );
+      // An entry nothing on this pod serves offers nothing: a fact (a later
+      // install may serve it), never a refusal; said once per entry.
+      for (const entry of [
+        ...unresolvedNames(named, registry.capabilities),
+        ...intents.filter((i) => (index.get(i) ?? []).length === 0),
+      ]) {
+        logger.warn(
+          { playbookId: input.playbookId, entry },
+          "run-tool-profile: a declared tool resolves to nothing on this pod — not offered"
+        );
+      }
     }
     const tier = activeStageTier(playbook.stages, currentStage);
     return {

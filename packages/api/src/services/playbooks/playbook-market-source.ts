@@ -163,7 +163,10 @@ export function projectPlaybookDefinition<
     stages?: Array<Record<string, unknown>>;
   };
   const tools = foldPlaybookTools(d);
-  if (tools.tools !== undefined) out.tools = tools.tools;
+  // ALWAYS projected, `[]` when the template declares none: a baseline
+  // stamped from this projection then always has `tools`, so a baseline
+  // WITHOUT it is one stamped before 0419 (see planPlaybookReconcile).
+  out.tools = tools.tools ?? [];
   if (tools.stages !== undefined) out.stages = tools.stages;
   return out as Pick<T, PlaybookManagedField & keyof T>;
 }
@@ -548,7 +551,22 @@ export function planPlaybookReconcile(args: {
     baseline,
     desired: desiredFull,
   });
-  const r = threeWayMergeFields(mergeLive, withoutRunners(baseline), desired);
+  const mergeBase = withoutRunners(baseline);
+  // A BASELINE STAMPED BEFORE 0419 has no `tools`: on that row `tools` was
+  // written by migration 0419 (from the old declarations, plus a short run's
+  // writes), never by its owner, since the field did not exist. So it is not
+  // an owner edit: present it as absent and the template's own list is
+  // adopted. Same for each stage 0419 rewrote (its `grants` became `tools`):
+  // the baseline's stage is read the way 0419 rewrote the live one, so the
+  // stage is not mistaken for an owner edit either. Every other field merges
+  // as before, so a real owner edit is kept.
+  if (!("tools" in baseline)) {
+    if ("tools" in desired) mergeLive.tools = undefined;
+    if (Array.isArray(mergeBase.stages) && Array.isArray(mergeLive.stages)) {
+      mergeBase.stages = readPre0419Stages(mergeBase.stages, mergeLive.stages);
+    }
+  }
+  const r = threeWayMergeFields(mergeLive, mergeBase, desired);
   const patch: Record<string, unknown> = {};
   for (const k of r.applied) patch[k] = r.merged[k];
   if (patch.stages !== undefined) {
@@ -577,4 +595,41 @@ export function planPlaybookReconcile(args: {
     ownerOwned: r.ownerOwned,
     held: runners.held,
   };
+}
+
+/**
+ * A pre-0419 baseline's stages, read the way migration 0419 rewrote the live
+ * ones: a baseline stage whose only difference from the live stage of the
+ * same key is 0419's rewrite (its `grants` gone, a `tools` list added) reads
+ * as that live stage. Any other difference stays, so a real owner edit of a
+ * stage is still seen. PURE.
+ */
+function readPre0419Stages(
+  baseline: readonly unknown[],
+  live: readonly unknown[]
+): unknown[] {
+  const without = (s: unknown, ...keys: string[]) => {
+    if (!s || typeof s !== "object") return s;
+    const out: Record<string, unknown> = { ...(s as Record<string, unknown>) };
+    for (const k of keys) delete out[k];
+    return out;
+  };
+  const liveByKey = new Map<unknown, unknown>(
+    live.map((s) => [
+      s && typeof s === "object" ? (s as { key?: unknown }).key : undefined,
+      s,
+    ])
+  );
+  return baseline.map((b) => {
+    if (!b || typeof b !== "object") return b;
+    const l = liveByKey.get((b as { key?: unknown }).key);
+    if (
+      l !== undefined &&
+      "grants" in (b as Record<string, unknown>) &&
+      deepEqual(without(b, "grants", "tools"), without(l, "grants", "tools"))
+    ) {
+      return l;
+    }
+    return b;
+  });
 }

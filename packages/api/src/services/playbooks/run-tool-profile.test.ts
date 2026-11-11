@@ -7,9 +7,14 @@ import { describe, it, expect, vi } from "vitest";
  * `verbs` under the run's lens; a failed read is said as `failed`, with the
  * floor only.
  */
+const warned = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 vi.mock("@synap-core/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap-core/core")>()),
-  createLogger: () => ({ warn: () => {}, error: () => {}, info: () => {} }),
+  createLogger: () => ({
+    warn: (o: Record<string, unknown>) => warned.push(o),
+    error: () => {},
+    info: () => {},
+  }),
 }));
 
 const { resolveRunToolProfile, foldRunVerbs } =
@@ -277,6 +282,45 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
     );
     expect(p).toMatchObject({ capabilitiesRead: "failed" });
     expect(p.tools).toEqual([...SHORT_RUN_FLOOR]);
+  });
+});
+
+describe("resolveRunToolProfile — what offers nothing is said, once per entry", () => {
+  it("warns for a capability name, an intent and a stage entry that resolve to nothing", async () => {
+    warned.length = 0;
+    await resolveRunToolProfile(
+      { ...input, sessionId: "sess-1" },
+      deps(
+        {
+          tools: [
+            "fireflies",
+            "no_such_capability",
+            "publish_post",
+            "schedule_event",
+          ],
+          stages: [stage("draft", { tools: ["fireflies", "web_search"] })],
+        },
+        { readCurrentStage: async () => null }
+      )
+    );
+    expect(warned.map((w) => w.entry ?? w.intent)).toEqual([
+      "no_such_capability",
+      "schedule_event",
+    ]);
+    warned.length = 0;
+    await resolveRunToolProfile(
+      { ...input, sessionId: "sess-1" },
+      deps(
+        {
+          tools: ["fireflies"],
+          stages: [stage("draft", { tools: ["fireflies", "web_search"] })],
+        },
+        { readCurrentStage: async () => "draft" }
+      )
+    );
+    expect(warned).toEqual([
+      expect.objectContaining({ stage: "draft", entry: "web_search" }),
+    ]);
   });
 });
 

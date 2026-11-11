@@ -479,3 +479,118 @@ describe("planPlaybookReconcile — runners are the pod's", () => {
     expect(held.held).toEqual(["runner"]);
   });
 });
+
+describe("planPlaybookReconcile — a row stamped before 0419 (the one tools field)", () => {
+  // The baseline as a pre-0419 install stamped it: `requiredIntents`, a
+  // stage's `grants`, and no `tools` (the field did not exist).
+  const OLD_STAGES = [
+    {
+      key: "research",
+      name: "Research",
+      category: "started",
+      grants: [{ kind: "skill", id: "source-triage" }],
+    },
+  ];
+  const oldBaseline = {
+    ...baselineOf({ ...TEMPLATE, scope: undefined, stages: [] }),
+    stages: OLD_STAGES,
+    requiredIntents: ["search_external"],
+  };
+  delete (oldBaseline as Record<string, unknown>).tools;
+  // What 0419 wrote on the live row: the folded list plus a short run's writes,
+  // and the stage's grants turned into its tools.
+  const MIGRATED_STAGES = [
+    {
+      key: "research",
+      name: "Research",
+      category: "started",
+      tools: ["source-triage", "update_document"],
+    },
+  ];
+  const migratedRow = (over: Record<string, unknown> = {}) =>
+    row({
+      stages: MIGRATED_STAGES,
+      tools: [
+        "search_external",
+        "source-triage",
+        "update_document",
+        "create_entity",
+      ],
+      metadata: {
+        marketSource: {
+          packageSlug: "grants",
+          packageVersion: "h-1",
+          installedAt: "x",
+          baseline: oldBaseline,
+        },
+      },
+      ...over,
+    });
+  const LEAN = {
+    ...TEMPLATE,
+    scope: undefined,
+    tools: ["update_document", "search_external", "source-triage"],
+    stages: [
+      {
+        key: "research",
+        name: "Research",
+        category: "started",
+        tools: ["source-triage"],
+      },
+    ],
+  };
+
+  it("the template's lean tools and stage tools replace what 0419 wrote", () => {
+    const p = plan(migratedRow(), LEAN);
+    expect(p.kind).toBe("updated");
+    expect(p.patch.tools).toEqual([
+      "update_document",
+      "search_external",
+      "source-triage",
+    ]);
+    expect(p.patch.stages).toEqual(LEAN.stages);
+    expect(p.ownerOwned).toEqual([]);
+    const ms = p.metadata!.marketSource as {
+      baseline: Record<string, unknown>;
+    };
+    // From here on the baseline has `tools`: a later owner edit is an edit.
+    expect(ms.baseline.tools).toEqual(LEAN.tools);
+  });
+
+  it("an owner's real edit (the goal, a stage renamed) is kept", () => {
+    const p = plan(
+      migratedRow({
+        goalTemplate: "My own goal.",
+        stages: [{ ...MIGRATED_STAGES[0]!, name: "My research" }],
+      }),
+      LEAN
+    );
+    expect(p.patch.goalTemplate).toBeUndefined();
+    expect(p.patch.stages).toBeUndefined();
+    expect(p.ownerOwned).toContain("stages");
+    expect(p.patch.tools).toEqual(LEAN.tools);
+  });
+
+  it("a baseline that has tools (stamped since 0419) still protects an owner's tools edit", () => {
+    const p = plan(
+      migratedRow({
+        tools: ["web_search"],
+        metadata: {
+          marketSource: {
+            packageSlug: "grants",
+            packageVersion: "h-1",
+            installedAt: "x",
+            baseline: baselineOf({
+              ...TEMPLATE,
+              scope: undefined,
+              stages: MIGRATED_STAGES,
+            }),
+          },
+        },
+      }),
+      LEAN
+    );
+    expect(p.patch.tools).toBeUndefined();
+    expect(p.ownerOwned).toContain("tools");
+  });
+});
