@@ -124,13 +124,18 @@ async function readDecided(input: {
       subjectTitle: entities.title,
     })
     .from(playbookRuns)
+    // The JSON side is cast, never the column, so each join reads the
+    // primary key's index.
     .innerJoin(
       proposals,
-      drizzleSql`${proposals.id}::text = ${playbookRuns.generation}->'proposal'->>'id'`
+      drizzleSql`${proposals.id} = (${playbookRuns.generation}->'proposal'->>'id')::uuid`
     )
     .leftJoin(
       entities,
-      drizzleSql`${entities.id}::text = ${playbookRuns.generation}->>'subjectId'`
+      and(
+        drizzleSql`${entities.id} = (${playbookRuns.generation}->>'subjectId')::uuid`,
+        isNull(entities.deletedAt)
+      )
     )
     .where(
       and(

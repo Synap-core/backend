@@ -582,6 +582,41 @@ describe("upsert_section form heading: the person's own plain block", () => {
     ).toThrow(/starting with "## "/);
   });
 
+  it("ends the block at a level-1 heading too, which it keeps", () => {
+    const doc = "## Caption\nOld.\n# Appendix\nKeep me.\n";
+    const out = renderDocumentPatch(doc, [op("New.")], {
+      writer: AGENT,
+      now: NOW,
+    });
+    expect(out.markdown).toBe("## Caption\n\nNew.\n\n# Appendix\nKeep me.\n");
+  });
+
+  it("reads no heading inside fenced code: neither as the block nor as its end", () => {
+    const fence = ["```md", "## Caption", "not the block", "```"].join("\n");
+    // A "## Caption" inside a fence is code: the real block is the one after it.
+    const doc = [
+      fence,
+      "",
+      "## Caption",
+      "Old.",
+      "```",
+      "## Inside code",
+      "```",
+      "Still the caption.",
+      "",
+      "## Notes",
+      "N.",
+    ].join("\n");
+    const out = renderDocumentPatch(doc, [op("New.")], {
+      writer: AGENT,
+      now: NOW,
+    });
+    expect(out.markdown).toBe(
+      [fence, "", "## Caption", "", "New.", "", "## Notes", "N."].join("\n")
+    );
+    expect(out.replacedSections).toEqual(["caption"]);
+  });
+
   it("is a document update, not a section write (governance keys)", () => {
     expect(isSectionOnlyPatch([op("x")])).toBe(false);
     expect(

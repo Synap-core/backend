@@ -367,6 +367,8 @@ export interface PlaybookRunDetail {
    * content, readable by its owner and its room's human roster). `session` is
    * then null and the page renders the "private session" placeholder — no
    * goal, no door. False when there is a readable session or none at all.
+   * Also true for ANOTHER person's one-shot run: its record (`generation`)
+   * is its creator's alone, so it is withheld the same way.
    */
   sessionPrivate: boolean;
   /** Entities the session produced (`session --produced--> entity`), user-visible only. */

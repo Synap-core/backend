@@ -17,7 +17,12 @@
  *     the run alone would show the other space's prompt;
  *   - a one-shot run from a playbook in another space: a read without the
  *     grant on the run row would show it;
- *   - an agent (session) run: the app gets no turns, no session.
+ *   - an agent (session) run: the app gets no turns, no session;
+ *   - ANOTHER MEMBER of the same space (review of the lean-runs wave): the
+ *     run row is space-visible, but its record (the prompt: the subject's
+ *     document, the creator's past drafts and reject reasons) is the
+ *     creator's alone, on the full detail, the app-key read and the list's
+ *     subject lens and column.
  * Cannot see: the fence wiring in the auth middleware (its own tests), a real
  * Postgres.
  */
@@ -69,6 +74,7 @@ function ddlFor(table: PgTable): string {
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
 const OWNER = randomUUID();
+const MEMBER = randomUUID(); // another member of the app's space
 const APP_SPACE = randomUUID(); // the space the app was granted
 const ELSEWHERE = randomUUID(); // the person's other space
 const NOTE_KIND = randomUUID();
@@ -107,22 +113,28 @@ const pinned = (...permissions: string[]) =>
   grantOfScope({ permissions, workspaceIds: [APP_SPACE] } as never);
 const FULL = grantOfScope({ permissions: ["*"] } as never);
 
-async function get(
-  id: string,
+async function request(
+  path: string,
   grant: unknown,
-  flowType = "playbook"
+  userId: string
 ): Promise<{ status: number; body: Record<string, any> }> {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
-    c.set("userId", OWNER);
+    c.set("userId", userId);
     c.set("scopes", ["hub-protocol.read"]);
     await next();
   });
   registerRunsRoutes(app);
-  const send = () => app.request(`/runs/${id}?flowType=${flowType}`);
-  const res = await runWithGrant(grant as never, send);
+  const res = await runWithGrant(grant as never, () => app.request(path));
   return { status: res.status, body: JSON.parse(await res.text()) };
 }
+
+const get = (
+  id: string,
+  grant: unknown,
+  flowType = "playbook",
+  userId = OWNER
+) => request(`/runs/${id}?flowType=${flowType}`, grant, userId);
 
 beforeAll(async () => {
   const tables = (Object.values(schema) as unknown[]).filter(
@@ -143,6 +155,10 @@ beforeAll(async () => {
     `insert into users (id, email, name, user_type) values ($1, 'o@test', 'Owner', 'human')`,
     [OWNER]
   );
+  await q(
+    `insert into users (id, email, name, user_type) values ($1, 'm@test', 'Member', 'human')`,
+    [MEMBER]
+  );
   for (const [ws, name] of [
     [APP_SPACE, "Studio"],
     [ELSEWHERE, "Elsewhere"],
@@ -156,6 +172,10 @@ beforeAll(async () => {
       [randomUUID(), ws, OWNER]
     );
   }
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'member')`,
+    [randomUUID(), APP_SPACE, MEMBER]
+  );
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id)
      values ($1, 'note', 'Note', 'kind', 'system', 'workspace', true, '{}'::jsonb, null)`,
@@ -277,5 +297,52 @@ describe("GET /runs/:id — an app key reads a one-shot run's record, narrowed",
     expect(res.status).toBe(200);
     expect(res.body.detail).toBeUndefined();
     expect(res.body.playbookDetail.generation.prompt.text).toBe(SECRET);
+  });
+});
+
+describe("another member of the space never reads a one-shot run's record (review finding 1)", () => {
+  it("the full detail: the run row is visible, its record is the private placeholder", async () => {
+    const own = await get(GEN_IN, FULL);
+    expect(own.body.playbookDetail.generation.prompt.text).toBe(
+      "Caption the note"
+    );
+    const res = await get(GEN_IN, FULL, "playbook", MEMBER);
+    expect(res.status).toBe(200);
+    expect(res.body.run).toMatchObject({ id: GEN_IN });
+    expect(res.body.playbookDetail.generation).toBeUndefined();
+    expect(res.body.playbookDetail.sessionPrivate).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain("Caption the note");
+  });
+
+  it("an app key of the other member gets no record", async () => {
+    const res = await get(
+      GEN_IN,
+      pinned("playbook.read", "entity.*.read"),
+      "playbook",
+      MEMBER
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.playbookDetail).toEqual({ generation: null });
+    expect(JSON.stringify(res.body)).not.toContain("Caption the note");
+  });
+
+  it("the list: the subject lens drops another member's run and its row names no subject", async () => {
+    const lens = `/runs?flowType=playbook&subjectEntityId=${NOTE_IN}`;
+    const own = await request(lens, FULL, OWNER);
+    expect(own.body.runs.map((r: { id: string }) => r.id)).toContain(GEN_IN);
+    const theirs = await request(lens, FULL, MEMBER);
+    expect(theirs.status).toBe(200);
+    expect(theirs.body.runs.map((r: { id: string }) => r.id)).not.toContain(
+      GEN_IN
+    );
+    // Unfiltered, the row is there (space-visible) but names no subject.
+    const all = await request(`/runs?flowType=playbook`, FULL, MEMBER);
+    const row = all.body.runs.find((r: { id: string }) => r.id === GEN_IN);
+    expect(row).toBeDefined();
+    expect(row.subjectEntityId).toBeNull();
+    const mine = (
+      await request(`/runs?flowType=playbook`, FULL, OWNER)
+    ).body.runs.find((r: { id: string }) => r.id === GEN_IN);
+    expect(mine.subjectEntityId).toBe(NOTE_IN);
   });
 });

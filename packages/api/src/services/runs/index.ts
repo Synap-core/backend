@@ -544,10 +544,12 @@ async function listPlaybookRuns(
       error: playbookRuns.error,
       // The run's room lives on its session (playbook → 1 channel per run).
       channelId: focusSessions.channelId,
-      // A one-shot run has no session: its subject is on its record.
+      // A one-shot run has no session: its subject is on its record, which
+      // is its creator's alone (the record quotes the subject and the
+      // person's past drafts). Another member's one-shot run names no subject.
       subjectEntityId: drizzleSql<
         string | null
-      >`coalesce(${focusSessions.subjectEntityId}::text, ${playbookRuns.generation}->>'subjectId')`,
+      >`coalesce(${focusSessions.subjectEntityId}::text, case when ${playbookRuns.createdBy} = ${userId} then ${playbookRuns.generation}->>'subjectId' end)`,
       projectId: focusSessions.projectId,
       // Progress signal: `playbook_runs` has no updated_at, so "actively
       // worked" is read off the linked session — the SAME column
@@ -589,9 +591,13 @@ async function listPlaybookRuns(
         scope.subjectEntityId
           ? or(
               eq(focusSessions.subjectEntityId, scope.subjectEntityId),
-              // A one-shot run (no session) names its subject on its record.
+              // A one-shot run (no session) names its subject on its record,
+              // read only for the run's creator: for anyone else the subject
+              // lens drops it, so the filter is no oracle for what a
+              // colleague drafted about (decision D1, as for a session run).
               and(
                 isNull(playbookRuns.sessionId),
+                eq(playbookRuns.createdBy, userId),
                 drizzleSql`${playbookRuns.generation}->>'subjectId' = ${scope.subjectEntityId}`
               )
             )
@@ -2646,6 +2652,7 @@ async function loadPlaybookRunDetail(
     const [link] = await db
       .select({
         sessionId: playbookRuns.sessionId,
+        createdBy: playbookRuns.createdBy,
         generation: playbookRuns.generation,
         runSnapshot: playbookRuns.definitionSnapshot,
       })
@@ -2655,8 +2662,20 @@ async function loadPlaybookRunDetail(
     // A ONE-SHOT run (`executor: "generate"`) has no session by design: its
     // record is the run row's `generation` (prompt, model, tokens) and its
     // result is the ONE proposal it filed on its subject. No room, so no
-    // agents and no door to a session.
+    // agents and no door to a session. The record is its CREATOR's: the
+    // prompt quotes the subject's document and the person's own past drafts
+    // and reject reasons, so for anyone else who sees the run row it is the
+    // private placeholder, like a session they may not open.
     const generation = !link?.sessionId ? (link?.generation ?? null) : null;
+    if (generation && link?.createdBy !== userId) {
+      return {
+        session: null,
+        sessionPrivate: true,
+        produced: [],
+        proposals: [],
+        agents: [],
+      };
+    }
     if (generation) {
       const filed = generation.proposal
         ? await loadRunProposals({ proposalId: generation.proposal.id }, userId)
