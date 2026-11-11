@@ -87,7 +87,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { db, drizzleSql } from "@synap/database";
+import { db, drizzleSql, type SQL } from "@synap/database";
 import { flowOfInput, readFlowOf, type FlowOf } from "../flow-read.js";
 import { readStatusOf } from "../../status/status-read.js";
 import { proposalOnThingsIn } from "../../focus-sessions/session-subject-where.js";
@@ -360,7 +360,8 @@ describe("proposal on things: one session probe per (proposal, card)", () => {
         (node["Actual Loops"] ?? 0)
       : 0) + (node.Plans ?? []).reduce((n, p) => n + sessionRowsRead(p), 0);
 
-  it("reads at most one session row per pair (plus one pass), never every session per pair", async () => {
+  /** Session rows the collector's shape reads with `onThings(x)` as its rule, and the bound. */
+  async function measure(onThings: (x: SQL) => SQL) {
     const list = drizzleSql.join(
       things.map((id) => drizzleSql`${id}`),
       drizzleSql`, `
@@ -368,7 +369,7 @@ describe("proposal on things: one session probe per (proposal, card)", () => {
     // The collector's shape (`readWaitingOnSourcesFor`): per proposal, the asked things it is on.
     const query = drizzleSql`SELECT proposals.id, ARRAY(
         SELECT x FROM unnest(ARRAY[${list}]::text[]) AS x
-        WHERE ${proposalOnThingsIn(drizzleSql`x`)}) AS on_things
+        WHERE ${onThings(drizzleSql`x`)}) AS on_things
       FROM proposals WHERE proposals.session_id IS NOT NULL`;
     // Tiny tables: let the planner take an index where one exists.
     await db.execute(drizzleSql`SET enable_seqscan = off`);
@@ -380,15 +381,29 @@ describe("proposal on things: one session probe per (proposal, card)", () => {
       const plan = (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
         Plan: PlanNode;
       }>;
-      const pairs = PROPOSALS * THINGS;
       const total = await q<{ n: number }>(
         `select count(*)::int as n from focus_sessions`
       );
-      const read = sessionRowsRead(plan[0]!.Plan);
-      expect(read).toBeGreaterThan(0);
-      expect(read).toBeLessThanOrEqual(pairs + total.rows[0]!.n);
+      return {
+        read: sessionRowsRead(plan[0]!.Plan),
+        bound: PROPOSALS * THINGS + total.rows[0]!.n,
+      };
     } finally {
       await db.execute(drizzleSql`RESET enable_seqscan`);
     }
+  }
+
+  it("reads at most one session row per pair (plus one pass), never every session per pair", async () => {
+    const { read, bound } = await measure(proposalOnThingsIn);
+    expect(read).toBeGreaterThan(0);
+    expect(read).toBeLessThanOrEqual(bound);
+  });
+
+  it("negative control: the pre-fix session half (IN over every session) breaks the bound", async () => {
+    // The rule before Nov 2026, verbatim in SQL: the metric must see its cost.
+    const before = (x: SQL) =>
+      drizzleSql`((proposals.target_type IN ('entity', 'entity_facet') AND proposals.target_id IN (${x})) OR proposals.data->>'entityId' IN (${x}) OR proposals.session_id IN (SELECT fs.id FROM focus_sessions fs WHERE (fs.subject_entity_id::text IN (${x}) OR EXISTS (SELECT 1 FROM links sl WHERE sl.from_type = 'session' AND sl.from_id = fs.id::text AND sl.to_type = 'entity' AND sl.link_type = 'targets' AND sl.metadata->>'role' = 'worker_target' AND sl.to_id IN (${x})))))`;
+    const { read, bound } = await measure(before);
+    expect(read).toBeGreaterThan(bound);
   });
 });
