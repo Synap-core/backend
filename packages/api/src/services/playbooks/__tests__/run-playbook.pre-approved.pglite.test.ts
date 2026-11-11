@@ -116,21 +116,13 @@ vi.mock("@synap/events", async (importOriginal) => ({
   emitSideEffects: async () => undefined,
 }));
 
-import { SQL } from "drizzle-orm";
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { SQL, is } from "drizzle-orm";
 import {
-  focusSessions,
-  channels,
-  playbookRuns,
-  playbookEnrollments,
-  entities,
-  links,
-  users,
-  governanceRules,
-  workspaces,
-  workspaceMembers,
-  apps,
-} from "@synap/database";
+  getTableConfig,
+  PgTable as PgTableClass,
+  type PgTable,
+} from "drizzle-orm/pg-core";
+import * as database from "@synap/database";
 import { runPlaybook } from "../run-playbook.js";
 
 const PERSON = "11111111-1111-4111-8111-111111111111";
@@ -179,24 +171,16 @@ const metadataOf = async (sessionId: string) =>
   ).rows[0]!.metadata;
 
 beforeAll(async () => {
-  for (const t of [
-    focusSessions,
-    channels,
-    playbookRuns,
-    playbookEnrollments,
-    entities,
-    // A run that names nobody asks THE route for the playbook's assigned
-    // agent (`resolveRunHandOff`): no assignment here, so nothing changes.
-    links,
-    users,
-    governanceRules,
-    // A runner that names a role asks for the person's agents (`resolveRunner`):
-    // none here, so the run goes to no agent and is held.
-    workspaces,
-    workspaceMembers,
-    apps,
-  ]) {
-    await h.client!.exec(ddlFor(t as unknown as PgTable));
+  // Every table of the schema: the run reads the assigned agent (`links`),
+  // a runner's agents (`resolveRunner`: members, pod members, apps) and the
+  // person's rule (`governance_rules`).
+  const seen = new Set<string>();
+  for (const t of Object.values(database)) {
+    if (!is(t, PgTableClass)) continue;
+    const name = getTableConfig(t as PgTable).name;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    await h.client!.exec(ddlFor(t as PgTable));
   }
 });
 
