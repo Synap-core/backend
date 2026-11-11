@@ -579,7 +579,13 @@ describe("upsert_section form heading: the person's own plain block", () => {
         writer: AGENT,
         now: NOW,
       })
-    ).toThrow(/starting with "## "/);
+    ).toThrow(/starting with "# " or "## "/);
+    expect(() =>
+      renderDocumentPatch(SCRIPT, [op("Line.\n# Title")], {
+        writer: AGENT,
+        now: NOW,
+      })
+    ).toThrow(/starting with "# " or "## "/);
   });
 
   it("ends the block at a level-1 heading too, which it keeps", () => {
