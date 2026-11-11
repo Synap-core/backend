@@ -22,6 +22,18 @@ export const en = {
   "document.copy": "A copy to read",
   "channel.belongsTo": "Belongs to",
   "channel.belongsToLabel": "What this conversation belongs to",
+  "view.handoff.title": "This view is worked in the Synap app",
+  "view.handoff.body":
+    "Pod admin runs the pod and does not draw boards, tables or dashboards. Open it in the app to see it with live data.",
+  "view.handoff.cta": "Open view in the app",
+  "view.shows.pipeline": "{noun} by state, one column per state.",
+  "view.shows.dashboard":
+    "A dashboard of {n, plural, one {# widget} other {# widgets}}.",
+  "view.shows.dashboardOver":
+    "A dashboard of {n, plural, one {# widget} other {# widgets}} over {noun}.",
+  "view.shows.layoutOver": "{layout} view of {noun}.",
+  "view.shows.layout": "{layout} view.",
+  "view.shows.unknown": "A saved view.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -39,6 +51,18 @@ export const fr: Catalog<typeof en> = {
   "document.copy": "Une copie à lire",
   "channel.belongsTo": "Rattachée à",
   "channel.belongsToLabel": "Ce à quoi cette conversation est rattachée",
+  "view.handoff.title": "Cette vue se travaille dans l’application Synap",
+  "view.handoff.body":
+    "L’administration du pod fait tourner le pod : elle ne dessine ni tableaux, ni tableaux de bord. Ouvrez la vue dans l’application pour la voir avec les données en direct.",
+  "view.handoff.cta": "Ouvrir la vue dans l’application",
+  "view.shows.pipeline": "{noun} par état, une colonne par état.",
+  "view.shows.dashboard":
+    "Un tableau de bord de {n, plural, one {# widget} other {# widgets}}.",
+  "view.shows.dashboardOver":
+    "Un tableau de bord de {n, plural, one {# widget} other {# widgets}} sur {noun}.",
+  "view.shows.layoutOver": "Vue {layout} de {noun}.",
+  "view.shows.layout": "Vue {layout}.",
+  "view.shows.unknown": "Une vue enregistrée.",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */
