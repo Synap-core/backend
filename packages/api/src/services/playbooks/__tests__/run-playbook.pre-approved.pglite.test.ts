@@ -127,6 +127,9 @@ import {
   links,
   users,
   governanceRules,
+  workspaces,
+  workspaceMembers,
+  apps,
 } from "@synap/database";
 import { runPlaybook } from "../run-playbook.js";
 
@@ -187,6 +190,11 @@ beforeAll(async () => {
     links,
     users,
     governanceRules,
+    // A runner that names a role asks for the person's agents (`resolveRunner`):
+    // none here, so the run goes to no agent and is held.
+    workspaces,
+    workspaceMembers,
+    apps,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
