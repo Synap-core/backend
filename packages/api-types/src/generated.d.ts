@@ -48672,6 +48672,46 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbook: Playbook | null;
 				proposalId: string;
 				status: "proposed";
+				warnings: string[];
+			} | {
+				message: string;
+				playbook: Playbook | null;
+				proposalId: string;
+				status: "proposed";
+				warnings?: undefined;
+			} | {
+				message: string;
+				playbook: {
+					channelSpec: unknown;
+					createdAt: Date;
+					createdBy: string;
+					criteria: unknown;
+					description: string | null;
+					executor: PlaybookExecutorRef;
+					expectedOutputs: unknown;
+					flowAutomationId: string | null;
+					goalTemplate: string;
+					guidance: unknown;
+					id: string;
+					inputStrategy: unknown;
+					metadata: unknown;
+					name: string;
+					params: unknown;
+					requires: unknown;
+					runner: unknown;
+					schedule: unknown;
+					scope: "project" | "session" | null;
+					stages: unknown;
+					status: "active" | "archived" | "draft" | "paused";
+					subjectProfile: unknown;
+					tools: unknown;
+					updatedAt: Date;
+					version: number;
+					workspaceId: string | null;
+				};
+				proposalId: string | null;
+				status: "created";
+				warnings: string[];
 			};
 		}>;
 		enrollments: import("@trpc/server").TRPCBuiltRouter<{
@@ -49970,6 +50010,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbook: Playbook | null;
 				proposalId: string;
 				status: "proposed";
+				warnings: string[];
+			} | {
+				message: string;
+				playbook: Playbook | null;
+				proposalId: string;
+				status: "proposed";
+				warnings?: undefined;
 			} | {
 				message: string;
 				playbook: {
@@ -50002,6 +50049,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				proposalId: string | null;
 				status: "updated";
+				warnings: string[];
+			} | {
+				message: string;
+				playbook: {
+					channelSpec: unknown;
+					createdAt: Date;
+					createdBy: string;
+					criteria: unknown;
+					description: string | null;
+					executor: PlaybookExecutorRef;
+					expectedOutputs: unknown;
+					flowAutomationId: string | null;
+					goalTemplate: string;
+					guidance: unknown;
+					id: string;
+					inputStrategy: unknown;
+					metadata: unknown;
+					name: string;
+					params: unknown;
+					requires: unknown;
+					runner: unknown;
+					schedule: unknown;
+					scope: "project" | "session" | null;
+					stages: unknown;
+					status: "active" | "archived" | "draft" | "paused";
+					subjectProfile: unknown;
+					tools: unknown;
+					updatedAt: Date;
+					version: number;
+					workspaceId: string | null;
+				};
+				proposalId: string | null;
+				status: "updated";
+				warnings?: undefined;
 			};
 		}>;
 	}>>;
