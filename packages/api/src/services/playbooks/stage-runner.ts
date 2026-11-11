@@ -64,6 +64,7 @@ import {
   type ExpectedOutput,
   type PlaybookRunner,
   type PlaybookStage,
+  type PlaybookStageUses,
   type SlotAsk,
 } from "@synap/playbooks";
 import { requiresOf } from "./requires-of.js";
@@ -102,6 +103,8 @@ export interface EnterStageResult {
   /** The hand-off's proposal, or why it was refused. */
   proposalId?: string;
   reason?: string;
+  /** A step that `uses` a playbook: the child run's session that works it. */
+  childSessionId?: string;
   /** The tools it waits on (`waiting_tools`), with their install asks. */
   waitingTools?: string[];
   /**
@@ -127,6 +130,8 @@ interface SnapshotStage {
   name?: string;
   runner?: PlaybookRunner;
   requires?: unknown;
+  /** The step IS this playbook (slice 4): a child run works it. */
+  uses?: PlaybookStageUses;
 }
 
 /** The label of the slot the person answers when nobody can take a step. */
@@ -533,6 +538,8 @@ async function enterStageUnsafe(p: {
   let reason: string | undefined;
   let report: Record<string, RequiresEntry> = {};
   let synapAiPersona: string | null = null;
+  /** The runner resolved to Synap AI (a step that `uses` a playbook runs it there). */
+  let synapAiChosen = false;
 
   const choices = runnerChoices(runner);
   const isSelf = choices.length === 0 || choices[0] === "self";
@@ -566,9 +573,10 @@ async function enterStageUnsafe(p: {
     } else if (chosen.kind === "synap_ai") {
       holder = null;
       computerUserId = null;
+      synapAiChosen = true;
+      synapAiPersona = chosen.persona;
       if (runAgent !== null) {
         handOff = "synap_ai_turn";
-        synapAiPersona = chosen.persona;
       }
     } else if (chosen.agentUserId !== runAgent) {
       const askingAgent =
@@ -652,9 +660,26 @@ async function enterStageUnsafe(p: {
     .returning({ id: sessionStageRuns.id });
   const stageRunId = row!.id;
   let reached: DispatchReach | undefined;
+  let childSessionId: string | undefined;
 
-  // What the room is told, and the one turn a Synap AI step gets.
-  if (handOff === "attached" && holder) {
+  // A step that IS a playbook (slice 4): its own run works it, handed to the
+  // step's runner — never a turn on this session. Not while it waits on tools
+  // (the re-check starts it) nor while nobody can take it (the person picks)
+  // or a hand-off waits for the person.
+  if (stage.uses && handOff !== "nobody" && handOff !== "proposed") {
+    if (!waitsOnTools) {
+      const { startStageChild } = await import("./stage-child.js");
+      const child = await startStageChild({
+        session,
+        stage,
+        stageRunId,
+        handTo: synapAiChosen ? "synap_ai" : holder,
+        persona: synapAiChosen ? synapAiPersona : null,
+      });
+      if (child.status === "started") childSessionId = child.childSessionId;
+    }
+  } else if (handOff === "attached" && holder) {
+    // What the room is told, and the one turn a Synap AI step gets.
     const { attachSessionAgent } =
       await import("../focus-sessions/attach-session-agent.js");
     await attachSessionAgent({
@@ -772,6 +797,7 @@ async function enterStageUnsafe(p: {
     ...(reason ? { reason } : {}),
     ...(waitsOnTools ? { waitingTools: missingTools } : {}),
     ...(reached ? { reached } : {}),
+    ...(childSessionId ? { childSessionId } : {}),
   };
 }
 
@@ -847,6 +873,8 @@ export async function recheckStageTools(
         `Step ${open.stageKey} has its tools: it goes on.`,
         `stage-runner:${open.id}:ready`
       );
+      // A step that IS a playbook waited on tools: its run starts now.
+      if (await startWaitedStageChild(open)) return "ready";
       // Its agent is bound for dispatch and was not told yet (the step
       // waited on tools first): it is told now.
       if (open.runnerAgentUserId && !open.externalAgent && open.playbookRunId) {
@@ -884,6 +912,42 @@ export async function recheckStageTools(
     logger.warn({ err, sessionId }, "stage runner: tools re-check failed");
     return "none";
   }
+}
+
+/**
+ * A step that `uses` a playbook and waited on tools: start its child run now,
+ * handed to the runner the row recorded. False when the step is not one.
+ */
+async function startWaitedStageChild(open: SessionStageRun): Promise<boolean> {
+  if (!open.playbookRunId) return false;
+  const [run] = await db
+    .select({ definitionSnapshot: playbookRuns.definitionSnapshot })
+    .from(playbookRuns)
+    .where(eq(playbookRuns.id, open.playbookRunId))
+    .limit(1);
+  const stage = readStages(run?.definitionSnapshot).find(
+    (s) => s.key === open.stageKey
+  );
+  if (!stage?.uses) return false;
+  const session = await db.query.focusSessions.findFirst({
+    columns: {
+      id: true,
+      userId: true,
+      channelId: true,
+      workspaceId: true,
+      status: true,
+    },
+    where: eq(focusSessions.id, open.sessionId),
+  });
+  if (!session) return false;
+  const { startStageChild } = await import("./stage-child.js");
+  await startStageChild({
+    session,
+    stage,
+    stageRunId: open.id,
+    handTo: open.runnerAgentUserId,
+  });
+  return true;
 }
 
 /** Tell a dispatch agent the step it waited on tools for (see `reachDispatchAgent`). */
