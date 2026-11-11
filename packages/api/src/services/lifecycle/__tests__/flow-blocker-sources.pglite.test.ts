@@ -87,8 +87,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { db, drizzleSql } from "@synap/database";
 import { flowOfInput, readFlowOf, type FlowOf } from "../flow-read.js";
 import { readStatusOf } from "../../status/status-read.js";
+import { proposalOnThingsIn } from "../../focus-sessions/session-subject-where.js";
 
 const USER = "user-1";
 const OTHER = "user-2";
@@ -311,5 +313,82 @@ describe("statusOf — the same draft on the person", () => {
       ball: "them",
       why: { blockerKey: "not_connected" },
     });
+  });
+});
+
+/**
+ * The cost of "which cards is each proposal on" (`GET /flow`, ~0.2 s per card
+ * in production, Nov 2026): the collector asks `proposalOnThingsIn(x)` for
+ * every (proposal, card) pair. Its session half must probe the proposal's own
+ * session, never scan every session once per pair. Measured on the plan
+ * (EXPLAIN ANALYZE): session rows read stay within one per pair plus one pass
+ * over the table; the old `session_id IN (SELECT … FROM focus_sessions …)`
+ * read pairs x sessions.
+ */
+describe("proposal on things: one session probe per (proposal, card)", () => {
+  const SESSIONS = 40;
+  const PROPOSALS = 6;
+  const THINGS = 12;
+  const things = Array.from({ length: THINGS }, () => randomUUID());
+
+  beforeAll(async () => {
+    const sessionIds: string[] = [];
+    // Sessions on other things: none is on an asked card.
+    for (let i = 0; i < SESSIONS; i++)
+      sessionIds.push(await session(randomUUID()));
+    for (let i = 0; i < PROPOSALS; i++) {
+      // Another person's, elsewhere: invisible to the cards above.
+      await sendDraft({
+        to: randomUUID(),
+        sessionId: sessionIds[i],
+        createdBy: OTHER,
+        workspaceId: ELSEWHERE,
+      });
+    }
+  });
+
+  type PlanNode = {
+    "Relation Name"?: string;
+    "Actual Rows"?: number;
+    "Actual Loops"?: number;
+    "Rows Removed by Filter"?: number;
+    Plans?: PlanNode[];
+  };
+  const sessionRowsRead = (node: PlanNode): number =>
+    (node["Relation Name"] === "focus_sessions"
+      ? ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) *
+        (node["Actual Loops"] ?? 0)
+      : 0) + (node.Plans ?? []).reduce((n, p) => n + sessionRowsRead(p), 0);
+
+  it("reads at most one session row per pair (plus one pass), never every session per pair", async () => {
+    const list = drizzleSql.join(
+      things.map((id) => drizzleSql`${id}`),
+      drizzleSql`, `
+    );
+    // The collector's shape (`readWaitingOnSourcesFor`): per proposal, the asked things it is on.
+    const query = drizzleSql`SELECT proposals.id, ARRAY(
+        SELECT x FROM unnest(ARRAY[${list}]::text[]) AS x
+        WHERE ${proposalOnThingsIn(drizzleSql`x`)}) AS on_things
+      FROM proposals WHERE proposals.session_id IS NOT NULL`;
+    // Tiny tables: let the planner take an index where one exists.
+    await db.execute(drizzleSql`SET enable_seqscan = off`);
+    try {
+      const res = (await db.execute(
+        drizzleSql`EXPLAIN (ANALYZE, FORMAT JSON) ${query}`
+      )) as unknown as { rows: Array<Record<string, unknown>> };
+      const raw = Object.values(res.rows[0]!)[0];
+      const plan = (typeof raw === "string" ? JSON.parse(raw) : raw) as Array<{
+        Plan: PlanNode;
+      }>;
+      const pairs = PROPOSALS * THINGS;
+      const total = await q<{ n: number }>(
+        `select count(*)::int as n from focus_sessions`
+      );
+      const read = sessionRowsRead(plan[0]!.Plan);
+      expect(read).toBeGreaterThan(0);
+      expect(read).toBeLessThanOrEqual(pairs + total.rows[0]!.n);
+    } finally {
+      await db.execute(drizzleSql`RESET enable_seqscan`);
+    }
   });
 });
