@@ -1,19 +1,25 @@
 "use client";
 
 /**
- * The console's ONE image door, drawn: give it a `MediaRef` (from
+ * The console's ONE media door, drawn: give it a `MediaRef` (from
  * `resolveEntityMedia`, `documentFileMedia`, …) and it signs, loads and draws
- * it, every state worded. Never an `<img>` anywhere else in the console.
+ * or plays it, every state worded. Never an `<img>`, `<video>` or `<audio>`
+ * anywhere else in the console (`__tripwires__/content-renderer.test.ts`).
  *
  *   · loading — a sized placeholder, so the page does not jump;
  *   · image   — lazy, bounded (`thumb` in a card or list, `full` on the
  *               object's own page); a click opens it full size;
- *   · file    — a stored file that is not a drawable raster (an SVG, a type
- *               the pod did not name): named, and downloaded on purpose;
+ *   · video   — a player with its own controls; it loads the metadata only,
+ *               never autoplays, and the file stays one click away;
+ *   · audio   — the same, as a bar;
+ *   · file    — a stored file that is not drawable or playable inline (an
+ *               SVG, a type the pod did not name): named, and downloaded on
+ *               purpose;
  *   · external — an address outside the pod: a link the reader follows,
  *               never loaded;
  *   · failed  — why, in the reader's words, with "Try again" when asking
- *               again can help. A failure never looks like "no image".
+ *               again can help, and the file when the browser could not play
+ *               it. A failure never looks like "no image".
  */
 
 import { useState } from "react";
@@ -24,7 +30,7 @@ import {
   ModalContent,
   ModalHeader,
 } from "@heroui/react";
-import { Download, ExternalLink, ImageOff } from "lucide-react";
+import { Download, ExternalLink, FileWarning, ImageOff } from "lucide-react";
 import type { MediaRef } from "@synap-core/types/presentation";
 import { EXTERNAL_REL } from "../object/content/markdown-model";
 import {
@@ -71,7 +77,7 @@ export function MediaFrame({
   size,
   onRetry,
   onOpen,
-  onImageError,
+  onMediaError,
 }: {
   draw: ImageDraw;
   /** The record's name or caption. */
@@ -79,9 +85,18 @@ export function MediaFrame({
   size: MediaSize;
   onRetry?: () => void;
   onOpen?: () => void;
-  onImageError?: (src: string) => void;
+  /** The signed `src` whose image, video or audio element errored. */
+  onMediaError?: (src: string) => void;
 }) {
-  const name = alt.trim() || "Image";
+  // What it is called to someone who cannot see it, when the record named it
+  // nothing: the kind it is, never "Image" over a recording.
+  const name =
+    alt.trim() ||
+    (draw.state === "video"
+      ? "Video"
+      : draw.state === "audio"
+        ? "Audio"
+        : "Image");
   switch (draw.state) {
     case "none":
       return null;
@@ -99,13 +114,34 @@ export function MediaFrame({
         <div
           className={`${BOX[size]} flex flex-col items-center justify-center gap-2 rounded-lg px-4 text-center ring-1 ring-inset ring-foreground/10`}
         >
-          <ImageOff aria-hidden="true" className="h-5 w-5 text-foreground/45" />
-          <p className="text-[12.5px] text-foreground/70">{draw.message}</p>
-          {draw.retryable && onRetry && (
-            <Button size="sm" variant="flat" onPress={onRetry}>
-              Try again
-            </Button>
+          {draw.downloadHref ? (
+            <FileWarning
+              aria-hidden="true"
+              className="h-5 w-5 text-foreground/45"
+            />
+          ) : (
+            <ImageOff
+              aria-hidden="true"
+              className="h-5 w-5 text-foreground/45"
+            />
           )}
+          <p className="text-[12.5px] text-foreground/70">{draw.message}</p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {draw.retryable && onRetry && (
+              <Button size="sm" variant="flat" onPress={onRetry}>
+                Try again
+              </Button>
+            )}
+            {draw.downloadHref && (
+              <a
+                href={draw.downloadHref}
+                className={`inline-flex items-center gap-1.5 text-[12.5px] text-foreground/75 ${DOOR}`}
+              >
+                <Download aria-hidden="true" className="h-3.5 w-3.5" />
+                Download
+              </a>
+            )}
+          </div>
         </div>
       );
     case "external":
@@ -133,6 +169,59 @@ export function MediaFrame({
         </span>
       );
     }
+    case "video": {
+      const { src } = draw;
+      return (
+        <div className="flex w-fit max-w-full flex-col gap-1.5">
+          {/* A plain <video> on the pod's signed URL: it only DECODES frames
+              (never renders its source as a document), loads the metadata
+              until played, never autoplays, and the reader's own controls
+              do the rest. No captions exist to attach: the file is stored
+              as made. */}
+          <video
+            src={src}
+            controls
+            preload="metadata"
+            playsInline
+            aria-label={name}
+            onError={() => onMediaError?.(src)}
+            className={`${IMG[size]} h-auto w-auto rounded-lg bg-foreground/[0.05] ${IMAGE_EDGE}`}
+          />
+          <a
+            href={src}
+            className={`inline-flex w-fit items-center gap-1.5 text-[12.5px] text-foreground/75 ${DOOR}`}
+          >
+            <Download aria-hidden="true" className="h-3.5 w-3.5" />
+            Download
+          </a>
+        </div>
+      );
+    }
+    case "audio": {
+      const { src } = draw;
+      return (
+        <div className="flex w-full max-w-md flex-col gap-1.5">
+          <span className="truncate text-[12.5px] text-foreground/75">
+            {name}
+          </span>
+          <audio
+            src={src}
+            controls
+            preload="metadata"
+            aria-label={name}
+            onError={() => onMediaError?.(src)}
+            className="w-full"
+          />
+          <a
+            href={src}
+            className={`inline-flex w-fit items-center gap-1.5 text-[12.5px] text-foreground/75 ${DOOR}`}
+          >
+            <Download aria-hidden="true" className="h-3.5 w-3.5" />
+            Download
+          </a>
+        </div>
+      );
+    }
     case "image": {
       const { src } = draw;
       return (
@@ -149,7 +238,7 @@ export function MediaFrame({
             alt={name}
             loading="lazy"
             decoding="async"
-            onError={() => onImageError?.(src)}
+            onError={() => onMediaError?.(src)}
             className={`${IMG[size]} h-auto w-auto rounded-lg object-contain ${IMAGE_EDGE}`}
           />
         </button>
@@ -184,19 +273,21 @@ export function MediaView({
     }),
     brokenSrc
   );
+  // Only the full-size viewer needs a name here; the frame defaults its own by
+  // what it draws (an image, a video or a recording).
   const name = alt.trim() || "Image";
   return (
     <>
       <MediaFrame
         draw={draw}
-        alt={name}
+        alt={alt}
         size={size}
         onRetry={() => {
           setBrokenSrc(null);
           sign.refetch();
         }}
         onOpen={() => setOpen(true)}
-        onImageError={setBrokenSrc}
+        onMediaError={setBrokenSrc}
       />
       {draw.state === "image" && (
         <Modal
