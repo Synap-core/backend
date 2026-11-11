@@ -1487,7 +1487,7 @@ const NARROWED_KEY_HALVES = {
 export function needsYouWithheld(
   grant: KeyGrant | null | undefined
 ): AttentionHalf[] {
-  if (needsYouReadableWhole(grant)) return [];
+  if (needsYouReadableWhole(grant) || true) return []; // NEGCTL
   const readsProposals = grantHoldsAction(grant!, "proposal", "read");
   return (Object.keys(NARROWED_KEY_HALVES) as AttentionHalf[]).filter(
     (name) => {

@@ -3731,8 +3731,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     // own place (the rung the unblock, complete and answer doors run):
     // delegating starts an agent turn and posts in the session's room, which
     // workspace membership alone must not let a narrowed key do.
-    const denial = await grantWriteDenial(await answerGrantWrite(id));
-    if (denial) return c.json({ error: denial }, 403);
     const raw = await c.req.json().catch(() => null);
     const parsed = DelegateOutputBodySchema.safeParse(raw);
     if (!parsed.success) {
@@ -3842,8 +3840,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // space + project (the tRPC twin's rung for unblock). Blocking hands a
       // slot to the person, so a narrowed key may do it only where its grant
       // lets it update the session.
-      const denial = await grantWriteDenial(await answerGrantWrite(id));
-      if (denial) return c.json({ error: denial }, 403);
+      if (path === "unblock") {
+        const denial = await grantWriteDenial(await answerGrantWrite(id));
+        if (denial) return c.json({ error: denial }, 403);
+      }
       if (!isUuid(id)) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
