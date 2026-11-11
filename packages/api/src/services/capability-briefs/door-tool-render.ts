@@ -80,6 +80,12 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
     "a document patch op (an `ops[]` entry of update_document) binding a living document's refresher, not a tool",
   search_web:
     "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `exa_search`; agents search with the builtin web.search through run_capability",
+  update_run:
+    "a run tool of the pod's AI (`LONG_RUN_FLOOR` in @synap/playbooks): a playbook run writes its OWN session with it; a name a playbook's `tools` lists, not a door tool",
+  post_in_room:
+    "a run tool of the pod's AI (`LONG_RUN_FLOOR` in @synap/playbooks): a playbook run posts in its OWN room with it; a name a playbook's `tools` lists, not a door tool",
+  get_brand_kit:
+    "a run tool of the pod's AI (`LONG_RUN_FLOOR` in @synap/playbooks): a playbook run reads the brand kit with it; a name a playbook's `tools` lists, not a door tool",
 };
 
 /** Human door name for the closing note. Product copy, not a domain token. */
