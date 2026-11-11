@@ -16,7 +16,8 @@ import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 import { HandoffCard } from "../../(admin)/components/handoff-card";
 import { openIn } from "../../../lib/open-in";
 import { openT } from "../copy";
-import { describeView } from "./view-summary";
+import { describeView, viewKind } from "./view-summary";
+import { ViewPipelineSnapshot } from "./view-pipeline-snapshot";
 
 /** Canvas lenses have no prose description worth showing on the web. */
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -53,6 +54,9 @@ export function ViewView({ id }: { id: string }) {
   // A written description wins; a generated view has none, so the page says
   // what the view is from its own layout and config (never an empty card).
   const written = canvas ? null : shortDescription(view.description);
+  // Only a pipeline gets a snapshot: its content is a kind's declared flow,
+  // which `flow.of` reads. Every other layout is handed over, never half-drawn.
+  const snapshotKind = lens === "pipeline" ? viewKind(view.config) : null;
   return (
     <OpenObject
       header={{
@@ -75,12 +79,24 @@ export function ViewView({ id }: { id: string }) {
         ],
       }}
     >
-      <HandoffCard
-        title={t("view.handoff.title")}
-        body={t("view.handoff.body")}
-        exit={openIn({ kind: "objectInApp", objectKind: "view", id })}
-        cta={t("view.handoff.cta")}
-      />
+      <div className="flex flex-col gap-4">
+        {snapshotKind && (
+          <ViewPipelineSnapshot
+            kind={snapshotKind}
+            workspaceId={view.workspaceId ?? null}
+          />
+        )}
+        <HandoffCard
+          title={t("view.handoff.title")}
+          body={
+            snapshotKind
+              ? t("view.handoff.bodySnapshot")
+              : t("view.handoff.body")
+          }
+          exit={openIn({ kind: "objectInApp", objectKind: "view", id })}
+          cta={t("view.handoff.cta")}
+        />
+      </div>
     </OpenObject>
   );
 }

@@ -25,7 +25,19 @@ export const en = {
   "view.handoff.title": "This view is worked in the Synap app",
   "view.handoff.body":
     "Pod admin runs the pod and does not draw boards, tables or dashboards. Open it in the app to see it with live data.",
+  "view.handoff.bodySnapshot":
+    "This is a read-only summary. Moving cards and filtering happen in the app.",
   "view.handoff.cta": "Open view in the app",
+  "view.snapshot.title": "By state",
+  "view.snapshot.loading": "Loading this pipeline…",
+  "view.snapshot.failed": "This pipeline couldn’t be read.",
+  "view.snapshot.empty": "Nothing in this pipeline yet.",
+  "view.snapshot.untitled": "Untitled",
+  "view.snapshot.stuck": "{n} stuck",
+  "view.snapshot.windowed": "last {days} days",
+  "view.snapshot.more": "+{n} more",
+  "view.snapshot.total": "{n} in total",
+  "view.snapshot.unclassified": "{n} in no declared state",
   "view.shows.pipeline": "{noun} by state, one column per state.",
   "view.shows.dashboard":
     "A dashboard of {n, plural, one {# widget} other {# widgets}}.",
@@ -54,7 +66,19 @@ export const fr: Catalog<typeof en> = {
   "view.handoff.title": "Cette vue se travaille dans l’application Synap",
   "view.handoff.body":
     "L’administration du pod fait tourner le pod : elle ne dessine ni tableaux, ni tableaux de bord. Ouvrez la vue dans l’application pour la voir avec les données en direct.",
+  "view.handoff.bodySnapshot":
+    "Ceci est un résumé en lecture seule. Déplacer les cartes et filtrer se fait dans l’application.",
   "view.handoff.cta": "Ouvrir la vue dans l’application",
+  "view.snapshot.title": "Par état",
+  "view.snapshot.loading": "Chargement de ce pipeline…",
+  "view.snapshot.failed": "Ce pipeline n’a pas pu être lu.",
+  "view.snapshot.empty": "Rien dans ce pipeline pour l’instant.",
+  "view.snapshot.untitled": "Sans titre",
+  "view.snapshot.stuck": "{n, plural, one {# bloqué} other {# bloqués}}",
+  "view.snapshot.windowed": "{days} derniers jours",
+  "view.snapshot.more": "+{n} de plus",
+  "view.snapshot.total": "{n} au total",
+  "view.snapshot.unclassified": "{n} sans état déclaré",
   "view.shows.pipeline": "{noun} par état, une colonne par état.",
   "view.shows.dashboard":
     "Un tableau de bord de {n, plural, one {# widget} other {# widgets}}.",
