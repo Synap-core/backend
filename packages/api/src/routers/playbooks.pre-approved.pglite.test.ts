@@ -207,8 +207,10 @@ beforeAll(async () => {
   );
   await q(`insert into workspaces (id, name) values ($1, 'Shared')`, [WS]);
   await q(
-    `insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner'), ($1, $3, 'owner')`,
-    [WS, PERSON, OTHER]
+    // Each agent is a member of the space too: an agent outside it is asked
+    // to join first (a `join` proposal), whatever the rule says.
+    `insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'owner'), ($1, $3, 'owner'), ($1, $4, 'editor'), ($1, $5, 'editor')`,
+    [WS, PERSON, OTHER, AGENT, OTHER_AGENT]
   );
   for (const [id, name, tools] of [
     [PB, "Summarize the week", []],
