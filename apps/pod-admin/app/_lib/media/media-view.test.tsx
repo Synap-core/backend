@@ -106,6 +106,119 @@ describe("MediaFrame — every state drawn and worded", () => {
   });
 });
 
+describe("MediaFrame — video and audio are played, never downloaded first", () => {
+  const VID = "https://pod.example/synap-storage/files/a.mp4?X-Amz-Signature=1";
+  const AUD = "https://pod.example/synap-storage/files/a.mp3?X-Amz-Signature=1";
+
+  it("a video is a player on the signed address: controls, metadata only, no autoplay", () => {
+    const out = html(
+      <MediaFrame
+        draw={{ state: "video", src: VID }}
+        alt="Launch film"
+        size="full"
+      />
+    );
+    expect(out).toContain("<video");
+    expect(out).toContain(`src="${VID}"`);
+    expect(out).toContain("controls");
+    expect(out).toContain('preload="metadata"');
+    expect(out).toContain('aria-label="Launch film"');
+    expect(out).not.toMatch(/autoplay/i);
+    expect(out).not.toContain("<img");
+    expect(out).not.toContain("<audio");
+  });
+
+  it("the file stays one click away beside the player", () => {
+    const out = html(
+      <MediaFrame draw={{ state: "video", src: VID }} alt="Film" size="full" />
+    );
+    expect(out).toContain(`href="${VID}"`);
+    expect(out).toContain("Download");
+  });
+
+  it("audio is a bar with the record's name over it, and the file one click away", () => {
+    const out = html(
+      <MediaFrame
+        draw={{ state: "audio", src: AUD }}
+        alt="Interview, take 3"
+        size="full"
+      />
+    );
+    expect(out).toContain("<audio");
+    expect(out).toContain(`src="${AUD}"`);
+    expect(out).toContain("controls");
+    expect(out).toContain('preload="metadata"');
+    expect(out).toContain(">Interview, take 3<");
+    expect(out).toContain(`href="${AUD}"`);
+    expect(out).not.toMatch(/autoplay/i);
+    expect(out).not.toContain("<video");
+  });
+
+  it("a record with no name is called what it is, never 'Image'", () => {
+    const video = html(
+      <MediaFrame draw={{ state: "video", src: VID }} alt="  " size="thumb" />
+    );
+    expect(video).toContain('aria-label="Video"');
+    expect(video).not.toContain('aria-label="Image"');
+    const audio = html(
+      <MediaFrame draw={{ state: "audio", src: AUD }} alt="" size="thumb" />
+    );
+    expect(audio).toContain('aria-label="Audio"');
+  });
+
+  it("a player that will not play says so, with Try again AND the file", () => {
+    const out = html(
+      <MediaFrame
+        draw={{
+          state: "failed",
+          message: "This video couldn’t be played here.",
+          retryable: true,
+          downloadHref: VID,
+        }}
+        alt="Film"
+        size="full"
+        onRetry={() => {}}
+      />
+    );
+    expect(out).toContain("This video couldn’t be played here.");
+    expect(out).toContain("Try again");
+    expect(out).toContain(`href="${VID}"`);
+    expect(out).toContain("Download");
+    expect(out).not.toContain("<video");
+  });
+
+  it("a failed IMAGE offers no download door: only a played file keeps one", () => {
+    const out = html(
+      <MediaFrame
+        draw={{
+          state: "failed",
+          message: "The image couldn’t be loaded.",
+          retryable: true,
+        }}
+        alt="Logo"
+        size="full"
+        onRetry={() => {}}
+      />
+    );
+    expect(out).toContain("Try again");
+    expect(out).not.toContain("Download");
+  });
+
+  it("a file no list names is a chip, never a player", () => {
+    for (const mime of ["video/quicktime", "audio/midi", "image/svg+xml"]) {
+      const out = html(
+        <MediaFrame
+          draw={{ state: "file", href: VID, mime }}
+          alt="Clip"
+          size="full"
+        />
+      );
+      expect(out).not.toMatch(/<(video|audio|img)\b/);
+      expect(out).toContain("Clip");
+    }
+  });
+});
+
 describe("signStoredMedia — one signing on the reader's own cookie", () => {
   const ok = (body: unknown) =>
     new Response(JSON.stringify(body), { status: 200 });
