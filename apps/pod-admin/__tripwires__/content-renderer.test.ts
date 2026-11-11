@@ -203,4 +203,26 @@ describe("content is drawn, never injected", () => {
     );
     expect(nextImage.map((f) => f.path)).toEqual([]);
   });
+
+  it("plays video and audio only through the one media door", () => {
+    // The door signs on the reader's own floor and decides on the type the pod
+    // SIGNED, against three allowlists that never overlap. A second `<video>`
+    // or `<audio>` would play whatever it was handed, from any address, with
+    // none of that. (`SpatialMediaPreview` is the app's door, not this one.)
+    const door = join("app", "_lib", "media", "media-view.tsx");
+    const players = FILES.filter(
+      (f) => !f.test && /<(video|audio)\b/.test(f.body)
+    );
+    expect(players.map((f) => f.path)).toEqual([door]);
+    // Non-vacuity: the scan can still see both elements where they live.
+    const body = FILES.find((f) => f.path === door)?.body ?? "";
+    expect(body).toMatch(/<video\b/);
+    expect(body).toMatch(/<audio\b/);
+    // A player never autoplays and never loads the whole file up front.
+    expect(body).not.toMatch(/\bautoPlay\b/i);
+    expect(body).not.toMatch(/preload=["']auto["']/);
+    // The door hands a player only a `src` it got from the signing: a literal
+    // address in a media element is the pod's signed URL replaced by a guess.
+    expect(body).not.toMatch(/<(video|audio)\b[^>]*\bsrc=["']https?:/);
+  });
 });

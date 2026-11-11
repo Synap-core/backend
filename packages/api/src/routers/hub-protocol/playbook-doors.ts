@@ -279,6 +279,8 @@ export async function runPlaybookDoor(
      * `runner`, validated there): mapped onto a hand-off or Synap AI.
      */
     runner?: unknown;
+    /** Who works each step (`playbooks.run` `stageRunners`, validated there). */
+    stageRunners?: unknown;
     /**
      * Remember this run's choice as the person's for the playbook
      * (`playbooks.run` `remember`). Refused for an agent.
@@ -409,6 +411,13 @@ export async function runPlaybookDoor(
           runner: input.runner as Parameters<
             ReturnType<typeof playbooksRouter.createCaller>["run"]
           >[0]["runner"],
+        }
+      : {}),
+    ...(input.stageRunners !== undefined
+      ? {
+          stageRunners: input.stageRunners as Parameters<
+            ReturnType<typeof playbooksRouter.createCaller>["run"]
+          >[0]["stageRunners"],
         }
       : {}),
     ...(input.remember ? { remember: true } : {}),

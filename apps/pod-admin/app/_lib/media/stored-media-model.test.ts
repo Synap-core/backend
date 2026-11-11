@@ -5,6 +5,7 @@ import {
   fileTypeLabel,
   freshFor,
   imageDraw,
+  inlineMediaKind,
   isInlineImage,
   isRetryable,
   MediaSignError,
@@ -240,5 +241,186 @@ describe("mediaAlt — an image is called by its record", () => {
     );
     expect(mediaAlt("  ", { fileName: "IMG_2041.png" })).toBe("IMG_2041.png");
     expect(mediaAlt(null, null)).toBe("");
+  });
+});
+
+describe("inlineMediaKind — a mime reaches exactly one element, or none", () => {
+  it.each([
+    ["image/png", "image"],
+    ["IMAGE/JPEG; charset=binary", "image"],
+    ["video/mp4", "video"],
+    ["video/webm", "video"],
+    ["audio/mpeg", "audio"],
+    ["audio/mp4", "audio"],
+    ["audio/x-wav; codecs=1", "audio"],
+    ["  audio/ogg ", "audio"],
+  ])("%s plays as %s", (mime, kind) => {
+    expect(inlineMediaKind(mime)).toBe(kind);
+  });
+
+  it.each([
+    "image/svg+xml",
+    "text/html",
+    "application/xhtml+xml",
+    "application/pdf",
+    "video/quicktime",
+    "audio/midi",
+    "application/octet-stream",
+    "",
+  ])("%s is never drawn or played inline", (mime) => {
+    expect(inlineMediaKind(mime)).toBeNull();
+  });
+
+  it("nothing and nothing-named are not media", () => {
+    expect(inlineMediaKind(null)).toBeNull();
+    expect(inlineMediaKind(undefined)).toBeNull();
+  });
+
+  it("audio/webm is audio, never a video: the prefix decides the element", () => {
+    expect(inlineMediaKind("audio/webm")).toBe("audio");
+    expect(inlineMediaKind("video/webm")).toBe("video");
+  });
+});
+
+describe("imageDraw — video and audio play on the type the pod signed", () => {
+  const stored = (mime?: string): MediaRef => ({
+    via: "stored",
+    documentId: DOC,
+    ...(mime ? { mime } : {}),
+  });
+
+  it("a signed mp4 or webm is a video, a signed mp3 or m4a is audio", () => {
+    expect(imageDraw(stored(), ready("video/mp4"))).toEqual({
+      state: "video",
+      src: SIGNED,
+    });
+    expect(imageDraw(stored("video/webm"), ready("video/webm"))).toEqual({
+      state: "video",
+      src: SIGNED,
+    });
+    expect(imageDraw(stored(), ready("audio/mpeg"))).toEqual({
+      state: "audio",
+      src: SIGNED,
+    });
+    expect(imageDraw(stored("audio/mp4"), ready("audio/mp4"))).toEqual({
+      state: "audio",
+      src: SIGNED,
+    });
+  });
+
+  it("the SIGNED type wins over what the reference claims", () => {
+    // A ref that says video, signed as an HTML page: a file, never a player.
+    expect(imageDraw(stored("video/mp4"), ready("text/html"))).toEqual({
+      state: "file",
+      href: SIGNED,
+      mime: "text/html",
+    });
+    // A ref that says image, signed as audio: it plays as the audio it is.
+    expect(imageDraw(stored("image/png"), ready("audio/mpeg"))).toEqual({
+      state: "audio",
+      src: SIGNED,
+    });
+  });
+
+  it("a type no list names is a file to download, even a video", () => {
+    expect(imageDraw(stored(), ready("video/quicktime"))).toEqual({
+      state: "file",
+      href: SIGNED,
+      mime: "video/quicktime",
+    });
+    expect(imageDraw(stored("audio/midi"), { status: "loading" })).toEqual({
+      state: "file",
+      href: null,
+      mime: "audio/midi",
+    });
+  });
+
+  it("a playable ref still loads while it is signed — never a file chip first", () => {
+    expect(imageDraw(stored("video/mp4"), { status: "loading" })).toEqual({
+      state: "loading",
+    });
+    expect(imageDraw(stored("audio/mpeg"), null)).toEqual({ state: "loading" });
+  });
+
+  it("a refused signing names what could not be played, not 'image'", () => {
+    expect(imageDraw(stored("audio/mpeg"), failed(403))).toEqual({
+      state: "failed",
+      message: "This audio isn’t visible to you.",
+      retryable: false,
+    });
+    expect(imageDraw(stored("video/mp4"), failed(401))).toMatchObject({
+      message: "Sign in again to play this video.",
+    });
+    // Unchanged for an image and for a type with no claim.
+    expect(imageDraw(stored(), failed(404))).toMatchObject({
+      message: "This image is no longer stored.",
+    });
+  });
+});
+
+describe("withLoadFailure — a player that will not play is a failure with a way out", () => {
+  const VIDEO = { state: "video", src: SIGNED } as const;
+  const AUDIO = { state: "audio", src: SIGNED } as const;
+
+  it("a broken video or audio keeps the file, and asking again can help", () => {
+    expect(withLoadFailure(VIDEO, SIGNED)).toEqual({
+      state: "failed",
+      message: "This video couldn’t be played here.",
+      retryable: true,
+      downloadHref: SIGNED,
+    });
+    expect(withLoadFailure(AUDIO, SIGNED)).toEqual({
+      state: "failed",
+      message: "This audio couldn’t be played here.",
+      retryable: true,
+      downloadHref: SIGNED,
+    });
+  });
+
+  it("a different src, or none broken, leaves the player alone", () => {
+    expect(withLoadFailure(VIDEO, null)).toBe(VIDEO);
+    expect(withLoadFailure(AUDIO, `${SIGNED}&re-signed`)).toBe(AUDIO);
+  });
+
+  it("an image failure is exactly what it was: no download door appears", () => {
+    const failedImage = withLoadFailure(
+      { state: "image", src: SIGNED },
+      SIGNED
+    );
+    expect(failedImage).toEqual({
+      state: "failed",
+      message: "The image couldn’t be loaded.",
+      retryable: true,
+    });
+    expect("downloadHref" in failedImage).toBe(false);
+  });
+});
+
+describe("signFailureMessage — worded for what it was", () => {
+  it("says play for a recording and see for a picture", () => {
+    expect(signFailureMessage(new MediaSignError(401), "audio")).toBe(
+      "Sign in again to play this audio."
+    );
+    expect(signFailureMessage(new MediaSignError(401))).toBe(
+      "Sign in again to see this image."
+    );
+    expect(signFailureMessage(new Error("x"), "video")).toBe(
+      "The video couldn’t be loaded."
+    );
+  });
+});
+
+describe("documentFileMedia — audio is media too", () => {
+  it("an uploaded mp3 or m4a is drawn through the door, a PDF still is not", () => {
+    expect(documentFileMedia(DOC, "audio/mpeg")).toEqual({
+      via: "stored",
+      documentId: DOC,
+      mime: "audio/mpeg",
+    });
+    expect(documentFileMedia(DOC, "Audio/MP4; codecs=mp4a.40.2")).toMatchObject(
+      { mime: "audio/mp4" }
+    );
+    expect(documentFileMedia(DOC, "application/pdf")).toBeNull();
+    expect(documentFileMedia(DOC, "application/octet-stream")).toBeNull();
   });
 });

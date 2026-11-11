@@ -606,6 +606,13 @@ export async function resumeCheckGateIfMet(params: {
       toStage: gate.stageKey,
       userId: params.userId,
     });
+    // The gate passed: the stage now RUNS (`enterStage`, never throws).
+    const { enterStage } = await import("../../playbooks/stage-runner.js");
+    await enterStage({
+      sessionId: session.id,
+      stageKey: gate.stageKey,
+      cause: { kind: "gate_passed" },
+    });
   }
   return true;
 }

@@ -31,6 +31,7 @@ import {
   AGENT_PROPOSAL_PACKAGE_MARKER,
   RECEIPT_IDLE_WINDOW_HOURS,
   focusSessionWaitsOnPersonWhere,
+  stageRunWaitsWhere,
   sessionStoppedOnItsAsksWhere,
   personTouchedSubjectIds,
   setSessionStatus,
@@ -128,6 +129,9 @@ export const SESSION_IS_STALE = and(
   drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
   drizzleSql`${focusSessions.updatedAt} < now() - (${REAPER_STALE_HOURS}::int * interval '1 hour')`,
   drizzleSql`NOT ${focusSessionWaitsOnPersonWhere()}`,
+  // A step that waits on a child run or on tools being installed (0422) is
+  // waiting, not idle (runner engine spec 7111934d, risk 3).
+  drizzleSql`NOT ${stageRunWaitsWhere(focusSessions.id)}`,
   // An open import waits on the person (curating can take days): its
   // `importCuration.phase` is the liveness signal, not `updatedAt`. A LIBRARY
   // run ("Kept from <device>, <day>") is not a curation: it is done once its
