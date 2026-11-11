@@ -24,6 +24,10 @@
  *    clause): NEGATIVE CONTROL — with `needsYouWithheld` returning `[]` the
  *    notifications of both spaces come back to that key;
  *  - the proposals arriving without `proposal.read`, or staying away with it;
+ *  - a named space dropping the key's proposal grant clause: `proposals.groups`
+ *    replaced the floor with a bare workspace equality, so `?workspaceId=B`
+ *    handed a proposal reader of A the proposals of B (found by this file's
+ *    negative control; fixed in `buildProposalScopeConditions`);
  *  - REGRESSION: a full-access key reads exactly what the person reads
  *    (same count, same rows by fold), `withheld` empty.
  *
@@ -406,6 +410,22 @@ describe("GET /needs-you — a key bounded by a grant", () => {
     expect(text).not.toContain(ASK_B);
     expect(body.withheld).not.toContain("proposals");
     expect(body.withheld).toContain("notifications");
+  });
+
+  it("naming space B gives a proposal reader of A none of B's proposals (the lens keeps the grant clause)", async () => {
+    // `proposals.groups` under a named space replaced the floor with a bare
+    // workspace equality and dropped the key's grant clause: B's proposal
+    // came back to a key that reads proposals in A only.
+    const { status, text } = await needsYou(
+      "appAProposals",
+      `?workspaceId=${WS_B}`
+    );
+    expect(status, text).toBe(200);
+    for (const id of [PROPOSAL_B, ASK_B, REVIEW_B])
+      expect(text).not.toContain(id);
+    // Control: naming A keeps A's proposal.
+    const own = await needsYou("appAProposals", `?workspaceId=${WS_A}`);
+    expect(own.text).toContain(PROPOSAL_A);
   });
 
   it("REGRESSION: a full-access key reads exactly what the person reads, nothing withheld", async () => {
