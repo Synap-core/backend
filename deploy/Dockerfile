@@ -134,7 +134,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sq
 # substrate 503s and the seeder no-ops in production.
 COPY --from=builder --chown=nodejs:nodejs /app/skills ./api/skills
 
-# Admin CLI scripts (create-admin-cli, user-admin-cli, field-crypto)
+# Admin CLI scripts (create-admin-cli, user-admin-cli, field-crypto, run-conversions)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./api/dist/scripts/
 
 # Shameful hoist for API node_modules (pnpm deploy --legacy doesn't create top-level symlinks)
