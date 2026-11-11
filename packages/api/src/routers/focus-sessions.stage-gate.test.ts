@@ -89,6 +89,15 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
+// The stage runner (slice 3) has its own suite (`stage-runner.pglite.test.ts`);
+// here only WHETHER the advance enters the stage is asserted.
+const entered: Array<{ stageKey: string; cause: unknown }> = [];
+vi.mock("../services/playbooks/stage-runner.js", () => ({
+  enterStage: async (p: { stageKey: string; cause: unknown }) => {
+    entered.push({ stageKey: p.stageKey, cause: p.cause });
+    return { status: "entered" };
+  },
+}));
 
 vi.mock("../utils/event-backed-proposal.js", () => ({
   createEventBackedProposal: async (input: Record<string, unknown>) => {
@@ -117,6 +126,7 @@ const UNGATED = [
 beforeEach(() => {
   vi.clearAllMocks();
   sets.length = 0;
+  entered.length = 0;
   proposalCalls.length = 0;
   snapshotStages = GATED;
   findFirstSpy.mockResolvedValue({
@@ -182,6 +192,13 @@ describe("focusSessions.update — the ungated path is unchanged", () => {
       sets.filter((s) => Object.keys(s as object).join() === "stageHistory")
     ).toHaveLength(1);
     expect(out.status).not.toBe("paused");
+    // The stage stands and nothing holds it: it starts (the stage runner).
+    expect(entered).toEqual([
+      {
+        stageKey: "review",
+        cause: expect.objectContaining({ kind: "advance" }),
+      },
+    ]);
   });
 
   it("a patch with NO stage never consults the gate resolver", async () => {

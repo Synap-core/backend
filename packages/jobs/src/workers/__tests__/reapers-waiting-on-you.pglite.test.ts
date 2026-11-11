@@ -42,6 +42,7 @@ import {
   chatTurns,
   events,
   lifecycleTransitionOutbox,
+  sessionStageRuns,
 } from "@synap/database/schema";
 import { handleFocusSessionReaper } from "../focus-session-reaper.js";
 import { handleAutomationRunReaper } from "../automation-run-reaper.js";
@@ -149,6 +150,8 @@ beforeAll(async () => {
     events,
     // Each stale stamp owes the session's transition (status-flow W2).
     lifecycleTransitionOutbox,
+    // A step that waits keeps its run and session (0422): both reapers read it.
+    sessionStageRuns,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   registerStoppedSessionStaler(async ({ sessionId }) => {

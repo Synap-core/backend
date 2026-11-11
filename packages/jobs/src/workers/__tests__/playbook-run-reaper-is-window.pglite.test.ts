@@ -34,6 +34,7 @@ import {
   proposals,
   automationRuns,
   lifecycleTransitionOutbox,
+  sessionStageRuns,
 } from "@synap/database/schema";
 import { handlePlaybookRunReaper } from "../playbook-run-reaper.js";
 import { registerSessionCloser } from "../../utils/session-close.js";
@@ -102,6 +103,8 @@ beforeAll(async () => {
     proposals,
     automationRuns,
     lifecycleTransitionOutbox,
+    // Both windows skip a run whose step waits (0422): they read it.
+    sessionStageRuns,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   registerSessionCloser(async ({ sessionId }) => {

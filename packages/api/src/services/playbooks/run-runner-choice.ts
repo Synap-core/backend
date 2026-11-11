@@ -24,6 +24,7 @@ import type { RunChoice } from "@synap-core/types/agents";
 import { runnerChoices, type PlaybookRunner } from "@synap/playbooks";
 import type { Playbook } from "@synap/database/schema";
 import { resolveRunner } from "../agent-dispatch/runner.js";
+import { requiresOf } from "./requires-of.js";
 
 /** What a Run-time `runner` maps to on the run input. */
 export interface RunnerAtRun {
@@ -47,11 +48,7 @@ export async function mapRunnerAtRun(input: {
   const resolved = await resolveRunner({
     ownerId: input.ownerId,
     runner: input.runner,
-    requires: Array.isArray(input.playbook.requires)
-      ? (input.playbook.requires as unknown[]).filter(
-          (k): k is string => typeof k === "string"
-        )
-      : [],
+    requires: requiresOf(input.playbook),
     synapAiAllowed: input.playbook.executor !== "external-agent",
   });
   const chosen = resolved.chosen;

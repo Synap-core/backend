@@ -161,6 +161,7 @@ import {
   links,
   tools,
   playbookRuns,
+  sessionStageRuns,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
 import { type RunTurnsState } from "../run-turn-end.js";
@@ -353,6 +354,8 @@ describe("the pod raises a stage's ask at the stage's end; runs never ask", () =
       playbookRuns,
       entities,
       relations,
+      // Who works each step (0422): a completed turn reads it first.
+      sessionStageRuns,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

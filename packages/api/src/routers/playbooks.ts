@@ -104,6 +104,7 @@ import {
 } from "../schemas/playbook-definition.js";
 import {
   playbookRunnerSchema,
+  stageRunnerSchema,
   requiresSchema,
 } from "../schemas/playbook-runner.js";
 import { recordPlaybookVersion } from "../services/playbooks/playbook-versions.js";
@@ -2936,6 +2937,16 @@ export const playbooksRouter = router({
          */
         runner: playbookRunnerSchema.optional(),
         /**
+         * WHO works each step of this run, by stage key, in the step runner
+         * grammar (`"self"`, an agent, a role, an engine, Synap AI, or a list
+         * of fallbacks). Kept on the run (`playbook_runs.input`); the stage
+         * runner reads it when the step is entered, before the step's own
+         * `runner` (`RunPlaybookInput.stageRunners`).
+         */
+        stageRunners: z
+          .record(z.string().trim().min(1).max(120), stageRunnerSchema)
+          .optional(),
+        /**
          * Remember this run's choice (`runOn` or `handToAgentId`) as the
          * person's for this playbook, so the next launch does not ask
          * (`setRunChoice`, the assignment edge). A PERSON's act: refused for
@@ -3246,6 +3257,7 @@ export const playbooksRouter = router({
             ? { handToAgentId: input.handToAgentId }
             : {}),
           ...(input.runOn ? { runOn: input.runOn } : {}),
+          ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
           // A gated trial stays a trial once approved.
           ...(input.trial ? { trial: input.trial } : {}),
         },
@@ -3318,6 +3330,7 @@ export const playbooksRouter = router({
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
         ...(input.runOn ? { runOn: input.runOn } : {}),
+        ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
         ...(input.trial ? { trial: input.trial } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
