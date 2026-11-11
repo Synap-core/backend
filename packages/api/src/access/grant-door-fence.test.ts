@@ -21,6 +21,7 @@ import {
   isFencedGrant,
   isUnboundedFullAccess,
   mcpToolAllowed,
+  needsYouReadableWhole,
   ownerWideDoorAllowed,
   packagePreflightReadable,
   restDoorAllowed,
@@ -1300,6 +1301,68 @@ describe("a computer's waker poll: GET /computers/me/wakes", () => {
   it("opens the poll only, never a sibling", () => {
     expect(restDoorAllowed("GET", "/computers/me", COMPUTER)).toBe(false);
     expect(restDoorAllowed("GET", "/computers/me/wakes/x", COMPUTER)).toBe(
+      false
+    );
+  });
+});
+
+describe("the needs-you door: an app reads what needs the person, narrowed", () => {
+  // A pod app's grant: pinned to one space, as every app's.
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["space-a"] });
+  it.each([
+    [["session.read"], true],
+    [["session.read", "proposal.read"], true],
+    [["session.*"], true],
+    [["proposal.read", "entity.read", "channel.read"], false], // no session
+    [["session.update"], false], // a write is not a read
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)(
+    "Hub GET /needs-you, a pinned key holding %j → %s",
+    (permissions, ok) => {
+      expect(restDoorAllowed("GET", "/needs-you", app(...permissions))).toBe(
+        ok
+      );
+    }
+  );
+
+  it("MCP synap_needs_you keeps its rule: every subject, unbounded", () => {
+    expect(mcpToolAllowed("synap_needs_you", true, app("session.read"))).toBe(
+      false
+    );
+    const all = key({
+      permissions: [
+        "session.read",
+        "proposal.read",
+        "channel.read",
+        "entity.read",
+      ],
+    });
+    expect(mcpToolAllowed("synap_needs_you", true, all)).toBe(true);
+    expect(restDoorAllowed("GET", "/needs-you", all)).toBe(true);
+  });
+
+  it("the whole read: a person, a full key, a key reading every subject unbounded — never a pinned one", () => {
+    expect(needsYouReadableWhole(null)).toBe(true);
+    expect(needsYouReadableWhole(key({ permissions: ["*"] }))).toBe(true);
+    expect(
+      needsYouReadableWhole(
+        key({
+          permissions: [
+            "session.read",
+            "proposal.read",
+            "channel.read",
+            "entity.read",
+          ],
+        })
+      )
+    ).toBe(true);
+    expect(
+      needsYouReadableWhole(
+        key({ permissions: ["*"], workspaceIds: ["space-a"] })
+      )
+    ).toBe(false);
+    expect(needsYouReadableWhole(app("session.read", "proposal.read"))).toBe(
       false
     );
   });

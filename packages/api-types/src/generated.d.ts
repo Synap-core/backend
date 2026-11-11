@@ -55613,6 +55613,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				lens: "needs-you";
 				rows: NeedsYouClassifiedRows;
 				truncated: boolean;
+				withheld: SignalSubRead[];
 			};
 		}>;
 		skipNextMove: import("@trpc/server").TRPCMutationProcedure<{

@@ -69,8 +69,14 @@ import {
   inArray,
   or,
   focusSessions,
+  getRequestGrant,
   projects,
+  type KeyGrant,
 } from "@synap/database";
+import {
+  grantHoldsAction,
+  needsYouReadableWhole,
+} from "../access/grant-door-fence.js";
 import { readRuleRuns } from "../services/signals/read-rule-runs.js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -315,6 +321,14 @@ export type SignalSubRead =
   | "activity"
   | "events";
 
+/** The halves `readAttention` reads; the other sub-reads are the page's. */
+export type AttentionHalf = Exclude<
+  SignalSubRead,
+  "liveness" | "outputs" | "activity" | "events"
+>;
+
+const NO_HALF_WITHHELD: ReadonlySet<AttentionHalf> = new Set();
+
 interface Settled<T> {
   value: T;
   failed: { source: SignalSubRead; error: unknown } | null;
@@ -406,8 +420,17 @@ async function readStatusBanner(ctx: SignalsCtx, input: SignalScopeInput) {
 async function readAttention(
   ctx: SignalsCtx,
   input: SignalScopeInput,
-  clusterLimit: number
+  clusterLimit: number,
+  /**
+   * Halves NOT read (a key the needs-you door narrows, `needsYouWithheld`):
+   * each answers its empty value, never a failure, and the caller names it
+   * `withheld`. Empty = every half, as before.
+   */
+  withheld: ReadonlySet<AttentionHalf> = NO_HALF_WITHHELD
 ) {
+  /** `settle` for one half, which a withheld half never runs. */
+  const half = <T>(name: AttentionHalf, empty: T, read: () => Promise<T>) =>
+    settle(name, empty, withheld.has(name) ? async () => empty : read);
   const userId = requireUserId(ctx.userId);
   const reader = { userId, roster: rosterReadFor(ctx) };
   const follows = followsScope(input);
@@ -461,7 +484,7 @@ async function readAttention(
     spaceInvites,
     convertibleGoals,
   ] = await Promise.all([
-    settle(
+    half(
       "proposals",
       {
         groups: [],
@@ -490,7 +513,7 @@ async function readAttention(
     // Under a container lens the door narrows IN SQL, before its limit
     // (`container`); the resolved containers below stay the authority.
     notifsFollow
-      ? settle(
+      ? half(
           "notifications",
           [] as AttentionNotification[],
           async () =>
@@ -503,14 +526,14 @@ async function readAttention(
               })
             ).notifications satisfies AttentionNotification[]
         )
-      : settle("notifications", [] as AttentionNotification[], async () => []),
+      : half("notifications", [] as AttentionNotification[], async () => []),
     // System HEALTH is the pod's, never a container's: under a container lens
     // the banner reads its own rows (every status-role type is `system`,
     // pinned in the tests); at the floor it reads the floor read above.
     // Under the intent lens the notification half is suppressed, so the
     // banner reads its own rows too.
     container || (follows && !notifsFollow)
-      ? settle("notifications", [] as AttentionNotification[], () =>
+      ? half("notifications", [] as AttentionNotification[], () =>
           readHealthRows(ctx, input)
         )
       : null,
@@ -519,17 +542,17 @@ async function readAttention(
     // not expose. On an undecided draft only its ASKS count (founder decision
     // 2026-10-22, `listNeedsYouOwed`); the draft itself is Proposed, below.
     follows
-      ? settle(
+      ? half(
           "owed",
           [] as AttentionOwed[],
           async (): Promise<AttentionOwed[]> =>
             await listNeedsYouOwed(owedScope)
         )
-      : settle("owed", [] as AttentionOwed[], async () => []),
+      : half("owed", [] as AttentionOwed[], async () => []),
     // The DRAFT half — owed slots on undecided agent drafts, folded into one
     // `draft-asks` row per draft: the draft to accept or reject. PROPOSED,
     // never needs-you; its asks are counted once, in the owed half above.
-    settle(
+    half(
       "drafts",
       {
         slots: [] as OwedSlotSignalInput[],
@@ -541,7 +564,7 @@ async function readAttention(
           : { slots: [], starterNames: new Map<string, string>() }
     ),
     // The REVIEW half — at every scope, the pod included.
-    settle("review", { sessions: [], truncated: false }, async () =>
+    half("review", { sessions: [], truncated: false }, async () =>
       follows
         ? await listSessionsAwaitingReview({
             userId,
@@ -555,7 +578,7 @@ async function readAttention(
     ),
     // The PERMISSION half (decision D-R1): a session whose live runner waits
     // on the person's permission dialog — one row per session, same lenses.
-    settle(
+    half(
       "permission",
       { sessions: [] as PermissionSessionSignalInput[], truncated: false },
       async () =>
@@ -570,7 +593,7 @@ async function readAttention(
             })
           : { sessions: [], truncated: false }
     ),
-    settle(
+    half(
       "captures",
       { captures: [] as UnfinishedCapture[], truncated: false },
       async () =>
@@ -578,7 +601,7 @@ async function readAttention(
           ? await listUnfinishedCaptures({ userId })
           : { captures: [], truncated: false }
     ),
-    settle(
+    half(
       "issuers",
       { rows: [] as PendingIssuerSignalInput[], truncated: false },
       async () =>
@@ -586,7 +609,7 @@ async function readAttention(
           ? await listPendingIssuers({ isAdmin })
           : { rows: [], truncated: false }
     ),
-    settle(
+    half(
       "app-requests",
       { rows: [] as PendingAppRequestSignalInput[], truncated: false },
       async () =>
@@ -594,7 +617,7 @@ async function readAttention(
           ? await listPendingAppRequests({ isAdmin })
           : { rows: [], truncated: false }
     ),
-    settle(
+    half(
       "key-requests",
       { rows: [] as PendingKeyRequestSignalInput[], truncated: false },
       async () =>
@@ -605,7 +628,7 @@ async function readAttention(
     // The person's own tools that need a sign-in again: the pod's connection
     // health (`secrets.connection_state`), read for its owner on the same
     // floor-only rule as the other access asks.
-    settle(
+    half(
       "broken-connections",
       { rows: [] as BrokenConnectionSignalInput[], truncated: false },
       async () =>
@@ -613,7 +636,7 @@ async function readAttention(
           ? await listBrokenConnections({ userId })
           : { rows: [], truncated: false }
     ),
-    settle(
+    half(
       "invites",
       { rows: [] as SpaceInviteSignalInput[], truncated: false },
       async () =>
@@ -621,7 +644,7 @@ async function readAttention(
           ? await listOpenSpaceInvites({ userId })
           : { rows: [], truncated: false }
     ),
-    settle(
+    half(
       "convertible-goals",
       {
         rows: [],
@@ -1422,9 +1445,64 @@ export type NeedsYouClassifiedRows = Record<
 >;
 
 /**
+ * How each attention half reaches a key the needs-you door NARROWS: one the
+ * fence admitted on `session.read` (`NARROWED("session", NEEDS_YOU_SUBJECTS)`,
+ * Hub `GET /needs-you`) that does not read every subject unbounded. Every
+ * half is classified, and `satisfies` makes a half added to `SignalSubRead`
+ * without a line here a BUILD error (default-closed, as `workReleaseReach`):
+ *  - `grant`: read through the session floor, which ANDs the key's grant
+ *    (`sessionReadableWhere`, `session` subject): only the sessions of the
+ *    spaces, projects and objects it names (`listOwedSlots`,
+ *    `sessionListConditions`).
+ *  - `proposal`: read through the proposal floor with the key's grant
+ *    (`proposalUserFloor`, `proposal` subject), and only when the key holds
+ *    `proposal.read`; otherwise withheld, never an empty fold.
+ *  - `withheld`: rows no grant clause bounds: notifications are floored on
+ *    their owner only (`notifCenter.list`); captures, access requests,
+ *    invites and the goals card are the person's or the pod's own and live
+ *    in no space.
+ */
+const NARROWED_KEY_HALVES = {
+  proposals: "proposal",
+  owed: "grant",
+  drafts: "grant",
+  review: "grant",
+  permission: "grant",
+  notifications: "withheld",
+  captures: "withheld",
+  issuers: "withheld",
+  "app-requests": "withheld",
+  "key-requests": "withheld",
+  "broken-connections": "withheld",
+  invites: "withheld",
+  "convertible-goals": "withheld",
+} as const satisfies Record<AttentionHalf, "grant" | "proposal" | "withheld">;
+
+/**
+ * THE needs-you read's rule for a key: the halves it does NOT read. Empty for
+ * a person, an unfenced key and a key reading every subject unbounded (the
+ * whole read, unchanged); otherwise derived from `NARROWED_KEY_HALVES`, so a
+ * half with no rule is never served.
+ */
+export function needsYouWithheld(
+  grant: KeyGrant | null | undefined
+): AttentionHalf[] {
+  if (needsYouReadableWhole(grant)) return [];
+  const readsProposals = grantHoldsAction(grant!, "proposal", "read");
+  return (Object.keys(NARROWED_KEY_HALVES) as AttentionHalf[]).filter(
+    (name) => {
+      const how: string = NARROWED_KEY_HALVES[name];
+      return how !== "grant" && !(how === "proposal" && readsProposals);
+    }
+  );
+}
+
+/**
  * `signals.needsYou` — one attention read, counted (`countOf`) and listed
  * (`blockingSignals`), the rows split by THE fold rule. One number, one
- * source: the count and the rows cannot come from two reads.
+ * source: the count and the rows cannot come from two reads. A key the
+ * request's grant narrows reads only the halves its grant bounds
+ * (`needsYouWithheld`); `withheld` names the others (empty = the whole read).
  */
 async function readNeedsYouClassified(
   ctx: SignalsCtx,
@@ -1434,8 +1512,15 @@ async function readNeedsYouClassified(
   count: ReturnType<typeof countOf>;
   rows: NeedsYouClassifiedRows;
   truncated: boolean;
+  withheld: SignalSubRead[];
 }> {
-  const attention = await readAttention(ctx, input, CLUSTER_PAGE_LIMIT);
+  const withheld = needsYouWithheld(getRequestGrant());
+  const attention = await readAttention(
+    ctx,
+    input,
+    CLUSTER_PAGE_LIMIT,
+    new Set(withheld)
+  );
   throwIfFailed([
     ...attention.failures.blocking,
     ...attention.failures.proposed,
@@ -1457,7 +1542,13 @@ async function readNeedsYouClassified(
       return [fold, list.slice(0, input.limit)];
     })
   ) as NeedsYouClassifiedRows;
-  return { lens: "needs-you", count, rows, truncated: cut || count.truncated };
+  return {
+    lens: "needs-you",
+    count,
+    rows,
+    truncated: cut || count.truncated,
+    withheld,
+  };
 }
 
 /** The scopes a grouped needs-you read answers: each space, and kinds in it. */

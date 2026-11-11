@@ -82,7 +82,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /messaging/conversations",
   "GET /messaging/conversations/:threadId/messages",
   "GET /messaging/service-config",
-  "GET /needs-you",
   "GET /observability/routing-health",
   "GET /openapi.json",
   "GET /pod-apps",
@@ -141,4 +140,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 121;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 120;

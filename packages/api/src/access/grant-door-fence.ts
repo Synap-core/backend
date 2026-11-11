@@ -441,6 +441,36 @@ export function sessionPacketReadable(
 }
 
 /**
+ * What THE needs-you read (`signals.needsYou`: Hub `GET /needs-you`, MCP
+ * `synap_needs_you`) reads WHOLE: sessions and their asks, proposals, the
+ * room-pointer notifications and the things they are about. MCP admits only a
+ * key that reads all of it unbounded; Hub REST also admits a key holding
+ * `session.read` and NARROWS the read for it (`needsYouWithheld`, signals).
+ */
+export const NEEDS_YOU_SUBJECTS: readonly string[] = [
+  "session",
+  "proposal",
+  "channel",
+  "entity",
+];
+
+/**
+ * May this request's key read the whole needs-you read? Every unfenced caller
+ * may (a person, a full-access key); a fenced key only when one scope reads
+ * every subject of it unbounded (the MCP door's rule). Any other key the fence
+ * admitted (`NARROWED("session", …)`) gets the halves its grant bounds, the
+ * rest said withheld.
+ */
+export function needsYouReadableWhole(
+  grant: KeyGrant | null | undefined
+): boolean {
+  return (
+    !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...NEEDS_YOU_SUBJECTS), grant!)
+  );
+}
+
+/**
  * What a playbook run's FULL detail (`getRun`, GET /runs/:id) reads beyond the
  * run row: its session card, room activity and agents, the records it
  * produced, its proposals, its turn ledger and telemetry events.
@@ -738,6 +768,17 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // grant reaches and the rest said withheld. Admitted when one scope reads
   // some `event` family. Same as MCP `synap_get_work_release`.
   [/^\/work-release\/?$/, NARROWED("event", WORK_RELEASE_SUBJECTS)],
+  // THE needs-you read (`signals.needsYou`), narrowed by the read itself
+  // (`needsYouWithheld`, routers/signals.ts): a key reading every subject
+  // unbounded gets it whole, as over MCP; any other key holding
+  // `session.read` gets the session halves (asks, sessions to review, runs
+  // waiting on a permission, drafts' asks), read through the session floor
+  // that ANDs its grant (`sessionReadableWhere`: only the spaces, projects
+  // and objects it names), the proposals only with `proposal.read` (through
+  // the proposal floor with its grant), and the rest said `withheld`:
+  // notifications (owner-floored, no grant clause) and the person's or pod's
+  // own rows that live in no space. The same folds and words as the pod.
+  [/^\/needs-you\/?$/, NARROWED("session", NEEDS_YOU_SUBJECTS)],
   // `readTimeline` (services/timeline/read-timeline.ts): a goal's history (the
   // track, its sessions, their proposals and evaluations), a session's
   // transition log, dev facts and proposals, or a PR's dev facts. Same as MCP
@@ -1010,7 +1051,7 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_proposals: READS("proposal", "entity"),
   synap_get_proposal: PROPOSAL_GET,
   synap_list_sessions: READS("session", "project"),
-  synap_needs_you: READS("session", "proposal", "channel", "entity"),
+  synap_needs_you: READS(...NEEDS_YOU_SUBJECTS),
   // Same subjects as `GET /focus-sessions/graph` (GRANT_REST_GET_READS).
   synap_get_work_graph: READS(
     "session",
