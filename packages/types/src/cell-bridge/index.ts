@@ -35,12 +35,21 @@
  *      pod (browser `createViewFrameHandlers.ts`, relay `useCellFrameHandlers.ts`).
  *   5. Nothing secret crosses: no token, no pod URL, no key is sent into the
  *      frame — only the answer to what the page asked.
+ *   6. Links, when a host asks (the `links` option of `wrapHtmlForFrame`,
+ *      `frame-links.ts`). A clicked http(s) link does NOT navigate the frame:
+ *      the frame posts `synap:navigate` and the host decides (`resolveFrameLink`):
+ *      a console `/open/…` link in the reader's own tab, anything else in a new
+ *      tab with `noopener`, nothing without a recent user activation. OFF by
+ *      default: a host that does not handle the message keeps its frame as it
+ *      was.
  *
  * WHAT IT DOES NOT COVER (measured limits, not wishes)
  *   - A page can still LEAK what it read, through a URL: by navigating its
  *     OWN frame to an outside address (CSP has no navigation directive; the
  *     sandbox only stops navigating the host). A host can detect the frame
  *     leaving (a second `load`) and tear it down — after the request left.
+ *     The link door (6) stops a CLICKED link from doing this; a script that
+ *     assigns `location` itself still can.
  *     DNS prefetch and WebRTC are outside CSP in some browsers too.
  *   - What the page SHOWS is the author's: a page can present data falsely.
  *   - Writes from a page on this contract: none. The module-cell hosts
@@ -73,7 +82,16 @@ export {
   cellFrameHeadBlock,
   htmlByteLength,
   wrapHtmlForFrame,
+  type CellFrameOptions,
 } from "./frame.js";
+export {
+  CELL_FRAME_LINK_DOOR,
+  FRAME_NAVIGATE_TYPE,
+  parseFrameNavigate,
+  resolveFrameLink,
+  type FrameLinkAction,
+  type FrameNavigateMessage,
+} from "./frame-links.js";
 export { frameExternalOrigins } from "./external-origins.js";
 export {
   frameEsmShAt,
