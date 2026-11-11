@@ -147,7 +147,7 @@ export function buildProposalScopeConditions(
   const grant = grantReadPredicate(proposals);
   if (input.workspaceId === null) {
     conditions.push(
-      and(isNull(proposals.workspaceId), ownLibrary, grant) as SQL
+      and(isNull(proposals.workspaceId), ownLibrary) as SQL
     );
   } else if (typeof input.workspaceId === "string") {
     conditions.push(
