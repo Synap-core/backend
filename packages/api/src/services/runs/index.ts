@@ -56,6 +56,10 @@ import {
 import { authoredByUser } from "../agent-identity-service.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import {
+  runSubjectColumn,
+  runSubjectMatches,
+} from "../playbooks/run-subject.js";
 import { AI_DECISION, AI_PROCESSING } from "../../lib/ai-events.js";
 import {
   AGENT_WRITE_EVENT_KIND,
@@ -544,12 +548,9 @@ async function listPlaybookRuns(
       error: playbookRuns.error,
       // The run's room lives on its session (playbook → 1 channel per run).
       channelId: focusSessions.channelId,
-      // A one-shot run has no session: its subject is on its record, which
-      // is its creator's alone (the record quotes the subject and the
-      // person's past drafts). Another member's one-shot run names no subject.
-      subjectEntityId: drizzleSql<
-        string | null
-      >`coalesce(${focusSessions.subjectEntityId}::text, case when ${playbookRuns.createdBy} = ${userId} then ${playbookRuns.generation}->>'subjectId' end)`,
+      // A one-shot run's subject is on its record, its creator's alone:
+      // another member's one-shot run names no subject (`run-subject.ts`).
+      subjectEntityId: runSubjectColumn(userId),
       projectId: focusSessions.projectId,
       // Progress signal: `playbook_runs` has no updated_at, so "actively
       // worked" is read off the linked session — the SAME column
@@ -588,19 +589,10 @@ async function listPlaybookRuns(
         scope.projectId
           ? eq(focusSessions.projectId, scope.projectId)
           : undefined,
+        // A one-shot run counts only for its creator: the lens is no oracle
+        // for what a colleague drafted about (`run-subject.ts`).
         scope.subjectEntityId
-          ? or(
-              eq(focusSessions.subjectEntityId, scope.subjectEntityId),
-              // A one-shot run (no session) names its subject on its record,
-              // read only for the run's creator: for anyone else the subject
-              // lens drops it, so the filter is no oracle for what a
-              // colleague drafted about (decision D1, as for a session run).
-              and(
-                isNull(playbookRuns.sessionId),
-                eq(playbookRuns.createdBy, userId),
-                drizzleSql`${playbookRuns.generation}->>'subjectId' = ${scope.subjectEntityId}`
-              )
-            )
+          ? runSubjectMatches(scope.subjectEntityId, userId)
           : undefined,
         statusValues ? inArray(playbookRuns.status, statusValues) : undefined,
         startedBeforeWhere(playbookRuns.startedAt, scope)

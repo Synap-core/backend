@@ -12,14 +12,12 @@
  * a capability by name or id, or a verb id (its verbs). Verbs reach the run
  * through `run_capability`, narrowed to them by the IS.
  *
- * Founder rule (2026-11-05): "We never send all the tools. That's the goal of
- * the playbooks itself." Run 9d57a207 sent 50 tools and an 82k-char prompt on
- * every call (pod finding 3fb5dae8).
+ * Founder rule (2026-11-05, pod finding 3fb5dae8): "We never send all the
+ * tools. That's the goal of the playbooks itself."
  *
  * NOTHING ELSE DECLARES A RUN'S TOOLS: not the `grants` links (they stay as
  * governance edges, e.g. a follow's grant widening), not the space's
- * `taskIntents`, not `required_intents` (migration 0419 folded all four into
- * `tools`).
+ * `taskIntents`, not `required_intents` (all folded into `tools`, 0419).
  *
  * ONE RESOLVER for every run turn: the kickoff (`is-agent-executor`), the
  * automatic continuation (`run-turn-end`) and the person's answer that wakes a

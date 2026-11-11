@@ -264,6 +264,8 @@ import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { registerPlaybooksRoutes } from "./playbooks.js";
 import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
 import { executeGenerateRun } from "../../../services/playbooks/generate-run.js";
+import { settleGenerateRunOnDecision } from "../../../services/playbooks/generate-run-decision.js";
+import { emitProposalReviewed } from "../../proposals/apply-approval.js";
 import { eq as eqCol } from "drizzle-orm";
 import {
   buildGeneratePrompt,
@@ -1189,5 +1191,61 @@ describe("one-shot runs stay the person's (review of the lean-runs wave)", () =>
     expect(body.generated.proposalId).toBe(p!.id);
     const [run] = await runRows();
     expect(run!.status).not.toBe("failed");
+  });
+});
+
+describe("a one-shot run follows its draft's decision (cross-repo review, watch 10)", () => {
+  it("approved: the run is completed, once", async () => {
+    const pid = await draft(CAPTION, POST, DRAFT);
+    expect(await settleGenerateRunOnDecision(pid, "approved")).toBe(
+      "completed"
+    );
+    const [run] = await runRows();
+    expect(run!.status).toBe("completed");
+    // Already moved: nothing moves twice.
+    expect(await settleGenerateRunOnDecision(pid, "approved")).toBeNull();
+  });
+
+  it("whichever door decides it: rejected → cancelled (discarded), reopened → proposed again", async () => {
+    const pid = await draft(CAPTION, POST, DRAFT);
+    emitProposalReviewed(pid, WS, "rejected", PERSON);
+    await vi.waitFor(async () => {
+      expect((await runRows())[0]!.status).toBe("cancelled");
+    });
+    emitProposalReviewed(pid, WS, "reopened", PERSON);
+    await vi.waitFor(async () => {
+      expect((await runRows())[0]!.status).toBe("proposed");
+    });
+  });
+
+  it("a proposal no one-shot run filed moves no run", async () => {
+    expect(
+      await settleGenerateRunOnDecision(randomUUID(), "approved")
+    ).toBeNull();
+  });
+});
+
+describe("the prompt never overshoots its bound when the subject leaves almost no room", () => {
+  it("every room left for the document, 0 to 40 characters included, stays under the bound", () => {
+    const big = "x".repeat(1_000);
+    const base: Record<string, unknown> = {};
+    for (let i = 0; i < 21; i++) base[`p${i}`] = big;
+    for (let n = 0; n < 1_000; n += 1) {
+      const out = buildGeneratePrompt({
+        method: { contextSkill: null, guidance: "" },
+        goal: "Write the caption.",
+        section: "Caption draft",
+        subject: {
+          id: "s",
+          title: "Post",
+          kind: "post",
+          properties: { ...base, q: "y".repeat(n) },
+        },
+        document: { id: "d", title: "Script", content: "z".repeat(30_000) },
+      });
+      expect(out.text.length, `q of ${n}`).toBeLessThanOrEqual(
+        GENERATE_PROMPT_MAX_CHARS
+      );
+    }
   });
 });

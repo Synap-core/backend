@@ -61,14 +61,14 @@ export interface PastOutcomeWithoutText {
   runId: string;
 }
 
-/** The counts a landing asks for, each 0 when absent. */
+/** The counts a landing asks for, each 0 when absent (the schema bounds them). */
 export function examplesAsked(examples: OutputLandingExamples | undefined): {
   approved: number;
   rejected: number;
 } {
   return {
-    approved: Math.max(0, Math.trunc(examples?.approved ?? 0)),
-    rejected: Math.max(0, Math.trunc(examples?.rejected ?? 0)),
+    approved: examples?.approved ?? 0,
+    rejected: examples?.rejected ?? 0,
   };
 }
 
@@ -173,7 +173,7 @@ async function readDecided(input: {
       outcome: input.outcome,
       proposalId: r.proposalId,
       runId: r.runId,
-      subjectTitle: r.subjectTitle ?? null,
+      subjectTitle: r.subjectTitle,
       text,
       reason,
     });

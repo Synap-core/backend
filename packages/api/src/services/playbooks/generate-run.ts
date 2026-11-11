@@ -2,10 +2,8 @@
  * A ONE-SHOT playbook run (`executor: "generate"`, plan 08e4fba7 slice 1,
  * founder decisions of 9 Nov 2026).
  *
- * A button that drafts four lines (a post's caption) used to start a full agent
- * run: a session, a room, a recall, a 19-tool agent turn with a 24k-token
- * prompt, a checkpoint and a continuation (document 2e7a93d1: 252k input
- * tokens for one caption). A one-shot playbook instead runs as:
+ * A playbook that drafts one piece of text runs as ONE model call, never an
+ * agent run (plan 08e4fba7; measurements in document 2e7a93d1):
  *
  *   1. resolve (the run door already did), the subject check, one open run per
  *      subject (`idempotentBySubject`), the params rendered into the goal;
@@ -76,6 +74,7 @@ import { loadRunMethodParts, renderPlaybookMethod } from "./playbook-method.js";
 import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { oneShotRunSubjectIs } from "./run-subject.js";
 import { documentPatchPayload } from "../document-patch/document-edit-undo.js";
 import {
   applyDocumentPatch,
@@ -212,7 +211,7 @@ export function readGenerateLanding(
       section: output.lands!.section.trim(),
       ...(output.lands!.owner === "person" ? { owner: "person" as const } : {}),
     },
-    ...(examples && typeof examples === "object" ? { examples } : {}),
+    ...(examples ? { examples } : {}),
   };
 }
 
@@ -403,7 +402,9 @@ export function buildGeneratePrompt(input: {
   let docTruncated = false;
   if (input.document && docText.length > room) {
     docText =
-      room > 1
+      // The cut marker takes 37 characters: below 40 of room the document
+      // is left out whole rather than overshoot the bound.
+      room >= 40
         ? `${docText.slice(0, room - 40)}\n\n[… the rest of the document is cut]`
         : "";
     docTruncated = true;
@@ -485,8 +486,7 @@ async function openGenerateRunFor(
     .where(
       and(
         eq(playbookRuns.playbookId, input.playbookId),
-        eq(playbookRuns.createdBy, input.userId),
-        drizzleSql`${playbookRuns.generation}->>'subjectId' = ${input.subjectId}`
+        oneShotRunSubjectIs(input.subjectId, input.userId)
       )
     )
     .orderBy(desc(playbookRuns.startedAt))
@@ -612,10 +612,9 @@ export async function executeGenerateRun(
     declaredParams,
     fillParamsFromSubject(declaredParams, input.params, {
       id: subjectId,
-      title: subject.title ?? null,
-      preview: subject.preview ?? null,
-      properties:
-        (subject.properties as Record<string, unknown> | null) ?? null,
+      title: subject.title,
+      preview: subject.preview,
+      properties: subject.properties as Record<string, unknown>,
       kinds: subjectKinds,
     }).values
   );
@@ -653,7 +652,7 @@ export async function executeGenerateRun(
         declaredParams,
         renderSubjectParamValues(declaredParams, resolution.values, {
           id: subjectId,
-          title: subject.title ?? null,
+          title: subject.title,
         })
       ),
       playbook.id
@@ -767,7 +766,7 @@ export async function executeGenerateRun(
       section: lands.section,
       subject: {
         id: subjectId,
-        title: subject.title ?? null,
+        title: subject.title,
         kind: subject.type,
         properties: (subject.properties ?? {}) as Record<string, unknown>,
       },

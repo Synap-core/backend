@@ -9,9 +9,9 @@
  *
  *   one-shot  `executor: generate`: one model call, NO tools.
  *   short     an IS run with at most 2 stages and no gate: reads only.
- *   long      an IS run with 3+ stages or a gate: the pod's 19 core tools,
- *             the relation read, and the run's own session tools (it has
- *             stages and gates to drive).
+ *   long      an IS run with 3+ stages or a gate: the pod's core tools, the
+ *             relation read, and the run's own session tools (it has stages
+ *             and gates to drive).
  *
  * The pod sends the IS the FINAL tool list of a turn (`run.tools`); the IS
  * keeps tool definitions, never a list. Copies, each pinned to this file:
@@ -83,9 +83,7 @@ export const SHORT_RUN_FLOOR = [
  * room, never another's: `update_run` (read the run, advance its stage, which
  * files the stage's gate; declare and claim deliverables; hand the person a
  * deliverable with an ask), `post_in_room` (a progress note in its room),
- * `get_brand_kit` (the brand kit of the run's project). The run audit of 10
- * Nov (pod document 80005d94) found every long run ending by handing these
- * mechanical steps to the person. Nothing that builds spaces, manages
+ * `get_brand_kit` (the brand kit of the run's project). Nothing that builds spaces, manages
  * connections, starts sessions or reaches outside the pod: a run that needs
  * that declares it.
  */
