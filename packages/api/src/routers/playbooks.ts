@@ -108,6 +108,12 @@ import {
 } from "../schemas/playbook-runner.js";
 import { recordPlaybookVersion } from "../services/playbooks/playbook-versions.js";
 import { resolveStageUses } from "../services/playbooks/stage-uses.js";
+import type { RunChoice } from "@synap-core/types/agents";
+import {
+  mapRunnerAtRun,
+  runnerOfferFor,
+  type RunnerOffer,
+} from "../services/playbooks/run-runner-choice.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
@@ -2960,6 +2966,16 @@ export const playbooksRouter = router({
          */
         runOn: z.enum(["synap_ai"]).optional(),
         /**
+         * WHO runs this run, in the playbook's own runner grammar
+         * (`PlaybookRunner`: an agent, a role, an engine, Synap AI, or an
+         * ordered list of fallbacks). Mapped onto `handToAgentId` / `runOn`
+         * before anything else (`mapRunnerAtRun`): a role, engine or list is
+         * resolved now through the route and the wake marks; nobody it names
+         * can take it → refused, never swapped. Never with `handToAgentId` or
+         * `runOn`. It beats the playbook's runner and the remembered choice.
+         */
+        runner: playbookRunnerSchema.optional(),
+        /**
          * Remember this run's choice (`runOn` or `handToAgentId`) as the
          * person's for this playbook, so the next launch does not ask
          * (`setRunChoice`, the assignment edge). A PERSON's act: refused for
@@ -2979,6 +2995,13 @@ export const playbooksRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.runner !== undefined && (input.handToAgentId || input.runOn)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Choose who runs this run once: runner, or handToAgentId / runOn, not both.",
+        });
+      }
       if (input.trial) {
         if (input.agentUserId || ctx.agentUserId) {
           throw new TRPCError({
@@ -2988,11 +3011,11 @@ export const playbooksRouter = router({
             cause: { reasonCode: "PERSON_ONLY" },
           });
         }
-        if (input.remember || input.handToAgentId) {
+        if (input.remember || input.handToAgentId || input.runner) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message:
-              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId.",
+              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId nor runner.",
           });
         }
       }
@@ -3009,6 +3032,21 @@ export const playbooksRouter = router({
           code: "NOT_FOUND",
           message: `Playbook ${input.playbookId} not found`,
         });
+      }
+      // A runner chosen for THIS run becomes the hand-off or Synap AI it
+      // names, ONCE, before the checks below read them (`mapRunnerAtRun`).
+      if (input.runner !== undefined) {
+        const mapped = await mapRunnerAtRun({
+          ownerId: ctx.userId,
+          runner: input.runner,
+          playbook,
+        });
+        if (mapped.handToAgentId) input.handToAgentId = mapped.handToAgentId;
+        if (mapped.runOn) input.runOn = mapped.runOn;
+        if (mapped.agentType && !input.agentType) {
+          input.agentType = mapped.agentType;
+        }
+        input.runner = undefined;
       }
 
       const database = await getDb();
@@ -3278,14 +3316,19 @@ export const playbooksRouter = router({
       // The person's choice is remembered once the run is allowed, before it
       // starts, so this run already follows it and the next launch does not
       // ask (`readPlaybookRunChoice`).
+      // The playbook's own runner comes before a remembered choice: when it
+      // names another, the reply offers to make this one its runner.
+      let runnerOffer: RunnerOffer | null = null;
       if (input.remember) {
+        const remembered: RunChoice = input.handToAgentId
+          ? { executor: "external-agent", agentUserId: input.handToAgentId }
+          : { executor: "is-agent" };
         await setRunChoice({
           callerId: ctx.userId,
           playbookId: playbook.id,
-          choice: input.handToAgentId
-            ? { executor: "external-agent", agentUserId: input.handToAgentId }
-            : { executor: "is-agent" },
+          choice: remembered,
         });
+        runnerOffer = runnerOfferFor(playbook, remembered);
       }
       if ("proposalId" in perm) {
         return {
@@ -3297,6 +3340,7 @@ export const playbooksRouter = router({
             "Playbook run proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...(runnerOffer ? { runnerOffer } : {}),
         };
       }
 
@@ -3387,6 +3431,7 @@ export const playbooksRouter = router({
           proposalId: null as string | null,
           ...(parentLink ? { parentLink } : {}),
           ...(handedTo ? { handedTo } : {}),
+          ...(runnerOffer ? { runnerOffer } : {}),
         };
       }
 
@@ -3398,6 +3443,7 @@ export const playbooksRouter = router({
         proposalId: null as string | null,
         ...(parentLink ? { parentLink } : {}),
         ...(handedTo ? { handedTo } : {}),
+        ...(runnerOffer ? { runnerOffer } : {}),
       };
     }),
 

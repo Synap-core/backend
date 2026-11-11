@@ -37,6 +37,7 @@ import {
   type BoxDeclaration,
 } from "../box-runs/box-spec.js";
 import { paramPlaceholderTokens } from "../_shared/interpolate.js";
+import { pickComputerSpec } from "@synap-core/types/capability-manifest";
 import {
   isBroadUrlPattern,
   isValidUrlPattern,
@@ -76,6 +77,15 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v15 = v14 + the container's COMPUTER BLOCKS (`metadata.computer`: placement,
+ *      install, verify, uninstall, permissions, licence, services, recipes —
+ *      see `capabilityComputerDrift`). Before it a catalog edit that only
+ *      changed them (media-ffmpeg gaining the `range-cut` recipe, 0.38.0)
+ *      diffed clean, and the stamp wrote the new hash over the OLD blocks: the
+ *      pod said "up to date", an installation update compared its snapshot
+ *      with that stale definition and found nothing to ask for, and a run of
+ *      the new recipe was refused (dogfood 2026-11-10). Retiring v14 stamps
+ *      makes each container re-diff once and its blocks land.
  * v14 = v13 + `metadata.box` (a box skill's DECLARED language, packages, hosts
  *      and limits, normalised — see `declaredBox`). Before it the applier
  *      dropped the key, so a catalog box skill could be installed with no
@@ -146,7 +156,22 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 14;
+export const DRIFT_COMPARATOR_VERSION = 15;
+
+/**
+ * Do the computer blocks a definition declares differ from the ones stored on
+ * the container (`metadata.computer`, as `declaredContainerMetadata` writes
+ * them)? A definition that declares none is never drift: the applier leaves a
+ * stored block alone then, so the comparator does too.
+ */
+export function capabilityComputerDrift(
+  storedMetadata: Record<string, unknown>,
+  def: object
+): boolean {
+  const declared = pickComputerSpec(def as Record<string, unknown>);
+  if (!declared) return false;
+  return canonicalJson(declared) !== canonicalJson(storedMetadata.computer);
+}
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (

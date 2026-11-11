@@ -1016,7 +1016,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Get full context for a thread: all messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
+          "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1025,6 +1025,10 @@ export const tools = {
               type: "number",
               description:
                 "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn.",
+            },
+            cursor: {
+              type: "string",
+              description: "Older messages: the last reply's `nextCursor`.",
             },
           },
           required: ["threadId"],
@@ -6448,7 +6452,7 @@ export const tools = {
               type: "string",
               enum: ["install", "update", "verify", "remove"],
               description:
-                "Default install. update = another version; verify = run its check now; remove = uninstall from that computer.",
+                "Default install. update = the pod's current definition (asks if it adds abilities), or `version`; verify = check now; remove = uninstall.",
             },
             version: {
               type: "string",
@@ -6879,7 +6883,11 @@ export const tools = {
             handToAgentId: {
               type: "string",
               description:
-                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the run goes to the agent the person ASSIGNED to this playbook, when there is one that can take it (the reply's `handedTo` and message name it); otherwise the playbook's own executor runs it.",
+                "Optional agent user id (synap_list_agents) to HAND the run to: that agent does the work and the playbook's own executor is not started. A person may name any of their agents; an agent may name only itself. An unknown, paused or foreign agent is refused by name — never replaced by the built-in AI. Omitted: the playbook's runner, else the agent the person ASSIGNED to it, else its own executor (`handedTo` names who).",
+            },
+            runner: {
+              description:
+                "A playbook runner for this run (system/synap/processes); not with handToAgentId.",
             },
           },
           required: [],

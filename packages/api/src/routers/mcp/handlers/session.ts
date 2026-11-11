@@ -34,6 +34,7 @@ import { requestClientKey } from "../../../services/focus-sessions/resolve-work-
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import { sessionWriteEcho } from "./session-write-echo.js";
+import { fitReply } from "./fit-reply.js";
 import {
   waitForConversationChanges,
   waitForSessionAnswers,
@@ -44,6 +45,7 @@ import { getRequestClientKey } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import {
   parseSessionReadDetail,
+  projectLeanSessionHeader,
   readLeanSession,
   readSessionDeploys,
   SESSION_READ_DETAIL_ERROR,
@@ -1102,11 +1104,18 @@ export const sessionHandlers: McpHandlerMap = {
     }
     if (detail === "lean") {
       const lean = await readLeanSession(session, { userId });
-      return ok({
-        session: await withParentSessionId(session),
-        ...lean,
-        ...(ambient?.sessionId ? { inferred: true, via: ambient.source } : {}),
-      });
+      // The session's own header, never its whole row (stages' goals,
+      // metadata.prompt and runTurns made a lean read 18,987 characters), and
+      // the reply fitted under the cap: a program reads it (finding 69fdd2e6).
+      return ok(
+        fitReply({
+          session: projectLeanSessionHeader(await withParentSessionId(session)),
+          ...lean,
+          ...(ambient?.sessionId
+            ? { inferred: true, via: ambient.source }
+            : {}),
+        })
+      );
     }
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
     // there is exactly one store for "what was this forked from". ONE

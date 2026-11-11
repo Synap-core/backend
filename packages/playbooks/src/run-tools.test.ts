@@ -1,6 +1,6 @@
 /**
  * The class of a run and the tools of a turn (plan 08e4fba7, decisions 3 and
- * 4): one-shot gets nothing, short gets 6 reads, long the 22 core tools; a
+ * 4): one-shot gets nothing, short gets 6 reads, long its 26-tool floor; a
  * declared list adds only run tools; a stage list narrows its playbook's.
  */
 import { describe, expect, it } from "vitest";
@@ -54,17 +54,29 @@ describe("runClassOf", () => {
 });
 
 describe("the floors and the vocabulary", () => {
-  it("one-shot has none, short the 6 reads, long the 22 core tools; short is inside long", () => {
+  it("one-shot has none, short the 6 reads, long the 19 core tools, the relation read, its own 3 and the 3 run-history reads; short is inside long", () => {
     expect(RUN_TOOL_FLOORS["one-shot"]).toEqual([]);
     expect(SHORT_RUN_FLOOR).toHaveLength(6);
-    expect(LONG_RUN_FLOOR).toHaveLength(22);
+    expect(LONG_RUN_FLOOR).toHaveLength(26);
     for (const t of SHORT_RUN_FLOOR) expect(LONG_RUN_FLOOR).toContain(t);
   });
   it("the long floor holds the run-history reads (plan fbfadf54 fix 1.5)", () => {
     for (const t of ["list_playbooks", "list_sessions", "get_session"])
       expect(LONG_RUN_FLOOR).toContain(t);
   });
-  it("every floor tool is a declarable run tool; no session-writing, ask or room tool is", () => {
+  it("a long run drives its own session (decision 832469a0); a short one reads only", () => {
+    for (const t of [
+      "update_run",
+      "post_in_room",
+      "get_brand_kit",
+      "graph_traverse",
+    ]) {
+      expect(LONG_RUN_FLOOR).toContain(t);
+      expect(SHORT_RUN_FLOOR).not.toContain(t);
+      expect(isRunToolName(t)).toBe(true);
+    }
+  });
+  it("every floor tool is a declarable run tool; no tool that names ANY session is", () => {
     for (const t of LONG_RUN_FLOOR) expect(isRunToolName(t)).toBe(true);
     for (const t of [
       "update_session",

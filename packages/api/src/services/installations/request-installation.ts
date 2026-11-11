@@ -53,6 +53,8 @@ import {
   reconcileInstallation,
   repairKindFor,
   requestNeedsApproval,
+  definitionChange,
+  type DefinitionChange,
   type ComputerRef,
   type InstallableCapability,
   type InstallationRequestAction,
@@ -513,7 +515,8 @@ function readableVersion(version: string | null): string | null {
 function reasoningFor(
   input: InstallationAskInput,
   live: boolean,
-  addition: CatalogAddition | null
+  addition: CatalogAddition | null,
+  change: DefinitionChange | null = null
 ): string {
   const { capabilityKey: key, computer } = input;
   if (input.action === "remove")
@@ -524,6 +527,17 @@ function reasoningFor(
       addition.licence ? `licence ${addition.licence}` : null,
     ].filter(Boolean);
     return `Add "${addition.name}" (${key}${what.length ? `, ${what.join(", ")}` : ""}) from the marketplace to the pod, then install it on ${computer.name}: its install steps run on that computer, then it is checked.`;
+  }
+  if (live && change) {
+    const what = [
+      change.recipesAdded.length
+        ? `adds ${change.recipesAdded.length === 1 ? "recipe" : "recipes"}: ${change.recipesAdded.join(", ")}`
+        : null,
+      change.recipesRemoved.length
+        ? `removes ${change.recipesRemoved.length === 1 ? "recipe" : "recipes"}: ${change.recipesRemoved.join(", ")}`
+        : null,
+    ].filter(Boolean);
+    return `Update ${key} on ${computer.name} to the pod's current definition${what.length ? ` (${what.join("; ")})` : ""}: its install steps run again on that computer, then it is checked.`;
   }
   return live
     ? `Change ${key} on ${computer.name} to version ${input.version ?? "latest"}: its install steps run again on that computer.`
@@ -647,8 +661,19 @@ export async function requestInstallation(
       );
   }
 
-  // Approved once for this pair at this version: a repair asks nobody.
-  if (live && !input.filedByPod && !requestNeedsApproval(live, input)) {
+  // An update moves the snapshot to the pod's CURRENT definition: what it
+  // changes is said on the card, and approving checks it is still that one.
+  const change =
+    live && capability && input.action === "update" && !input.version
+      ? definitionChange(live.manifest ?? {}, capability.manifest)
+      : null;
+
+  // Approved once for this pair at this definition: a repair asks nobody.
+  if (
+    live &&
+    !input.filedByPod &&
+    !requestNeedsApproval(live, input, capability?.manifest)
+  ) {
     const jobId = await reconcileInstallation(live, {
       kind: repairKindFor(live),
     });
@@ -674,9 +699,9 @@ export async function requestInstallation(
     // The pod's own sentence; a marketplace addition still says so.
     reasoning: input.filedByPod
       ? addition
-        ? `${input.filedByPod.reasoning} ${reasoningFor(input, !!live, addition)}`
+        ? `${input.filedByPod.reasoning} ${reasoningFor(input, !!live, addition, change)}`
         : input.filedByPod.reasoning
-      : reasoningFor(input, !!live, addition),
+      : reasoningFor(input, !!live, addition, change),
     data: {
       id: computer.id,
       computerId: computer.id,
@@ -685,6 +710,17 @@ export async function requestInstallation(
       kind,
       action: input.action,
       ...(input.version ? { version: input.version } : {}),
+      // The definition the card showed: approving refuses another one.
+      ...(change && capability
+        ? {
+            definition: {
+              from: live?.capabilityVersion ?? null,
+              to: capability.version,
+              recipesAdded: change.recipesAdded,
+              recipesRemoved: change.recipesRemoved,
+            },
+          }
+        : {}),
       // Approving adds it from the catalog first (the executor re-reads the
       // catalog definition and checks the computer again).
       ...(addition ? { catalog: addition } : {}),

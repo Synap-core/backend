@@ -15,6 +15,7 @@
 import type { NounGender } from "../i18n/noun.js";
 import type { Catalog } from "../i18n/translator.js";
 import type { NounSlug, VocabularyEn } from "./catalog.en.js";
+import { DRAFT_DECISION_WORDS } from "./draft-words.js";
 
 export const vocabularyFr: Catalog<VocabularyEn> = {
   // ── Object kinds: `kind.<slug>.one` / `.other` ──
@@ -248,9 +249,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.send.imperative": "Envoyer",
   "action.send.past": "Envoyé",
   "action.send.progressive": "Envoi en cours",
-  "action.approve.imperative": "Approuver",
-  "action.approve.past": "Approuvé",
-  "action.approve.progressive": "Approbation en cours",
+  // The draft decisions' French words are defined once (`./draft-words.ts`).
+  "action.approve.imperative": DRAFT_DECISION_WORDS.fr.approve.imperative,
+  "action.approve.past": DRAFT_DECISION_WORDS.fr.approve.past,
+  "action.approve.progressive": DRAFT_DECISION_WORDS.fr.approve.progressive,
   "action.publish.imperative": "Publier",
   "action.publish.past": "Publié",
   "action.reject.imperative": "Rejeter",
@@ -270,8 +272,9 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "action.spawn.past": "Généré",
   "action.accept.imperative": "Accepter",
   "action.accept.past": "Accepté",
-  "action.discard.imperative": "Écarter",
-  "action.discard.past": "Écarté",
+  "action.discard.imperative": DRAFT_DECISION_WORDS.fr.discard.imperative,
+  "action.discard.past": DRAFT_DECISION_WORDS.fr.discard.past,
+  "action.discard.progressive": DRAFT_DECISION_WORDS.fr.discard.progressive,
   "action.revert.imperative": "Revenir en arrière",
   "action.revert.past": "Revenu en arrière",
   "action.undo.imperative": "Annuler",

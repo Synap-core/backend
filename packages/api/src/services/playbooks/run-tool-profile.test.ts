@@ -125,7 +125,7 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
     expect(p.tools).not.toContain("create_entity");
   });
 
-  it("a long run (3+ stages) gets the 22 core tools plus its declared run tools", async () => {
+  it("a long run (3+ stages) gets its floor (the core, the relation read, its own session tools, the run-history reads) plus its declared run tools", async () => {
     const p = await resolveRunToolProfile(
       input,
       deps({
@@ -135,7 +135,7 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
     );
     expect(p.runClass).toBe("long");
     expect(p.tools).toEqual([...LONG_RUN_FLOOR, "web_fetch"]);
-    expect(p.tools).toHaveLength(23);
+    expect(p.tools).toHaveLength(27);
   });
 
   it("a gate makes a 1-stage run long", async () => {

@@ -141,6 +141,19 @@ export function registerInstallationExecutors(): void {
         const refusal = installRefusal(capability, computer);
         if (refusal) throw cannotApply(`Couldn't apply — ${refusal}`);
       }
+      // An update moves the snapshot to the definition the card showed
+      // (`data.definition.to`), never to one the pod got since: what runs on
+      // the computer is what the person read.
+      const definition = asRecord(data.definition);
+      if (
+        action === "update" &&
+        "to" in definition &&
+        (definition.to ?? null) !== capability.version
+      ) {
+        throw cannotApply(
+          `Couldn't apply — ${capabilityKey} changed on the pod since this update was asked for. Nothing was asked of the computer: ask for the update again.`
+        );
+      }
       const out = await applyInstallationRequest({
         computer,
         capability,

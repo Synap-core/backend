@@ -1354,6 +1354,7 @@ export type RunChoice = {
 };
 declare const RUN_CHOICE_VIAS: readonly [
 	"named",
+	"authored",
 	"stored",
 	"fallback",
 	"default"
@@ -1374,6 +1375,49 @@ export interface RunOn {
 		name: string | null;
 		why: AgentWakeRefusal | "not_awake" | "refused";
 	} | null;
+	/**
+	 * The computer the agent that took it runs on (`users.host_user_id`, the
+	 * computer's principal), at the moment it was handed the run. Absent for
+	 * Synap AI and for an agent on no known computer.
+	 */
+	computerUserId?: string | null;
+	/** The agent preset the runner choice named (`{ agentId, preset }`). */
+	preset?: string | null;
+	/**
+	 * The tools the playbook `requires`, as checked on the computer of the
+	 * runner that took it (only when the playbook declares some).
+	 */
+	requires?: Record<string, RunnerRequiresState> | null;
+	/**
+	 * Only when the playbook names a `runner`: each choice of it that could
+	 * not take this run, in order, and why — whether a later choice took it or
+	 * the run fell to the next rung.
+	 */
+	runnerPassedOver?: RunnerPassedOver[] | null;
+}
+declare const RUNNER_REQUIRES_STATES: readonly [
+	"installed",
+	"missing",
+	"unverified"
+];
+export type RunnerRequiresState = (typeof RUNNER_REQUIRES_STATES)[number];
+/**
+ * One choice of a playbook's `runner` that could not take a run, and why:
+ *   no_agent      — none of the person's agents fits it (role, engine,
+ *                   computer, or an agent id that is not theirs);
+ *   not_allowed   — Synap AI, on a playbook that runs only on agents;
+ *   refused       — the route refuses the agent (paused, not theirs…);
+ *   not_awake     — the agent is not awake now (`why` carries the wake
+ *                   refusal when it cannot wake);
+ *   missing_tools — awake, but an earlier awake choice had every tool, or it
+ *                   lacks some and a later choice has them all.
+ */
+export interface RunnerPassedOver {
+	/** Its position in the playbook's `runner` list (0 = first). */
+	choice: number;
+	agentUserId: string | null;
+	name: string | null;
+	why: AgentWakeRefusal | "missing_tools" | "no_agent" | "not_allowed" | "not_awake" | "refused";
 }
 /** One answer the person can pick, in the order the pod offers them. */
 export interface RunChoiceOption {
@@ -8557,6 +8601,8 @@ export interface PlaybookRunGeneration {
 	subjectId: string | null;
 	/** Where the result lands, as the playbook declared it (`ExpectedOutput.lands`). */
 	lands: {
+		/** The person's own plain block, replaced on approval (`OutputLanding.owner`). */
+		owner?: "person";
 		section: string;
 		target: "subject_document_section";
 	} | null;
@@ -14535,6 +14581,16 @@ export interface OutputLanding {
 	/** The section's title, e.g. "Caption draft". */
 	section: string;
 	/**
+	 * WHOSE section it is (decision "An approved one-shot draft lands in the
+	 * person's own target", founder 10 Nov 2026). `ai` (the default): an
+	 * AI-owned `synap-section` the app offers as a draft. `person`: the
+	 * document's own plain `## <section>` block, the person's words as an app
+	 * writes them (e.g. Content Studio's `## Caption`): the proposal replaces
+	 * its body on approval (appends it when absent), so approving IS the one
+	 * write and no app copies a draft over.
+	 */
+	owner?: "ai" | "person";
+	/**
 	 * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
 	 * reads the person's last decided drafts of THIS playbook in THIS space, the
 	 * approved ones as they were applied (after the person's revisions), the
@@ -14914,6 +14970,38 @@ export interface SlotAskSnapshot {
  * vocabularies exactly like ours — makes the category a MANDATORY field.
  */
 export type PlaybookStageCategory = "backlog" | "canceled" | "completed" | "paused" | "planned" | "started";
+/**
+ * WHO does a playbook or a step (founder decision, proposal 72fdca0b; spec
+ * document 7111934d §2.1). One choice:
+ *   - `"self"`      a STEP only: the run's own agent does it (the default);
+ *   - `"synap_ai"`  the pod's own AI; `{ synapAi: { persona } }` names its
+ *                   persona (an `agents.slug`, today's run param `agentType`);
+ *   - `{ agentId }` one agent (`users.id`): pod-specific, so never in a
+ *                   catalog package; `preset` names one of its presets;
+ *   - `{ role }`    any of the person's agents whose `agent_role`, or one of
+ *                   whose presets, is this slug; portable;
+ *   - `{ engine }`  any of the person's agents of this engine
+ *                   (`users.agent_type`, e.g. "claude-code"); portable.
+ * `computer` narrows a role or engine to the agents on that computer (by id or
+ * name). DECLARED: the write door validates it; resolving it to an agent is the
+ * runner resolution's job (`agent-dispatch/route.ts` stays the only router).
+ */
+export type PlaybookRunnerRef = "self" | "synap_ai" | {
+	synapAi: {
+		persona: string;
+	};
+} | {
+	agentId: string;
+	preset?: string;
+} | {
+	computer?: string;
+	role: string;
+} | {
+	computer?: string;
+	engine: string;
+};
+/** One choice, or an ordered list where each later choice is a fallback. */
+export type PlaybookRunner = PlaybookRunnerRef | PlaybookRunnerRef[];
 declare const CRITERION_CHECK_KINDS: readonly [
 	"evidence",
 	"capability",
@@ -15319,8 +15407,8 @@ export type RunCostRead = RunCost & {
 /** One turn's end, as the ledger kept it. `null` = not recorded. */
 export interface RunCostTurn {
 	at: string | null;
-	outcome: "completed" | "stopped" | null;
-	/** Why a stopped turn stopped (`turn_budget` | `max_steps`). */
+	outcome: "completed" | "failed" | "stopped" | null;
+	/** Why a stopped turn stopped, or why a failed one failed. */
 	reason: string | null;
 	agentType: string | null;
 	/** The model of the turn's LAST provider call (no per-call model is kept). */
@@ -25060,6 +25148,13 @@ export interface SessionUsage {
 	/** What the session's latest run spent; null = no run turn reported. */
 	cost: RunCostRead | null;
 }
+/** The offer a remembered choice gets when the playbook names its own runner. */
+export interface RunnerOffer {
+	kind: "set_playbook_runner";
+	/** What `playbooks.update { runner }` would write. */
+	runner: PlaybookRunner;
+	message: string;
+}
 export interface CriterionScore {
 	key: string;
 	statement: string;
@@ -25115,7 +25210,7 @@ export interface GeneratedRunAnswer {
 export interface RunHandedTo {
 	agentUserId: string;
 	name: string | null;
-	via: "assigned" | "named";
+	via: "assigned" | "authored" | "named";
 }
 /** What the write door answers: applied with the new read, or proposed. */
 export type SetRunChoiceResult = {
@@ -39466,6 +39561,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -40784,6 +40880,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -48098,6 +48195,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -48967,6 +49065,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning?: string | undefined;
 				remember?: boolean | undefined;
 				runOn?: "synap_ai" | undefined;
+				runner?: unknown;
 				source?: string | undefined;
 				subjectId?: string | undefined;
 				suspendedIntent?: string | undefined;
@@ -48993,6 +49092,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				run: null;
+				runnerOffer?: RunnerOffer | undefined;
 				session: FocusSession | null;
 				status: "proposed";
 				unenabledSkills?: undefined;
@@ -49050,6 +49150,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				proposalId: string | null;
 				run: null;
+				runnerOffer?: RunnerOffer | undefined;
 				session: {
 					agentIds: string[] | null;
 					channelId: string | null;
@@ -49118,6 +49219,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
+				runnerOffer?: RunnerOffer | undefined;
 				session: {
 					agentIds: string[] | null;
 					channelId: string | null;
@@ -49403,6 +49505,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							approved?: number | undefined;
 							rejected?: number | undefined;
 						} | undefined;
+						owner?: "ai" | "person" | undefined;
 						section: string;
 						target: "subject_document_section";
 					} | undefined;
@@ -60587,6 +60690,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									approved?: number | undefined;
 									rejected?: number | undefined;
 								} | undefined;
+								owner?: "ai" | "person" | undefined;
 								section: string;
 								target: "subject_document_section";
 							} | undefined;

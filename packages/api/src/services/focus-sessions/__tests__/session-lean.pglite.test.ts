@@ -278,6 +278,121 @@ describe("lean session read (C8)", () => {
   });
 });
 
+/**
+ * The MCP door's lean read stays under the reply cap BY CONSTRUCTION
+ * (finding 69fdd2e6): on 2026-11-10 three handed sessions read 18,043-19,814
+ * characters lean, the cap cut each to `{truncated, head}`, and the founder's
+ * Mac worker could not launch them. The fixture is their shape, larger: a
+ * playbook run whose stages carry long goals and criteria, whose metadata
+ * carries the prompt and 40 run turns, 60 declared outputs with long labels,
+ * and a room of long agent posts. It goes through the real handler, `ok()`
+ * and the cap, as a worker's call does.
+ *
+ * Negative control: with the door answering `withParentSessionId(session)`
+ * (the whole row) and no `fitReply`, this case is cut by the cap (red).
+ */
+describe("lean session read on the MCP door fits under the reply cap", () => {
+  const FAT = randomUUID();
+  const FAT_CH = randomUUID();
+  const PLAYBOOK = randomUUID();
+
+  beforeAll(async () => {
+    await q(
+      `insert into channels (id, user_id, workspace_id, channel_type, created_at, updated_at)
+       values ($1, $2, null, 'ai_thread', now(), now())`,
+      [FAT_CH, OWNER]
+    );
+    const outputs = Array.from({ length: 60 }, (_, i) => ({
+      key: `out-${i}`,
+      label: `Output ${i}: ${"l".repeat(220)}`,
+      kind: i === 0 ? "pull_request" : "document",
+    }));
+    const stages = Array.from({ length: 8 }, (_, i) => ({
+      key: `stage-${i}`,
+      name: `Stage ${i}`,
+      goal: "g".repeat(900),
+      criteria: [{ key: `c-${i}`, statement: "s".repeat(400) }],
+      expectedOutputs: [
+        { key: `so-${i}`, label: `Stage output ${i}`, kind: "code" },
+      ],
+    }));
+    const metadata = {
+      prompt: "p".repeat(2_500),
+      runTurns: Array.from({ length: 40 }, (_, i) => ({
+        turn: i,
+        text: "r".repeat(250),
+      })),
+      params: { repo: "synap-backend", takes: ["file-1", "file-2"] },
+    };
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, title, goal, status, expected_outputs, stages, metadata, playbook_id, origin, channel_id, created_at, updated_at, started_at)
+       values ($1, $2, null, null, 'Fat session', $3, 'active', $4::jsonb, $5::jsonb, $6::jsonb, $7, 'human', $8, now(), now(), now())`,
+      [
+        FAT,
+        OWNER,
+        "Ship the fat run ".repeat(60),
+        JSON.stringify(outputs),
+        JSON.stringify(stages),
+        JSON.stringify(metadata),
+        PLAYBOOK,
+        FAT_CH,
+      ]
+    );
+    for (let i = 0; i < 12; i++) {
+      await q(
+        `insert into messages (id, channel_id, role, author_type, user_id, content, timestamp, ephemeral, hash, previous_hash)
+         values ($1, $2, 'assistant', 'agent', $3, $4, $5, false, 'h', '')`,
+        [
+          randomUUID(),
+          FAT_CH,
+          OTHER,
+          `checkpoint ${i}: ${"m".repeat(3_000)}`,
+          minutesAgo(30 - i).toISOString(),
+        ]
+      );
+    }
+  });
+
+  it("the whole row alone is over the cap; the door's lean reply is under it, parseable, with what a worker reads", async () => {
+    const { REPLY_CAP_CHARS, capReply } =
+      await import("../../../routers/mcp/reply-cap.js");
+    // The fixture is really over: the row the door used to send.
+    expect(JSON.stringify(await rowOf(FAT)).length).toBeGreaterThan(
+      REPLY_CAP_CHARS
+    );
+    const { sessionHandlers } =
+      await import("../../../routers/mcp/handlers/session.js");
+    const res = capReply(
+      "synap_get_session",
+      await sessionHandlers.synap_get_session!({
+        toolName: "synap_get_session",
+        args: { sessionId: FAT, detail: "lean" },
+        userId: OWNER,
+        apiKeyScopes: ["mcp.read"],
+      } as never)
+    );
+    const block = res.content?.[0];
+    if (!block || block.type !== "text") throw new Error("expected text");
+    // eslint-disable-next-line no-console
+    console.log(`lean MCP reply: ${block.text.length} characters`);
+    expect(block.text.length).toBeLessThanOrEqual(REPLY_CAP_CHARS);
+    const parsed = JSON.parse(block.text);
+    expect(parsed.truncated).toBeUndefined();
+    // What the worker reads: the room, the playbook, the params, the output kinds, the outcomes.
+    expect(parsed.session).toMatchObject({
+      id: FAT,
+      channelId: FAT_CH,
+      playbookId: PLAYBOOK,
+      metadata: { params: { repo: "synap-backend" } },
+    });
+    expect(parsed.session.expectedOutputs[0].kind).toBe("pull_request");
+    expect(parsed.session.stages[0].expectedOutputs[0].kind).toBe("code");
+    expect(parsed.outcomes.status).toBe("ok");
+    expect(parsed.outcomes.outcomes.length).toBeGreaterThan(0);
+    expect(JSON.stringify(parsed.session)).not.toMatch(/runTurns|"prompt"/);
+  });
+});
+
 describe("deploys gate read (C8)", () => {
   it("lists the owner's deploys across sessions, or only the commit asked for", async () => {
     const row = await rowOf(MINE);

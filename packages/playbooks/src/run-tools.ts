@@ -1,6 +1,7 @@
 /**
  * THE TOOLS A PLAYBOOK RUN IS GIVEN — the one source (plan 08e4fba7, founder
- * decisions 3 and 4, 9 Nov 2026).
+ * decisions 3 and 4, 9 Nov 2026; the run's own session tools, decision
+ * 832469a0, 10 Nov 2026).
  *
  * A run gets a FLOOR fixed by its class, plus its playbook's ONE `tools` list,
  * which means "only these": nothing else is offered. The class is derived from
@@ -8,7 +9,9 @@
  *
  *   one-shot  `executor: generate`: one model call, NO tools.
  *   short     an IS run with at most 2 stages and no gate: reads only.
- *   long      an IS run with 3+ stages or a gate: the pod's 22 core tools.
+ *   long      an IS run with 3+ stages or a gate: the pod's 19 core tools,
+ *             the relation read, the run's own session tools (it has
+ *             stages and gates to drive) and the run-history reads.
  *
  * The pod sends the IS the FINAL tool list of a turn (`run.tools`); the IS
  * keeps tool definitions, never a list. Copies, each pinned to this file:
@@ -75,11 +78,18 @@ export const SHORT_RUN_FLOOR = [
 /**
  * The floor of a long run: the pod's core tools (read and search the pod,
  * orient in its kinds, create and update entities and documents, link them,
- * the one graph proposal, identity and facets, memory recall, a skill, and
- * the run-history reads: which playbooks exist, their sessions, one session
- * (plan fbfadf54 fix 1.5). Nothing that builds spaces, manages connections,
- * writes a session or reaches outside the pod: a run that needs that declares
- * it.
+ * the one graph proposal, identity and facets, memory recall, a skill), the
+ * relation read (`graph_traverse`), and the run's OWN tools (decision
+ * 832469a0, 10 Nov 2026), each bound by the IS to the run's own session and
+ * room, never another's: `update_run` (read the run, advance its stage, which
+ * files the stage's gate; declare and claim deliverables; hand the person a
+ * deliverable with an ask), `post_in_room` (a progress note in its room),
+ * `get_brand_kit` (the brand kit of the run's project). The run audit of 10
+ * Nov (pod document 80005d94) found every long run ending by handing these
+ * mechanical steps to the person. Then the run-history reads: which playbooks
+ * exist, their sessions, one session (plan fbfadf54 fix 1.5). Nothing that
+ * builds spaces, manages connections, starts sessions or reaches outside the
+ * pod: a run that needs that declares it.
  */
 export const LONG_RUN_FLOOR = [
   "search_unified",
@@ -101,6 +111,10 @@ export const LONG_RUN_FLOOR = [
   "detach_facet",
   "memory_search",
   "load_skill",
+  "graph_traverse",
+  "update_run",
+  "post_in_room",
+  "get_brand_kit",
   "list_playbooks",
   "list_sessions",
   "get_session",
@@ -116,16 +130,18 @@ export const RUN_TOOL_FLOORS: Readonly<Record<RunClass, readonly string[]>> = {
 /**
  * Every IS tool a playbook may name in `tools`: the long floor, plus tools a
  * run may be given on top. A name here is a run tool, never an intent or a
- * capability. Never a tool that writes a session, an ask or a room: the pod
- * closes a run's session at turn end and raises a stage's ask (founder, 9 Nov
- * 2026), so a run never needs one. Reading sessions is in the long floor.
+ * capability. A run's session, ask and room tools are its OWN (`update_run`,
+ * `post_in_room`, in the long floor; decision 832469a0, 10 Nov 2026, which
+ * reverses the 9 Nov "a run never needs one"); reading sessions is in the
+ * long floor too. The general session tools that name any session
+ * (`update_session`, `start_session`, `relay_answer`) and `proactive_post`
+ * are never run tools, and the pod still closes a run's session at turn end.
  */
 export const RUN_TOOL_NAMES = [
   ...LONG_RUN_FLOOR,
   "web_search",
   "web_fetch",
   "batch_web_fetch",
-  "graph_traverse",
   "get_knowledge",
   "list_knowledge",
   "save_research",

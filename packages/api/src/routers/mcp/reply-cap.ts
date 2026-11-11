@@ -62,6 +62,8 @@ export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
   synap_list_workspaces: "Lower `limit` and page with `offset`.",
   synap_list_tracks: "Lower `limit` and page with `offset`.",
   synap_list_agents: "Lower `limit` and page with `offset`.",
+  synap_get_thread_context:
+    "Lower `limit`, and read older messages with `cursor` (the previous `nextCursor`).",
   synap_orient:
     "Pass `scope` and/or `workspaceId`; a worker polling its hand-offs passes only:'handedToYou'.",
 };

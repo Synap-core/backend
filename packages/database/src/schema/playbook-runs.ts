@@ -124,7 +124,12 @@ export interface PlaybookRunGeneration {
   /** The entity the run worked on (no session carries it). */
   subjectId: string | null;
   /** Where the result lands, as the playbook declared it (`ExpectedOutput.lands`). */
-  lands: { target: "subject_document_section"; section: string } | null;
+  lands: {
+    target: "subject_document_section";
+    section: string;
+    /** The person's own plain block, replaced on approval (`OutputLanding.owner`). */
+    owner?: "person";
+  } | null;
   /** What the prompt was made of, in order, with each part's size. */
   context: Array<{
     kind: "method" | "subject" | "subject_document" | "examples";

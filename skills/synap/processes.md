@@ -136,23 +136,26 @@ All three are optional: without them a playbook runs exactly as before.
   Example: render on the Mac, else the devbox:
   `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
   `null` clears a playbook's runner. A choice made when running it comes
-  first, then the playbook's runner, then the person's remembered choice.
+  first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+  list is resolved then, and nobody it names → refused), then the playbook's
+  runner, then the person's remembered choice.
 - `requires`: capability keys (`["media-ffmpeg"]`), at most 16; a stage needs
   its own plus the playbook's. They are checked on the runner's computer
   before a step is handed over.
 - `tools`: what a RUN of it may use beyond the floor of its class, and ONLY
   these (a one-shot `generate` playbook gets no tools; a run of at most 2
-  stages and no gate gets 6 reads; a longer one the pod's 22 core tools,
-  which include `list_playbooks`, `list_sessions` and `get_session`).
+  stages and no gate gets 6 reads; a longer one 26: the pod's core tools,
+  the relation read, its own session tools `update_run`, `post_in_room`,
+  `get_brand_kit`, and `list_playbooks`, `list_sessions`, `get_session`).
   Each entry is a run tool (`update_document`, `web_search`; the MCP
   spelling synap_web_search reads the same), an intent slug
   (such as search_external) or a capability name. A stage's `tools` narrows the
   playbook's while it is active and must be a subset (refused otherwise).
   A run on the pod's AI whose tools lack what a stage declares does not
   start; a stage with no `tools` of its own declares the playbook's run
-  tools. A run has no tool that writes a session, an ask or a room: the pod
-  closes its session when the turn ends and raises a stage's `endAsk`, so
-  never ask for those in text.
+  tools. A run writes only its OWN session and room (`update_run`,
+  `post_in_room`, long runs); the pod closes its session when the turn ends
+  and raises a stage's `endAsk`.
 - `uses` (a stage): `{ "playbookId": "<id>", "version"?: n, "with"?: { "<its
   param>": "<this run's param or subject path>" }, "outputs"?: { "<this
   stage's slot label>": "<its output label>" } }`. Omit `version` to pin
