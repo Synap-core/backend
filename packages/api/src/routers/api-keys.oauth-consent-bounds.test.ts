@@ -159,9 +159,7 @@ describe("consent procedures — the scope fits what an app description may decl
 
   it("a scope longer than a whole app description is refused at the input schema", async () => {
     const err = await errorOf(
-      caller().getOAuthConsentContext(
-        withScope("a".repeat(CIMD_MAX_BYTES + 1))
-      )
+      caller().getOAuthConsentContext(withScope("a".repeat(CIMD_MAX_BYTES + 1)))
     );
     expect(err.code).toBe("BAD_REQUEST");
     expect(resolveCimdClient).not.toHaveBeenCalled();
