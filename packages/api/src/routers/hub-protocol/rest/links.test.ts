@@ -159,6 +159,18 @@ vi.mock(
 // `link-endpoint-visibility.pglite.test.ts`; here it is driven by the same
 // maps the rest of this file uses, so these tests pin that the HANDLER
 // consults it before governance and returns its refusal verbatim.
+// The session handle door (`resolveVerifiedSessionId`, its own suite pins the
+// ownership SQL): here it follows the same contract over a set of sessions
+// the caller owns, so these tests pin that the HANDLER asks it.
+const ownedSessionIds = new Set<string>();
+vi.mock("../_middleware/session.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveVerifiedSessionId: vi.fn(
+    async (_userId: string, header?: string | null, body?: string | null) =>
+      header ?? (body && ownedSessionIds.has(body) ? body : undefined)
+  ),
+}));
+
 vi.mock("./link-endpoint-visibility.js", () => ({
   checkLinkEndpointsVisible: vi.fn(
     async (e: {
@@ -706,6 +718,7 @@ describe("POST /links — project --uses--> workspace", () => {
       proposalId: "prop-uses-2",
     } as never);
     const SESSION = "44444444-4444-4444-8444-444444444444";
+    ownedSessionIds.add(SESSION);
     await postLinks(buildTestApp(), {
       ...usesBody,
       sessionId: SESSION,
@@ -717,6 +730,24 @@ describe("POST /links — project --uses--> workspace", () => {
       sessionId: SESSION,
       data: { metadata: { purpose: "Win the first clients" } },
     });
+  });
+
+  // Rules out "the body's session wins": another user's session named in the
+  // body is never the gate's session (the verified-handle door drops it).
+  it("never files the gate under another user's session named in the body", async () => {
+    visibleProjectIds.add(PROJECT);
+    ownedSessionIds.clear();
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      granted: false,
+      proposalId: "prop-uses-3",
+    } as never);
+    await postLinks(buildTestApp(), {
+      ...usesBody,
+      sessionId: "55555555-5555-4555-8555-555555555555",
+    });
+    expect(
+      vi.mocked(checkPermissionOrPropose).mock.calls[0]?.[0]
+    ).not.toHaveProperty("sessionId", "55555555-5555-4555-8555-555555555555");
   });
 });
 

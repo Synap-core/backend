@@ -24,6 +24,7 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { resolveVerifiedSessionId } from "../_middleware/session.js";
 import {
   createLink,
   getLinksFor,
@@ -424,10 +425,14 @@ export function registerLinksRoutes(app: HubHono): void {
           );
         }
         const purpose = rawPurpose as string | null | undefined;
+        // The verified X-Session-Id header wins; the body's handle only for
+        // a session the caller OWNS (never another user's), as capture does.
         const sessionId =
-          (typeof body.sessionId === "string" ? body.sessionId : null) ??
-          c.get("sessionId") ??
-          null;
+          (await resolveVerifiedSessionId(
+            userId,
+            c.get("sessionId"),
+            typeof body.sessionId === "string" ? body.sessionId : undefined
+          )) ?? null;
         const outcome = await setProjectWorkspaceMembershipGoverned({
           userId,
           agentUserId: actorId !== userId ? actorId : undefined,
