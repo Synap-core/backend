@@ -223,7 +223,8 @@ async function countGoalWork(
  */
 async function readChildGoals(
   userId: string,
-  goalIds: string[]
+  goalIds: string[],
+  opts: GoalTreeWalk = {}
 ): Promise<Map<string, string[]>> {
   const rows = await db
     .select({ parent: links.toId, child: projectTracks.id })
@@ -238,7 +239,10 @@ async function readChildGoals(
         eq(links.fromType, "track"),
         eq(links.toType, "track"),
         inArray(links.toId, goalIds),
-        scopedDb(AccessContext.operator({ userId })).predicate(projectTracks)
+        scopedDb(AccessContext.operator({ userId })).predicate(projectTracks),
+        opts.primaryOnly
+          ? drizzleSql`(${links.metadata} ->> 'primary') = 'true'`
+          : undefined
       )
     );
   const out = new Map<string, string[]>();
@@ -303,6 +307,17 @@ export async function readGoalRollups(
 export const GOAL_TREE_MAX_DEPTH = 32;
 
 /**
+ * How a goal tree is walked. `primaryOnly`: follow only a sub-goal's PRIMARY
+ * `serves` edge (`metadata.primary`), so a sub-goal with several parents
+ * belongs to ONE tree: what the pillar health read needs to count a session
+ * once, in one pillar. The default follows every `serves` edge the reader may
+ * see (the goal page, orient's rollups list a sub-goal under each parent).
+ */
+export interface GoalTreeWalk {
+  primaryOnly?: boolean;
+}
+
+/**
  * THE goal-tree walk: `rootIds` and every goal that serves one of them, down
  * `serves` edges the reader may see (`readChildGoals`), each goal expanded
  * once, at most {@link GOAL_TREE_MAX_DEPTH} deep. `childrenOf` holds each
@@ -311,13 +326,14 @@ export const GOAL_TREE_MAX_DEPTH = 32;
  */
 export async function readGoalTreeNodes(
   userId: string,
-  rootIds: readonly string[]
+  rootIds: readonly string[],
+  opts: GoalTreeWalk = {}
 ): Promise<{ nodes: Set<string>; childrenOf: Map<string, string[]> }> {
   const childrenOf = new Map<string, string[]>();
   let frontier = [...new Set(rootIds)];
   const nodes = new Set(frontier);
   for (let depth = 0; depth < GOAL_TREE_MAX_DEPTH && frontier.length; depth++) {
-    const kids = await readChildGoals(userId, frontier);
+    const kids = await readChildGoals(userId, frontier, opts);
     const next: string[] = [];
     for (const parent of frontier) {
       const mine = [...new Set(kids.get(parent) ?? [])];
@@ -345,10 +361,13 @@ export async function readGoalTreeNodes(
 export async function readGoalGroupWork(
   userId: string,
   rootIds: readonly string[],
-  since: Date = windowStart()
+  opts: GoalTreeWalk & { since?: Date } = {}
 ): Promise<{ sessions: number; moved: number }> {
   if (rootIds.length === 0) return { sessions: 0, moved: 0 };
-  const { nodes } = await readGoalTreeNodes(userId, rootIds);
+  const since = opts.since ?? windowStart();
+  const { nodes } = await readGoalTreeNodes(userId, rootIds, {
+    primaryOnly: opts.primaryOnly,
+  });
   const goalIds = [...nodes];
   // The children are read through the same population rule as the goal's own
   // sessions (`workAndTrackedRunsWhere`). Recursive UNION: a lineage loop ends.

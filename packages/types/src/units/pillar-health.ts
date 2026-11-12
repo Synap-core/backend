@@ -59,7 +59,8 @@ export interface PillarHealth {
   reason: string;
   /**
    * Distinct work sessions on the pillar's primary goals (filed in, serving,
-   * or spawned under one of them; sub-goals included), each counted once.
+   * or spawned under one of them), each counted once. A sub-goal's sessions
+   * count only under its PRIMARY parent, so a session counts in one pillar.
    * Absent when the pod did not count them.
    */
   sessions?: number;

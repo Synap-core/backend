@@ -13,8 +13,9 @@
  *
  *   health     the pure rule (`derivePillarHealth`, `@synap-core/types/units`)
  *              over the primary goals; `sessions` = ONE union over those
- *              goals' trees and the sessions spawned under them
- *              (`readGoalGroupWork`), never a sum per goal;
+ *              goals' trees, walked down PRIMARY parent edges only (a
+ *              sub-goal sits in one tree), and the sessions spawned under
+ *              them (`readGoalGroupWork`), never a sum per goal;
  *   stale      nothing moved in the window: no move of the pillar's things,
  *              sessions or advancing goals (`readScopeRollup` with BOTH
  *              lenses) and none in the primary goals' work;
@@ -263,9 +264,12 @@ async function readPillar(
       workspaceId: space.id,
       byKind: true,
     }),
+    // Down PRIMARY parent edges only: a sub-goal with two parents counts in
+    // its primary parent's pillar, once.
     readGoalGroupWork(
       userId,
-      primary.map((a) => a.goal.id)
+      primary.map((a) => a.goal.id),
+      { primaryOnly: true }
     ),
     readDeclaredOutputKinds(userId, space.id),
   ]);

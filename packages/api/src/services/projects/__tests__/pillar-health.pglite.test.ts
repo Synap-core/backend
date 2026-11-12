@@ -664,3 +664,26 @@ describe("readProjectPillars — the derived read", () => {
     expect(await readProjectPillars("user-stranger", P)).toBeNull();
   });
 });
+
+describe("a sub-goal with two parents counts in one pillar", () => {
+  // Rules out "the pillar walk follows every serves edge": G_SUB (with its
+  // session S_SUB) serves G_RUN (primary, Sales) AND G_PAUSED (non-primary,
+  // Brand). Its sessions count once, in Sales only.
+  it("walks primary parent edges only", async () => {
+    await link("track", G_SUB, "track", G_PAUSED, "serves");
+    try {
+      const read = await readProjectPillars(ME, P);
+      const sales = read!.pillars.find((p) => p.workspaceId === W_SALES)!;
+      const brand = read!.pillars.find((p) => p.workspaceId === W_BRAND)!;
+      expect(sales.health.sessions).toBe(4);
+      expect(brand.health.sessions).toBe(0);
+      // The default walk (goal page, orient) still lists it under both.
+      expect((await readGoalGroupWork(ME, [G_PAUSED])).sessions).toBe(1);
+    } finally {
+      await q(
+        `delete from links where from_id = $1 and to_id = $2 and link_type = 'serves'`,
+        [G_SUB, G_PAUSED]
+      );
+    }
+  });
+});
