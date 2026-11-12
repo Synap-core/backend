@@ -20047,6 +20047,16 @@ export type StatusOfAnswer = StatusOf | {
 	id: string;
 	type: "unknown";
 };
+export interface DependencyState {
+	blocked: boolean;
+	/**
+	 * The blockers still holding it up, after `replaces` following — open ones
+	 * and dropped ones (`dropped: true`, ended without delivering).
+	 */
+	openBlockers: OpenBlocker[];
+	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
+	declared: DependencyNodeRef[];
+}
 /** INDEX projection a UI/agent can name, not just id. */
 export type UsedWorkspaceRef = {
 	domain: string | null;
@@ -22423,16 +22433,6 @@ export interface GraphEnvelope {
 	 * "not found" instead of rendering the placeholder as a real entity.
 	 */
 	found: boolean;
-}
-export interface DependencyState {
-	blocked: boolean;
-	/**
-	 * The blockers still holding it up, after `replaces` following — open ones
-	 * and dropped ones (`dropped: true`, ended without delivering).
-	 */
-	openBlockers: OpenBlocker[];
-	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
-	declared: DependencyNodeRef[];
 }
 /** Per space and kind: the rows missing one required link. */
 export interface RequiredLinkDebt {
@@ -39143,7 +39143,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -40403,7 +40403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -52753,9 +52753,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					readonly status: "unavailable";
 				} | null | undefined;
 				phaseCategory: PlaybookStageCategory;
-				pillars?: Pillar[] | {
+				pillars?: {
 					readonly status: "unavailable";
-				} | undefined;
+				} | Pillar[] | undefined;
 				project: {
 					colorSlot: number | null;
 					createdAt: Date;
@@ -52775,9 +52775,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string | null;
 				};
-				rootHealth?: ProjectRootHealth | {
+				rootHealth?: {
 					readonly status: "unavailable";
-				} | undefined;
+				} | ProjectRootHealth | undefined;
 				subject: ProjectSubject | null;
 				usedWorkspaceIds: string[];
 				usedWorkspaces: UsedWorkspaceRef[];
