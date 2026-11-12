@@ -58,9 +58,8 @@ vi.mock("../../utils/realtime-broadcast.js", () => ({
   broadcastSuccess: async (...args: unknown[]) => m.broadcast(...args),
 }));
 
-const { handleWhiteboardSnapshot, handleWhiteboardRestore } = await import(
-  "../snapshot-worker.js"
-);
+const { handleWhiteboardSnapshot, handleWhiteboardRestore } =
+  await import("../snapshot-worker.js");
 
 const job = {
   data: {
