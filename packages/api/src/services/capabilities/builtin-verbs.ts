@@ -63,6 +63,7 @@ import {
   profilesByRoleCategory,
   MessageRole,
   MessageAuthorType,
+  MessageDirection,
   getActingAgentUserId,
   messagingAccounts,
   profiles,
@@ -3038,6 +3039,8 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
     participantExternalId?: string;
     sentAt?: string;
     outbound?: boolean;
+    /** The provider's native message id (never the content-key fallback). */
+    messageId?: string;
   }) =>
     recordInboundMessage({
       provider: input.provider,
@@ -3061,6 +3064,21 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
       ...(args.outbound
         ? { authorType: MessageAuthorType.HUMAN, role: MessageRole.ASSISTANT }
         : {}),
+      // The direction is stated, never left to the recorder's INBOUND default:
+      // our own send read back from the provider is OUTBOUND, and a row that
+      // says INBOUND next to the real outbound one is a twin. Single-message
+      // mode passes no `outbound` → omitted → the recorder's default holds.
+      ...(args.outbound !== undefined
+        ? {
+            direction: args.outbound
+              ? MessageDirection.OUTBOUND
+              : MessageDirection.INBOUND,
+          }
+        : {}),
+      // The provider's own id: keys the (channel_id, external_message_id)
+      // unique index and the legacy merge, so a message already stored by the
+      // send door (same provider id) is no second row.
+      ...(args.messageId ? { messageId: args.messageId } : {}),
       // Threaded from the top-level param: a historical backfill suppresses the
       // per-message event fan-out. Omitted (undefined) → recorder default false.
       ...(input.suppressSideEffects !== undefined
@@ -3135,6 +3153,11 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
           : {}),
         ...(typeof sentRaw === "string" ? { sentAt: sentRaw } : {}),
         outbound,
+        // Only a real provider id; the content-key fallback is a dedup seed,
+        // not a message id.
+        ...(idRaw !== undefined && idRaw !== null && String(idRaw).length > 0
+          ? { messageId: String(idRaw) }
+          : {}),
       });
       channelId = result.channelId;
       contextObjectId = result.contextObjectId;

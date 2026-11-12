@@ -1068,7 +1068,16 @@ export async function recordInboundMessage(
 ): Promise<RecordInboundMessageResult> {
   const preview = args.text.slice(0, 120);
   const sentAt = args.sentAt ? new Date(args.sentAt) : new Date();
-  const direction = args.direction ?? MessageDirection.INBOUND;
+  // No stated direction: a row recorded as the operator's own message
+  // (HUMAN author, ASSISTANT role) is OUTBOUND, never the INBOUND default —
+  // that pair is how `channel.ingest` marks our own send read back from the
+  // provider. Every other caller omits both, so its default is unchanged.
+  const direction =
+    args.direction ??
+    (args.authorType === MessageAuthorType.HUMAN &&
+    args.role === MessageRole.ASSISTANT
+      ? MessageDirection.OUTBOUND
+      : MessageDirection.INBOUND);
   const outbound = direction === MessageDirection.OUTBOUND;
   const externalMessageId = args.messageId?.trim() || null;
 

@@ -100,6 +100,7 @@ import {
 import { webhooksInboundRouter } from "../../routers/webhooks-inbound.js";
 import { runMessagingHistoryImport } from "./messaging-history-import.js";
 import { openPersonChannel } from "./inbound-recorder.js";
+import { BUILTIN_VERBS } from "../capabilities/builtin-verbs.js";
 import { PROFILE_LOOKUP_DAILY_CAP } from "./participant-lookup.js";
 
 const dialect = new PgDialect();
@@ -1024,5 +1025,111 @@ describe("delivery status moves forward only", () => {
     await receipt("chat-in", "n1", "read");
     const [ch] = await channelOf("chat-in");
     expect((await messagesIn(ch!.id))[0]!.delivery_status).toBeNull();
+  });
+});
+
+describe("channel.ingest keeps the provider id and the direction", () => {
+  // The daily LinkedIn read-back: unipile_list_messages -> channel.ingest with
+  // isOutbound = is_sender. Our own sends must not come back as INBOUND rows
+  // with no id next to the outbound row the send door stored.
+  const MAP = {
+    id: "id",
+    text: "text",
+    sentAt: "timestamp",
+    isOutbound: "is_sender",
+  };
+  const ingest = (rows: Array<Record<string, unknown>>) =>
+    BUILTIN_VERBS["channel.ingest"](
+      {
+        provider: "linkedin",
+        externalId: "chat-ingest",
+        title: "Marie Curie",
+        suppressSideEffects: true,
+        messageMap: MAP,
+        messages: rows,
+      },
+      { userId: OWNER, workspaceId: null }
+    );
+  const row = (id: string, is_sender: boolean, text = `text of ${id}`) => ({
+    id,
+    text,
+    timestamp: T(10),
+    is_sender,
+  });
+  const rowsOf = async () => {
+    const [ch] = await channelOf("chat-ingest");
+    return ch ? messagesIn(ch.id) : [];
+  };
+
+  it("a send the pod already stored (same provider id) is no second row", async () => {
+    const { rows } = await q<{ id: string }>(
+      `insert into channels (user_id, workspace_id, channel_type, scope, title, context_object_type, context_object_id,
+                             external_source, external_id, external_channel_id, status, metadata)
+       values ($1,$2,'external','workspace','Marie Curie','entity',$3,'linkedin','chat-ingest','chat-ingest','active','{}'::jsonb)
+       returning id`,
+      [OWNER, WS, MARIE]
+    );
+    await q(
+      `insert into messages (channel_id, user_id, role, author_type, content, hash, timestamp,
+                             direction, delivery_status, external_message_id, external_source)
+       values ($1,$2,'assistant','human','Hello Marie','tamper-hash-of-the-send',$3,
+               'outbound','sent','sent-X','linkedin')`,
+      [rows[0]!.id, OWNER, T(10)]
+    );
+
+    await ingest([row("sent-X", true, "Hello Marie")]);
+
+    const after = await messagesIn(rows[0]!.id);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({
+      direction: "outbound",
+      external_message_id: "sent-X",
+    });
+  });
+
+  it("our own message not stored yet lands OUTBOUND with its provider id", async () => {
+    await ingest([row("sent-Y", true)]);
+    const after = await rowsOf();
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({
+      direction: "outbound",
+      external_message_id: "sent-Y",
+      author_type: "human",
+    });
+  });
+
+  it("a real reply still lands INBOUND with its provider id", async () => {
+    await ingest([row("reply-Z", false)]);
+    const after = await rowsOf();
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({
+      direction: "inbound",
+      external_message_id: "reply-Z",
+    });
+  });
+
+  it("the same read-back twice changes nothing", async () => {
+    await ingest([row("sent-Y", true), row("reply-Z", false)]);
+    await ingest([row("sent-Y", true), row("reply-Z", false)]);
+    expect(await rowsOf()).toHaveLength(2);
+  });
+
+  it("the recorder derives OUTBOUND from HUMAN/ASSISTANT when no direction is stated", async () => {
+    const { recordInboundMessage } = await import("./inbound-recorder.js");
+    await recordInboundMessage({
+      provider: "linkedin",
+      externalId: "chat-ingest",
+      userId: OWNER,
+      workspaceId: WS,
+      title: "Marie Curie",
+      text: "mine",
+      idempotencySeed: "chat-ingest:derive",
+      suppressSideEffects: true,
+      authorType: "human" as never,
+      role: "assistant" as never,
+    });
+    const after = await rowsOf();
+    expect(after).toHaveLength(1);
+    expect(after[0]!.direction).toBe("outbound");
   });
 });
