@@ -687,6 +687,37 @@ describe("POST /links — project --uses--> workspace", () => {
       reasoning: "Architech runs through Operations",
     });
   });
+
+  // Rules out "a malformed purpose reads as a clear": only a string or null.
+  it("refuses a non-string metadata.purpose with 400, before governance", async () => {
+    visibleProjectIds.add(PROJECT);
+    const res = await postLinks(buildTestApp(), {
+      ...usesBody,
+      metadata: { purpose: 42 },
+    });
+    expect(res.status).toBe(400);
+    expect(checkPermissionOrPropose).not.toHaveBeenCalled();
+  });
+
+  it("files the gate under the caller's session, with the purpose", async () => {
+    visibleProjectIds.add(PROJECT);
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      granted: false,
+      proposalId: "prop-uses-2",
+    } as never);
+    const SESSION = "44444444-4444-4444-8444-444444444444";
+    await postLinks(buildTestApp(), {
+      ...usesBody,
+      sessionId: SESSION,
+      metadata: { purpose: "Win the first clients" },
+    });
+    expect(
+      vi.mocked(checkPermissionOrPropose).mock.calls[0]?.[0]
+    ).toMatchObject({
+      sessionId: SESSION,
+      data: { metadata: { purpose: "Win the first clients" } },
+    });
+  });
 });
 
 describe("POST /links — the dependency door (cross-kind blocked_by, replaces)", () => {
