@@ -49,6 +49,8 @@
  *                                  next step turns red=true into a failure.
  *   --cp-source=<file>             door-tool-names, cp-pod-tools-drift: read the
  *                                  control-plane-api catalog from this file (tests)
+ *   --pins=<file>                  door-tool-names: read the control-plane-api pin
+ *                                  from this file, not sibling-pins.json (tests)
  *   --cp-drift-test-source=<file>  cp-pod-tools-drift: read CP's drift test (its
  *                                  omission registries) from this file (tests)
  */
@@ -66,10 +68,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { PINS_FILE_NAME, loadSiblingPins } from "./layout/layout.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCORES_PATH = join(ROOT, "scripts", "ci", "check-scores.json");
 const CP_REPO = "Synap-core/control-plane-api";
+const CP_DIR = "synap-control-plane-api";
 const CP_FILE = "src/routes/mcp-pod-tools.ts";
 const CP_DRIFT_TEST = "src/__tests__/mcp-pod-tools-drift.test.ts";
 const BACKEND_REPO = "Synap-core/backend";
@@ -351,16 +355,33 @@ export const CHECKS = [
     mirrors:
       "test file packages/api/src/routers/mcp/door-tool-names.freshness.test.ts",
     costHint: 1,
-    fix: "cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts (with ../synap-control-plane-api at main), commit door-tool-names.generated.ts",
+    fix: `cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts (with ../synap-control-plane-api at the ${PINS_FILE_NAME} pin), commit door-tool-names.generated.ts; or bump the pin in ${PINS_FILE_NAME} and regenerate`,
     async run(ctx) {
       // CI tests the PR with a pending control-plane-api dependency checked
-      // out at that dependency's ref (scripts/layout/layout.mjs): CP main is
+      // out at that dependency's ref (scripts/layout/layout.mjs): the pin is
       // then the wrong comparison, and the Full suite judges it.
       if (/^Depends-On:.*control-plane-api/im.test(ctx.prBody ?? ""))
         return {
           verdict: "SKIP",
           detail:
             "the PR body names a control-plane-api Depends-On: the Full suite compares against that ref",
+        };
+      // The comparison is CP at the commit this tree pins (sibling-pins.json,
+      // the one CI lays ../synap-control-plane-api out at), never CP main: a
+      // CP change reaches this table only through a pull request that bumps
+      // the pin (plan b5820982 §2). A missing or malformed pin is red.
+      let pin;
+      try {
+        pin = loadSiblingPins(ctx.pinsFile ?? join(ROOT, PINS_FILE_NAME)).get(
+          CP_DIR
+        );
+      } catch (err) {
+        return { verdict: "FAIL", detail: err.message };
+      }
+      if (!pin)
+        return {
+          verdict: "FAIL",
+          detail: `${PINS_FILE_NAME} pins no ${CP_DIR}: CI would read its moving main`,
         };
       let source;
       let from;
@@ -375,42 +396,29 @@ export const CHECKS = [
           ...(ctx.env.CP_READ_TOKEN ? { GH_TOKEN: ctx.env.CP_READ_TOKEN } : {}),
         };
         const [file, commit] = await Promise.allSettled([
-          sh(
-            "gh",
-            [
-              "api",
-              `repos/${CP_REPO}/contents/${CP_FILE}?ref=main`,
-              "-H",
-              "Accept: application/vnd.github.raw",
-            ],
-            { env, timeoutMs: 20_000 }
-          ),
-          ghJson(
-            `repos/${CP_REPO}/commits?sha=main&path=${CP_FILE}&per_page=1`,
+          (ctx.ghRaw ?? ghRaw)(CP_REPO, CP_FILE, pin, env),
+          (ctx.ghJson ?? ghJson)(
+            `repos/${CP_REPO}/commits?sha=${pin}&path=${CP_FILE}&per_page=1`,
             env
           ),
         ]);
-        if (file.status === "fulfilled" && file.value.code === 0) {
-          source = file.value.out;
+        const at = `${CP_REPO}@${pin.slice(0, 10)} (the pin)`;
+        if (file.status === "fulfilled") {
+          source = file.value.text;
           const c = commit.status === "fulfilled" ? commit.value[0] : null;
           from = c
-            ? `${CP_REPO}@main (${CP_FILE} last changed in ${c.sha.slice(0, 8)} "${c.commit.message.split("\n")[0].slice(0, 60)}")`
-            : `${CP_REPO}@main`;
+            ? `${at}, ${CP_FILE} last changed in ${c.sha.slice(0, 8)} "${c.commit.message.split("\n")[0].slice(0, 60)}"`
+            : at;
         } else {
-          // No GitHub access: the sibling checkout, which may not be at main.
-          const sibling = resolve(
-            ROOT,
-            "..",
-            "synap-control-plane-api",
-            CP_FILE
-          );
+          // No GitHub access: the sibling checkout, which may not be at the pin.
+          const sibling = resolve(ROOT, "..", CP_DIR, CP_FILE);
           if (!existsSync(sibling))
             return {
               verdict: "WARN",
-              detail: `could not read ${CP_REPO}@main (${file.status === "fulfilled" ? tail(file.value.out, 1) : file.reason}) and no sibling checkout`,
+              detail: `could not read ${at} (${file.reason?.message ?? file.reason}) and no sibling checkout`,
             };
           source = readFileSync(sibling, "utf8");
-          from = `the sibling checkout ${sibling} (NOT necessarily main)`;
+          from = `the sibling checkout ${sibling} (NOT necessarily at the pin ${pin.slice(0, 10)})`;
         }
       }
       // The SAME builder and committed table the freshness tripwire compares
@@ -950,6 +958,7 @@ async function main() {
     env: process.env,
     prBody: process.env.PR_BODY ?? "",
     cpSource: flag("cp-source"),
+    pinsFile: flag("pins"),
     cpDriftTestSource: flag("cp-drift-test-source"),
     base: process.env.PREFLIGHT_BASE || undefined,
     changed: () => (changed ??= changedFiles(ctx)),

@@ -5,14 +5,18 @@
  * Compares the committed TABLE VALUE with a fresh build — not file bytes, which a
  * formatter reflows.
  *
- * The CP manifest is a SIBLING repo. Policy for a missing sibling
+ * The CP manifest is a SIBLING repo, which CI lays out at the commit the
+ * repo-root sibling-pins.json pins (scripts/layout/layout.mjs): CP's main
+ * moving does not turn this red; bumping the pin does, in the PR that bumps
+ * it and regenerates the table. Policy for a missing sibling
  * (memory: cross-repo-sameness-test-vs-standalone-ci):
  *   - present           → compare with a fresh build;
  *   - absent + CI       → skip, NAMED;
  *   - absent locally    → fail loudly (a local checkout is expected to have it).
  * The pinned builder tests below run everywhere.
  *
- * FIX WHEN RED:  cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts
+ * FIX WHEN RED:  with ../synap-control-plane-api at the pin,
+ *   cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts
  */
 
 import { existsSync } from "node:fs";
