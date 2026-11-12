@@ -293,11 +293,20 @@ export async function applyGoalPlacement(p: {
   }
 
   if (input.pillars === undefined) return;
-  // The WHOLE list: an edge to a space not listed goes first, then the
-  // listed ones are written with an explicit mark, non-primary first, so the
-  // one primary (the marked entry, else the first) never meets another.
+  // The WHOLE list, in the order that loses the least if a write fails
+  // midway (the door writes on its own connection: no one transaction spans
+  // these edges, a known race): (1) the listed non-primary edges, marked
+  // `primary: false`, so a refusal there removes nothing; (2) the unlisted
+  // edges are removed; (3) the one primary (the marked entry, else the
+  // first), which by then meets no other primary.
   const pillars = input.pillars;
   const listed = new Set(pillars.map((x) => x.workspaceId));
+  const named = pillars.findIndex((x) => x.primary === true);
+  const primaryAt = named === -1 ? 0 : named;
+  for (const [i, x] of pillars.entries()) {
+    if (i === primaryAt) continue;
+    await write(ADVANCES_LINK_TYPE, "workspace", x.workspaceId, false);
+  }
   const existing = await db
     .select({ toId: links.toId })
     .from(links)
@@ -323,16 +332,8 @@ export async function applyGoalPlacement(p: {
       ...(attribution ? { attribution } : {}),
     });
   }
-  const named = pillars.findIndex((x) => x.primary === true);
-  const primaryAt = named === -1 ? 0 : named;
-  const plan = pillars.map((x, i) => ({
-    workspaceId: x.workspaceId,
-    primary: i === primaryAt,
-  }));
-  for (const x of [
-    ...plan.filter((x) => !x.primary),
-    ...plan.filter((x) => x.primary),
-  ]) {
-    await write(ADVANCES_LINK_TYPE, "workspace", x.workspaceId, x.primary);
+  const primary = pillars[primaryAt];
+  if (primary) {
+    await write(ADVANCES_LINK_TYPE, "workspace", primary.workspaceId, true);
   }
 }
