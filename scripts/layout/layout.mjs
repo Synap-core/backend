@@ -462,6 +462,11 @@ const TRANSIENT_GIT = [
   /Could not resolve host/i,
   /Connection reset/i,
   /timed out/i,
+  // A just-minted installation token is not yet honoured for every repo it
+  // names: GitHub answers a private repo with "not found" (main run 42666869771,
+  // #959/#886/#657: the token was minted 1 s before the fetch).
+  /Repository not found/i,
+  /repository '[^']*' not found/i,
 ];
 
 export function isTransientGitError(message) {
@@ -495,7 +500,7 @@ export function gitNetwork(
       if (!isTransientGitError(e.message)) throw e;
       if (attempt >= attempts) {
         throw new Error(
-          `${e.message} (transient, gave up after ${attempt} attempts)`
+          `INFRA: ${e.message} (transient, gave up after ${attempt} attempts; not a test failure, re-run the job)`
         );
       }
       const wait = delays[attempt - 1];
