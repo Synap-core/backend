@@ -8,6 +8,9 @@ name: Cancel a closed PR's runs
 # run, never "Pod observations" (it posts this very close). The rules and
 # their tripwire: scripts/ci/cancel-closed-pr-runs.mjs.
 #
+# The same close also deletes the PR's negative-control branch
+# `negctl/<head>` (job `negctl`, its own write permission, never a fork).
+#
 # A fork's PR gets a read-only token: the cancel calls are refused, and the
 # script only warns.
 
@@ -42,5 +45,26 @@ jobs:
 
       - name: Cancel the PR's queued and running CI runs
         run: node scripts/ci/cancel-closed-pr-runs.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  # Its own job so the ref-write permission is held by nothing else here.
+  negctl:
+    name: Delete this PR's negctl branch
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          sparse-checkout: scripts/ci/cancel-closed-pr-runs.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Delete negctl/<head> (absent is fine)
+        run: node scripts/ci/cancel-closed-pr-runs.mjs --delete-negctl
         env:
           GITHUB_TOKEN: ${{ github.token }}
