@@ -935,3 +935,28 @@ describe("a failed part of the project read is marked, never empty", () => {
     }
   });
 });
+
+describe("projects.get carries the pillars only when asked", () => {
+  // Rules out "every project read pays for the pillars" and "include is
+  // ignored": the tRPC read adds the three fields with include ["pillars"]
+  // only.
+  it("include: [pillars] adds mainGoal, pillars and rootHealth", async () => {
+    const { projectsRouter } = await import("../../../routers/projects.js");
+    const caller = projectsRouter.createCaller({
+      authenticated: true,
+      userId: ME,
+      workspaceId: null,
+    } as never);
+    const plain = (await caller.get({ id: P })) as Record<string, unknown>;
+    expect(plain).not.toHaveProperty("pillars");
+    expect(plain).not.toHaveProperty("mainGoal");
+    const asked = (await caller.get({
+      id: P,
+      include: ["pillars"],
+    })) as Record<string, unknown>;
+    expect(Array.isArray(asked.pillars)).toBe(true);
+    expect((asked.pillars as unknown[]).length).toBe(2);
+    expect(asked).toHaveProperty("rootHealth.pillarsTotal", 2);
+    expect(asked).toHaveProperty("mainGoal");
+  });
+});

@@ -577,7 +577,11 @@ export const workspaceHandlers: McpHandlerMap = {
     );
     const projectCaller = projectsRouter.createCaller(projectCtx);
     try {
-      const result = await projectCaller.get({ id: projectId });
+      // An agent asks where the project stands: always with its pillars.
+      const result = await projectCaller.get({
+        id: projectId,
+        include: ["pillars"],
+      });
       return ok(result);
     } catch (err) {
       return ok({

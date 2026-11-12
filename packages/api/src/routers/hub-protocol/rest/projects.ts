@@ -767,9 +767,11 @@ export function registerProjectsRoutes(app: HubHono): void {
       // Additive INDEX: workspaces this project uses. Not an ACL.
       usedWorkspaceIds,
       usedWorkspaces,
-      // Parity with tRPC `projects.get`: `mainGoal`, `pillars`, `rootHealth`
-      // (a failed read is `{ status: "unavailable" }`, never empty).
-      ...(await readProjectPillarFields(userId, row.id)),
+      // Parity with tRPC `projects.get`: `?include=pillars` adds `mainGoal`,
+      // `pillars`, `rootHealth` (a failed part is `{ status: "unavailable" }`).
+      ...((c.req.query("include") ?? "").split(",").includes("pillars")
+        ? await readProjectPillarFields(userId, row.id)
+        : {}),
     });
   });
 
