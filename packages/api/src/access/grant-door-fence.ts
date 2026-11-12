@@ -1205,7 +1205,7 @@ export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
 ]);
 
 export const GRANT_DOOR_UNSUPPORTED =
-  "This door does not support scoped keys yet: its reads are not bounded by a grant. Use a door listed in the API keys guide, or a key with the full-access '*' grant.";
+  "This door does not support scoped keys yet: its reads are not bounded by a grant. Use a door that does (for example the ask, orient or find tools), or ask the person for a key with unrestricted full access ('*' with no space, project or object limit), which they create on the Keys page of pod admin.";
 
 /**
  * What a READ door asks of a grant that does not hold it, in the grant
@@ -1572,7 +1572,7 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
   };
 
 export const GRANT_WRITE_DOOR_UNSUPPORTED =
-  "This door does not support scoped keys yet: its writes are not bounded by a grant. Use a door listed in the API keys guide, or a key with unrestricted full access ('*' with no space, project or object limit).";
+  "This door does not support scoped keys yet: its writes are not bounded by a grant. Use a door that does, or ask the person for a key with unrestricted full access ('*' with no space, project or object limit), which they create on the Keys page of pod admin.";
 
 /**
  * tRPC (the Bearer door): may a key holding `grant` call this procedure?

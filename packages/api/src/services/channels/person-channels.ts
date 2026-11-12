@@ -58,6 +58,8 @@ export interface PodChannelLastMessage {
   content: string;
   at: string;
   direction: "inbound" | "outbound" | null;
+  /** The provider's own id for this message; null when it has none. */
+  externalMessageId: string | null;
 }
 
 /** One conversation with a person (design §6 `PodChannel`). */
@@ -159,17 +161,24 @@ async function lastMessage(
     content: string;
     timestamp: Date;
     direction: "inbound" | "outbound" | null;
+    externalMessageId: string | null;
   }>(database, {
     channelId,
     order: "desc",
     limit: 1,
-    columns: { content: true, timestamp: true, direction: true },
+    columns: {
+      content: true,
+      timestamp: true,
+      direction: true,
+      externalMessageId: true,
+    },
   });
   if (!m) return null;
   return {
     content: m.content.slice(0, LAST_MESSAGE_CHARS),
     at: iso(m.timestamp),
     direction: m.direction ?? null,
+    externalMessageId: m.externalMessageId ?? null,
   };
 }
 
