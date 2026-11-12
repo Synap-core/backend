@@ -5494,7 +5494,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Read one project: name, description, home workspace, and usedWorkspaces (domains this engagement spans via the uses INDEX). Call after orient when you need the span map. Not an ACL.",
+      "description": "Read one project: name, description, home workspace, usedWorkspaces (domains this engagement spans via the uses INDEX; not an ACL), its mainGoal, and its PILLARS: each space it uses, with its purpose, the goals advancing it (role primary or contributing) and a derived health (state moving | needs_attention | unproven | stalled | no_active_goal, worst-of, with counts; only primary goals count). rootHealth sums the pillars. A failed health read is {status:'unavailable'}, never empty. Call after orient when you need the span map or where the project stands.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -5704,6 +5704,29 @@
               }
             },
             "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
+          },
+          "parentGoalId": {
+            "type": "string",
+            "description": "Optional: the goal this one SERVES (a sub-goal's parent, id from synap_list_tracks). It becomes the goal's primary parent if it has none yet — the goal then rolls up into that parent; a second parent only lists it. A loop of goals is refused."
+          },
+          "pillars": {
+            "type": "array",
+            "maxItems": 12,
+            "description": "Optional: the PILLARS this goal advances — spaces its project uses (synap_get_project lists them; link a new one with synap_project_use_workspace first). Mark the one it mainly moves `primary: true` (at most one): the goal counts fully in that pillar's health and is only listed in the others. With none marked, the first becomes primary when the goal has no primary pillar yet.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["workspaceId"],
+              "properties": {
+                "workspaceId": {
+                  "type": "string",
+                  "description": "Space UUID"
+                },
+                "primary": {
+                  "type": "boolean"
+                }
+              }
+            }
           },
           "reasoning": {
             "type": "string",
@@ -6176,7 +6199,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "description": "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them); and where it sits — a parentGoalId it serves, the pillars it advances (both ADDED). Every other field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6319,6 +6342,29 @@
             },
             "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
           },
+          "parentGoalId": {
+            "type": "string",
+            "description": "Optional: the goal this one SERVES (a sub-goal's parent, id from synap_list_tracks). It becomes the goal's primary parent if it has none yet — the goal then rolls up into that parent; a second parent only lists it. A loop of goals is refused."
+          },
+          "pillars": {
+            "type": "array",
+            "maxItems": 12,
+            "description": "Optional: the PILLARS this goal advances — spaces its project uses (synap_get_project lists them; link a new one with synap_project_use_workspace first). Mark the one it mainly moves `primary: true` (at most one): the goal counts fully in that pillar's health and is only listed in the others. With none marked, the first becomes primary when the goal has no primary pillar yet.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["workspaceId"],
+              "properties": {
+                "workspaceId": {
+                  "type": "string",
+                  "description": "Space UUID"
+                },
+                "primary": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
           "reasoning": {
             "type": "string",
             "description": "Why — shown to the reviewer. One line."
@@ -6379,7 +6425,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
+      "description": "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, name its main goal, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6413,6 +6459,10 @@
             "type": "string",
             "description": "Move the project's HOME to this workspace (UUID from synap_list_workspaces). You must be able to write it. Entities and sessions stay where they are."
           },
+          "mainGoalId": {
+            "type": ["string", "null"],
+            "description": "The project's MAIN goal: what the whole project is for. One of this project's own live goals (id from synap_list_tracks). null clears it; omit to leave it."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the reviewer. One line."
@@ -6433,7 +6483,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
+      "description": "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). A space the project uses is one of its PILLARS: give `purpose` to say what the project needs from it; goals then say which pillar they advance (synap_start_track / synap_update_track `pillars`). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent: calling it again with a purpose changes only the purpose. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6442,6 +6492,10 @@
           },
           "workspaceId": {
             "type": "string"
+          },
+          "purpose": {
+            "type": ["string", "null"],
+            "description": "What the project needs from this space, one line (max 280), e.g. 'Win the first clients'. Shown as the pillar's purpose. null clears it; omit to leave it. Not with remove."
           },
           "remove": {
             "type": "boolean",

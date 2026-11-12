@@ -2612,6 +2612,96 @@ export interface StatusOfSignal {
 	role: string | null;
 	raisedAt: string;
 }
+declare const PILLAR_HEALTH_STATES: readonly [
+	"no_active_goal",
+	"stalled",
+	"unproven",
+	"needs_attention",
+	"moving"
+];
+export type PillarHealthState = (typeof PILLAR_HEALTH_STATES)[number];
+export interface PillarGoalCounts {
+	/** Live primary goals that are not paused. */
+	open: number;
+	/** Primary goals closed as met or partly met. */
+	validated: number;
+	/** Open primary goals that are unvalidated bets ({@link isGoalBet}). */
+	bet: number;
+	/** Paused primary goals. */
+	paused: number;
+}
+export interface PillarHealth {
+	state: PillarHealthState;
+	counts: PillarGoalCounts;
+	/** Nothing moved in the pillar within the window — its own signal. */
+	stale: boolean;
+	/** One line for an agent; a surface draws the state's label and the counts. */
+	reason: string;
+	/**
+	 * Distinct work sessions on the pillar's primary goals (filed in, serving,
+	 * or spawned under one of them; sub-goals included), each counted once.
+	 * Absent when the pod did not count them.
+	 */
+	sessions?: number;
+}
+/** Lifecycle categories a pillar's indicator counts things in. */
+export interface PillarIndicatorCounts {
+	open: number;
+	active: number;
+	paused: number;
+	done: number;
+	lost: number;
+}
+export interface PillarIndicatorKind {
+	/** The kind's slug (its words come from the vocabulary door). */
+	kind: string;
+	byCategory: PillarIndicatorCounts;
+	/** Things past their status's `stuckAfterDays`. */
+	stuck: number;
+}
+/**
+ * What the pillar's own work looks like: the things of a kind with a DECLARED
+ * lifecycle, in the project and the space. `declared: false` = no such kind
+ * here — a surface says "no indicator declared"; an indicator is never
+ * invented for a space that declares none.
+ */
+export interface PillarIndicator {
+	declared: boolean;
+	kinds: PillarIndicatorKind[];
+}
+export type PillarGoalRole = "contributing" | "primary";
+export interface PillarGoal {
+	goalId: string;
+	name: string;
+	status: string;
+	verdict: string | null;
+	role: PillarGoalRole;
+	isBet: boolean;
+}
+export interface Pillar {
+	workspaceId: string;
+	workspaceName: string;
+	/** What the project needs from the space (`uses` `metadata.purpose`). */
+	purpose: string | null;
+	/** Always true: only a space the project uses is a pillar. */
+	isLinked: true;
+	health: PillarHealth;
+	indicator: PillarIndicator;
+	goals: PillarGoal[];
+}
+export interface ProjectMainGoal {
+	id: string;
+	name: string;
+	status: string;
+}
+export interface ProjectRootHealth {
+	/** The worst pillar state; `no_active_goal` when the project has no pillar. */
+	state: PillarHealthState;
+	pillarsMoving: number;
+	pillarsTotal: number;
+	/** Pillars with no live primary goal. */
+	pillarsEmpty: number;
+}
 /**
  * The kind of object on one end of a relation edge.
  *
@@ -8400,7 +8490,8 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   source              --feeds-->             playbook     (input-strategy source)
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
- *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
+ *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL; metadata.purpose)
+ *   track               --advances-->          workspace    (the goal moves that pillar of its project; metadata.primary)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
  *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
@@ -8513,8 +8604,23 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
  * a goal's work counts the sessions filed in it OR serving it, each once,
  * and its sub-goals are listed as `children`.
+ *
+ * `metadata.primary: true` names the goal's PRIMARY parent: at most one per
+ * goal, on a goal → goal edge only (`validateServesEdge`). A goal rolls up
+ * fully to its primary parent; other parents only list it.
  */
- | "serves";
+ | "serves"
+/**
+ * track --advances--> workspace. The goal moves one SPACE of its project
+ * forward — the space is a "pillar" of the project (the `uses` edge, whose
+ * `metadata.purpose` says what the project needs from it). Written by THE
+ * dependency door (`services/links/dependency-links.ts`), which refuses a
+ * space the goal's project does not `uses`. `metadata.primary: true` on at
+ * most one per goal: a goal rolls up FULLY to its primary pillar only; in
+ * the others it is listed and changes nothing (`services/projects/
+ * pillar-health.ts`).
+ */
+ | "advances";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /**
@@ -19810,8 +19916,14 @@ export interface GoalRollup {
 	children?: string[];
 }
 export interface ScopeRollup {
-	lens: "project" | "workspace";
+	/**
+	 * `pillar` = BOTH lenses: one project INSIDE one space (a project's pillar).
+	 * `id` is then the project's, `workspaceId` the space's.
+	 */
+	lens: "pillar" | "project" | "workspace";
 	id: string;
+	/** The space of a `pillar` lens. */
+	workspaceId?: string;
 	windowDays: number;
 	/** Things with a declared lifecycle (kinds; roles are not counted here). */
 	things: CategoryCounts;
@@ -19829,6 +19941,14 @@ export interface ScopeRollup {
 		}>;
 	};
 	waitingOn: WaitingOnMark[];
+	/** Per kind (asked with `byKind`): its things per category and its stuck count. */
+	kinds?: ScopeKindRollup[];
+}
+/** One kind's things in the lens: per lifecycle category, and how many are stuck. */
+export interface ScopeKindRollup {
+	kind: string;
+	byCategory: CategoryCounts;
+	stuck: number;
 }
 /**
  * A move a thing's step offers: every declared option but the one it stands
@@ -25448,6 +25568,9 @@ export interface ProjectAutomation {
 	triggerType: string;
 	status: string | null;
 }
+declare const PILLARS_UNAVAILABLE: {
+	readonly status: "unavailable";
+};
 /** One thing the project's work produced. */
 export interface ProjectOutputItem {
 	/** `<sessionId>|<kind>:<refId>` — stable across refetches, unique per row. */
@@ -25654,9 +25777,18 @@ export type FileEntitiesResult = ProjectFilingApplied | {
 	status: "proposed";
 };
 export type SetProjectWorkspaceMembershipOutcome = {
+	effect: "linked";
+	status: "updated";
+}
+/** `rows` = the edges actually removed (`0` = there was none). */
+ | {
+	effect: "unlinked";
+	rows: number;
 	status: "updated";
 } | {
 	proposalId: string;
+	reviewPath?: string;
+	reviewUrl?: string;
 	status: "proposed";
 };
 export type StageDomainFallbackReason = 
@@ -42446,7 +42578,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				criterionKey?: string | undefined;
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces" | "serves";
+				linkType: "advances" | "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -42660,7 +42792,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				fromId: string;
 				fromType: "entity" | "session" | "track";
-				linkType: "blocked_by" | "replaces" | "serves";
+				linkType: "advances" | "blocked_by" | "replaces" | "serves";
 				toId: string;
 				toType: "entity" | "session" | "track";
 			};
@@ -52477,6 +52609,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52540,13 +52673,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				mainGoal: ProjectMainGoal | null;
 				phaseCategory: PlaybookStageCategory;
+				pillars: Pillar[];
 				project: {
 					colorSlot: number | null;
 					createdAt: Date;
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52559,6 +52695,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string | null;
 				};
+				rootHealth: ProjectRootHealth;
+				subject: ProjectSubject | null;
+				usedWorkspaceIds: string[];
+				usedWorkspaces: UsedWorkspaceRef[];
+			} | {
+				mainGoal: ProjectMainGoal | null;
+				phaseCategory: PlaybookStageCategory;
+				pillars: typeof PILLARS_UNAVAILABLE;
+				project: {
+					colorSlot: number | null;
+					createdAt: Date;
+					description: string | null;
+					icon: string | null;
+					id: string;
+					mainGoalId: string | null;
+					metadata: unknown;
+					name: string;
+					phase: string | null;
+					sample: boolean;
+					settings: unknown;
+					slug: string | null;
+					status: "active" | "archived" | "completed";
+					targetDate: Date | null;
+					updatedAt: Date;
+					userId: string;
+					workspaceId: string | null;
+				};
+				rootHealth: typeof PILLARS_UNAVAILABLE;
 				subject: ProjectSubject | null;
 				usedWorkspaceIds: string[];
 				usedWorkspaces: UsedWorkspaceRef[];
@@ -52578,6 +52742,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52605,6 +52770,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					icon: string | null;
 					id: string;
+					mainGoalId: string | null;
 					metadata: unknown;
 					name: string;
 					phase: string | null;
@@ -52663,6 +52829,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				member: boolean;
 				projectId: string;
+				purpose?: string | null | undefined;
+				reasoning?: string | undefined;
 				workspaceId: string;
 			};
 			meta: object;
@@ -52675,6 +52843,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				homeWorkspaceId?: string | undefined;
 				icon?: string | null | undefined;
 				id: string;
+				mainGoalId?: string | null | undefined;
 				metadata?: Record<string, unknown> | undefined;
 				name?: string | undefined;
 				phase?: string | null | undefined;
@@ -58436,6 +58605,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					on: boolean;
 					perWeek?: number | undefined;
 				} | null | undefined;
+				parentGoalId?: string | undefined;
+				pillars?: {
+					primary?: boolean | undefined;
+					workspaceId: string;
+				}[] | undefined;
 				reasoning?: string | undefined;
 				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
 				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
@@ -58518,6 +58692,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null | undefined;
 				name?: string | undefined;
 				params?: Record<string, unknown> | undefined;
+				parentGoalId?: string | undefined;
+				pillars?: {
+					primary?: boolean | undefined;
+					workspaceId: string;
+				}[] | undefined;
 				playbookId?: string | undefined;
 				projectId: string;
 				reasoning?: string | undefined;
