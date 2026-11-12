@@ -419,7 +419,7 @@ export function registerLinksRoutes(app: HubHono): void {
           return c.json(
             {
               error:
-                "metadata.purpose is one line of text, or null to clear it.",
+                "metadata.purpose is text (a string), or null to clear it.",
             },
             400
           );

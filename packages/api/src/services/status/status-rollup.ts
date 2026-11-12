@@ -825,9 +825,9 @@ async function countScopeMoves(p: {
 }
 
 /**
- * The LEAN read of a scope: only what moved and its things per kind — no
- * work counts, no open sessions, no waiting-on (the pillar health read needs
- * nothing else). Same queries as {@link readScopeRollup} for these two parts,
+ * A LEANER read of a scope: what moved and its things per kind (the things
+ * read still runs whole) — no work counts, no open sessions, no waiting-on
+ * (the pillar health read needs nothing else). Same queries as {@link readScopeRollup} for these two parts,
  * so they always agree. The caller has ALREADY checked the project visible
  * (no second check here). THROWS.
  */

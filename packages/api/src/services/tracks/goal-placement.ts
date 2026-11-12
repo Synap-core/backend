@@ -153,7 +153,12 @@ export async function checkGoalPlacement(
   const existing = ctx.goalExists !== false ? ctx.trackId : undefined;
   const refuse = (refusal: { httpStatus: number; error: string }): never => {
     throw new TRPCError({
-      code: refusal.httpStatus === 404 ? "NOT_FOUND" : "BAD_REQUEST",
+      code:
+        refusal.httpStatus === 404
+          ? "NOT_FOUND"
+          : refusal.httpStatus === 403
+            ? "FORBIDDEN"
+            : "BAD_REQUEST",
       message: refusal.error,
     });
   };
@@ -276,7 +281,12 @@ export async function applyGoalPlacement(p: {
     });
     if (!written.ok) {
       throw new TRPCError({
-        code: written.httpStatus === 404 ? "NOT_FOUND" : "BAD_REQUEST",
+        code:
+          written.httpStatus === 404
+            ? "NOT_FOUND"
+            : written.httpStatus === 403
+              ? "FORBIDDEN"
+              : "BAD_REQUEST",
         message: written.error,
       });
     }

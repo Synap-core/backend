@@ -20,10 +20,10 @@
  *              counts in its primary parent's pillar only, so a session counts
  *              in one pillar;
  *   stale      nothing moved in the window: no move of the pillar's things,
- *              sessions or advancing goals (`readScopeRollup` with BOTH
+ *              sessions or advancing goals (`readScopeMoves` with BOTH
  *              lenses) and none in the primary goals' work;
  *   indicator  the things of declared-lifecycle kinds in the project AND the
- *              space, per kind (`readScopeRollup` `byKind`), plus a kind the
+ *              space, per kind (`readScopeMoves`), plus a kind the
  *              space declares as an output (`readSpaceOutputs`) with none yet.
  *              No such kind ⇒ `declared: false`, never an invented one.
  *
