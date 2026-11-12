@@ -79,6 +79,11 @@ export interface UpdateProjectInput {
   icon?: string | null;
   /** A sample (demo) project (0347) — its records leave every listing. */
   sample?: boolean;
+  /**
+   * The project's main goal (0423) — validated by the governed update
+   * (`assertMainGoal`) before it reaches here. `null` clears it.
+   */
+  mainGoalId?: string | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   /**
@@ -233,6 +238,8 @@ export class ProjectRepository extends BaseRepository<
         icon: data.icon,
         // `undefined` untouched (Drizzle skips it); never nullable.
         sample: data.sample,
+        // Same two-state contract: `undefined` untouched, `null` clears.
+        mainGoalId: data.mainGoalId,
         // D6 home change — `undefined` is skipped by Drizzle (untouched).
         workspaceId: data.workspaceId,
         settings: data.settings,

@@ -2532,6 +2532,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "sample",
     addedBy: "0347_projects_sample.sql",
   },
+  // The project's main goal (0423) — same baseline exemption. Selected by
+  // every `projects` row read (`db.query.projects`), so a missing column 500s
+  // every project door.
+  {
+    table: "projects",
+    column: "main_goal_id",
+    addedBy: "0423_projects_main_goal.sql",
+  },
   // Invite links are found by their token's digest (0353, decision B2): a
   // missing column fails every invite preview, accept and create.
   {

@@ -2105,7 +2105,10 @@ export type LinkType =
   | "assigned_to"
   // session|track --serves--> track: the work is done FOR that goal (a
   // sub-goal serves its parent). NOT a dependency; goal rollups follow it.
-  | "serves";
+  | "serves"
+  // track --advances--> workspace: the goal moves that space of its project
+  // forward (a "pillar"; `metadata.primary` on at most one per goal).
+  | "advances";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

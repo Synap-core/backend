@@ -864,6 +864,8 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   replaces: { outgoing: "Replaces", incoming: "Replaced by" },
   // `X --serves--> G`: a session or a sub-goal does its work FOR goal G.
   serves: { outgoing: "Serves", incoming: "Served by" },
+  // `G --advances--> W`: goal G moves space W (a pillar of its project).
+  advances: { outgoing: "Advances", incoming: "Advanced by" },
   // ── Every other stored `links` type, read from its TO end ────────────────
   // Without these an incoming edge showed its FORWARD word ("Targets") plus a
   // reversed-arrow mark. Read as "<focus> <label> <row>": the row is the
