@@ -14,11 +14,15 @@
  * with its own mark and changes nothing. A dropped goal, or one closed without
  * being met, leaves the roll-up (and the list).
  *
+ * A goal RUNS only when its status is active (lead decision, 2026-11-12): a
+ * proposed, agreed or ready goal has not started and makes no pillar move.
+ *
  * The states, worst first (each never green unless `moving`):
- *   no_active_goal   no live primary goal (all ended, or none) — never green;
- *   stalled          live primary goals, every one paused;
- *   unproven         every non-paused live primary goal is an unvalidated bet;
- *   needs_attention  a paused goal or an unvalidated bet among them;
+ *   no_active_goal   no primary goal running or paused (none, all ended, or
+ *                    only goals not started yet) — never green;
+ *   stalled          no primary goal running, at least one paused;
+ *   unproven         every running primary goal is an unvalidated bet;
+ *   needs_attention  a paused goal or an unvalidated bet beside a running one;
  *   moving           the rest.
  * Staleness (nothing moved in the window) is its OWN signal (`stale`), never
  * folded into the state.
@@ -40,11 +44,13 @@ export const PILLAR_HEALTH_STATES = [
 export type PillarHealthState = (typeof PILLAR_HEALTH_STATES)[number];
 
 export interface PillarGoalCounts {
-  /** Live primary goals that are not paused. */
+  /** Primary goals RUNNING (status active). */
   open: number;
+  /** Primary goals not started yet (proposed, agreed, ready). */
+  notStarted: number;
   /** Primary goals closed as met or partly met. */
   validated: number;
-  /** Open primary goals that are unvalidated bets ({@link isGoalBet}). */
+  /** Running primary goals that are unvalidated bets ({@link isGoalBet}). */
   bet: number;
   /** Paused primary goals. */
   paused: number;
@@ -203,12 +209,19 @@ export function derivePillarHealth(
   primaryGoals: readonly PillarGoalFacts[],
   stale: boolean
 ): PillarHealth {
-  const counts: PillarGoalCounts = { open: 0, validated: 0, bet: 0, paused: 0 };
+  const counts: PillarGoalCounts = {
+    open: 0,
+    notStarted: 0,
+    validated: 0,
+    bet: 0,
+    paused: 0,
+  };
   for (const g of primaryGoals) {
     if (!goalInPillarRollup(g)) continue;
     const category = trackStatusCategory(g.status);
     if (category === "done") counts.validated++;
     else if (category === "paused") counts.paused++;
+    else if (category === "open") counts.notStarted++;
     else {
       counts.open++;
       if (isGoalBet(g)) counts.bet++;
@@ -219,12 +232,14 @@ export function derivePillarHealth(
   if (counts.open === 0 && counts.paused === 0) {
     state = "no_active_goal";
     reason =
-      counts.validated > 0
-        ? `No live goal: ${plural(counts.validated, "goal was", "goals were")} met, none is running.`
-        : "No live goal names this pillar as its primary pillar.";
+      counts.notStarted > 0
+        ? `No goal is running: ${plural(counts.notStarted, "goal has", "goals have")} not started.`
+        : counts.validated > 0
+          ? `No goal is running: ${plural(counts.validated, "goal was", "goals were")} met.`
+          : "No goal names this pillar as its primary pillar.";
   } else if (counts.open === 0) {
     state = "stalled";
-    reason = `Every goal is paused (${plural(counts.paused, "goal", "goals")}).`;
+    reason = `No goal is running; ${plural(counts.paused, "goal is", "goals are")} paused.`;
   } else if (counts.bet === counts.open) {
     state = "unproven";
     reason = `Only unvalidated bets are running (${plural(counts.bet, "bet", "bets")}).`;

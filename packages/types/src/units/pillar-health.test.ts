@@ -77,6 +77,29 @@ describe("derivePillarHealth — worst-of, with counts, never an average", () =>
   it("no goal at all is no_active_goal", () => {
     expect(derivePillarHealth([], false).state).toBe("no_active_goal");
   });
+  // Rules out "a goal not started yet runs" (lead decision): proposed,
+  // agreed and ready goals make no pillar move, never green.
+  it("only goals not started yet is no_active_goal", () => {
+    const h = derivePillarHealth(
+      [{ status: "proposed" }, { status: "agreed" }, { status: "ready" }],
+      false
+    );
+    expect(h).toMatchObject({
+      state: "no_active_goal",
+      counts: { open: 0, notStarted: 3 },
+    });
+    // Beside a running goal it changes nothing.
+    expect(
+      derivePillarHealth([active(), { status: "ready" }], false)
+    ).toMatchObject({
+      state: "moving",
+      counts: { open: 1, notStarted: 1 },
+    });
+    // Beside a paused one: stalled, not moving.
+    expect(
+      derivePillarHealth([paused, { status: "agreed" }], false).state
+    ).toBe("stalled");
+  });
   // Rules out "met goals keep it green": met is history, nothing runs.
   it("only met goals is no_active_goal, never green", () => {
     const h = derivePillarHealth(
@@ -158,7 +181,7 @@ describe("the root and the order", () => {
     const h = (state: (typeof PILLAR_HEALTH_STATES)[number]) => ({
       health: {
         state,
-        counts: { open: 0, validated: 0, bet: 0, paused: 0 },
+        counts: { open: 0, notStarted: 0, validated: 0, bet: 0, paused: 0 },
         stale: false,
         reason: "",
       },
