@@ -51,6 +51,7 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { entityReadVisibleWhere } from "../access/entity-read-floor.js";
 import { BELONGS_TO_PROJECT } from "../utils/project-scope.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
+import { readProjectPillarFields } from "../services/projects/pillar-health.js";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
@@ -265,6 +266,10 @@ export const projectsRouter = router({
         // Additive INDEX: workspaces this project uses. Not an ACL.
         usedWorkspaceIds,
         usedWorkspaces,
+        // Where it stands, pillar by pillar (derived, never stored):
+        // `mainGoal`, `pillars`, `rootHealth` — a failed read is
+        // `{ status: "unavailable" }`, never an empty list.
+        ...(await readProjectPillarFields(ctx.userId, project.id)),
       };
     }),
 

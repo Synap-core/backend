@@ -109,8 +109,14 @@ export interface GoalRollup {
 }
 
 export interface ScopeRollup {
-  lens: "workspace" | "project";
+  /**
+   * `pillar` = BOTH lenses: one project INSIDE one space (a project's pillar).
+   * `id` is then the project's, `workspaceId` the space's.
+   */
+  lens: "workspace" | "project" | "pillar";
   id: string;
+  /** The space of a `pillar` lens. */
+  workspaceId?: string;
   windowDays: number;
   /** Things with a declared lifecycle (kinds; roles are not counted here). */
   things: CategoryCounts;
@@ -128,6 +134,15 @@ export interface ScopeRollup {
     }>;
   };
   waitingOn: WaitingOnMark[];
+  /** Per kind (asked with `byKind`): its things per category and its stuck count. */
+  kinds?: ScopeKindRollup[];
+}
+
+/** One kind's things in the lens: per lifecycle category, and how many are stuck. */
+export interface ScopeKindRollup {
+  kind: string;
+  byCategory: CategoryCounts;
+  stuck: number;
 }
 
 const windowStart = () =>
@@ -288,6 +303,84 @@ export async function readGoalRollups(
 export const GOAL_TREE_MAX_DEPTH = 32;
 
 /**
+ * THE goal-tree walk: `rootIds` and every goal that serves one of them, down
+ * `serves` edges the reader may see (`readChildGoals`), each goal expanded
+ * once, at most {@link GOAL_TREE_MAX_DEPTH} deep. `childrenOf` holds each
+ * expanded goal's direct sub-goals. Shared by the tree rollup and the pillar
+ * health read, so "a goal's tree" means one thing. THROWS.
+ */
+export async function readGoalTreeNodes(
+  userId: string,
+  rootIds: readonly string[]
+): Promise<{ nodes: Set<string>; childrenOf: Map<string, string[]> }> {
+  const childrenOf = new Map<string, string[]>();
+  let frontier = [...new Set(rootIds)];
+  const nodes = new Set(frontier);
+  for (let depth = 0; depth < GOAL_TREE_MAX_DEPTH && frontier.length; depth++) {
+    const kids = await readChildGoals(userId, frontier);
+    const next: string[] = [];
+    for (const parent of frontier) {
+      const mine = [...new Set(kids.get(parent) ?? [])];
+      childrenOf.set(parent, mine);
+      for (const k of mine) {
+        if (nodes.has(k)) continue;
+        nodes.add(k);
+        next.push(k);
+      }
+    }
+    frontier = next;
+  }
+  return { nodes, childrenOf };
+}
+
+/**
+ * The ONE set of work sessions on a group of goals and their trees: filed in
+ * or serving any goal of the trees (`goalSessions`), PLUS every work session
+ * spawned under one of those, down `session --spawned_from--> session` (a
+ * child session does not inherit its parent's goal — finding a9d6a175 — so a
+ * goal read that skips the parent chain undercounts). Each session ONCE,
+ * however many roots or goals reach it — never a sum of per-root counts.
+ * Also the session and goal status moves since `since`. THROWS.
+ */
+export async function readGoalGroupWork(
+  userId: string,
+  rootIds: readonly string[],
+  since: Date = windowStart()
+): Promise<{ sessions: number; moved: number }> {
+  if (rootIds.length === 0) return { sessions: 0, moved: 0 };
+  const { nodes } = await readGoalTreeNodes(userId, rootIds);
+  const goalIds = [...nodes];
+  // The children are read through the same population rule as the goal's own
+  // sessions (`workAndTrackedRunsWhere`). Recursive UNION: a lineage loop ends.
+  const union = drizzleSql`WITH RECURSIVE lineage(id) AS (
+      SELECT g.id FROM (${goalSessions(goalIds)}) g
+      UNION
+      SELECT ${links.fromId}
+        FROM ${links} JOIN lineage ON ${links.toId} = lineage.id
+       WHERE ${links.linkType} = 'spawned_from'
+         AND ${links.fromType} = 'session'
+         AND ${links.toType} = 'session'
+    )
+    SELECT DISTINCT ${focusSessions.id}::text AS id, 'all' AS key
+      FROM lineage JOIN ${focusSessions} ON ${focusSessions.id}::text = lineage.id
+     WHERE ${workAndTrackedRunsWhere()}`;
+  const [counted, moved] = await Promise.all([
+    db.execute(
+      drizzleSql`SELECT cast(count(*) as integer) AS n FROM (${union}) u`
+    ) as Promise<Array<{ n: number }> | { rows: Array<{ n: number }> }>,
+    countMovesSince(since, [
+      movesOf("focus_session", union),
+      movesOf(
+        "track",
+        drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${inArray(projectTracks.id, goalIds)}`
+      ),
+    ]),
+  ]);
+  const rows = Array.isArray(counted) ? counted : counted.rows;
+  return { sessions: Number(rows[0]?.n ?? 0), moved: moved.get("all") ?? 0 };
+}
+
+/**
  * Each asked goal's TREE rollup (`include: ["rollup"]`): the goal and every
  * goal that serves it, down `serves` edges the reader may see
  * (`readChildGoals`), at most {@link GOAL_TREE_MAX_DEPTH} deep. Its work is
@@ -307,24 +400,7 @@ export async function readGoalTreeRollups(
 ): Promise<Map<string, StatusOfRollup>> {
   const out = new Map<string, StatusOfRollup>();
   if (rootIds.length === 0) return out;
-  // The graph, breadth-first: each goal expanded once.
-  const childrenOf = new Map<string, string[]>();
-  let frontier = [...new Set(rootIds)];
-  const nodes = new Set(frontier);
-  for (let depth = 0; depth < GOAL_TREE_MAX_DEPTH && frontier.length; depth++) {
-    const kids = await readChildGoals(userId, frontier);
-    const next: string[] = [];
-    for (const parent of frontier) {
-      const mine = [...new Set(kids.get(parent) ?? [])];
-      childrenOf.set(parent, mine);
-      for (const k of mine) {
-        if (nodes.has(k)) continue;
-        nodes.add(k);
-        next.push(k);
-      }
-    }
-    frontier = next;
-  }
+  const { nodes, childrenOf } = await readGoalTreeNodes(userId, rootIds);
 
   // Each node's subtree, cycle-safe: a goal already on the path closes a loop.
   const subtree = (root: string) => {
@@ -481,7 +557,11 @@ async function readThings(input: {
   userId: string;
   workspaceId?: string;
   projectId?: string;
-}): Promise<{ things: CategoryCounts; stuck: ScopeRollup["stuck"] }> {
+}): Promise<{
+  things: CategoryCounts;
+  stuck: ScopeRollup["stuck"];
+  kinds: ScopeKindRollup[];
+}> {
   const res = (await db.execute(declaredLifecycleProfilesStatement())) as
     Array<{ profile_id: string }> | { rows: Array<{ profile_id: string }> };
   const declaredIds = (Array.isArray(res) ? res : res.rows).map(
@@ -489,7 +569,8 @@ async function readThings(input: {
   );
   const things: CategoryCounts = {};
   const stuck: ScopeRollup["stuck"] = { count: 0, items: [] };
-  if (declaredIds.length === 0) return { things, stuck };
+  const perKind = new Map<string, ScopeKindRollup>();
+  if (declaredIds.length === 0) return { things, stuck, kinds: [] };
   const kinds = await db
     .select({ id: profiles.id, slug: profiles.slug })
     .from(profiles)
@@ -527,13 +608,17 @@ async function readThings(input: {
         input.workspaceId ?? null
       );
       if (!lifecycle) return;
+      const kind: ScopeKindRollup = {
+        kind: slugOf.get(profileId) ?? "",
+        byCategory: {},
+        stuck: 0,
+      };
+      perKind.set(profileId, kind);
       for (const [status, n] of statuses) {
-        addCount(
-          things,
-          (findLifecycleOption(lifecycle, status)?.category ??
-            null) as LifecycleCategory | null,
-          n
-        );
+        const category = (findLifecycleOption(lifecycle, status)?.category ??
+          null) as LifecycleCategory | null;
+        addCount(things, category, n);
+        addCount(kind.byCategory, category, n);
       }
       const rules = [...stuckAfterDaysOf(lifecycle.options)].filter(([s]) =>
         statuses.has(s)
@@ -559,7 +644,10 @@ async function readThings(input: {
           order: "time_in_column",
         }),
       ]);
-      for (const n of stuckCounts.values()) stuck.count += n;
+      for (const n of stuckCounts.values()) {
+        stuck.count += n;
+        kind.stuck += n;
+      }
       const days = new Map(rules);
       for (const g of groups) {
         for (const i of g.items) {
@@ -581,18 +669,27 @@ async function readThings(input: {
   stuck.items = candidates
     .sort((a, b) => b.forDays - a.forDays)
     .slice(0, STUCK_LISTED);
-  return { things, stuck };
+  const kinds = [...perKind.values()].sort((a, b) =>
+    a.kind.localeCompare(b.kind)
+  );
+  return { things, stuck, kinds };
 }
 
 /**
- * Where one space or one project stands. A space pin was already checked by
+ * Where one space or one project stands — or, with BOTH lenses, one project
+ * INSIDE one space (a project's PILLAR): its things, sessions and moves are
+ * those in the project AND the space (each lens ANDs its own condition), and
+ * its goal moves are the project's goals that ADVANCE that space
+ * (`track --advances--> workspace`). A space pin was already checked by
  * the caller (orient refuses an inaccessible `workspaceId`); a project the
- * caller cannot see is `null`, never a rollup of zeros. THROWS.
+ * caller cannot see is `null`, never a rollup of zeros. `byKind` adds the
+ * per-kind split of `things` (the pillar indicator). THROWS.
  */
 export async function readScopeRollup(input: {
   userId: string;
   workspaceId?: string;
   projectId?: string;
+  byKind?: boolean;
 }): Promise<ScopeRollup | null> {
   const { userId, workspaceId, projectId } = input;
   if (projectId) {
@@ -604,11 +701,13 @@ export async function readScopeRollup(input: {
     });
     if (!visible) return null;
   }
-  const lens = projectId ? "project" : "workspace";
+  const pillar = projectId !== undefined && workspaceId !== undefined;
+  const lens = pillar ? "pillar" : projectId ? "project" : "workspace";
   const id = (projectId ?? workspaceId)!;
-  const scope: ResolvedScope = projectId
-    ? { workspaceLens: undefined, projectLens: projectId }
-    : { workspaceLens: workspaceId, projectLens: undefined };
+  const scope: ResolvedScope = {
+    workspaceLens: workspaceId,
+    projectLens: projectId,
+  };
   const sessionsInScope = and(
     sessionReadableWhere({ userId }),
     ...sessionScopeConditions(scope)
@@ -624,10 +723,11 @@ export async function readScopeRollup(input: {
       )
     )
     .limit(OPEN_WORK_READ_CAP);
-  const [{ things, stuck }, work, moved, open] = await Promise.all([
+  const [{ things, stuck, kinds }, work, moved, open] = await Promise.all([
     readThings({
       userId,
-      ...(projectId ? { projectId } : { workspaceId }),
+      ...(projectId ? { projectId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
     }),
     countWork(sessionsInScope),
     // Moves of what the caller can see in the scope: its things (the entity
@@ -640,9 +740,8 @@ export async function readScopeRollup(input: {
           entityReadVisibleWhere(userId),
           // The rule `things` is counted under, so demo and probe rows never move it.
           listableEntityWhere({ projectLens: projectId }),
-          projectId
-            ? projectLensWhere(entities.id, projectId)
-            : eq(entities.workspaceId, workspaceId!)
+          projectId ? projectLensWhere(entities.id, projectId) : undefined,
+          workspaceId ? eq(entities.workspaceId, workspaceId) : undefined
         )}`
       ),
       movesOf(
@@ -653,7 +752,10 @@ export async function readScopeRollup(input: {
         ? [
             movesOf(
               "track",
-              drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, projectId)}`
+              drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${and(
+                eq(projectTracks.projectId, projectId),
+                pillar ? goalAdvancesWhere(workspaceId!) : undefined
+              )}`
             ),
           ]
         : []),
@@ -676,11 +778,27 @@ export async function readScopeRollup(input: {
   return {
     lens,
     id,
+    ...(pillar ? { workspaceId } : {}),
     windowDays: ROLLUP_WINDOW_DAYS,
     things,
     work,
     moved: moved.get("all") ?? 0,
     stuck,
     waitingOn,
+    ...(input.byKind ? { kinds } : {}),
   };
+}
+
+/**
+ * The goal ADVANCES space `workspaceId` (`track --advances--> workspace`).
+ * The literal (not the constant) keeps this reader visible to the
+ * `links-type-ssot` tripwire's typed-reader scan.
+ */
+function goalAdvancesWhere(workspaceId: string): SQL {
+  return drizzleSql`${projectTracks.id}::text IN (SELECT ${links.fromId} FROM ${links} WHERE ${and(
+    eq(links.linkType, "advances"),
+    eq(links.fromType, "track"),
+    eq(links.toType, "workspace"),
+    eq(links.toId, workspaceId)
+  )})`;
 }

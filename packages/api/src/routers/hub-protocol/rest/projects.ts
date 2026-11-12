@@ -5,6 +5,7 @@
  * Auth: Hub Protocol API key (Bearer). All writes go through governance.
  */
 
+import { readProjectPillarFields } from "../../../services/projects/pillar-health.js";
 import { z } from "zod";
 import { isProjectIcon } from "@synap-core/types/projects";
 import {
@@ -766,6 +767,9 @@ export function registerProjectsRoutes(app: HubHono): void {
       // Additive INDEX: workspaces this project uses. Not an ACL.
       usedWorkspaceIds,
       usedWorkspaces,
+      // Parity with tRPC `projects.get`: `mainGoal`, `pillars`, `rootHealth`
+      // (a failed read is `{ status: "unavailable" }`, never empty).
+      ...(await readProjectPillarFields(userId, row.id)),
     });
   });
 
