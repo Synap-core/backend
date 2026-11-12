@@ -87,7 +87,9 @@ const bridgeReply = (extra: Record<string, unknown>) =>
       )
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("handleWhiteboardSnapshot and a room that failed to load", () => {
   it("refuses: no version stored, nothing announced", async () => {
