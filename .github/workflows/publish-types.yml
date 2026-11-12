@@ -190,6 +190,58 @@ jobs:
       - name: Build api-types package
         run: cd packages/api-types && pnpm build
 
+      # @synap-core/markdown-core: the one markdown grammar (chips, embeds,
+      # sections) a pod app needs to read and write pod documents (plan
+      # 78c60908, G4). No workspace dependency. Built through turbo for the
+      # same reason as the steps above (a missed filter exits 1, not 0).
+      - name: Build @synap-core/markdown-core
+        run: pnpm turbo run build --filter=@synap-core/markdown-core
+
+      # Publish iff what the repo holds is not on npm yet:
+      #   - the package is not on npm at all: SKIP with a warning. Trusted
+      #     Publishing cannot create a package; its first version is a one-time
+      #     bootstrap by an npm owner (SECURITY-RELEASE-RUNBOOK.md §2.2);
+      #   - the repo's version is not on npm: publish it as is (the first
+      #     release after the bootstrap, or a bump made in a PR);
+      #   - it is, with the same src/ and dependencies: nothing to publish;
+      #   - it is, and they differ: publish the next free patch.
+      # A failed pack fails the step: unread is not "unchanged".
+      - name: Drift-aware bump @synap-core/markdown-core
+        id: bump-markdown-core
+        run: |
+          cd packages/markdown-core
+          PKG=@synap-core/markdown-core
+          # Only a 404 means "not on npm": any other failed read (network,
+          # registry down) fails the step instead of skipping the publish.
+          if ! VIEW=$(npm view "$PKG" name 2>&1); then
+            if printf '%s' "$VIEW" | grep -q E404; then
+              echo "::warning::$PKG is not on npm yet: not published. An npm owner bootstraps it once (SECURITY-RELEASE-RUNBOOK.md §2.2)."
+              echo "bumped=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "$VIEW"
+            exit 1
+          fi
+          published() { [ -n "$(npm view "$PKG@$1" version 2>/dev/null)" ]; }
+          V=$(node -p "require('./package.json').version")
+          if published "$V"; then
+            NPM_DIR=$(mktemp -d)
+            (cd "$NPM_DIR" && npm pack "$PKG@$V" --silent >/dev/null && tar xzf ./*.tgz)
+            deps() { node -p "JSON.stringify(require('$1').dependencies ?? {})"; }
+            if diff -rq src "$NPM_DIR/package/src" >/dev/null \
+               && [ "$(deps ./package.json)" = "$(deps "$NPM_DIR/package/package.json")" ]; then
+              echo "$PKG $V is already on npm and unchanged: nothing to publish"
+              echo "bumped=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            while published "$V"; do
+              npm version patch --no-git-tag-version >/dev/null
+              V=$(node -p "require('./package.json').version")
+            done
+          fi
+          echo "$PKG -> $V"
+          echo "bumped=true" >> "$GITHUB_OUTPUT"
+
       # ── Publish ────────────────────────────────────────────────────────────
       # npm Trusted Publishing needs Node >= 22.14.0 and npm >= 11.5.1 IN THE
       # PROCESS THAT PUBLISHES (SECURITY-RELEASE-RUNBOOK.md §2.1). Everything
@@ -213,13 +265,22 @@ jobs:
       #
       # Each published package must trust this workflow on npmjs.com
       # (package → Settings → Trusted Publishers → Add — cannot be automated):
-      #   for EACH package (@synap-core/types and @synap-core/api-types):
+      #   for EACH package (@synap-core/types, @synap-core/api-types and
+      #   @synap-core/markdown-core):
       #     Organization/user : Synap-core
       #     Repository        : Synap-core/backend
       #     Workflow filename : publish-types.yml
       #     Environment       : leave blank
       # Until a package trusts it, its publish step fails with E404/ENEEDAUTH.
       # The NPM_TOKEN repo secret is no longer read; delete it.
+      #
+      # markdown-core publishes FIRST: it is the newest door, so if its trust is
+      # not in place the run stops while nothing is on npm and main is not left
+      # behind the registry (the same reason the App token is minted first).
+      - name: Publish @synap-core/markdown-core
+        if: steps.bump-markdown-core.outputs.bumped == 'true'
+        run: cd packages/markdown-core && pnpm publish --no-git-checks --provenance
+
       - name: Publish @synap-core/types
         run: cd packages/types && pnpm publish --no-git-checks --provenance
 
@@ -234,11 +295,14 @@ jobs:
       # prepublishOnly/prepack hook.
       - name: Verify published artifacts are installable
         run: |
+          DIRS="packages/types"
           if [ "${{ steps.bump-api-types.outputs.bumped }}" = "true" ]; then
-            node scripts/verify-publishable.mjs packages/types packages/api-types
-          else
-            node scripts/verify-publishable.mjs packages/types
+            DIRS="$DIRS packages/api-types"
           fi
+          if [ "${{ steps.bump-markdown-core.outputs.bumped }}" = "true" ]; then
+            DIRS="$DIRS packages/markdown-core"
+          fi
+          node scripts/verify-publishable.mjs $DIRS
 
       # TODO (B1, deferred): once published, open a PR bumping synap-app's
       # @synap-core/api-types pin to the new version (see
@@ -267,6 +331,7 @@ jobs:
                   packages/api-types/package.json \
                   packages/api-types/src/version.ts \
                   packages/api-types/src/generated.d.ts \
+                  packages/markdown-core/package.json \
                   apps/api/src/index.ts
           git commit -m "chore: auto-publish type packages [skip ci]" || true
           # main moves during a run: rebase the bump commit onto it. If the rebase
@@ -275,12 +340,13 @@ jobs:
           # index.ts) always win. The packages are already published at these versions.
           TYPES_V=$(node -p "require('./packages/types/package.json').version")
           API_V=$(node -p "require('./packages/api-types/package.json').version")
+          MD_V=$(node -p "require('./packages/markdown-core/package.json').version")
           reapply_versions() {
             git rebase --abort 2>/dev/null || true
             git_auth fetch -q origin main && git reset -q --hard origin/main
             node -e '
               const fs = require("fs");
-              const [typesV, apiV] = process.argv.slice(1);
+              const [typesV, apiV, mdV] = process.argv.slice(1);
               const setVersion = (f, v) => {
                 const pkg = JSON.parse(fs.readFileSync(f, "utf8"));
                 pkg.version = v;
@@ -293,10 +359,12 @@ jobs:
               };
               setVersion("packages/types/package.json", typesV);
               setVersion("packages/api-types/package.json", apiV);
+              setVersion("packages/markdown-core/package.json", mdV);
               replace("packages/api-types/src/version.ts", /API_TYPES_VERSION = "[^"]*"/, `API_TYPES_VERSION = "${apiV}"`);
               replace("apps/api/src/index.ts", /apiTypesVersion: "[^"]*"/, `apiTypesVersion: "${apiV}"`);
-            ' "$TYPES_V" "$API_V"
+            ' "$TYPES_V" "$API_V" "$MD_V"
             git add packages/types/package.json packages/api-types/package.json \
+                    packages/markdown-core/package.json \
                     packages/api-types/src/version.ts apps/api/src/index.ts
             git commit -m "chore: auto-publish type packages [skip ci]" || true
           }
