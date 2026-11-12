@@ -429,6 +429,84 @@ describe("computer.run_recipe — the ask", () => {
 });
 
 /**
+ * A `time` param is seconds or [hh:]mm:ss, so a JSON number of seconds is a
+ * time. Live, 2026-11-11: an agent's range-cut run with `start: 2, end: 7`
+ * was approved and then refused, "recipe range-cut: end must be a string".
+ * The pod stores the value as its string, so the Mac's runner (any version)
+ * receives what it renders.
+ */
+describe("computer.run_recipe — a time given as a number of seconds", () => {
+  const TIMED_CUT = {
+    name: "range-cut",
+    description: "Keep one time range of a video.",
+    params: {
+      in: { type: "file", description: "The video.", required: true },
+      start: { type: "time", description: "Range start.", required: true },
+      end: { type: "time", description: "Range end.", required: true },
+      out: { type: "output", description: "The result.", required: true },
+    },
+    steps: [
+      {
+        program: "ffmpeg",
+        args: ["-ss", "{start}", "-to", "{end}", "-i", "{in}", "{out}"],
+      },
+    ],
+    gotchas: ["Re-encodes the range."],
+  };
+  const withTimedCut = async (body: () => Promise<void>) => {
+    await q(`UPDATE installations SET manifest = $2::jsonb WHERE id = $1`, [
+      INST_MAC,
+      JSON.stringify({ recipes: [LOUDNORM, TIMED_CUT] }),
+    ]);
+    try {
+      await body();
+    } finally {
+      await q(`UPDATE installations SET manifest = $2::jsonb WHERE id = $1`, [
+        INST_MAC,
+        JSON.stringify({ recipes: [LOUDNORM] }),
+      ]);
+    }
+  };
+  const cut = (start: unknown, end: unknown) =>
+    ask({
+      recipe: "range-cut",
+      params: { in: CLIP, start, end, out: "take-cut.mp4" },
+    });
+
+  it("queues the run and stores each time as its string", () =>
+    withTimedCut(async () => {
+      const out = await run(cut(2, 7.5), ctx);
+      expect(isQueuedHostVerbResult(out)).toBe(true);
+      const jobs = await q<{ parameters: Record<string, unknown> }>(
+        `SELECT parameters FROM host_jobs`
+      );
+      expect(jobs.rows.map((r) => r.parameters)).toEqual([
+        { in: CLIP, start: "2", end: "7.5", out: "take-cut.mp4" },
+      ]);
+      // A negative number is refused by the TIME rule, not as "not a string".
+      await expect(run(cut(-2, 7), ctx)).rejects.toMatchObject(
+        refusal("BAD_PARAMS", expect.any(String), /start must be a time/)
+      );
+    }));
+
+  it("CONTROL: a string time is stored as it came; a negative number is still refused", () =>
+    withTimedCut(async () => {
+      await run(cut("00:02", "7"), ctx);
+      const jobs = await q<{ parameters: Record<string, unknown> }>(
+        `SELECT parameters FROM host_jobs`
+      );
+      expect(jobs.rows[0]!.parameters).toMatchObject({
+        start: "00:02",
+        end: "7",
+      });
+      // Refused before this change and after it (only start is a number here).
+      await expect(run(cut(-2, "7"), ctx)).rejects.toMatchObject(
+        refusal("BAD_PARAMS", expect.any(String), /start must be/)
+      );
+    }));
+});
+
+/**
  * The person APPROVES an agent's run (proposal c6ba64e6, 2026-11-10): the
  * agent asked for `range-cut`, which the catalog added after media-ffmpeg was
  * approved on that computer. The handler refused with the next step, and the

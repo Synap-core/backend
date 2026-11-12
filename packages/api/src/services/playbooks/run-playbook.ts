@@ -73,12 +73,15 @@ import type {
   PlaybookRunner,
   PlaybookStage,
 } from "@synap/playbooks";
+import { requiresOf } from "./requires-of.js";
 import {
   instantiateSession,
   runPromptFor,
   resolveRunnablePlaybook,
   resolveGoal,
 } from "./playbook-lifecycle.js";
+import { playbookAtVersion } from "./playbook-versions.js";
+import { STAGE_OF_METADATA_KEY, type StageOf } from "./stage-of.js";
 import {
   resolveGrantedCapabilities,
   getLinksFor,
@@ -229,6 +232,13 @@ export interface RunPlaybookInput {
    */
   runOn?: "synap_ai";
   /**
+   * WHO works each step of THIS run, by stage key (spec 7111934d §2.4): the
+   * stage runner's second rung, after a runner named when the step is
+   * entered and before the step's own `runner`. Stored on the run's input
+   * (`playbook_runs.input.stageRunners`), where `enterStage` reads it.
+   */
+  stageRunners?: Record<string, PlaybookRunner>;
+  /**
    * The agent that STARTED this run directly (no proposal). The run is still
    * the PERSON's (`userId`): the agent rides first on the roster and the
    * session waits as a triage DRAFT (`origin: "agent"`) for the person to
@@ -300,6 +310,19 @@ export interface RunPlaybookInput {
    * as `createFocusSession`). Absent ⇒ a slice that does not block the parent.
    */
   suspendedIntent?: string;
+  /**
+   * Run the playbook as it stood at this KEPT version (`playbook_versions`),
+   * not its live definition: a step that `uses` a playbook is pinned (spec
+   * 7111934d §2.3). Refused when the version is not kept. Absent ⇒ the live
+   * definition, as every other run.
+   */
+  pinnedVersion?: number;
+  /**
+   * This run WORKS A STEP of another run (a stage that `uses` this playbook):
+   * stamped on the session (`metadata.stageOf`), where the child-close reactor
+   * finds the parent step to hand its outputs back to (`stage-child.ts`).
+   */
+  stageOf?: StageOf;
   /**
    * The PROJECT this run is filed into (`focus_sessions.project_id`). Must be
    * visible to `userId`; refused otherwise.
@@ -982,13 +1005,6 @@ export interface ResolvedRunChoice {
   persona?: string | null;
 }
 
-/** A playbook's stored `requires` (jsonb: data), as capability keys. */
-function readRequires(requires: unknown): string[] {
-  return Array.isArray(requires)
-    ? requires.filter((k): k is string => typeof k === "string")
-    : [];
-}
-
 /**
  * THE rule for who runs a playbook for a person (slice 5a, plan v2 66d229dc;
  * founder Q1: ask once, then remember; runner engine slice 2, spec 7111934d
@@ -1081,7 +1097,7 @@ export async function resolveRunChoice(
   }
 
   // 2. The playbook's own runner.
-  const requires = readRequires(input.playbook.requires);
+  const requires = requiresOf(input.playbook);
   const authored =
     input.playbook.runner !== null && input.playbook.runner !== undefined
       ? await resolveRunner({
@@ -1352,11 +1368,18 @@ export async function runPlaybook(
   // The ONE door (playbook-lifecycle.ts): the appointment materializer resolves
   // through the same function, so the by-name fallback and the write-side IDOR
   // floor exist once, not once per scheduled door.
-  const playbook = await resolveRunnablePlaybook({
+  const live = await resolveRunnablePlaybook({
     playbookId: input.playbookId,
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+  // A step that IS this playbook runs the version it is pinned at: the run,
+  // its snapshot and its session follow that kept definition, never the live
+  // row (spec 7111934d §3.2).
+  const playbook =
+    input.pinnedVersion !== undefined
+      ? await playbookAtVersion(await getDb(), live, input.pinnedVersion)
+      : live;
 
   // FILING — the project/track this run lands in, resolved ONCE for every
   // fan-out item. Before any session, channel or run row exists, so a bad
@@ -1759,6 +1782,8 @@ async function executeSingleRun(
           // the draft says why (`projectTriage` → `triage.heldBecause`).
           { triage: { heldBecause: preApproval.reason } }
         : {}),
+    // The step of another run this run works (a stage that `uses` it).
+    ...(input.stageOf ? { [STAGE_OF_METADATA_KEY]: input.stageOf } : {}),
     // `profileSlug` = the lifecycle the worker follows: process-sync settles
     // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker
@@ -1777,6 +1802,10 @@ async function executeSingleRun(
   // against the automation StepContext), else substituted against `params`.
   const session = await instantiateSession({
     playbookId: playbook.id,
+    // The session's stages and slots come from the pinned version too.
+    ...(input.pinnedVersion !== undefined
+      ? { pinnedVersion: input.pinnedVersion }
+      : {}),
     workspaceId: input.workspaceId,
     userId: actorId,
     // The birth stage's subject move is governed as the agent that ran it.
@@ -1983,6 +2012,7 @@ async function executeSingleRun(
       ...(handOff ? { handToAgentId: handOff.agentUserId } : {}),
       // A run asked for Synap AI stays on Synap AI when it is accepted.
       ...(input.runOn ? { runOn: input.runOn } : {}),
+      ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
       heldAt: new Date().toISOString(),
     };
     const [heldSession] = await db
@@ -2012,6 +2042,7 @@ async function executeSingleRun(
     agentType: input.agentType ?? null,
     handOff: handOff ?? null,
     runOn: runOn ?? null,
+    stageRunners: input.stageRunners,
   });
 
   // Re-load the session so the returned row reflects the wired channelId.
@@ -2036,6 +2067,8 @@ interface HeldRun {
   handToAgentId?: string;
   /** Synap AI was asked for this run (`RunPlaybookInput.runOn`). */
   runOn?: "synap_ai";
+  /** Who works each step (`RunPlaybookInput.stageRunners`). */
+  stageRunners?: Record<string, PlaybookRunner>;
   heldAt: string;
 }
 
@@ -2056,6 +2089,11 @@ function readHeldRun(metadata: unknown): HeldRun | null {
       ? { handToAgentId: h.handToAgentId }
       : {}),
     ...(h.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+    ...(h.stageRunners &&
+    typeof h.stageRunners === "object" &&
+    !Array.isArray(h.stageRunners)
+      ? { stageRunners: h.stageRunners }
+      : {}),
     heldAt: typeof h.heldAt === "string" ? h.heldAt : "",
   };
 }
@@ -2081,6 +2119,8 @@ async function dispatchRunOnSession(p: {
   handOff?: RunHandOff | null;
   /** Who runs it and why ({@link resolveRunChoice}), recorded on the run. */
   runOn?: RunOn | null;
+  /** Who works each step (`RunPlaybookInput.stageRunners`), kept on the run's input. */
+  stageRunners?: Record<string, PlaybookRunner>;
 }): Promise<PlaybookRun> {
   const db = await getDb();
   const { playbook, actorId, params } = p;
@@ -2104,7 +2144,9 @@ async function dispatchRunOnSession(p: {
       executor: executorRef,
       ...(p.runOn ? { runOn: p.runOn } : {}),
       status: "running",
-      input: params,
+      input: p.stageRunners
+        ? { ...params, stageRunners: p.stageRunners }
+        : params,
       createdBy: actorId,
       definitionSnapshot: buildDefinitionSnapshot(playbook),
     })
@@ -2141,6 +2183,18 @@ async function dispatchRunOnSession(p: {
         "playbook run: enrollment upsert failed (non-fatal)"
       );
     }
+  }
+
+  // 4c. BIRTH: the run's first stage starts now — the stage runner records
+  // who works it and hands it over when the stage names another runner
+  // (`enterStage`, spec 7111934d §3.1). Never throws.
+  if (session.currentStage) {
+    const { enterStage } = await import("./stage-runner.js");
+    await enterStage({
+      sessionId: session.id,
+      stageKey: session.currentStage,
+      cause: { kind: "birth" },
+    });
   }
 
   // 5. Resolve the playbook's granted capabilities (its `grants` links) into
@@ -2283,6 +2337,7 @@ export async function startHeldRun(
     agentType: held.agentType ?? persona ?? null,
     handOff,
     runOn,
+    stageRunners: held.stageRunners,
   });
   return { status: "started", run };
 }

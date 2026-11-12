@@ -19043,6 +19043,31 @@ export type PacketInboxSection = {
 	reason: string;
 	status: "unavailable";
 };
+/**
+ * ONE ENTRY OF A STEP (`session_stage_runs`, runner engine slice 3): who works
+ * or worked it, on which computer, and where it stands. `agent: null` = Synap
+ * AI (or the run's own executor). Names are the users table's, or null.
+ */
+export interface PacketStageRunItem {
+	id: string;
+	stageKey: string;
+	/** 1 for the first entry of the step; more after a return (`onFail`). */
+	attempt: number;
+	/** running | waiting_tools | waiting_start | unreached | waiting_child | done | failed | cancelled */
+	status: string;
+	agent: {
+		id: string;
+		name: string | null;
+	} | null;
+	computer: {
+		id: string;
+		name: string | null;
+	} | null;
+	/** The child run's session when the step IS a playbook (`uses`). */
+	childSessionId: string | null;
+	startedAt: string;
+	endedAt: string | null;
+}
 export type PacketSection<T> = {
 	items: T[];
 	status: "ok";
@@ -19479,6 +19504,15 @@ export interface ContinuationPacket {
 	 * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
 	 */
 	holder: SessionHolderSection;
+	/**
+	 * WHO WORKS EACH STEP — every entry of a step of this run
+	 * (`session_stage_runs`), oldest first, the newest
+	 * {@link PACKET_STAGE_RUNS_MAX} kept (`total` counts all). The newest entry
+	 * of a `stageKey` is who is on it now (`status` running or waiting_*), or
+	 * who did it. `total: 0` = no step entered yet (or a session with no
+	 * stages); a failed read is `unavailable`, never an empty list.
+	 */
+	stageRuns: PacketSection<PacketStageRunItem>;
 	outputs: PacketSection<PacketOutputItem>;
 	/**
 	 * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -24839,6 +24873,8 @@ export interface LeanContinuation {
 	/** `ownerDeploys` holds THIS session's deploys only (`detail: 'deploys'` reads the rest). */
 	gates: ContinuationPacket["gates"];
 	live: ContinuationPacket["live"];
+	/** Who works each step (the same section as the full packet: a wake needs it). */
+	stageRuns: ContinuationPacket["stageRuns"];
 }
 export type LeanOutcomesSection = {
 	counts: {
@@ -49178,6 +49214,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runOn?: "synap_ai" | undefined;
 				runner?: unknown;
 				source?: string | undefined;
+				stageRunners?: Record<string, unknown> | undefined;
 				subjectId?: string | undefined;
 				suspendedIntent?: string | undefined;
 				trackId?: string | undefined;

@@ -41,6 +41,7 @@ import type {
 } from "@synap-core/types/host-jobs";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
+import { normalizeRecipeValues } from "@synap-core/types/capability-manifest";
 import { listPersonsComputers } from "../installations/request-installation.js";
 import type { RunStatus, UnifiedRun } from "../runs/types.js";
 import { hostJobReadStatus, installationHealth } from "./host-jobs.js";
@@ -183,7 +184,11 @@ export async function queueRecipeRun(
         : `${input.capabilityKey} on ${computer.name} has no recipe "${input.recipe}", and neither has the pod's ${input.capabilityKey}. ${list}`,
     };
   }
-  const problem = recipeValuesProblem(recipe, input.values);
+  // The values in the form the recipe is filled with (a time given as a
+  // number of seconds is its string): what is checked here is what is stored
+  // on the job, so the computer's runner receives what it renders.
+  const values = normalizeRecipeValues(recipe, input.values);
+  const problem = recipeValuesProblem(recipe, values);
   if (problem) return { ok: false, code: "BAD_PARAMS", error: problem };
 
   // The files a run makes land in a space (the upload door needs one): the
@@ -206,7 +211,7 @@ export async function queueRecipeRun(
   // Each input file must be one the person can read, with bytes, now; the
   // lease reads it again (it may be gone by then).
   const { readableFileEntity } = await import("../../routers/file-upload.js");
-  for (const [param, ids] of Object.entries(fileIdsOf(recipe, input.values))) {
+  for (const [param, ids] of Object.entries(fileIdsOf(recipe, values))) {
     for (const id of ids) {
       const readable = await readableFileEntity(input.userId, id);
       if (!readable.ok) {
@@ -243,7 +248,7 @@ export async function queueRecipeRun(
         capabilityKey: input.capabilityKey,
         recipe: recipe.name,
       },
-      parameters: input.values,
+      parameters: values,
     })
     .returning();
   const label = `“${recipe.name}” (${input.capabilityKey})`;

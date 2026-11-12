@@ -113,7 +113,16 @@ export function proposalOnThingsWhere(lens: ThingsLens): SQL {
  * say which asked things each proposal is on (THE waiting-on collector,
  * `status-facts.ts`). One rule, so "Needs you" and a thing's blocker never
  * disagree on which proposals are about it.
+ *
+ * The session half is an EXISTS on the proposal's own session (a primary-key
+ * probe), never `session_id IN (SELECT … FROM focus_sessions WHERE …)`: when
+ * `things` is a correlated column (the collector's `x`), that subquery is
+ * re-run for every (proposal, thing) pair and scans EVERY session each time
+ * (its predicate takes no index), which made `GET /flow` cost ~0.2 s per card
+ * on a pod with many sessions. Same rows in every boolean context the rule is
+ * used in (a NULL `session_id` answers false instead of NULL; no caller
+ * negates the rule).
  */
 export function proposalOnThingsIn(things: SQL): SQL {
-  return drizzleSql`((${proposals.targetType} IN ('entity', 'entity_facet') AND ${proposals.targetId} IN (${things})) OR ${proposals.data}->>'entityId' IN (${things}) OR ${proposals.sessionId} IN (SELECT ${focusSessions.id} FROM ${focusSessions} WHERE ${sessionOnThingsIn(things)}))`;
+  return drizzleSql`((${proposals.targetType} IN ('entity', 'entity_facet') AND ${proposals.targetId} IN (${things})) OR ${proposals.data}->>'entityId' IN (${things}) OR EXISTS (SELECT 1 FROM ${focusSessions} WHERE ${focusSessions.id} = ${proposals.sessionId} AND ${sessionOnThingsIn(things)}))`;
 }

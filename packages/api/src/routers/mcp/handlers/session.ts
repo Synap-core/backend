@@ -29,7 +29,12 @@ import {
   readCloseQuestionDispositions,
   type CloseQuestionDisposition,
 } from "../../../services/messaging/room-post-kind.js";
-import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  PlaybookRunner,
+  SessionCriterion,
+} from "@synap/playbooks";
+import { stageRunnerSchema } from "../../../schemas/playbook-runner.js";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
@@ -1690,6 +1695,22 @@ export const sessionHandlers: McpHandlerMap = {
     if (updateTargets === "invalid") {
       return reply({ error: TARGETS_ARG_ERROR });
     }
+    // A runner for the stage being entered: only with that advance, and
+    // refused when misspelled rather than dropped.
+    if (args.stageRunner !== undefined && args.stageRunner !== null) {
+      if (typeof args.currentStage !== "string") {
+        return reply({
+          error:
+            "stageRunner names who works the stage you enter: send it with currentStage.",
+        });
+      }
+      const parsed = stageRunnerSchema.safeParse(args.stageRunner);
+      if (!parsed.success) {
+        return reply({
+          error: `stageRunner: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        });
+      }
+    }
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -1715,6 +1736,9 @@ export const sessionHandlers: McpHandlerMap = {
       ...moveHoldToolArgs(args),
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,
+      ...(args.stageRunner !== undefined
+        ? { stageRunner: args.stageRunner as PlaybookRunner | null }
+        : {}),
       addOutput: slots.addOutput,
       completeOutput: args.completeOutput as string | undefined,
       ...(typeof args.retireOutput === "string"
@@ -1899,6 +1923,8 @@ export const sessionHandlers: McpHandlerMap = {
           // subject status that did NOT move the subject (skipped, failed, or
           // waiting on a person) changes nothing the session row shows.
           ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
+          // Who works the stage the advance entered (the stage runner).
+          ...(result.stageRun ? { stageRun: result.stageRun } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
           ...(result.warnings ? { warnings: result.warnings } : {}),

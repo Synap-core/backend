@@ -1075,3 +1075,154 @@ export async function satisfyPullRequestByMerge(params: {
       return r;
     });
 }
+
+// ── THE FIFTH PATH: A CHILD RUN THAT DELIVERED (runner engine slice 4) ─────
+
+/** One parent slot a step that `uses` a playbook expects back, and its child label. */
+export interface ChildSlotWanted {
+  /** The parent stage's slot label (`stage.expectedOutputs[].label`). */
+  parentLabel: string;
+  /** The child run's slot that answers it (`uses.outputs`, default the same label). */
+  childLabel: string;
+}
+
+/**
+ * WHICH parent slots a child run's delivered slots close. Pure. A parent slot
+ * is closed only when ALL hold:
+ *   - it is one the step expects back (`wanted`), found by label;
+ *   - it is not already done, not retired, not the person's (`owner:
+ *     'human'`), and no criterion shares its key (that criterion's evaluator
+ *     checks it);
+ *   - the child's slot of the mapped label is DONE (through one of the
+ *     child's own doors) and not retired.
+ * The evidence is the child slot's own pointer, else the child session.
+ */
+export function selectSlotsDeliveredByChild(
+  parent: readonly ExpectedOutput[],
+  child: readonly ExpectedOutput[],
+  wanted: readonly ChildSlotWanted[],
+  criterionKeys: ReadonlySet<string>,
+  childSessionId: string
+): Array<{ index: number; evidence: SlotEvidence; childSlot: ExpectedOutput }> {
+  const keys = deriveSlotKeys(parent);
+  const out: Array<{
+    index: number;
+    evidence: SlotEvidence;
+    childSlot: ExpectedOutput;
+  }> = [];
+  for (const w of wanted) {
+    const index = findSlotIndex(parent, { label: w.parentLabel }, (s) => !!s);
+    const slot = parent[index];
+    const key = keys[index];
+    if (!slot || !key || out.some((o) => o.index === index)) continue;
+    if (slot.status === "done" || slot.retiredAt != null) continue;
+    if (slot.owner === "human") continue;
+    if (criterionKeys.has(key)) continue;
+    const childIndex = findSlotIndex(
+      child,
+      { label: w.childLabel },
+      (s) => !!s && s.status === "done" && s.retiredAt == null
+    );
+    const childSlot = child[childIndex];
+    if (!childSlot) continue;
+    out.push({
+      index,
+      evidence: refEvidence(childSlot) ?? {
+        kind: "ref",
+        id: `focus_session:${childSessionId}`,
+      },
+      childSlot,
+    });
+  }
+  return out;
+}
+
+/**
+ * THE CHILD VERDICT — a step that IS a playbook got its outputs from the run
+ * that worked it (spec 7111934d §3.2). Called by the child-close reactor
+ * (`playbooks/stage-child.ts`) only for a child that closed DELIVERED and
+ * whose session is stamped `stageOf` this parent. The child's slots were made
+ * done by the child's own doors; this door carries that verdict up, citing the
+ * child's pointer (copied onto the parent slot when it has none). Owner-floored
+ * on the parent; idempotent: a slot already done is never re-stamped.
+ */
+export async function satisfyStageSlotsFromChild(params: {
+  sessionId: string;
+  userId: string;
+  childSessionId: string;
+  wanted: readonly ChildSlotWanted[];
+  now?: Date;
+}): Promise<SatisfyClaimsByEvidenceResult> {
+  const { sessionId, userId, childSessionId, wanted } = params;
+  if (wanted.length === 0) return { satisfied: [] };
+  const now = params.now ?? new Date();
+  const [child] = await db
+    .select({ expectedOutputs: focusSessions.expectedOutputs })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.id, childSessionId),
+        eq(focusSessions.userId, userId)
+      )
+    )
+    .limit(1);
+  const childSlots: ExpectedOutput[] = Array.isArray(child?.expectedOutputs)
+    ? (child.expectedOutputs as ExpectedOutput[])
+    : [];
+  if (childSlots.length === 0) return { satisfied: [] };
+  return db
+    .transaction(async (tx): Promise<SatisfyClaimsByEvidenceResult> => {
+      const [locked] = await tx
+        .select({
+          expectedOutputs: focusSessions.expectedOutputs,
+          criteria: focusSessions.criteria,
+        })
+        .from(focusSessions)
+        .where(
+          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+        )
+        .for("update");
+      if (!locked) return { satisfied: [] };
+      const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
+        ? (locked.expectedOutputs as ExpectedOutput[])
+        : [];
+      const picks = selectSlotsDeliveredByChild(
+        current,
+        childSlots,
+        wanted,
+        new Set(readCriteria(locked.criteria).map((c) => c.key)),
+        childSessionId
+      );
+      if (picks.length === 0) return { satisfied: [] };
+      const byIndex = new Map(picks.map((p) => [p.index, p]));
+      const next = current.map((o, i) => {
+        const pick = byIndex.get(i);
+        if (!pick) return o;
+        return {
+          ...o,
+          status: "done" as const,
+          satisfiedByEvidence: { ...pick.evidence, at: now.toISOString() },
+          ...(!o.ref && pick.childSlot.ref ? { ref: pick.childSlot.ref } : {}),
+        };
+      });
+      await tx
+        .update(focusSessions)
+        .set({ expectedOutputs: next, updatedAt: now })
+        .where(eq(focusSessions.id, sessionId));
+      const currentKeys = deriveSlotKeys(current);
+      return {
+        satisfied: picks.map((p) => ({
+          key: currentKeys[p.index]!,
+          label: current[p.index]!.label,
+          evidence: p.evidence,
+        })),
+        outputs: next,
+      };
+    })
+    .then(async (r) => {
+      if (r.satisfied.length > 0) {
+        await linkSatisfiedOutputsToSubject({ sessionId, now });
+      }
+      return r;
+    });
+}

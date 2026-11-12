@@ -84,6 +84,7 @@ export * from "./utils/open-run-session.js";
 export * from "./utils/session-started-by.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
+export * from "./utils/stage-run-waiting.js";
 export * from "./utils/needs-you-predicate.js";
 export * from "./utils/awaited-gate-wait.js";
 export * from "./utils/stage-gate-wait.js";

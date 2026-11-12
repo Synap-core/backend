@@ -87,7 +87,10 @@ import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { recordPlaybookVersion } from "./playbook-versions.js";
+import {
+  playbookAtVersion,
+  recordPlaybookVersion,
+} from "./playbook-versions.js";
 import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
 import {
@@ -372,6 +375,12 @@ export function runPromptFor(session: {
 
 export interface InstantiateInput {
   playbookId: string;
+  /**
+   * Born from this KEPT version of the playbook, not its live definition (a
+   * step that `uses` it is pinned, spec 7111934d §3.2): its stages, slots,
+   * criteria, params and goal template. Absent ⇒ the live definition.
+   */
+  pinnedVersion?: number;
   /** The workspace the session runs in (verified membership upstream). */
   workspaceId: string;
   /** The human/agent starting the run. */
@@ -603,12 +612,16 @@ export async function instantiateSessionRow(
   input: InstantiateInput
 ): Promise<FocusSession | null> {
   const db = await getDb();
-  const playbook = await db.query.playbooks.findFirst({
+  const live = await db.query.playbooks.findFirst({
     where: eq(playbooks.id, input.playbookId),
   });
-  if (!playbook) {
+  if (!live) {
     throw new Error(`Playbook ${input.playbookId} not found`);
   }
+  const playbook =
+    input.pinnedVersion !== undefined
+      ? await playbookAtVersion(db, live, input.pinnedVersion)
+      : live;
 
   // PARAMS — validated HERE and nowhere else. This function is the single
   // funnel behind every run door (playbooks.run, the Hub run door, MCP

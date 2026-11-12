@@ -804,6 +804,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "definition",
     addedBy: "0416_playbook_runner_and_versions.sql",
   },
+  // Who works each step of a run (0422): the stage runner writes a row on
+  // every step entry, so its absence fails every stage advance.
+  {
+    table: "session_stage_runs",
+    column: "runner_via",
+    addedBy: "0422_session_stage_runs.sql",
+  },
 
   // Backup run ledger (0295). The backup container writes it with psql and
   // GET /status/backup reads it; without it every run's record is lost and the

@@ -99,6 +99,9 @@ import {
   type StageSubjectStatusOutcome,
 } from "./stage-subject-status.js";
 
+import type { PlaybookRunner } from "@synap/playbooks";
+import type { EnterStageResult } from "../playbooks/stage-runner.js";
+
 const logger = createLogger({ module: "focus-sessions/advance-stage" });
 
 /**
@@ -142,6 +145,12 @@ export interface AdvanceSessionStageInput {
    * A follow that wrote back re-fired on every stale event and ping-ponged.
    */
   skipSubjectWrite?: boolean;
+  /**
+   * Who works the stage being entered, named for THIS entry
+   * (`synap_update_session { stageRunner }`): the stage runner's first rung
+   * (`enterStage`, spec 7111934d §2.4).
+   */
+  stageRunner?: PlaybookRunner | null;
 }
 
 export interface AdvanceSessionStageResult {
@@ -190,6 +199,31 @@ export interface AdvanceSessionStageResult {
    * `changed` is false. A session with no stages is never refused.
    */
   refused?: UndeclaredStageRefusal;
+  /**
+   * The stage runner's report (`enterStage`): who works the stage entered,
+   * and whether it waits on tools. Absent while a gate holds the stage (its
+   * pass enters it) and on a subject-first move (the follow enters it).
+   */
+  stageRun?: EnterStageResult;
+}
+
+/**
+ * Enter the stage that now stands and runs (no gate holds it): THE stage
+ * runner (`services/playbooks/stage-runner.ts`). Never throws.
+ */
+async function enterStandingStage(
+  input: AdvanceSessionStageInput
+): Promise<EnterStageResult> {
+  const { enterStage } = await import("../playbooks/stage-runner.js");
+  return enterStage({
+    sessionId: input.session.id,
+    stageKey: input.toStage,
+    cause: {
+      kind: "advance",
+      stageRunner: input.stageRunner ?? null,
+      agentUserId: input.agentUserId ?? null,
+    },
+  });
 }
 
 const UNCHANGED: AdvanceSessionStageResult = {
@@ -357,12 +391,14 @@ export async function advanceSessionStage(
 
   if (!gate) {
     const subjectStatus = await writeSubject();
+    const stageRun = await enterStandingStage(input);
     return {
       changed: true,
       gated: false,
       paused: false,
       ...(subjectStatus ? { subjectStatus } : {}),
       ...slots,
+      stageRun,
     };
   }
 
@@ -377,6 +413,7 @@ export async function advanceSessionStage(
     if (!gate.paused) {
       const subjectStatus = await writeSubject();
       if (subjectStatus) result.subjectStatus = subjectStatus;
+      result.stageRun = await enterStandingStage(input);
       return result;
     }
     // A HOLDING check gate whose stage declares `onFail` returns the run there

@@ -540,6 +540,18 @@ export async function followPlaybook(
     reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
 
+  // The stage the work is ALREADY in starts its run row's first step: the
+  // stage runner records who works it (`enterStage`, spec 7111934d §3.1).
+  // A follow that names no stage sits in none, so nothing is entered.
+  if (stageKey !== null) {
+    const { enterStage } = await import("../playbooks/stage-runner.js");
+    await enterStage({
+      sessionId,
+      stageKey,
+      cause: { kind: "birth" },
+    });
+  }
+
   // Provenance edge — the same `instantiated_from` an instantiate writes, so
   // "every run of this playbook" is one graph query however the run began.
   // Idempotent on the unique edge.

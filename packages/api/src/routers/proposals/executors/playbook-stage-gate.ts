@@ -136,6 +136,15 @@ export function registerPlaybookStageGateExecutors(): void {
           toStage: session.currentStage,
           userId,
         });
+        // The gate passed: the stage now RUNS — the stage runner hands it to
+        // whoever works it (`enterStage`, never throws).
+        const { enterStage } =
+          await import("../../../services/playbooks/stage-runner.js");
+        await enterStage({
+          sessionId: session.id,
+          stageKey: session.currentStage,
+          cause: { kind: "gate_passed" },
+        });
       }
 
       await transitionProposal(db, {
