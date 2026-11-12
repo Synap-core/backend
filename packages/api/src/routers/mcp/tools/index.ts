@@ -243,6 +243,32 @@ const TRACK_GOAL_PROPERTIES = {
 };
 
 /**
+ * WHERE a goal sits (goals / pillars contract, C4) — its parent goal and the
+ * pillars of its project it advances. ONE advertised shape on both track
+ * doors; validated server-side (`goalPlacementInputSchema`, the dependency
+ * door's floors). Added, never removed, through these doors.
+ */
+const TRACK_PLACEMENT_PROPERTIES = {
+  parentGoalId: {
+    type: "string",
+    description: "Goal it serves (primary parent if it has none).",
+  },
+  pillars: {
+    type: "array",
+    description:
+      "Project spaces it advances (added); one primary, default the first.",
+    items: {
+      type: "object",
+      required: ["workspaceId"],
+      properties: {
+        workspaceId: { type: "string" },
+        primary: { type: "boolean" },
+      },
+    },
+  },
+};
+
+/**
  * JSON Schema for `synap_create_automation`'s `dataContract` input, DERIVED from
  * `automationDataContractSchema` — the very schema `automations.create` runs to
  * reject an AI-authored automation that lacks a contract. Deriving (rather than
@@ -4734,7 +4760,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Read one project: name, description, home workspace, and usedWorkspaces (domains this engagement spans via the uses INDEX). Call after orient when you need the span map. Not an ACL.",
+          "Read one project: name, description, home workspace, usedWorkspaces (the uses INDEX; not an ACL), mainGoal, and pillars: each used space with its purpose, goals and derived health; rootHealth is the worst. Call after orient.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4790,7 +4816,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), e.g. 'Launch the new site': pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks, each with how it is checked) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal matters. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met — hitting a number never closes it. No method needed and never stages: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+          "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting. A person closes it with a verdict once its criteria are met; a number never closes it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4828,6 +4854,7 @@ export const tools = {
               required: ["label", "target"],
             },
             ...TRACK_GOAL_PROPERTIES,
+            ...TRACK_PLACEMENT_PROPERTIES,
             reasoning: {
               type: "string",
               description:
@@ -5242,7 +5269,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Set what a goal holds: its DIRECTION (one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the value (stamped: STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. A KPI needs a label and a target. Reaching the target NUDGES the person; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5253,8 +5280,7 @@ export const tools = {
             },
             kpi: {
               type: ["object", "null"],
-              description:
-                "A KPI patch { label?, unit?, target?, current? } (numbers), or null to clear.",
+              description: "A KPI patch, or null to clear.",
               properties: {
                 label: { type: "string" },
                 unit: { type: "string" },
@@ -5263,6 +5289,7 @@ export const tools = {
               },
             },
             ...TRACK_GOAL_PROPERTIES,
+            ...TRACK_PLACEMENT_PROPERTIES,
             reasoning: {
               type: "string",
               description: "Why — shown to the reviewer. One line.",
@@ -5313,7 +5340,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
+          "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, name its main goal, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5344,6 +5371,10 @@ export const tools = {
               description:
                 "Move the project's HOME to this workspace (UUID from synap_list_workspaces). You must be able to write it. Entities and sessions stay where they are.",
             },
+            mainGoalId: {
+              type: ["string", "null"],
+              description: "One of its live goals; null clears it.",
+            },
             reasoning: {
               type: "string",
               description:
@@ -5364,12 +5395,16 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
+          "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). A used space is a PILLAR of the project. packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
         inputSchema: {
           type: "object",
           properties: {
             projectId: { type: "string" },
             workspaceId: { type: "string" },
+            purpose: {
+              type: ["string", "null"],
+              description: "What the project needs from it; null clears it.",
+            },
             remove: {
               type: "boolean",
               description:

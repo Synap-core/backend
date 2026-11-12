@@ -27889,7 +27889,8 @@
                       "uses",
                       "dispatched_via",
                       "assigned_to",
-                      "serves"
+                      "serves",
+                      "advances"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },

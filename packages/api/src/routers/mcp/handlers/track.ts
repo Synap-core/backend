@@ -32,6 +32,7 @@ import {
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
 import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
+import { pickGoalPlacementInput } from "../../../services/tracks/goal-placement.js";
 import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import { convertEntityToGoal } from "../../../services/tracks/convert-to-goal.js";
 import {
@@ -164,6 +165,8 @@ export const trackHandlers: McpHandlerMap = {
         // What the goal holds (0345) — parsed (2–5 criteria, meanings) by
         // the service; a malformed one comes back as `{ error }` words.
         ...pickTrackGoalInput(ctx.args),
+        // Where it sits (parentGoalId, pillars) — parsed by the service.
+        ...pickGoalPlacementInput(ctx.args),
         actor: actorOf(ctx),
       });
       const domainsNote = missingStageDomainsNote(result.missingDomains);
@@ -362,13 +365,17 @@ export const trackHandlers: McpHandlerMap = {
     const hasDirection = "direction" in ctx.args;
     const hasKpi = "kpi" in ctx.args;
     const goal = pickTrackGoalInput(ctx.args);
+    const placement = pickGoalPlacementInput(ctx.args);
     if (
       !trackId ||
-      (!hasDirection && !hasKpi && Object.keys(goal).length === 0)
+      (!hasDirection &&
+        !hasKpi &&
+        Object.keys(goal).length === 0 &&
+        Object.keys(placement).length === 0)
     ) {
       return ok({
         error:
-          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind, uncertainty or loop. synap_list_tracks lists the project's tracks.",
+          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind, uncertainty, loop, parentGoalId or pillars. synap_list_tracks lists the project's tracks.",
       });
     }
     const direction = ctx.args.direction;
@@ -381,6 +388,7 @@ export const trackHandlers: McpHandlerMap = {
         ...(hasDirection ? { direction: direction as string | null } : {}),
         ...(hasKpi ? { kpi: ctx.args.kpi } : {}),
         ...goal,
+        ...placement,
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;

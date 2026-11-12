@@ -103,6 +103,17 @@ export const projects = pgTable(
      */
     sample: boolean("sample").notNull().default(false),
 
+    /**
+     * The project's MAIN GOAL (0423): one of its own live goals
+     * (`project_tracks.id`), named explicitly. NULL = none named. The FK is
+     * declared in SQL only (`ON DELETE SET NULL` — a deleted goal clears the
+     * pointer); `project_tracks` imports this table, so a Drizzle
+     * `.references()` here would close an import cycle. Written only through
+     * the governed project update (`mainGoalId`), which checks the goal is
+     * this project's, visible and live.
+     */
+    mainGoalId: uuid("main_goal_id"),
+
     // Settings (agent preferences, defaults, etc.)
     settings: jsonb("settings"),
     metadata: jsonb("metadata"),

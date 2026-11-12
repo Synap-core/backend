@@ -14,8 +14,13 @@
  *    floored on the proposal's SUBJECT user (not the approver), refuses any
  *    other link shape, and reports the DELETE's own row count.
  *
- * No database: governance, the floor and the util are mocked at the module
- * seam — the unlink SQL itself is proven on PGlite in
+ * The handler runs THE governed `uses` writer
+ * (`services/projects/project-workspace-membership.ts`), so these drive it
+ * end to end through the handler; it gates at POD scope (`workspaceId`
+ * undefined), the archived relaxation included.
+ *
+ * No database: governance, the floor, the project read and the util are
+ * mocked at the module seam — the unlink SQL itself is proven on PGlite in
  * `utils/project-workspace.unlink.pglite.test.ts`.
  */
 
@@ -36,6 +41,16 @@ vi.mock("../../../utils/permission-check.js", () => ({
 }));
 vi.mock("../../hub-protocol/rest/link-endpoint-visibility.js", () => ({
   checkLinkEndpointsVisible: (...a: unknown[]) => h.refusal(...a),
+}));
+vi.mock("../../../services/projects/load-visible-project.js", () => ({
+  loadVisibleProject: async () => ({
+    id: "44444444-4444-4444-8444-444444444444",
+    workspaceId: null,
+    userId: "11111111-1111-4111-8111-111111111111",
+  }),
+}));
+vi.mock("../../../services/proposals/stamp-materialized.js", () => ({
+  stampAutoApprovedCreate: async () => undefined,
 }));
 vi.mock("../../../utils/project-workspace.js", async (importOriginal) => {
   const actual =
@@ -180,10 +195,10 @@ describe("synap_project_use_workspace {remove:true}", () => {
       userId: USER,
     });
     const opts = h.perm.mock.calls[0]![0] as Record<string, any>;
-    // Still governed as a link DELETE (destructive ⇒ agent proposes), but the
-    // archived lens is not the RBAC workspace.
+    // Still governed as a link DELETE (destructive ⇒ agent proposes), at
+    // POD scope: the archived lens is not the RBAC workspace.
     expect(opts).toMatchObject({ subjectType: "link", action: "delete" });
-    expect(opts.workspaceId).toBeNull();
+    expect(opts.workspaceId).toBeUndefined();
     expect(h.unlink).not.toHaveBeenCalled();
   });
 
@@ -205,6 +220,37 @@ describe("synap_project_use_workspace {remove:true}", () => {
       "create"
     );
     expect(h.unlink).not.toHaveBeenCalled();
+  });
+
+  it("an add with a purpose carries it to the gate and to the edge door", async () => {
+    h.perm.mockResolvedValue({ allowed: true });
+    h.link.mockResolvedValue({ linked: true });
+    const out = await call({
+      projectId: PROJECT,
+      workspaceId: WS,
+      purpose: "  Win the first clients ",
+    });
+    expect(out.status).toBe("linked");
+    const opts = h.perm.mock.calls[0]![0] as Record<string, any>;
+    expect(opts.workspaceId).toBeUndefined();
+    expect(opts.data.metadata).toEqual({ purpose: "Win the first clients" });
+    expect(h.link).toHaveBeenCalledWith(expect.anything(), {
+      projectId: PROJECT,
+      workspaceId: WS,
+      userId: USER,
+      purpose: "Win the first clients",
+    });
+  });
+
+  it("a purpose with remove is refused, nothing filed", async () => {
+    const out = await call({
+      projectId: PROJECT,
+      workspaceId: WS,
+      remove: true,
+      purpose: "x",
+    });
+    expect(String(out.error)).toMatch(/purpose/i);
+    expect(h.perm).not.toHaveBeenCalled();
   });
 });
 

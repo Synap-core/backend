@@ -864,6 +864,8 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   replaces: { outgoing: "Replaces", incoming: "Replaced by" },
   // `X --serves--> G`: a session or a sub-goal does its work FOR goal G.
   serves: { outgoing: "Serves", incoming: "Served by" },
+  // `G --advances--> W`: goal G moves space W (a pillar of its project).
+  advances: { outgoing: "Advances", incoming: "Advanced by" },
   // ── Every other stored `links` type, read from its TO end ────────────────
   // Without these an incoming edge showed its FORWARD word ("Targets") plus a
   // reversed-arrow mark. Read as "<focus> <label> <row>": the row is the
@@ -1852,6 +1854,15 @@ const STATUS_LABEL_ROWS = {
   // (`automation_runs.status`, `automation_step_runs.status`): a calm outcome,
   // not a failure; its unit state is `blocked` on a rule (`units/state.ts`).
   blocked_by_policy: "Blocked by policy",
+  // A project PILLAR's derived health (`units/pillar-health.ts`), worst
+  // first, and the words of its goal counts (the pillar's bar legend).
+  no_active_goal: "No active goal",
+  stalled: "Stalled",
+  unproven: "Unproven",
+  needs_attention: "Needs attention",
+  moving: "Moving",
+  unvalidated_bet: "Unvalidated bet",
+  validated: "Validated",
 } satisfies Readonly<Record<string, string>>;
 
 export const STATUS_LABELS: Readonly<Record<string, string>> =

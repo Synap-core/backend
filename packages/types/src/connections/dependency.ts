@@ -108,13 +108,38 @@ export function isDependencyLinkType(
 export const SERVES_LINK_TYPE = "serves" as const;
 
 /**
+ * `G --advances--> W`: goal G moves space W of its project forward — W is a
+ * PILLAR of the project (the project `uses` W). NOT a dependency: no blocker
+ * reader follows it. The pillar health read does
+ * (`services/projects/pillar-health.ts`).
+ */
+export const ADVANCES_LINK_TYPE = "advances" as const;
+
+/**
+ * `links.metadata.primary: true` on a `serves` (goal → goal) or `advances`
+ * edge: the goal's PRIMARY parent or pillar — at most one of each per goal.
+ * A goal rolls up fully to its primary only; elsewhere it is listed.
+ */
+export const LINK_PRIMARY_KEY = "primary" as const;
+
+/** Does this link metadata mark the edge primary? */
+export function isPrimaryLinkMetadata(metadata: unknown): boolean {
+  return (
+    metadata != null &&
+    typeof metadata === "object" &&
+    (metadata as Record<string, unknown>)[LINK_PRIMARY_KEY] === true
+  );
+}
+
+/**
  * The work edges THE dependency door writes: the dependency edges plus
- * `serves`. Readers of "what waits on what" keep reading
+ * `serves` and `advances`. Readers of "what waits on what" keep reading
  * {@link DEPENDENCY_LINK_TYPES}; only the door widens to this list.
  */
 export const WORK_LINK_TYPES = [
   ...DEPENDENCY_LINK_TYPES,
   SERVES_LINK_TYPE,
+  ADVANCES_LINK_TYPE,
 ] as const;
 export type WorkLinkType = (typeof WORK_LINK_TYPES)[number];
 
@@ -133,6 +158,11 @@ export function isServesPair(fromType: string, toType: string): boolean {
     (SERVES_FROM_KINDS as readonly string[]).includes(fromType) &&
     toType === "track"
   );
+}
+
+/** Is `from --advances--> to` the pair the edge allows (track → workspace)? */
+export function isAdvancesPair(fromType: string, toType: string): boolean {
+  return fromType === "track" && toType === "workspace";
 }
 
 /** What became of a blocker — see the table at the top of this module. */

@@ -1,9 +1,13 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, transitionProposal } from "@synap/database";
+import { db, getDb, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "../../../utils/audit-log.js";
 import { addSessionBlocker } from "../../../services/focus-sessions/session-blocked-by.js";
 import { applyApprovedDependencyLink } from "../../../services/links/dependency-links.js";
+import {
+  linkProjectToWorkspace,
+  USES_PURPOSE_KEY,
+} from "../../../utils/project-workspace.js";
 import {
   isWorkLinkType,
   normaliseDependencyRelation,
@@ -352,6 +356,55 @@ export function registerCatchAllExecutor(): void {
           return settle({
             applied: "verified",
             rows: applied.rows,
+            subject: "link",
+          });
+        }
+
+        // `project --uses--> workspace` (a project's PILLAR, `metadata.purpose`)
+        // is replayed through THE edge door (`linkProjectToWorkspace`), floored
+        // on the proposal's owner NOW — never the raw materializer, whose
+        // insert ignores an existing edge: an approved purpose change would
+        // read green and write nothing. Same edge, same stamp as the direct
+        // path (`setProjectWorkspaceMembershipGoverned`).
+        if (
+          targetType === "link" &&
+          changeType === "create" &&
+          eventPayload.linkType === "uses" &&
+          eventPayload.fromType === "project" &&
+          eventPayload.toType === "workspace" &&
+          typeof eventPayload.fromId === "string" &&
+          typeof eventPayload.toId === "string"
+        ) {
+          const ownerUserId = proposal.subjectUserId;
+          if (!ownerUserId) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Approval for '${doorKey}' (uses) refused: the proposal records no owner, so whose project this is cannot be established. Nothing was applied.`,
+            });
+          }
+          const meta = eventPayload.metadata as
+            Record<string, unknown> | undefined;
+          const purpose =
+            meta && USES_PURPOSE_KEY in meta
+              ? typeof meta[USES_PURPOSE_KEY] === "string"
+                ? (meta[USES_PURPOSE_KEY] as string)
+                : null
+              : undefined;
+          const uses = await linkProjectToWorkspace(await getDb(), {
+            projectId: eventPayload.fromId,
+            workspaceId: eventPayload.toId,
+            userId: ownerUserId,
+            ...(purpose !== undefined ? { purpose } : {}),
+          });
+          if (!uses.linked) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Approval for '${doorKey}' (uses) refused: the ${uses.reason === "workspace_not_found" ? "space" : "project"} no longer exists or is no longer visible to the proposal's owner. Nothing was applied.`,
+            });
+          }
+          return settle({
+            applied: "verified",
+            rows: uses.linkId ? 1 : 0,
             subject: "link",
           });
         }

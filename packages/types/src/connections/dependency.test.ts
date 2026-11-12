@@ -12,9 +12,12 @@ import {
   isBlocked,
   isDependencyEnded,
   isDependencyLinkType,
+  isAdvancesPair,
+  isPrimaryLinkMetadata,
   isServesPair,
   isWorkLinkType,
   normaliseDependencyRelation,
+  ADVANCES_LINK_TYPE,
   DEPENDENCY_LINK_TYPES,
   SERVES_LINK_TYPE,
   WORK_LINK_TYPES,
@@ -484,6 +487,35 @@ describe("neighbourhood labels for the dependency + replaces edges", () => {
   });
 });
 
+describe("advances — a goal's pillar, a work link, never a dependency", () => {
+  // Rules out "advances joined the dependency list": a pillar would start
+  // reading as something the goal waits on.
+  it("is a work link the door writes, and not a dependency link", () => {
+    expect(isWorkLinkType(ADVANCES_LINK_TYPE)).toBe(true);
+    expect(isDependencyLinkType(ADVANCES_LINK_TYPE)).toBe(false);
+  });
+  // Rules out "any unit may advance any space": only a goal advances, and
+  // only a space is advanced.
+  it("joins track → workspace only", () => {
+    expect(isAdvancesPair("track", "workspace")).toBe(true);
+    expect(isAdvancesPair("session", "workspace")).toBe(false);
+    expect(isAdvancesPair("track", "track")).toBe(false);
+    expect(isAdvancesPair("track", "project")).toBe(false);
+  });
+  // Rules out "a truthy primary counts": only the boolean true marks it.
+  it("reads the primary mark as the boolean true only", () => {
+    expect(isPrimaryLinkMetadata({ primary: true })).toBe(true);
+    expect(isPrimaryLinkMetadata({ primary: "true" })).toBe(false);
+    expect(isPrimaryLinkMetadata({ primary: false })).toBe(false);
+    expect(isPrimaryLinkMetadata({})).toBe(false);
+    expect(isPrimaryLinkMetadata(null)).toBe(false);
+  });
+  it("reads as Advances / Advanced by", () => {
+    expect(resolveLineageEdgeLabel("advances", "outgoing")).toBe("Advances");
+    expect(resolveLineageEdgeLabel("advances", "incoming")).toBe("Advanced by");
+  });
+});
+
 describe("serves — a work link, never a dependency", () => {
   // Rules out "serves joined the dependency list": every blocker reader reads
   // DEPENDENCY_LINK_TYPES, so it would start treating a goal as a blocker.
@@ -491,7 +523,12 @@ describe("serves — a work link, never a dependency", () => {
     expect(isWorkLinkType(SERVES_LINK_TYPE)).toBe(true);
     expect(isDependencyLinkType(SERVES_LINK_TYPE)).toBe(false);
     expect(DEPENDENCY_LINK_TYPES).not.toContain("serves");
-    expect(WORK_LINK_TYPES).toEqual(["blocked_by", "replaces", "serves"]);
+    expect(WORK_LINK_TYPES).toEqual([
+      "blocked_by",
+      "replaces",
+      "serves",
+      "advances",
+    ]);
     for (const t of DEPENDENCY_LINK_TYPES) expect(isWorkLinkType(t)).toBe(true);
     expect(isWorkLinkType("targets")).toBe(false);
     expect(isWorkLinkType(null)).toBe(false);

@@ -127,8 +127,13 @@ function stageRefOf(
   };
 }
 
-/** The space's declared outputs, read leniently (`settings.intent`). */
-async function readSpaceOutputs(
+/**
+ * The space's declared outputs, read leniently (`settings.intent`). Also read
+ * by the pillar health read (`services/projects/pillar-health.ts`), which
+ * lists a declared output's kind in a pillar's indicator even when the
+ * project has none of it yet.
+ */
+export async function readSpaceOutputs(
   userId: string,
   workspaceId: string
 ): Promise<{ primaryOutput: string | null; produces: string[] }> {

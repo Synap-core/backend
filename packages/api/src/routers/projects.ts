@@ -51,9 +51,11 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { entityReadVisibleWhere } from "../access/entity-read-floor.js";
 import { BELONGS_TO_PROJECT } from "../utils/project-scope.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
+import { readProjectPillarFields } from "../services/projects/pillar-health.js";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
+  USES_PURPOSE_MAX,
 } from "../utils/project-workspace.js";
 import { setProjectWorkspaceMembershipGoverned } from "../services/projects/project-workspace-membership.js";
 
@@ -264,6 +266,10 @@ export const projectsRouter = router({
         // Additive INDEX: workspaces this project uses. Not an ACL.
         usedWorkspaceIds,
         usedWorkspaces,
+        // Where it stands, pillar by pillar (derived, never stored):
+        // `mainGoal`, `pillars`, `rootHealth` — a failed read is
+        // `{ status: "unavailable" }`, never an empty list.
+        ...(await readProjectPillarFields(ctx.userId, project.id)),
       };
     }),
 
@@ -626,6 +632,11 @@ export const projectsRouter = router({
          * existing `uses` edges stay where they are.
          */
         homeWorkspaceId: z.string().uuid().optional(),
+        /**
+         * The project's MAIN GOAL (0423): one of its own live goals. `null`
+         * clears it; omitted = untouched. Governed with the rest of the patch.
+         */
+        mainGoalId: z.string().uuid().nullable().optional(),
         settings: z.record(z.string(), z.unknown()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         /**
@@ -846,18 +857,29 @@ export const projectsRouter = router({
         projectId: z.string().uuid(),
         workspaceId: z.string().uuid(),
         member: z.boolean(),
+        /**
+         * What the project needs from this space — the pillar's one line
+         * (`uses` `metadata.purpose`). With `member: true` only; `null`
+         * clears it, omitted leaves it.
+         */
+        purpose: z.string().max(USES_PURPOSE_MAX).nullable().optional(),
+        /** Shown to the reviewer when the gate files a proposal. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) =>
       // The ONE governed `uses` writer (`services/projects/
       // project-workspace-membership.ts`), shared with `projects.create`'s
-      // `usedWorkspaceIds`.
+      // `usedWorkspaceIds` and MCP `synap_project_use_workspace`.
       setProjectWorkspaceMembershipGoverned({
         userId: ctx.userId,
         agentUserId: ctx.agentUserId ?? undefined,
+        sessionId: ctx.sessionId ?? null,
         projectId: input.projectId,
         workspaceId: input.workspaceId,
         member: input.member,
+        ...(input.purpose !== undefined ? { purpose: input.purpose } : {}),
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         door: "projects.setWorkspaceMembership",
       })
     ),
