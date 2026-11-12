@@ -40,6 +40,14 @@ import {
   UNSTAMPED_EDITOR_SCHEMA,
 } from "./document-room.js";
 import { isUuid } from "@synap-core/types/property-render";
+// The pure subpath: no provider, no config (and untouched by a test's mock
+// of the provider module).
+import { isStorageObjectNotFound } from "@synap/storage/interface";
+import {
+  markWhiteboardLoadFailed,
+  stripWhiteboardLoadErrorKey,
+  whiteboardLoadFailed,
+} from "./whiteboard-room-state.js";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
@@ -169,25 +177,15 @@ function editorOutdated(socket: Socket, doc: Y.Doc): boolean {
 /** What an outdated editor is told (a client words it "Update Synap to edit"). */
 const OUTDATED_ACCESS = { access: "read", reason: "editor-outdated" } as const;
 
-/** What the room says when a whiteboard's saved content failed to load. */
-export const WHITEBOARD_LOAD_FAILED_MESSAGE =
-  "The board's saved content could not be loaded.";
-
-/**
- * A whiteboard room whose saved content FAILED to load (`loadError` mark, set
- * by `bindState`). Its live map is empty or partial, not the board: it takes
- * no client write (every socket is served it read-only) and is never saved
- * (`writeState` refuses), so the stored file keeps the real board. The room is
- * loaded again from storage once every socket has left.
- */
-export function whiteboardLoadFailed(doc: Y.Doc): boolean {
-  const name = (doc as Y.Doc & { name?: unknown }).name;
-  return (
-    typeof name === "string" &&
-    name.startsWith("whiteboard-") &&
-    roomMeta(doc).get(ROOM_META_KEYS.loadError) !== undefined
-  );
-}
+// A whiteboard room whose saved content FAILED to load is flagged on the
+// SERVER (`whiteboard-room-state.ts`, never a Y.Doc key a client can write):
+// it takes no client write (every socket is served it read-only) and is never
+// saved (`writeState` refuses), so the stored file keeps the real board. The
+// room is loaded again from storage once every socket has left.
+export {
+  WHITEBOARD_LOAD_FAILED_MESSAGE,
+  whiteboardLoadFailed,
+} from "./whiteboard-room-state.js";
 
 /** What every socket of such a room is told (a client words it "could not load"). */
 const LOAD_FAILED_ACCESS = { access: "read", reason: "load-failed" } as const;
@@ -254,13 +252,28 @@ class DatabasePersistence {
         }
         // Whiteboard: load from MinIO (canonical source)
         try {
-          const contentBuffer = await storage.downloadBuffer(doc.storageKey);
+          let contentBuffer: Buffer;
+          try {
+            contentBuffer = await storage.downloadBuffer(doc.storageKey);
+          } catch (error) {
+            // A key that names no object is a board never saved yet (a derived
+            // key, an upload that failed): EMPTY, and its first save creates
+            // the object. Any other failure is a failed load.
+            if (!isStorageObjectNotFound(error)) throw error;
+            console.warn(
+              `[Yjs] Whiteboard ${roomName} has no stored object yet — starting fresh`
+            );
+            return;
+          }
           const content = contentBuffer.toString("utf-8");
 
           // Legacy: content might be yjs:base64 from old document_versions backfill
           if (content.startsWith("yjs:")) {
             const state = Buffer.from(content.substring(4), "base64");
             Y.applyUpdate(ydoc, state);
+            // A pre-fix save may have persisted a `synap-room.loadError` key
+            // in this body: it means nothing here (the flag is server-side).
+            stripWhiteboardLoadErrorKey(ydoc);
             console.log(
               `[Yjs] Loaded whiteboard from MinIO (legacy Yjs) for ${roomName}`
             );
@@ -271,7 +284,11 @@ class DatabasePersistence {
             store?: TldrawStoreSnapshot;
           };
           const store = parsed.store ?? parsed;
-          if (typeof store !== "object" || store === null) {
+          if (
+            typeof store !== "object" ||
+            store === null ||
+            Array.isArray(store)
+          ) {
             throw new Error("the stored body is not a tldraw store");
           }
           const yMap = ydoc.getMap(`tl_map_${documentId}`);
@@ -286,14 +303,14 @@ class DatabasePersistence {
             `[Yjs] Loaded whiteboard from MinIO for ${roomName} (${Object.keys(store).length} records)`
           );
         } catch (error) {
-          // A FAILED read is surfaced on the room, never an empty board: the
-          // room then takes no write and is never saved over the stored file
-          // (`whiteboardLoadFailed`), exactly as a document room is marked.
+          // A FAILED read is surfaced, never an empty board: the room is
+          // flagged on the server, then takes no write and is never saved
+          // over the stored file (`whiteboardLoadFailed`).
           console.error(
             `[Yjs] Failed to load whiteboard from MinIO for ${roomName}:`,
             error
           );
-          markDocumentRoomLoadFailed(ydoc, WHITEBOARD_LOAD_FAILED_MESSAGE);
+          markWhiteboardLoadFailed(ydoc);
         }
         return;
       }
@@ -383,20 +400,16 @@ class DatabasePersistence {
         // Whiteboard: save to MinIO (canonical source, no version)
         let storageKey = doc.storageKey;
 
-        // Safety net: derive storageKey if missing (legacy whiteboards or creation edge cases)
+        // Safety net: derive storageKey if missing (legacy whiteboards or
+        // creation edge cases). It is persisted only AFTER an upload succeeded
+        // below, so the row never names an object that does not exist.
+        const derivedKey = !storageKey;
         if (!storageKey) {
           console.warn(
             `[Yjs] Whiteboard ${roomName} missing storageKey — deriving fallback`
           );
           const userId = (doc as { userId?: string }).userId ?? "system";
           storageKey = `whiteboards/${userId}/${documentId}.json`;
-          await db
-            .update(documents)
-            .set({ storageKey })
-            .where(eq(documents.id, documentId));
-          console.log(
-            `[Yjs] Persisted derived storageKey for ${roomName}: ${storageKey}`
-          );
         }
 
         // Extract Tldraw store from Yjs Map
@@ -455,10 +468,10 @@ class DatabasePersistence {
                 }
               }
             }
-          } catch {
-            // Download failed or object doesn't exist yet.
-            // If uncertain, err on the side of safety: skip the empty write.
-            priorIsNonEmpty = true;
+          } catch (error) {
+            // No object yet: nothing to clobber, the empty write creates it.
+            // Any other failure is uncertain: skip the empty write.
+            priorIsNonEmpty = !isStorageObjectNotFound(error);
           }
 
           if (priorIsNonEmpty) {
@@ -509,8 +522,17 @@ class DatabasePersistence {
 
         await db
           .update(documents)
-          .set({ updatedAt: new Date() })
+          .set(
+            derivedKey
+              ? { storageKey, updatedAt: new Date() }
+              : { updatedAt: new Date() }
+          )
           .where(eq(documents.id, documentId));
+        if (derivedKey) {
+          console.log(
+            `[Yjs] Persisted derived storageKey for ${roomName}: ${storageKey}`
+          );
+        }
         recordYjsPersist();
         console.log(
           `[Yjs] Saved whiteboard to MinIO for ${roomName} (${Object.keys(store).length} tldraw records, ${content.length} bytes)`
@@ -583,7 +605,9 @@ class DatabasePersistence {
         // (Deeper versioned history — keep-last-N / point-in-time — needs storage
         // bucket-versioning or a list() API the IFileStorage interface lacks today;
         // tracked as the Pillar-B follow-up in WHITEBOARD-DURABILITY-ARCHITECTURE.md.)
-        if (doc.storageKey) {
+        // A room that failed to load never touches the backup: its stored body
+        // may be the corrupt one, and the last good `.bak` must survive it.
+        if (doc.storageKey && !whiteboardLoadFailed(ydoc)) {
           try {
             const current = await storage.downloadBuffer(doc.storageKey);
             if (current.byteLength > 2) {
@@ -696,7 +720,12 @@ export function installReadOnlySync(yServer: unknown): void {
         if (event === "sync-update") {
           return socket.on(event, (...args: unknown[]) => {
             if (whiteboardLoadFailed(doc)) return;
-            if (!editorOutdated(socket, doc)) return listener(...args);
+            if (!editorOutdated(socket, doc)) {
+              listener(...args);
+              // A whiteboard room has no client-writable failure mark.
+              stripWhiteboardLoadErrorKey(doc);
+              return;
+            }
             if (!told) {
               told = true;
               socket.emit("yjs-access", OUTDATED_ACCESS);
@@ -740,6 +769,7 @@ export function installReadOnlySync(yServer: unknown): void {
           )
             return;
           if (typeof apply === "function") apply(...reply);
+          stripWhiteboardLoadErrorKey(doc);
         });
       }
       return socket.emit(event, ...args);

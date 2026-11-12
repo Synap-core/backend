@@ -245,21 +245,31 @@ describe("GET /whiteboards/:viewId/scene: which source answers", () => {
 });
 
 describe("GET /whiteboards/:viewId/scene: a failed read is an error, never an empty board", () => {
-  it("an open room the realtime server marked load-failed → 502 live_unreadable naming the mark", async () => {
+  /** The bridge's answer for an open room, with optional extra reply fields. */
+  const openRoom = (
+    records: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+    meta?: Record<string, unknown>
+  ) => {
     const doc = new Y.Doc();
-    doc
-      .getMap(ROOM_META_MAP)
-      .set(
-        ROOM_META_KEYS.loadError,
-        "The board's saved content could not be loaded."
-      );
-    // Even with records in it: the mark says the live map is not the board.
-    doc.getMap(`tl_map_${DOC}`).set("shape:s", RECORDS["shape:s"]);
+    for (const [k, v] of Object.entries(records))
+      doc.getMap(`tl_map_${DOC}`).set(k, v);
+    for (const [k, v] of Object.entries(meta ?? {}))
+      doc.getMap(ROOM_META_MAP).set(k, v);
     const state = Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64");
-    m.fetchImpl = async () =>
-      new Response(JSON.stringify({ roomId: `whiteboard-${DOC}`, state }), {
-        status: 200,
-      });
+    return async () =>
+      new Response(
+        JSON.stringify({ roomId: `whiteboard-${DOC}`, state, ...extra }),
+        { status: 200 }
+      );
+  };
+
+  it("an open room the realtime server FLAGGED load-failed → 502 live_unreadable with its message", async () => {
+    // Even with records in it: the server's flag says the map is not the board.
+    m.fetchImpl = openRoom(RECORDS, {
+      loadFailed: true,
+      loadError: "The board's saved content could not be loaded.",
+    });
     const res = await get();
     expect(res.status).toBe(502);
     const body = (await res.json()) as Record<string, string>;
@@ -267,6 +277,37 @@ describe("GET /whiteboards/:viewId/scene: a failed read is an error, never an em
     expect(body.error).toContain(
       "The board's saved content could not be loaded."
     );
+  });
+
+  it("a `synap-room.loadError` KEY inside a healthy room (a client's stale copy) is not a failure", async () => {
+    m.fetchImpl = openRoom(
+      RECORDS,
+      {},
+      {
+        [ROOM_META_KEYS.loadError]: "stale mark from another day",
+      }
+    );
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(
+      ((await res.json()) as Record<string, any>).scene.counts.shapes
+    ).toBe(1);
+  });
+
+  it("a stored key that names no object (S3 NoSuchKey) is a board never saved: `new`, empty", async () => {
+    m.storageError = Object.assign(
+      new Error("The specified key does not exist."),
+      {
+        name: "NoSuchKey",
+        $metadata: { httpStatusCode: 404 },
+      }
+    );
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      source: "new",
+      scene: { counts: { shapes: 0 } },
+    });
   });
 
   it("an open room that is EMPTY while the saved file is not → 502 live_unreadable, never an empty live board", async () => {

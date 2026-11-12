@@ -24,8 +24,9 @@
 import * as Y from "yjs";
 import { db, documents, eq, views } from "@synap/database";
 import { storage } from "@synap/storage";
+import { isStorageObjectNotFound } from "@synap/storage/interface";
 import { createLogger } from "@synap-core/core";
-import { ROOM_META_KEYS, ROOM_META_MAP } from "@synap/events/realtime-schemas";
+import type { YjsRoomStateReply } from "@synap/events/realtime-schemas";
 import { resolveDocumentRoomAccess } from "../../utils/document-edit-access.js";
 import { bridgeRequestHeaders } from "../../utils/chat-realtime-broadcast.js";
 import {
@@ -116,23 +117,12 @@ function realtimeUrl(): string {
   return process.env.REALTIME_URL || "http://localhost:4001";
 }
 
-/**
- * The records of a Y.Doc's tldraw map, from an encoded update, and the room's
- * `loadError` mark (the realtime server sets it when the room could not load
- * the board's saved content; `ROOM_META_*` are the shared names).
- */
-function decodeYjsUpdate(
-  update: Uint8Array,
-  documentId: string
-): { records: unknown; loadError: string | null } {
+/** The records of a Y.Doc's tldraw map, from an encoded update. */
+function recordsFromYjsUpdate(update: Uint8Array, documentId: string): unknown {
   const doc = new Y.Doc();
   try {
     Y.applyUpdate(doc, update);
-    const mark = doc.getMap(ROOM_META_MAP).get(ROOM_META_KEYS.loadError);
-    return {
-      records: doc.getMap(`tl_map_${documentId}`).toJSON(),
-      loadError: mark === undefined ? null : String(mark),
-    };
+    return doc.getMap(`tl_map_${documentId}`).toJSON();
   } finally {
     doc.destroy();
   }
@@ -185,11 +175,12 @@ async function readLiveRecords(
       `The realtime server answered ${res.status} for the board's room. Retry shortly.`
     );
   }
-  let decoded: { records: unknown; loadError: string | null };
+  let body: Partial<YjsRoomStateReply>;
+  let records: unknown;
   try {
-    const body = (await res.json()) as { state?: unknown };
+    body = (await res.json()) as Partial<YjsRoomStateReply>;
     if (typeof body.state !== "string") throw new Error("no state");
-    decoded = decodeYjsUpdate(
+    records = recordsFromYjsUpdate(
       new Uint8Array(Buffer.from(body.state, "base64")),
       documentId
     );
@@ -200,26 +191,33 @@ async function readLiveRecords(
       "The open board's state could not be decoded."
     );
   }
-  // The room says it failed to load the saved board: its live map is not the
-  // board, whatever it holds.
-  if (decoded.loadError !== null) {
+  // The realtime server flagged the room as failed to load the saved board
+  // (its own flag, never a Y.Doc key): the live map is not the board.
+  if (body.loadFailed === true) {
     throw new BoardSceneReadError(
       "live_unreadable",
-      `The board is open but failed to load its saved content: ${decoded.loadError} Retry once everyone has left the board, or reopen it.`
+      `The board is open but failed to load its saved content: ${body.loadError ?? "unknown error."} Retry once everyone has left the board, or reopen it.`
     );
   }
-  return decoded.records;
+  return records;
 }
 
-/** The stored file's records, and whether it was the legacy `yjs:` form. */
+/**
+ * The stored file's records, whether it was the legacy `yjs:` form, and
+ * whether the key names no object at all (a board never saved: empty, as the
+ * realtime server opens it).
+ */
 async function readStoredRecords(
   storageKey: string,
   documentId: string
-): Promise<{ records: unknown; legacy: boolean }> {
+): Promise<{ records: unknown; legacy: boolean; missing?: true }> {
   let body: string;
   try {
     body = (await storage.downloadBuffer(storageKey)).toString("utf-8");
   } catch (err) {
+    if (isStorageObjectNotFound(err)) {
+      return { records: {}, legacy: false, missing: true };
+    }
     logger.warn({ err, documentId }, "board stored read failed");
     throw new BoardSceneReadError(
       "stored_unavailable",
@@ -230,10 +228,10 @@ async function readStoredRecords(
     // Same two forms the realtime server loads (`yjs-server.ts` bindState).
     if (body.startsWith("yjs:")) {
       return {
-        records: decodeYjsUpdate(
+        records: recordsFromYjsUpdate(
           new Uint8Array(Buffer.from(body.slice(4), "base64")),
           documentId
-        ).records,
+        ),
         legacy: true,
       };
     }
@@ -340,8 +338,12 @@ export async function readBoardScene(
 
   const doc = await loadDoc();
   if (!doc) throw notFound();
-  if (!doc.storageKey) {
-    // Never saved: the realtime server starts such a room empty too.
+  const stored = doc.storageKey
+    ? await readStoredRecords(doc.storageKey, documentId)
+    : null;
+  if (!stored || stored.missing) {
+    // Never saved (no key, or a key that names no object yet): the realtime
+    // server starts such a room empty too.
     return {
       ...base,
       source: "new",
@@ -349,7 +351,6 @@ export async function readBoardScene(
       scene: windowBoardScene(buildBoardScene({}), input.window ?? {}),
     };
   }
-  const stored = await readStoredRecords(doc.storageKey, documentId);
   return {
     ...base,
     source: "stored",

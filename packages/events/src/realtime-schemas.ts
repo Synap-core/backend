@@ -48,6 +48,22 @@ export const ROOM_META_KEYS = {
   schemaVersion: "schemaVersion",
 } as const;
 
+/**
+ * The realtime bridge's answer to `GET /yjs/:roomId/state` for an OPEN room
+ * (`@synap/realtime` bridge.ts writes it, the api's board read door reads it).
+ * `loadFailed` is the SERVER's flag that the room could not load the board's
+ * saved content (never a key inside the Y.Doc, which clients can write): the
+ * state is then not the board.
+ */
+export interface YjsRoomStateReply {
+  roomId: string;
+  state: string;
+  encoding: "base64";
+  byteLength: number;
+  loadFailed?: true;
+  loadError?: string;
+}
+
 // ============================================================================
 // Pass-through schema for legacy events without a dedicated shape
 // ============================================================================
