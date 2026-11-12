@@ -196,11 +196,25 @@ case "$*" in
   "inspect -f {{index .Config.Labels"*)
     # FAKE_HEALTH="<svc>=<health>[:<startPeriodNs>] ..." while the NEW release
     # runs (FAKE_HEALTH_ALWAYS=1: before the update too); healthy otherwise.
+    # The start period is answered the way REAL docker answers it: the field is
+    # a Go time.Duration, which a text/template prints as "30m0s" — only a
+    # template that asks for `json` gets the nanoseconds. (This fake once printed
+    # nanoseconds regardless, so the slowstart test passed for months while a
+    # real pod never got the exemption it tests: 12 Nov 2026, postgres-backup.)
+    case "$*" in *"json .Config.Healthcheck.StartPeriod"*) period_json=1 ;; *) period_json="" ;; esac
+    go_duration() {   # nanoseconds -> Go's Duration.String(), whole seconds
+      local n=$(( $1 / 1000000000 )) h m s out=""
+      h=$(( n / 3600 )); m=$(( n % 3600 / 60 )); s=$(( n % 60 ))
+      [ "$h" -gt 0 ] && out="${h}h"
+      { [ "$h" -gt 0 ] || [ "$m" -gt 0 ]; } && out="${out}${m}m"
+      echo "${out}${s}s"
+    }
     for svc in backend kratos postgres-backup; do
       st=healthy; sp=0
       if [ -n "${FAKE_HEALTH_ALWAYS:-}" ] || is_new "$(cat "$F/backend_image")"; then
         for kv in $FAKE_HEALTH; do [ "${kv%%=*}" = "$svc" ] && { v="${kv#*=}"; st="${v%%:*}"; [ "$v" != "$st" ] && sp="${v#*:}"; }; done
       fi
+      [ -n "$period_json" ] || [ "$sp" = 0 ] || sp="$(go_duration "$sp")"
       echo "$svc $st $sp"
     done; exit 0 ;;
   "inspect -f {{.State.Running}} pg1") echo true; exit 0 ;;
