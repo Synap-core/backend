@@ -21,6 +21,7 @@ import {
   pgEnum,
   uuid,
   text,
+  integer,
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
@@ -96,6 +97,14 @@ export const governanceRules = pgTable(
     targetPattern: text("target_pattern").notNull(),
     // Entity profile slug when target_kind = 'profile'.
     targetProfile: text("target_profile"),
+    // ONE object an exact action rule is narrowed to (0420), at the version a
+    // person approved: today a playbook for `playbook.run` ("let agents run
+    // this without asking"). A version bump leaves the rule matching nothing.
+    targetSubjectId: uuid("target_subject_id"),
+    targetSubjectVersion: integer("target_subject_version"),
+    // The person whose agents a rule naming one object covers (0420): only an
+    // agent acting for this person matches it.
+    principalOwnerId: text("principal_owner_id"),
 
     verdict: governanceVerdictEnum("verdict").notNull(),
 

@@ -47,6 +47,10 @@ import type { FocusSession, SQL } from "@synap/database";
 import { notExists, type AnyColumn } from "drizzle-orm";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
+import {
+  isPreApprovalHeldReason,
+  type PreApprovalHeldReason,
+} from "@synap-core/types/governance-rules";
 import { logEvent } from "../../lib/event-helpers.js";
 import { completeFocusSession } from "./complete-session.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
@@ -131,20 +135,30 @@ export interface TriageProjection {
   acceptedAt: string | null;
   /** Who accepted it, or null. */
   acceptedBy: string | null;
+  /**
+   * Why a pending agent run is held although its person allowed the playbook
+   * (or an earlier version of it) for agents (`PreApprovalHeldReason`), or
+   * null. Only on a pending draft. Always set by {@link projectTriage};
+   * optional so a row built elsewhere (a sample world) still types.
+   */
+  heldBecause?: PreApprovalHeldReason | null;
 }
 
 function triageReceipt(metadata: unknown): {
   acceptedAt: string | null;
   acceptedBy: string | null;
+  heldBecause: PreApprovalHeldReason | null;
 } {
   const bag = (metadata ?? {}) as { triage?: unknown };
   const t = (bag.triage ?? {}) as {
     acceptedAt?: unknown;
     acceptedBy?: unknown;
+    heldBecause?: unknown;
   };
   return {
     acceptedAt: typeof t.acceptedAt === "string" ? t.acceptedAt : null,
     acceptedBy: typeof t.acceptedBy === "string" ? t.acceptedBy : null,
+    heldBecause: isPreApprovalHeldReason(t.heldBecause) ? t.heldBecause : null,
   };
 }
 
@@ -163,7 +177,12 @@ export function projectTriage(row: TriageProjectable): TriageProjection {
     !!row.status &&
     (OPEN_SESSION_STATUSES as readonly string[]).includes(row.status) &&
     receipt.acceptedAt === null;
-  return { pending, ...receipt };
+  return {
+    pending,
+    acceptedAt: receipt.acceptedAt,
+    acceptedBy: receipt.acceptedBy,
+    heldBecause: pending ? receipt.heldBecause : null,
+  };
 }
 
 /** Attach the projection to a page of rows (no extra query — pure). */
