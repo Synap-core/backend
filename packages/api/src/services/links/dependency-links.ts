@@ -252,28 +252,50 @@ async function restampPrimaryMark(
 }
 
 /**
- * Does goal `fromId` already carry a PRIMARY `linkType` edge to some OTHER
- * end than `toId`? The at-most-one-primary rule for `serves` (parent) and
- * `advances` (pillar): a goal rolls up fully to one place only.
+ * THE primary reader: the end of goal `goalId`'s PRIMARY `linkType` edge
+ * (`metadata.primary`), or `null` when it has none. For `advances`, only an
+ * edge to a space the goal's project still `uses` counts (a pillar the
+ * project dropped is no pillar). `except` leaves one end out (a re-link of
+ * that very pair). Read by the one-primary rule here and by goal placement
+ * (`services/tracks/goal-placement.ts`), so both mean the same edge.
  */
-async function hasOtherPrimary(
-  edge: DependencyEdgeInput,
-  linkType: typeof SERVES_LINK_TYPE | typeof ADVANCES_LINK_TYPE
-): Promise<boolean> {
+export async function readGoalPrimary(
+  goalId: string,
+  linkType: typeof SERVES_LINK_TYPE | typeof ADVANCES_LINK_TYPE,
+  except?: { toType: string; toId: string }
+): Promise<{ toType: string; toId: string } | null> {
   const [row] = await db
-    .select({ id: links.id })
+    .select({ toType: links.toType, toId: links.toId })
     .from(links)
     .where(
       and(
         eq(links.linkType, linkType),
         eq(links.fromType, "track"),
-        eq(links.fromId, edge.fromId),
-        drizzleSql`NOT (${links.toType} = ${edge.toType} AND ${links.toId} = ${edge.toId})`,
-        drizzleSql`(${links.metadata} ->> ${LINK_PRIMARY_KEY}) = 'true'`
+        eq(links.fromId, goalId),
+        drizzleSql`(${links.metadata} ->> ${LINK_PRIMARY_KEY}) = 'true'`,
+        except
+          ? drizzleSql`NOT (${links.toType} = ${except.toType} AND ${links.toId} = ${except.toId})`
+          : undefined,
+        linkType === ADVANCES_LINK_TYPE
+          ? drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`
+          : undefined
       )
     )
     .limit(1);
-  return row !== undefined;
+  return row ?? null;
+}
+
+/** Does goal `edge.fromId` have a primary `linkType` edge to another end? */
+async function hasOtherPrimary(
+  edge: DependencyEdgeInput,
+  linkType: typeof SERVES_LINK_TYPE | typeof ADVANCES_LINK_TYPE
+): Promise<boolean> {
+  return (
+    (await readGoalPrimary(edge.fromId, linkType, {
+      toType: edge.toType,
+      toId: edge.toId,
+    })) !== null
+  );
 }
 
 /** THE delete. Emits `link.delete.completed` per row actually removed. */

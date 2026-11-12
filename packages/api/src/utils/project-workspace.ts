@@ -22,6 +22,7 @@ import {
   getDb,
   links,
   projects,
+  projectTracks,
   workspaces,
   ownerPrivateVisibleWhere,
   userVisibleWhere,
@@ -72,6 +73,10 @@ export async function hydrateUsedWorkspaces(
   return out;
 }
 import { createLink } from "../services/links/links-service.js";
+import {
+  recordLinkMutation,
+  type LinkAttribution,
+} from "../services/links/dependency-links.js";
 import { isUuid } from "@synap-core/types/property-render";
 
 export type LinkProjectToWorkspaceResult =
@@ -207,6 +212,8 @@ export async function unlinkProjectFromWorkspace(
     projectId: string;
     workspaceId: string;
     userId: string;
+    /** Who the removed pillar edges' `link.delete.completed` names. */
+    attribution?: LinkAttribution;
   }
 ): Promise<UnlinkProjectFromWorkspaceResult> {
   const [visible] = await db
@@ -239,6 +246,20 @@ export async function unlinkProjectFromWorkspace(
       )
     )
     .returning({ id: links.id });
+  // A space the project no longer uses is no longer one of its pillars: its
+  // goals' `advances` edges to it go with the `uses` edge (same door, same
+  // gate: removing a `uses` edge is a DESTRUCTIVE link delete, an agent's
+  // always a proposal). Otherwise a stale primary pillar would block a goal
+  // from naming a new one. Each removed edge emits `link.delete.completed`.
+  if (removed.length > 0) {
+    const advances = await removeProjectPillarEdges(db, {
+      projectId: args.projectId,
+      workspaceId: args.workspaceId,
+    });
+    for (const row of advances) {
+      recordLinkMutation("delete", row, args.userId, args.attribution ?? {});
+    }
+  }
   return { unlinked: true, rows: removed.length };
 }
 
@@ -408,4 +429,57 @@ export async function listProjectsUsingWorkspaces(
     }
   }
   return result;
+}
+
+/**
+ * How many of the project's goals advance that space (read-only): what
+ * removing the `uses` edge would stop, said to the approver BEFORE it is
+ * removed (the proposal's reasoning) and in the door's reply.
+ */
+export async function countProjectPillarGoals(
+  executor: Pick<Awaited<ReturnType<typeof getDb>>, "select">,
+  args: { projectId: string; workspaceId: string }
+): Promise<number> {
+  const rows = await executor
+    .select({
+      n: drizzleSql<number>`cast(count(distinct ${links.fromId}) as integer)`,
+    })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, "advances"),
+        eq(links.fromType, "track"),
+        eq(links.toType, "workspace"),
+        eq(links.toId, args.workspaceId),
+        drizzleSql`${links.fromId} IN (SELECT ${projectTracks.id}::text FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, args.projectId)})`
+      )
+    );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * THE cascade of a removed `project --uses--> workspace` edge: the project's
+ * goals' `advances` edges to that space go too (a space the project no longer
+ * uses is no pillar). Run by every door that removes a `uses` edge
+ * (`unlinkProjectFromWorkspace`, the safe revert of a recorded `uses` link),
+ * on the executor it is given (a transaction included). Returns the removed
+ * rows; emitting their `link.delete.completed` is the caller's (after its
+ * transaction).
+ */
+export async function removeProjectPillarEdges(
+  executor: Pick<Awaited<ReturnType<typeof getDb>>, "delete">,
+  args: { projectId: string; workspaceId: string }
+) {
+  return executor
+    .delete(links)
+    .where(
+      and(
+        eq(links.linkType, "advances"),
+        eq(links.fromType, "track"),
+        eq(links.toType, "workspace"),
+        eq(links.toId, args.workspaceId),
+        drizzleSql`${links.fromId} IN (SELECT ${projectTracks.id}::text FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, args.projectId)})`
+      )
+    )
+    .returning();
 }

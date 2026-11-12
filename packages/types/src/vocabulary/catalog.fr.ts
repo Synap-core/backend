@@ -549,10 +549,10 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "status.blocked_by_policy": "Bloqué par une règle",
   "status.no_active_goal": "Aucun objectif actif",
   "status.stalled": "À l’arrêt",
-  "status.unproven": "Non prouvé",
+  "status.unproven": "Pas encore validé",
   "status.needs_attention": "Demande votre attention",
   "status.moving": "En mouvement",
-  "status.unvalidated_bet": "Pari non validé",
+  "status.unvalidated_bet": "Non validé",
   "status.validated": "Validé",
   // ── Runner states: `runner.<state>` (what a session's agent says it does) ──
   "runner.busy": "Au travail",

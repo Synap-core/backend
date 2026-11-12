@@ -24,6 +24,7 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { resolveVerifiedSessionId } from "../_middleware/session.js";
 import {
   createLink,
   getLinksFor,
@@ -230,6 +231,8 @@ export function registerLinksRoutes(app: HubHono): void {
       metadata?: Record<string, unknown>;
       agentUserId?: string;
       reasoning?: string;
+      /** The session the caller works in; the gate files the write under it. */
+      sessionId?: string;
     } | null;
     if (!body) return c.json({ error: "Invalid JSON in request body" }, 400);
 
@@ -404,13 +407,32 @@ export function registerLinksRoutes(app: HubHono): void {
       // the gate at pod scope, `metadata.purpose` (the pillar's line) carried
       // and replayed — never dropped by a raw edge write.
       if (parsed.data.linkType === "uses") {
+        // `metadata.purpose`: a string sets it, `null` clears it, absent
+        // leaves it. Any other value is refused, never read as a clear.
         const meta = parsed.data.metadata;
-        const purpose =
-          meta && "purpose" in meta
-            ? typeof meta.purpose === "string"
-              ? meta.purpose
-              : null
-            : undefined;
+        const rawPurpose = meta && "purpose" in meta ? meta.purpose : undefined;
+        if (
+          rawPurpose !== undefined &&
+          rawPurpose !== null &&
+          typeof rawPurpose !== "string"
+        ) {
+          return c.json(
+            {
+              error:
+                "metadata.purpose is text (a string), or null to clear it.",
+            },
+            400
+          );
+        }
+        const purpose = rawPurpose as string | null | undefined;
+        // The verified X-Session-Id header wins; the body's handle only for
+        // a session the caller OWNS (never another user's), as capture does.
+        const sessionId =
+          (await resolveVerifiedSessionId(
+            userId,
+            c.get("sessionId"),
+            typeof body.sessionId === "string" ? body.sessionId : undefined
+          )) ?? null;
         const outcome = await setProjectWorkspaceMembershipGoverned({
           userId,
           agentUserId: actorId !== userId ? actorId : undefined,
@@ -421,6 +443,7 @@ export function registerLinksRoutes(app: HubHono): void {
           ...(typeof body.reasoning === "string" && body.reasoning.trim()
             ? { reasoning: body.reasoning.trim() }
             : {}),
+          sessionId,
           door: "POST /links",
         });
         if (outcome.status === "proposed") {

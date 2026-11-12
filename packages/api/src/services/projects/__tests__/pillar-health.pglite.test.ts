@@ -63,9 +63,22 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 // The goal doors' gate: a person's write is granted (governance has its own
-// suites); the agent path is not exercised here.
+// suites); an AGENT's write is proposed, and the gate data it would file is
+// kept so a test can approve it through the real executor.
+const gate = vi.hoisted(() => ({ filed: [] as Record<string, unknown>[] }));
 vi.mock("../../../utils/permission-check.js", () => ({
-  checkPermissionOrPropose: async () => ({ granted: true }),
+  checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
+    if (opts.agentUserId) {
+      gate.filed.push(opts);
+      return {
+        granted: false,
+        proposalId: `p-${gate.filed.length}`,
+        reviewPath: "/open/p",
+        reviewUrl: "https://pod/open/p",
+      };
+    }
+    return { granted: true };
+  },
   proposedMessageFor: (_t: string, fallback: string) => fallback,
 }));
 
@@ -74,21 +87,36 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL, is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import {
+  countProjectPillarGoals,
+  linkProjectToWorkspace,
+  unlinkProjectFromWorkspace,
+} from "../../../utils/project-workspace.js";
 import {
   PILLAR_NOT_USED_ERROR,
   PRIMARY_PARENT_TAKEN_ERROR,
   PRIMARY_PILLAR_TAKEN_ERROR,
   writeDependencyLink,
 } from "../../links/dependency-links.js";
-import { applyGoalPlacement } from "../../tracks/goal-placement.js";
-import { setTrackDirection, startTrack } from "../../tracks/tracks-service.js";
+import {
+  applyGoalPlacement,
+  PARENT_OTHER_PROJECT_ERROR,
+} from "../../tracks/goal-placement.js";
+import {
+  applyTrackDirection,
+  setTrackDirection,
+  startTrack,
+} from "../../tracks/tracks-service.js";
 import { assertMainGoal } from "../update-project.js";
 import {
   readGoalGroupWork,
+  readScopeMoves,
   readScopeRollup,
 } from "../../status/status-rollup.js";
-import { readProjectPillars } from "../pillar-health.js";
+import {
+  readProjectPillarFields,
+  readProjectPillars,
+} from "../pillar-health.js";
 
 const ME = "user-me";
 const W_SALES = randomUUID();
@@ -142,6 +170,9 @@ function ddlFor(table: PgTable): string {
   return `create table if not exists "${cfg.name}" (${columns.join(", ")});`;
 }
 
+// Goals are created in fixture order, one second apart: the read lists them
+// oldest first, and two goals in the same instant would order by random id.
+let goalSeq = 0;
 async function goal(
   id: string,
   project: string,
@@ -151,7 +182,7 @@ async function goal(
 ) {
   await q(
     `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, verdict, uncertainty, criteria, created_at, updated_at)
-     values ($1, $2, $3, $4, '{}'::jsonb, '1', $5, $6, $7, '[]'::jsonb, now(), now())`,
+     values ($1, $2, $3, $4, '{}'::jsonb, '1', $5, $6, $7, '[]'::jsonb, timestamptz '2026-01-01' + make_interval(secs => ${++goalSeq}), now())`,
     [
       id,
       project,
@@ -463,7 +494,7 @@ describe("goal placement — where a goal sits", () => {
     expect((await linkRow(g, G_RUN, "serves"))?.metadata).toEqual({});
   });
 
-  it("makes the first pillar primary when none is named; refuses an unused space", async () => {
+  it("makes the first pillar primary when none is named; the list replaces; refuses an unused space", async () => {
     const g = randomUUID();
     await goal(g, P, "Placed pillars", "active");
     await applyGoalPlacement({
@@ -476,7 +507,25 @@ describe("goal placement — where a goal sits", () => {
     expect((await linkRow(g, W_BRAND, "advances"))?.metadata).toEqual({
       primary: true,
     });
-    expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({});
+    expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({
+      primary: false,
+    });
+    // Rules out "pillars are added": the list is the whole set.
+    await applyGoalPlacement({
+      trackId: g,
+      input: { pillars: [{ workspaceId: W_SALES }] },
+      userId: ME,
+    });
+    expect(await linkRow(g, W_BRAND, "advances")).toBeUndefined();
+    expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+    await applyGoalPlacement({
+      trackId: g,
+      input: { pillars: [] },
+      userId: ME,
+    });
+    expect(await linkRow(g, W_SALES, "advances")).toBeUndefined();
     await expect(
       applyGoalPlacement({
         trackId: g,
@@ -489,6 +538,78 @@ describe("goal placement — where a goal sits", () => {
 });
 
 describe("the goal doors carry the placement", () => {
+  // Rules out "a refused placement still writes the goal's columns": G_SUB
+  // serves G_RUN, so G_RUN serving G_SUB would close a loop.
+  it("an update whose placement is refused changes nothing", async () => {
+    const before = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    await expect(
+      setTrackDirection({
+        trackId: G_RUN,
+        direction: "A new heading",
+        parentGoalId: G_SUB,
+        actor: { userId: ME },
+      })
+    ).rejects.toThrow();
+    const after = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    expect(after.rows).toEqual(before.rows);
+    expect(await linkRow(G_RUN, G_SUB, "serves")).toBeUndefined();
+  });
+
+  // The same on the replay path (an approved proposal): the placement is
+  // re-checked before the columns are written.
+  it("an approved update whose placement is now refused changes nothing", async () => {
+    const before = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    const track = (
+      await q(`select * from project_tracks where id = $1`, [G_RUN])
+    ).rows[0];
+    const project = (await q(`select * from projects where id = $1`, [P]))
+      .rows[0];
+    const camel = (row: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(row).map(([k, v]) => [
+          k.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase()),
+          v,
+        ])
+      );
+    await expect(
+      applyTrackDirection(
+        camel(track as Record<string, unknown>) as never,
+        camel(project as Record<string, unknown>) as never,
+        { direction: "Replayed heading", parentGoalId: G_SUB },
+        { userId: ME, statedBy: ME }
+      )
+    ).rejects.toThrow();
+    const after = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    expect(after.rows).toEqual(before.rows);
+  });
+
+  it("refuses a parent goal of another project before anything is started", async () => {
+    await expect(
+      startTrack({
+        projectId: P,
+        name: "Wrong parent",
+        parentGoalId: G_ELSEWHERE,
+        actor: { userId: ME },
+      })
+    ).rejects.toThrow(PARENT_OTHER_PROJECT_ERROR);
+    const born = await q(
+      `select id from project_tracks where name = 'Wrong parent'`
+    );
+    expect(born.rows).toHaveLength(0);
+  });
+
   it("a person's start writes the parent and the pillars with the goal", async () => {
     const started = await startTrack({
       projectId: P,
@@ -508,7 +629,9 @@ describe("the goal doors carry the placement", () => {
     expect((await linkRow(id, W_BRAND, "advances"))?.metadata).toEqual({
       primary: true,
     });
-    expect((await linkRow(id, W_SALES, "advances"))?.metadata).toEqual({});
+    expect((await linkRow(id, W_SALES, "advances"))?.metadata).toEqual({
+      primary: false,
+    });
     // An update that only places the goal moves the primary pillar.
     const updated = await setTrackDirection({
       trackId: id,
@@ -662,5 +785,543 @@ describe("readProjectPillars — the derived read", () => {
 
   it("another user's project is null, never empty pillars", async () => {
     expect(await readProjectPillars("user-stranger", P)).toBeNull();
+  });
+});
+
+describe("a sub-goal with two parents counts in one pillar", () => {
+  // Rules out "the pillar walk follows every serves edge": G_SUB (with its
+  // session S_SUB) serves G_RUN (primary, Sales) AND G_PAUSED (non-primary,
+  // Brand). Its sessions count once, in Sales only.
+  it("walks primary parent edges only", async () => {
+    await link("track", G_SUB, "track", G_PAUSED, "serves");
+    try {
+      const read = await readProjectPillars(ME, P);
+      const sales = read!.pillars.find((p) => p.workspaceId === W_SALES)!;
+      const brand = read!.pillars.find((p) => p.workspaceId === W_BRAND)!;
+      expect(sales.health.sessions).toBe(4);
+      expect(brand.health.sessions).toBe(0);
+      // The default walk (goal page, orient) still lists it under both.
+      expect((await readGoalGroupWork(ME, [G_PAUSED])).sessions).toBe(1);
+    } finally {
+      await q(
+        `delete from links where from_id = $1 and to_id = $2 and link_type = 'serves'`,
+        [G_SUB, G_PAUSED]
+      );
+    }
+  });
+});
+
+describe("a space the project stops using is no pillar any more", () => {
+  // Rules out "unlinking a space leaves the goals' advances edges behind":
+  // a stale primary pillar would then block naming a new one.
+  it("removing the uses edge removes the goals' advances to it; a new primary lands", async () => {
+    const g = randomUUID();
+    await goal(g, P, "Brand push", "active");
+    await link("track", g, "workspace", W_BRAND, "advances", { primary: true });
+    const r = await unlinkProjectFromWorkspace(holder.db as never, {
+      projectId: P,
+      workspaceId: W_BRAND,
+      userId: ME,
+    });
+    expect(r).toEqual({ unlinked: true, rows: 1 });
+    try {
+      expect(await linkRow(g, W_BRAND, "advances")).toBeUndefined();
+      expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeUndefined();
+      await applyGoalPlacement({
+        trackId: g,
+        input: { pillars: [{ workspaceId: W_SALES, primary: true }] },
+        userId: ME,
+      });
+      expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({
+        primary: true,
+      });
+    } finally {
+      await q(`delete from links where from_id = $1`, [g]);
+      await q(
+        `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+        [g]
+      );
+      await link("project", P, "workspace", W_BRAND, "uses");
+      await link("track", G_PAUSED, "workspace", W_BRAND, "advances", {
+        primary: true,
+      });
+    }
+  });
+
+  // Rules out "any primary advances edge counts": an edge left to a space the
+  // project does not use (written before this rule) is no primary pillar.
+  it("a primary edge to an unused space does not count as the goal's primary", async () => {
+    const g = randomUUID();
+    await goal(g, P, "Stale pillar", "active");
+    await link("track", g, "workspace", W_UNUSED, "advances", {
+      primary: true,
+    });
+    try {
+      expect(
+        await writeDependencyLink({
+          edge: {
+            fromType: "track",
+            fromId: g,
+            toType: "workspace",
+            toId: W_SALES,
+            linkType: "advances",
+          },
+          userId: ME,
+          metadata: { primary: true },
+        })
+      ).toMatchObject({ ok: true, inserted: 1 });
+    } finally {
+      await q(`delete from links where from_id = $1`, [g]);
+      await q(
+        `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+        [g]
+      );
+    }
+  });
+});
+
+describe("the lean scope read agrees with the full one", () => {
+  // Rules out "the pillar read counts moves or kinds its own way": the lean
+  // read must give exactly what readScopeRollup gives for those two parts.
+  it("gives the same moved and kinds, for a pillar and for a project", async () => {
+    await q(
+      `insert into events (id, type, subject_id, subject_type, data, user_id, timestamp)
+       values ($1, 'entity.transition.completed', $2, 'entity', '{}'::jsonb, $3, now())`,
+      [randomUUID(), E_IN, ME]
+    );
+    // A move of a goal of P that advances Brand, not Sales: in the project's
+    // count, never in the Sales pillar's.
+    await q(
+      `insert into events (id, type, subject_id, subject_type, data, user_id, timestamp)
+       values ($1, 'track.transition.completed', $2, 'track', '{}'::jsonb, $3, now())`,
+      [randomUUID(), G_PAUSED, ME]
+    );
+    for (const scope of [
+      { projectId: P, workspaceId: W_SALES },
+      { projectId: P },
+      { workspaceId: W_SALES },
+    ]) {
+      const full = await readScopeRollup({
+        userId: ME,
+        ...scope,
+        byKind: true,
+      });
+      const lean = await readScopeMoves({ userId: ME, ...scope });
+      expect(lean).toEqual({ moved: full!.moved, kinds: full!.kinds });
+    }
+    // Non-vacuity: the pillar scope saw the move and the kind.
+    const pillar = await readScopeMoves({
+      userId: ME,
+      projectId: P,
+      workspaceId: W_SALES,
+    });
+    expect(pillar.moved).toBe(1);
+    expect((await readScopeMoves({ userId: ME, projectId: P })).moved).toBe(2);
+    expect(pillar.kinds.map((k) => k.kind)).toEqual(["deal"]);
+  });
+});
+
+describe("a failed part of the project read is marked, never empty", () => {
+  // Rules out "a failed pillar read answers [] / a failed main goal answers
+  // null": each part fails on its own and says so; the other part stands.
+  it("marks the failed part unavailable and keeps the other", async () => {
+    await q(`update projects set main_goal_id = $1 where id = $2`, [G_RUN, P]);
+    await q(`alter table links rename to links_gone`);
+    try {
+      const fields = await readProjectPillarFields(ME, P);
+      expect(fields.pillars).toEqual({ status: "unavailable" });
+      expect(fields.rootHealth).toEqual({ status: "unavailable" });
+      expect(fields.mainGoal).toEqual({
+        id: G_RUN,
+        name: "Win clients",
+        status: "active",
+      });
+    } finally {
+      await q(`alter table links_gone rename to links`);
+    }
+    await q(`alter table project_tracks rename to project_tracks_gone`);
+    try {
+      const fields = await readProjectPillarFields(ME, P);
+      expect(fields.mainGoal).toEqual({ status: "unavailable" });
+      expect(fields.pillars).toEqual({ status: "unavailable" });
+    } finally {
+      await q(`alter table project_tracks_gone rename to project_tracks`);
+    }
+  });
+});
+
+describe("projects.get carries the pillars only when asked", () => {
+  // Rules out "every project read pays for the pillars" and "include is
+  // ignored": the tRPC read adds the three fields with include ["pillars"]
+  // only.
+  it("include: [pillars] adds mainGoal, pillars and rootHealth", async () => {
+    const { projectsRouter } = await import("../../../routers/projects.js");
+    const caller = projectsRouter.createCaller({
+      authenticated: true,
+      userId: ME,
+      workspaceId: null,
+    } as never);
+    const plain = (await caller.get({ id: P })) as Record<string, unknown>;
+    expect(plain).not.toHaveProperty("pillars");
+    expect(plain).not.toHaveProperty("mainGoal");
+    const asked = (await caller.get({
+      id: P,
+      include: ["pillars"],
+    })) as Record<string, unknown>;
+    expect(Array.isArray(asked.pillars)).toBe(true);
+    expect((asked.pillars as unknown[]).length).toBe(2);
+    expect(asked).toHaveProperty("rootHealth.pillarsTotal", 2);
+    expect(asked).toHaveProperty("mainGoal");
+  });
+});
+
+describe("an approved uses link replays through the edge door", () => {
+  // Rules out "the approval inserts the edge raw": an existing edge would be
+  // left as it was, so an approved purpose change would read green and
+  // write nothing.
+  it("an approved purpose change on an existing edge lands", async () => {
+    const { proposalExecRegistry } =
+      await import("../../../routers/proposals/execution-registry.js");
+    const { registerCatchAllExecutor } =
+      await import("../../../routers/proposals/executors/catch-all.js");
+    const { isRequestShapedProposalData } =
+      await import("@synap-core/types/proposals");
+    proposalExecRegistry._reset();
+    registerCatchAllExecutor();
+    const exec = proposalExecRegistry.resolveWildcard("nothing/matches-this")!;
+    const payload = {
+      requestId: "req-uses",
+      targetType: "link",
+      changeType: "create",
+      data: {
+        fromType: "project",
+        fromId: P,
+        toType: "workspace",
+        toId: W_SALES,
+        linkType: "uses",
+        metadata: { purpose: "Keep the clients" },
+      },
+    };
+    const result = await exec.execute({
+      proposal: {
+        id: randomUUID(),
+        targetType: "link",
+        targetId: P,
+        proposalType: "create",
+        workspaceId: null,
+        sessionId: null,
+        projectId: null,
+        agentUserId: "agent-x",
+        subjectUserId: ME,
+        sourceMessageId: null,
+        data: payload,
+      },
+      payload,
+      userId: ME,
+      input: { proposalId: randomUUID() },
+      ctx: {},
+      deps: {
+        db: holder.db,
+        isRequestShapedProposalData,
+        emitProposalReviewed: () => {},
+        reportProposalOutcome: () => {},
+      },
+    } as never);
+    expect(result).toMatchObject({ success: true });
+    expect((await linkRow(P, W_SALES, "uses"))?.metadata).toEqual({
+      purpose: "Keep the clients",
+    });
+    proposalExecRegistry._reset();
+  });
+});
+
+describe("an agent's placement, approved, lands through the real executors", () => {
+  // Rules out "the replay drops parentGoalId / pillars": the agent's start
+  // and update are proposals; approving each through the track executors
+  // writes the parent and the pillars.
+  it("start then update, each approved", async () => {
+    const { proposalExecRegistry } =
+      await import("../../../routers/proposals/execution-registry.js");
+    const { registerTrackExecutors } =
+      await import("../../../routers/proposals/executors/track.js");
+    proposalExecRegistry._reset();
+    registerTrackExecutors();
+    const deps = {
+      db: holder.db,
+      emitProposalReviewed: () => {},
+      reportProposalOutcome: () => {},
+    };
+    const approve = async (
+      key: string,
+      filed: Record<string, unknown>,
+      targetId: string
+    ) => {
+      const [targetType, proposalType] = key.split("/");
+      return proposalExecRegistry.resolve(key)!.execute({
+        proposal: {
+          id: randomUUID(),
+          targetType,
+          targetId,
+          proposalType,
+          workspaceId: null,
+          sessionId: null,
+          projectId: P,
+          agentUserId: "agent-x",
+          subjectUserId: ME,
+          sourceMessageId: null,
+          data: {
+            requestId: "r",
+            targetType,
+            changeType: proposalType,
+            data: filed.data,
+          },
+        },
+        payload: {
+          requestId: "r",
+          targetType,
+          changeType: proposalType,
+          data: filed.data,
+        },
+        userId: ME,
+        input: { proposalId: randomUUID() },
+        ctx: {},
+        deps,
+      } as never);
+    };
+    gate.filed.length = 0;
+    const proposed = await startTrack({
+      projectId: P,
+      name: "Agent placed",
+      parentGoalId: G_OTHER_ROOT,
+      pillars: [{ workspaceId: W_SALES }],
+      actor: { userId: ME, agentUserId: "agent-x" },
+    });
+    expect(proposed.status).toBe("proposed");
+    expect(gate.filed).toHaveLength(1);
+    const startData = gate.filed[0]!.data as Record<string, unknown>;
+    expect(startData).toMatchObject({
+      parentGoalId: G_OTHER_ROOT,
+      pillars: [{ workspaceId: W_SALES }],
+    });
+    await approve("track/create", gate.filed[0]!, P);
+    const born = (
+      await q(`select id from project_tracks where name = 'Agent placed'`)
+    ).rows[0] as { id: string };
+    expect(born).toBeDefined();
+    expect((await linkRow(born.id, G_OTHER_ROOT, "serves"))?.metadata).toEqual({
+      primary: true,
+    });
+    expect((await linkRow(born.id, W_SALES, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+
+    gate.filed.length = 0;
+    const updated = await setTrackDirection({
+      trackId: born.id,
+      pillars: [{ workspaceId: W_BRAND }],
+      actor: { userId: ME, agentUserId: "agent-x" },
+    });
+    expect(updated.status).toBe("proposed");
+    expect(await linkRow(born.id, W_BRAND, "advances")).toBeUndefined();
+    await approve("track/update", gate.filed[0]!, born.id);
+    expect((await linkRow(born.id, W_BRAND, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+    expect(await linkRow(born.id, W_SALES, "advances")).toBeUndefined();
+    await q(`delete from links where from_id = $1`, [born.id]);
+    await q(
+      `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+      [born.id]
+    );
+    proposalExecRegistry._reset();
+  });
+});
+
+describe("a placement that fails after the start was authorized undoes the birth", () => {
+  // Rules out "the goal is born half-placed": the parent edge lands, then the
+  // pillar write fails (a store failure stands in for a race the pre-check
+  // cannot see); the goal and its edges are gone.
+  it("leaves no goal and no edge behind", async () => {
+    await client.exec(`
+      create or replace function refuse_sales_advances() returns trigger as $$
+      begin
+        if new.link_type = 'advances' and new.to_id = '${W_SALES}' then
+          raise exception 'store refused the pillar';
+        end if;
+        return new;
+      end $$ language plpgsql;
+      create trigger refuse_sales_advances before insert on links
+        for each row execute function refuse_sales_advances();`);
+    const servingBefore = await q(
+      `select id from links where link_type = 'serves' and to_id = $1 and from_type = 'track'`,
+      [G_OTHER_ROOT]
+    );
+    try {
+      await expect(
+        startTrack({
+          projectId: P,
+          name: "Half placed",
+          parentGoalId: G_OTHER_ROOT,
+          pillars: [{ workspaceId: W_SALES }],
+          actor: { userId: ME },
+        })
+      ).rejects.toThrow();
+      const born = await q(
+        `select id from project_tracks where name = 'Half placed'`
+      );
+      expect(born.rows).toHaveLength(0);
+      const serving = await q(
+        `select id from links where link_type = 'serves' and to_id = $1 and from_type = 'track'`,
+        [G_OTHER_ROOT]
+      );
+      expect(serving.rows).toEqual(servingBefore.rows);
+    } finally {
+      await client.exec(
+        `drop trigger refuse_sales_advances on links; drop function refuse_sales_advances();`
+      );
+    }
+  });
+});
+
+describe("a reverted uses link takes its pillar edges with it", () => {
+  // Rules out "the safe revert deletes the uses edge raw": the goals'
+  // advances edges to that space must go too, as with the unlink door.
+  it("undoing a recorded uses link removes the goals' advances to that space", async () => {
+    const { safeRevert } = await import("../../reversibility/safe-revert.js");
+    const uses = (
+      await q(
+        `select id from links where link_type = 'uses' and from_id = $1 and to_id = $2`,
+        [P, W_BRAND]
+      )
+    ).rows[0] as { id: string };
+    expect(uses).toBeDefined();
+    expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeDefined();
+    try {
+      const out = await safeRevert({
+        targets: [{ kind: "link", id: uses.id }],
+        mode: "all_or_nothing",
+        database: holder.db as never,
+      });
+      expect(JSON.stringify(out)).not.toMatch(/"skipped":\[\{/);
+      expect(await linkRow(P, W_BRAND, "uses")).toBeUndefined();
+      expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeUndefined();
+    } finally {
+      if (!(await linkRow(P, W_BRAND, "uses"))) {
+        await link("project", P, "workspace", W_BRAND, "uses");
+      }
+      if (!(await linkRow(G_PAUSED, W_BRAND, "advances"))) {
+        await link("track", G_PAUSED, "workspace", W_BRAND, "advances", {
+          primary: true,
+        });
+      }
+    }
+  });
+});
+
+describe("a sub-goal is never a pillar root", () => {
+  // Rules out "a sub-goal with its own primary pillar rolls up twice": G_SUB
+  // serves G_RUN (primary parent, Sales) and names Brand as ITS primary
+  // pillar. Its sessions count in Sales (through G_RUN's tree) only; in
+  // Brand it is listed as contributing and changes nothing.
+  it("lists it as contributing in its own pillar", async () => {
+    await link("track", G_SUB, "workspace", W_BRAND, "advances", {
+      primary: true,
+    });
+    try {
+      const read = await readProjectPillars(ME, P);
+      const sales = read!.pillars.find((p) => p.workspaceId === W_SALES)!;
+      const brand = read!.pillars.find((p) => p.workspaceId === W_BRAND)!;
+      expect(sales.health.sessions).toBe(4);
+      expect(brand.health.sessions).toBe(0);
+      expect(brand.health.state).toBe("stalled");
+      expect(brand.goals.find((g) => g.goalId === G_SUB)?.role).toBe(
+        "contributing"
+      );
+    } finally {
+      await q(
+        `delete from links where from_id = $1 and to_id = $2 and link_type = 'advances'`,
+        [G_SUB, W_BRAND]
+      );
+    }
+  });
+});
+
+describe("a pillar write refused midway removes nothing", () => {
+  // Rules out "unlisted pillars go first": a list whose non-primary entry the
+  // door refuses must leave the goal's current pillars in place.
+  it("keeps the old pillars when a listed one is refused", async () => {
+    const g = randomUUID();
+    await goal(g, P, "Keeps its pillar", "active");
+    await link("track", g, "workspace", W_BRAND, "advances", { primary: true });
+    try {
+      await expect(
+        applyGoalPlacement({
+          trackId: g,
+          input: {
+            pillars: [
+              { workspaceId: W_SALES, primary: true },
+              { workspaceId: W_UNUSED },
+            ],
+          },
+          userId: ME,
+        })
+      ).rejects.toThrow(PILLAR_NOT_USED_ERROR);
+      expect((await linkRow(g, W_BRAND, "advances"))?.metadata).toEqual({
+        primary: true,
+      });
+      expect(await linkRow(g, W_SALES, "advances")).toBeUndefined();
+    } finally {
+      await q(`delete from links where from_id = $1`, [g]);
+      await q(
+        `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+        [g]
+      );
+    }
+  });
+});
+
+describe("the unlink cascade stays inside its project", () => {
+  // Rules out "every advances edge to the space goes": another project using
+  // the same space keeps its goals' pillar edges; the count said to the
+  // approver counts this project's goals only.
+  it("leaves another project's goals' edges to the same space alone", async () => {
+    if (!(await linkRow(P_OTHER, W_BRAND, "uses"))) {
+      await link("project", P_OTHER, "workspace", W_BRAND, "uses");
+    }
+    await link("track", G_ELSEWHERE, "workspace", W_BRAND, "advances", {
+      primary: true,
+    });
+    try {
+      expect(
+        await countProjectPillarGoals(holder.db as never, {
+          projectId: P,
+          workspaceId: W_BRAND,
+        })
+      ).toBe(1);
+      await unlinkProjectFromWorkspace(holder.db as never, {
+        projectId: P,
+        workspaceId: W_BRAND,
+        userId: ME,
+      });
+      expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeUndefined();
+      expect(
+        (await linkRow(G_ELSEWHERE, W_BRAND, "advances"))?.metadata
+      ).toEqual({
+        primary: true,
+      });
+    } finally {
+      await q(
+        `delete from links where from_id = $1 and to_id = $2 and link_type = 'advances'`,
+        [G_ELSEWHERE, W_BRAND]
+      );
+      if (!(await linkRow(P, W_BRAND, "uses"))) {
+        await link("project", P, "workspace", W_BRAND, "uses");
+      }
+      if (!(await linkRow(G_PAUSED, W_BRAND, "advances"))) {
+        await link("track", G_PAUSED, "workspace", W_BRAND, "advances", {
+          primary: true,
+        });
+      }
+    }
   });
 });

@@ -223,7 +223,8 @@ async function countGoalWork(
  */
 async function readChildGoals(
   userId: string,
-  goalIds: string[]
+  goalIds: string[],
+  opts: GoalTreeWalk = {}
 ): Promise<Map<string, string[]>> {
   const rows = await db
     .select({ parent: links.toId, child: projectTracks.id })
@@ -238,7 +239,10 @@ async function readChildGoals(
         eq(links.fromType, "track"),
         eq(links.toType, "track"),
         inArray(links.toId, goalIds),
-        scopedDb(AccessContext.operator({ userId })).predicate(projectTracks)
+        scopedDb(AccessContext.operator({ userId })).predicate(projectTracks),
+        opts.primaryOnly
+          ? drizzleSql`(${links.metadata} ->> 'primary') = 'true'`
+          : undefined
       )
     );
   const out = new Map<string, string[]>();
@@ -303,6 +307,17 @@ export async function readGoalRollups(
 export const GOAL_TREE_MAX_DEPTH = 32;
 
 /**
+ * How a goal tree is walked. `primaryOnly`: follow only a sub-goal's PRIMARY
+ * `serves` edge (`metadata.primary`), so a sub-goal with several parents
+ * belongs to ONE tree: what the pillar health read needs to count a session
+ * once, in one pillar. The default follows every `serves` edge the reader may
+ * see (the goal page, orient's rollups list a sub-goal under each parent).
+ */
+export interface GoalTreeWalk {
+  primaryOnly?: boolean;
+}
+
+/**
  * THE goal-tree walk: `rootIds` and every goal that serves one of them, down
  * `serves` edges the reader may see (`readChildGoals`), each goal expanded
  * once, at most {@link GOAL_TREE_MAX_DEPTH} deep. `childrenOf` holds each
@@ -311,13 +326,14 @@ export const GOAL_TREE_MAX_DEPTH = 32;
  */
 export async function readGoalTreeNodes(
   userId: string,
-  rootIds: readonly string[]
+  rootIds: readonly string[],
+  opts: GoalTreeWalk = {}
 ): Promise<{ nodes: Set<string>; childrenOf: Map<string, string[]> }> {
   const childrenOf = new Map<string, string[]>();
   let frontier = [...new Set(rootIds)];
   const nodes = new Set(frontier);
   for (let depth = 0; depth < GOAL_TREE_MAX_DEPTH && frontier.length; depth++) {
-    const kids = await readChildGoals(userId, frontier);
+    const kids = await readChildGoals(userId, frontier, opts);
     const next: string[] = [];
     for (const parent of frontier) {
       const mine = [...new Set(kids.get(parent) ?? [])];
@@ -345,10 +361,13 @@ export async function readGoalTreeNodes(
 export async function readGoalGroupWork(
   userId: string,
   rootIds: readonly string[],
-  since: Date = windowStart()
+  opts: GoalTreeWalk & { since?: Date } = {}
 ): Promise<{ sessions: number; moved: number }> {
   if (rootIds.length === 0) return { sessions: 0, moved: 0 };
-  const { nodes } = await readGoalTreeNodes(userId, rootIds);
+  const since = opts.since ?? windowStart();
+  const { nodes } = await readGoalTreeNodes(userId, rootIds, {
+    primaryOnly: opts.primaryOnly,
+  });
   const goalIds = [...nodes];
   // The children are read through the same population rule as the goal's own
   // sessions (`workAndTrackedRunsWhere`). Recursive UNION: a lineage loop ends.
@@ -731,36 +750,7 @@ export async function readScopeRollup(input: {
       ...(workspaceId ? { workspaceId } : {}),
     }),
     countWork(sessionsInScope),
-    // Moves of what the caller can see in the scope: its things (the entity
-    // read floor), its sessions (THE session read rule) and, for a project,
-    // the project's goals (the project was checked visible above).
-    countMovesSince(windowStart(), [
-      movesOf(
-        "entity",
-        drizzleSql`SELECT ${entities.id} AS id, 'all' AS key FROM ${entities} WHERE ${and(
-          entityReadVisibleWhere(userId),
-          // The rule `things` is counted under, so demo and probe rows never move it.
-          listableEntityWhere({ projectLens: projectId }),
-          projectId ? projectLensWhere(entities.id, projectId) : undefined,
-          workspaceId ? eq(entities.workspaceId, workspaceId) : undefined
-        )}`
-      ),
-      movesOf(
-        "focus_session",
-        drizzleSql`SELECT ${focusSessions.id} AS id, 'all' AS key FROM ${focusSessions} WHERE ${and(sessionsInScope, workAndTrackedRunsWhere())}`
-      ),
-      ...(projectId
-        ? [
-            movesOf(
-              "track",
-              drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${and(
-                eq(projectTracks.projectId, projectId),
-                pillar ? goalAdvancesWhere(workspaceId!) : undefined
-              )}`
-            ),
-          ]
-        : []),
-    ]),
+    countScopeMoves({ userId, workspaceId, projectId, sessionsInScope }),
     openWork,
   ]);
   const openIds = open.map((s) => s.id);
@@ -783,11 +773,86 @@ export async function readScopeRollup(input: {
     windowDays: ROLLUP_WINDOW_DAYS,
     things,
     work,
-    moved: moved.get("all") ?? 0,
+    moved,
     stuck,
     waitingOn,
     ...(input.byKind ? { kinds } : {}),
   };
+}
+
+/**
+ * Status moves since the window start of what the caller can see in the
+ * scope: its things (the entity read floor and the listing rule), its
+ * sessions (THE session read rule) and, for a project, the project's goals
+ * (in a pillar: those that advance the space). The ONE count both
+ * {@link readScopeRollup} and {@link readScopeMoves} return.
+ */
+async function countScopeMoves(p: {
+  userId: string;
+  workspaceId?: string;
+  projectId?: string;
+  sessionsInScope: SQL | undefined;
+}): Promise<number> {
+  const { userId, workspaceId, projectId } = p;
+  const moved = await countMovesSince(windowStart(), [
+    movesOf(
+      "entity",
+      drizzleSql`SELECT ${entities.id} AS id, 'all' AS key FROM ${entities} WHERE ${and(
+        entityReadVisibleWhere(userId),
+        // The rule `things` is counted under, so demo and probe rows never move it.
+        listableEntityWhere({ projectLens: projectId }),
+        projectId ? projectLensWhere(entities.id, projectId) : undefined,
+        workspaceId ? eq(entities.workspaceId, workspaceId) : undefined
+      )}`
+    ),
+    movesOf(
+      "focus_session",
+      drizzleSql`SELECT ${focusSessions.id} AS id, 'all' AS key FROM ${focusSessions} WHERE ${and(p.sessionsInScope, workAndTrackedRunsWhere())}`
+    ),
+    ...(projectId
+      ? [
+          movesOf(
+            "track",
+            drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${and(
+              eq(projectTracks.projectId, projectId),
+              workspaceId ? goalAdvancesWhere(workspaceId) : undefined
+            )}`
+          ),
+        ]
+      : []),
+  ]);
+  return moved.get("all") ?? 0;
+}
+
+/**
+ * A LEANER read of a scope: what moved and its things per kind (the things
+ * read still runs whole) — no work counts, no open sessions, no waiting-on
+ * (the pillar health read needs nothing else). Same queries as {@link readScopeRollup} for these two parts,
+ * so they always agree. The caller has ALREADY checked the project visible
+ * (no second check here). THROWS.
+ */
+export async function readScopeMoves(input: {
+  userId: string;
+  workspaceId?: string;
+  projectId?: string;
+}): Promise<{ moved: number; kinds: ScopeKindRollup[] }> {
+  const { userId, workspaceId, projectId } = input;
+  const sessionsInScope = and(
+    sessionReadableWhere({ userId }),
+    ...sessionScopeConditions({
+      workspaceLens: workspaceId,
+      projectLens: projectId,
+    })
+  );
+  const [{ kinds }, moved] = await Promise.all([
+    readThings({
+      userId,
+      ...(projectId ? { projectId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+    }),
+    countScopeMoves({ userId, workspaceId, projectId, sessionsInScope }),
+  ]);
+  return { moved, kinds };
 }
 
 /**

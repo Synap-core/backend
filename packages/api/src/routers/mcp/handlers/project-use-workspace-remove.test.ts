@@ -32,6 +32,7 @@ const h = vi.hoisted(() => ({
   link: vi.fn(),
   unlink: vi.fn(),
   archivedOk: vi.fn(),
+  pillarGoals: 0,
   proposalStatus: "pending" as string,
   updates: [] as unknown[],
 }));
@@ -62,6 +63,7 @@ vi.mock("../../../utils/project-workspace.js", async (importOriginal) => {
     linkProjectToWorkspace: (...a: unknown[]) => h.link(...a),
     unlinkProjectFromWorkspace: (...a: unknown[]) => h.unlink(...a),
     archivedUsesTargetRemovable: (...a: unknown[]) => h.archivedOk(...a),
+    countProjectPillarGoals: async () => h.pillarGoals,
   };
 });
 vi.mock("@synap/database", async (importOriginal) => {
@@ -121,6 +123,7 @@ beforeEach(() => {
   h.archivedOk.mockResolvedValue(false);
   h.proposalStatus = "pending";
   h.updates = [];
+  h.pillarGoals = 0;
 });
 
 describe("synap_project_use_workspace {remove:true}", () => {
@@ -159,12 +162,32 @@ describe("synap_project_use_workspace {remove:true}", () => {
       remove: true,
     });
     expect(out).toMatchObject({ status: "unlinked", removed: 1 });
-    expect(h.unlink).toHaveBeenCalledWith(expect.anything(), {
+    expect(h.unlink).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        projectId: PROJECT,
+        workspaceId: WS,
+        userId: USER,
+      })
+    );
+    expect(h.link).not.toHaveBeenCalled();
+  });
+
+  // Rules out "the approver cannot see the cascade": a removal says how
+  // many goals stop advancing the space, in the reasoning the reviewer reads
+  // and in the reply.
+  it("says how many goals stop advancing the space", async () => {
+    h.pillarGoals = 2;
+    h.perm.mockResolvedValue({ proposalId: "p-3", reviewUrl: "u" });
+    const out = await call({
       projectId: PROJECT,
       workspaceId: WS,
-      userId: USER,
+      remove: true,
     });
-    expect(h.link).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ status: "proposed", goalsStopAdvancing: 2 });
+    const opts = h.perm.mock.calls[0]![0] as Record<string, any>;
+    expect(opts.reasoning).toMatch(/2 goals stop advancing this space\./);
+    expect(opts.data.goalsStopAdvancing).toBe(2);
   });
 
   it("the endpoint floor refuses before governance", async () => {
@@ -302,11 +325,19 @@ describe("link/delete approval executor", () => {
   it("replays unlink floored on the SUBJECT user and reports the delete's rows", async () => {
     h.unlink.mockResolvedValue({ unlinked: true, rows: 1 });
     const res = await run(stored);
-    expect(h.unlink).toHaveBeenCalledWith(expect.anything(), {
-      projectId: PROJECT,
-      workspaceId: WS,
-      userId: USER,
-    });
+    expect(h.unlink).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        projectId: PROJECT,
+        workspaceId: WS,
+        userId: USER,
+        // The cascade's link.delete events name the agent and the approval.
+        attribution: expect.objectContaining({
+          agentUserId: AGENT,
+          proposalId: "p-1",
+        }),
+      })
+    );
     expect(res).toMatchObject({
       success: true,
       effect: { applied: "verified", rows: 1, subject: "link" },

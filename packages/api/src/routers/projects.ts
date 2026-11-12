@@ -51,7 +51,10 @@ import { AccessContext, scopedDb } from "../access/index.js";
 import { entityReadVisibleWhere } from "../access/entity-read-floor.js";
 import { BELONGS_TO_PROJECT } from "../utils/project-scope.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
-import { readProjectPillarFields } from "../services/projects/pillar-health.js";
+import {
+  PROJECT_READ_INCLUDES,
+  readProjectPillarFields,
+} from "../services/projects/pillar-health.js";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
@@ -214,7 +217,16 @@ export const projectsRouter = router({
    * Get a single project by ID
    */
   get: podProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        /**
+         * Opt-in parts: `["pillars"]` adds `mainGoal`, `pillars` and
+         * `rootHealth` (derived per read; costly, so only when asked).
+         */
+        include: z.array(z.enum(PROJECT_READ_INCLUDES)).max(1).optional(),
+      })
+    )
     .query(async ({ ctx, input }) => {
       // Single-object read: the WHERE is already pure user-floor (pod-personal
       // owner OR workspace-member visibility). It must not be gated by the
@@ -266,10 +278,12 @@ export const projectsRouter = router({
         // Additive INDEX: workspaces this project uses. Not an ACL.
         usedWorkspaceIds,
         usedWorkspaces,
-        // Where it stands, pillar by pillar (derived, never stored):
-        // `mainGoal`, `pillars`, `rootHealth` — a failed read is
-        // `{ status: "unavailable" }`, never an empty list.
-        ...(await readProjectPillarFields(ctx.userId, project.id)),
+        // Asked with `include: ["pillars"]`: where it stands, pillar by
+        // pillar (derived, never stored): `mainGoal`, `pillars`,
+        // `rootHealth` — a failed part is `{ status: "unavailable" }`.
+        ...(input.include?.includes("pillars")
+          ? await readProjectPillarFields(ctx.userId, project.id)
+          : {}),
       };
     }),
 

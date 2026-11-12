@@ -34,6 +34,7 @@ import { getDb } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import {
   archivedUsesTargetRemovable,
+  countProjectPillarGoals,
   linkProjectToWorkspace,
   unlinkProjectFromWorkspace,
   USES_PURPOSE_KEY,
@@ -67,15 +68,23 @@ export interface SetProjectWorkspaceMembershipInput {
 export type SetProjectWorkspaceMembershipOutcome =
   | { status: "updated"; effect: "linked" }
   /** `rows` = the edges actually removed (`0` = there was none). */
-  | { status: "updated"; effect: "unlinked"; rows: number }
+  | {
+      status: "updated";
+      effect: "unlinked";
+      rows: number;
+      /** Goals of the project that advanced the space (their edges went too). */
+      goalsStoppedAdvancing: number;
+    }
   | {
       status: "proposed";
       proposalId: string;
       reviewPath?: string;
       reviewUrl?: string;
+      /** On a removal: goals that will stop advancing the space. */
+      goalsStopAdvancing?: number;
     };
 
-/** A purpose as stored: trimmed, one line, `null` when blank. */
+/** A purpose as stored: trimmed, `null` when blank. */
 function normalizePurpose(
   purpose: string | null | undefined
 ): string | null | undefined {
@@ -84,7 +93,7 @@ function normalizePurpose(
   if (line.length > USES_PURPOSE_MAX) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `A pillar's purpose is one line, at most ${USES_PURPOSE_MAX} characters.`,
+      message: `A pillar's purpose is at most ${USES_PURPOSE_MAX} characters.`,
     });
   }
   return line === "" ? null : line;
@@ -139,6 +148,17 @@ export async function setProjectWorkspaceMembershipGoverned(
     throw new TRPCError({ code: "FORBIDDEN", message: endpointRefusal.error });
   }
 
+  // What a removal also stops, said to the approver before it is filed.
+  const goalsStopAdvancing = member
+    ? 0
+    : await countProjectPillarGoals(db, { projectId, workspaceId });
+  const cascadeNote =
+    goalsStopAdvancing === 0
+      ? ""
+      : goalsStopAdvancing === 1
+        ? " 1 goal stops advancing this space."
+        : ` ${goalsStopAdvancing} goals stop advancing this space.`;
+
   // 3. Governance at pod scope.
   const perm = await checkPermissionOrPropose({
     userId,
@@ -148,10 +168,10 @@ export async function setProjectWorkspaceMembershipGoverned(
     action: member ? "create" : "delete",
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     reasoning:
-      input.reasoning?.trim() ||
-      (member
-        ? "Project uses workspace (INDEX, not ACL)"
-        : "Project no longer uses workspace"),
+      (input.reasoning?.trim() ||
+        (member
+          ? "Project uses workspace (INDEX, not ACL)"
+          : "Project no longer uses workspace")) + cascadeNote,
     data: {
       title: member
         ? "project --uses--> workspace"
@@ -161,6 +181,7 @@ export async function setProjectWorkspaceMembershipGoverned(
       toType: "workspace",
       toId: workspaceId,
       linkType: "uses",
+      ...(goalsStopAdvancing > 0 ? { goalsStopAdvancing } : {}),
       // The approval replays it (`executors/catch-all.ts`).
       ...(purpose !== undefined
         ? { metadata: { [USES_PURPOSE_KEY]: purpose } }
@@ -176,6 +197,7 @@ export async function setProjectWorkspaceMembershipGoverned(
       proposalId: perm.proposalId,
       ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
       ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
+      ...(goalsStopAdvancing > 0 ? { goalsStopAdvancing } : {}),
     };
   }
 
@@ -210,9 +232,20 @@ export async function setProjectWorkspaceMembershipGoverned(
     projectId,
     workspaceId,
     userId,
+    attribution: {
+      agentUserId: input.agentUserId ?? null,
+      proposalId:
+        "granted" in perm ? (perm.autoApprovedProposalId ?? null) : null,
+      sessionId: input.sessionId ?? null,
+    },
   });
   if (!removed.unlinked) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
-  return { status: "updated", effect: "unlinked", rows: removed.rows };
+  return {
+    status: "updated",
+    effect: "unlinked",
+    rows: removed.rows,
+    goalsStoppedAdvancing: goalsStopAdvancing,
+  };
 }

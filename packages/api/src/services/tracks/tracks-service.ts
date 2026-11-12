@@ -1149,6 +1149,7 @@ export async function startTrack(
     projectId: project.id,
     userId: actor.userId,
     trackId,
+    goalExists: false,
   });
   // An entity that was ACHIEVED arrives closed as met, and `met` needs every
   // required criterion met — none can be yet, so its criteria ride the end
@@ -3052,6 +3053,16 @@ export async function applyTrackDirection(
   // Where it sits, re-parsed (a replay's payload) and written AFTER the
   // patch, through THE dependency door, which re-checks every floor now.
   const placement = parseGoalPlacementInput(pickGoalPlacementInput(rawBag));
+  // Checked BEFORE the goal's columns are written: a placement the door
+  // would refuse (a replay's parent or space may have changed) changes
+  // nothing at all.
+  if (hasGoalPlacementInput(placement)) {
+    await checkGoalPlacement(placement, {
+      projectId: track.projectId,
+      userId: who.userId,
+      trackId: track.id,
+    });
+  }
   if (
     patch.direction === undefined &&
     patch.kpi === undefined &&

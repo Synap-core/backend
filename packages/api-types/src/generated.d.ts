@@ -2621,11 +2621,13 @@ declare const PILLAR_HEALTH_STATES: readonly [
 ];
 export type PillarHealthState = (typeof PILLAR_HEALTH_STATES)[number];
 export interface PillarGoalCounts {
-	/** Live primary goals that are not paused. */
+	/** Primary goals RUNNING (status active). */
 	open: number;
+	/** Primary goals not started yet (proposed, agreed, ready). */
+	notStarted: number;
 	/** Primary goals closed as met or partly met. */
 	validated: number;
-	/** Open primary goals that are unvalidated bets ({@link isGoalBet}). */
+	/** Running primary goals that are unvalidated bets ({@link isGoalBet}). */
 	bet: number;
 	/** Paused primary goals. */
 	paused: number;
@@ -2639,7 +2641,8 @@ export interface PillarHealth {
 	reason: string;
 	/**
 	 * Distinct work sessions on the pillar's primary goals (filed in, serving,
-	 * or spawned under one of them; sub-goals included), each counted once.
+	 * or spawned under one of them), each counted once. A sub-goal's sessions
+	 * count only under its PRIMARY parent, so a session counts in one pillar.
 	 * Absent when the pod did not count them.
 	 */
 	sessions?: number;
@@ -20044,6 +20047,16 @@ export type StatusOfAnswer = StatusOf | {
 	id: string;
 	type: "unknown";
 };
+export interface DependencyState {
+	blocked: boolean;
+	/**
+	 * The blockers still holding it up, after `replaces` following — open ones
+	 * and dropped ones (`dropped: true`, ended without delivering).
+	 */
+	openBlockers: OpenBlocker[];
+	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
+	declared: DependencyNodeRef[];
+}
 /** INDEX projection a UI/agent can name, not just id. */
 export type UsedWorkspaceRef = {
 	domain: string | null;
@@ -22420,16 +22433,6 @@ export interface GraphEnvelope {
 	 * "not found" instead of rendering the placeholder as a real entity.
 	 */
 	found: boolean;
-}
-export interface DependencyState {
-	blocked: boolean;
-	/**
-	 * The blockers still holding it up, after `replaces` following — open ones
-	 * and dropped ones (`dropped: true`, ended without delivering).
-	 */
-	openBlockers: OpenBlocker[];
-	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
-	declared: DependencyNodeRef[];
 }
 /** Per space and kind: the rows missing one required link. */
 export interface RequiredLinkDebt {
@@ -25593,9 +25596,6 @@ export interface ProjectAutomation {
 	triggerType: string;
 	status: string | null;
 }
-declare const PILLARS_UNAVAILABLE: {
-	readonly status: "unavailable";
-};
 /** One thing the project's work produced. */
 export interface ProjectOutputItem {
 	/** `<sessionId>|<kind>:<refId>` — stable across refetches, unique per row. */
@@ -25808,9 +25808,13 @@ export type SetProjectWorkspaceMembershipOutcome = {
 /** `rows` = the edges actually removed (`0` = there was none). */
  | {
 	effect: "unlinked";
+	/** Goals of the project that advanced the space (their edges went too). */
+	goalsStoppedAdvancing: number;
 	rows: number;
 	status: "updated";
 } | {
+	/** On a removal: goals that will stop advancing the space. */
+	goalsStopAdvancing?: number;
 	proposalId: string;
 	reviewPath?: string;
 	reviewUrl?: string;
@@ -39139,7 +39143,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | string[] | null | undefined;
 				q?: string | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -40399,7 +40403,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				playbookId?: string | undefined;
 				projectId?: string | string[] | null | undefined;
 				settledSince?: string | undefined;
-				status?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | "all" | undefined;
+				status?: "active" | "all" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | ("active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale")[] | undefined;
 				statusSince?: {
 					closed?: string | undefined;
 					stale?: string | undefined;
@@ -52741,12 +52745,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
+				include?: "pillars"[] | undefined;
 			};
 			meta: object;
 			output: {
-				mainGoal: ProjectMainGoal | null;
+				mainGoal?: ProjectMainGoal | {
+					readonly status: "unavailable";
+				} | null | undefined;
 				phaseCategory: PlaybookStageCategory;
-				pillars: Pillar[];
+				pillars?: {
+					readonly status: "unavailable";
+				} | Pillar[] | undefined;
 				project: {
 					colorSlot: number | null;
 					createdAt: Date;
@@ -52766,34 +52775,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string | null;
 				};
-				rootHealth: ProjectRootHealth;
-				subject: ProjectSubject | null;
-				usedWorkspaceIds: string[];
-				usedWorkspaces: UsedWorkspaceRef[];
-			} | {
-				mainGoal: ProjectMainGoal | null;
-				phaseCategory: PlaybookStageCategory;
-				pillars: typeof PILLARS_UNAVAILABLE;
-				project: {
-					colorSlot: number | null;
-					createdAt: Date;
-					description: string | null;
-					icon: string | null;
-					id: string;
-					mainGoalId: string | null;
-					metadata: unknown;
-					name: string;
-					phase: string | null;
-					sample: boolean;
-					settings: unknown;
-					slug: string | null;
-					status: "active" | "archived" | "completed";
-					targetDate: Date | null;
-					updatedAt: Date;
-					userId: string;
-					workspaceId: string | null;
-				};
-				rootHealth: typeof PILLARS_UNAVAILABLE;
+				rootHealth?: {
+					readonly status: "unavailable";
+				} | ProjectRootHealth | undefined;
 				subject: ProjectSubject | null;
 				usedWorkspaceIds: string[];
 				usedWorkspaces: UsedWorkspaceRef[];

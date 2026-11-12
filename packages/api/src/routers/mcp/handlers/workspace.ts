@@ -577,7 +577,11 @@ export const workspaceHandlers: McpHandlerMap = {
     );
     const projectCaller = projectsRouter.createCaller(projectCtx);
     try {
-      const result = await projectCaller.get({ id: projectId });
+      // An agent asks where the project stands: always with its pillars.
+      const result = await projectCaller.get({
+        id: projectId,
+        include: ["pillars"],
+      });
       return ok(result);
     } catch (err) {
       return ok({
@@ -817,6 +821,9 @@ export const workspaceHandlers: McpHandlerMap = {
           status: "proposed",
           proposalId: outcome.proposalId,
           reviewUrl: outcome.reviewUrl,
+          ...(outcome.goalsStopAdvancing
+            ? { goalsStopAdvancing: outcome.goalsStopAdvancing }
+            : {}),
         });
       }
       if (outcome.effect === "unlinked") {
@@ -825,6 +832,7 @@ export const workspaceHandlers: McpHandlerMap = {
           projectId,
           workspaceId,
           removed: outcome.rows,
+          goalsStoppedAdvancing: outcome.goalsStoppedAdvancing,
         });
       }
       return ok({ status: "linked", projectId, workspaceId });
