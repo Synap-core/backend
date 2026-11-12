@@ -12,6 +12,7 @@ import { useState } from "react";
 import { Button } from "@heroui/react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { ContentBody } from "../../_lib/object/content/content-block";
+import { HtmlPagePreview } from "../../_lib/object/content/html-preview";
 import { documentReading } from "./proposal-record-model";
 
 export function ProposedDocumentBody({
@@ -23,6 +24,19 @@ export function ProposedDocumentBody({
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // A whole HTML document (a report an agent made) is drawn as the page, not
+  // as markdown. Only a doctype or <html> opening counts: markdown may open
+  // with an inline tag.
+  if (/^\uFEFF?\s*<(?:!doctype\s+html|html[\s>])/i.test(content)) {
+    return (
+      <div data-proposed-document="" className="flex min-w-0 flex-col gap-2">
+        <span className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+          Content
+        </span>
+        <HtmlPagePreview html={content} title="Document preview" />
+      </div>
+    );
+  }
   const { preview, full, hasMore } = documentReading(content);
   const shown = open ? full : preview;
   return (

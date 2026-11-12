@@ -46,7 +46,11 @@ beforeAll(async () => {
       target_kind governance_target NOT NULL, target_pattern text NOT NULL, target_profile text,
       verdict governance_verdict NOT NULL, source_proposal_id uuid, created_by text NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(), revoked_at timestamptz, expires_at timestamptz,
-      revoked_reason text
+      revoked_reason text,
+      -- 0420: a rule naming one object at one version
+      target_subject_id uuid,
+      target_subject_version integer,
+      principal_owner_id text
     );
     CREATE TABLE governance_ceilings (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

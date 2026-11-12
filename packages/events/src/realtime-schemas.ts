@@ -29,6 +29,42 @@ import {
 } from "@synap-core/types/lifecycle";
 
 // ============================================================================
+// Yjs room meta: the `synap-room` map every realtime room may carry
+// ============================================================================
+
+/**
+ * The Yjs room's meta map and its keys: ONE home, read by `@synap/realtime`
+ * (`document-room.ts`, the room server) and `@synap/api` (the board read door,
+ * `services/whiteboards/read-board-scene.ts`), which cannot import each other.
+ * The client mirror is synap-app `packages/web/src/document/roomMeta.ts`; the
+ * key sets must stay identical. Meanings: `document-room.ts`.
+ */
+export const ROOM_META_MAP = "synap-room";
+export const ROOM_META_KEYS = {
+  revision: "revision",
+  seedRevision: "seedRevision",
+  seedClaim: "seedClaim",
+  loadError: "loadError",
+  schemaVersion: "schemaVersion",
+} as const;
+
+/**
+ * The realtime bridge's answer to `GET /yjs/:roomId/state` for an OPEN room
+ * (`@synap/realtime` bridge.ts writes it, the api's board read door reads it).
+ * `loadFailed` is the SERVER's flag that the room could not load the board's
+ * saved content (never a key inside the Y.Doc, which clients can write): the
+ * state is then not the board.
+ */
+export interface YjsRoomStateReply {
+  roomId: string;
+  state: string;
+  encoding: "base64";
+  byteLength: number;
+  loadFailed?: true;
+  loadError?: string;
+}
+
+// ============================================================================
 // Pass-through schema for legacy events without a dedicated shape
 // ============================================================================
 

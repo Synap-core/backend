@@ -20,6 +20,7 @@ import type { MediaRef } from "@synap-core/types/presentation";
 import { MediaView } from "../../_lib/media/media-view";
 import { TextDiff } from "../../_lib/object/content/document-changes";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import { HtmlPagePreview } from "../../_lib/object/content/html-preview";
 import { ProposedDocumentBody } from "./ProposedDocumentBody";
 import type { PartEdge } from "./composite-parts-model";
 import type { RecordGroup } from "./record-groups";
@@ -111,8 +112,10 @@ function TextValue({
   );
 }
 
-function Value({ value }: { value: RecordValue }) {
+function Value({ value, title }: { value: RecordValue; title?: string }) {
   switch (value.kind) {
+    case "page":
+      return <HtmlPagePreview html={value.html} title={title ?? "Preview"} />;
     case "code":
       return <CodeValue text={value.text} lines={value.lines} />;
     case "text":
@@ -172,11 +175,28 @@ function Value({ value }: { value: RecordValue }) {
 }
 
 /** One side of a code change, named: struck-through code would be unreadable. */
-function CodeSide({ label, value }: { label: string; value: RecordValue }) {
+function CodeSide({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: RecordValue;
+  title?: string;
+}) {
+  // The side that is replaced reads as source, never a second running page.
+  const shown: RecordValue =
+    label === "Before" && value.kind === "page"
+      ? {
+          kind: "code",
+          text: value.html,
+          lines: value.html.split("\n").length,
+        }
+      : value;
   return (
     <div className="flex w-full min-w-0 flex-col gap-1">
       <span className="text-[11px] text-foreground/55">{label}</span>
-      <Value value={value} />
+      <Value value={shown} title={title} />
     </div>
   );
 }
@@ -188,7 +208,11 @@ function Field({ field }: { field: RecordField }) {
       {field.label}
     </dt>
   );
-  if (op === "change" && before?.kind === "code" && after) {
+  if (
+    op === "change" &&
+    (before?.kind === "code" || before?.kind === "page") &&
+    after
+  ) {
     return (
       <div
         data-record-field={field.key}
@@ -197,7 +221,7 @@ function Field({ field }: { field: RecordField }) {
         {label}
         <dd className="flex min-w-0 flex-col gap-2 text-[13px] leading-relaxed text-foreground/90">
           <CodeSide label="Before" value={before} />
-          <CodeSide label="After" value={after} />
+          <CodeSide label="After" value={after} title={field.label} />
         </dd>
       </div>
     );
@@ -222,7 +246,7 @@ function Field({ field }: { field: RecordField }) {
         )}
         {op !== "remove" &&
           (after ? (
-            <Value value={after} />
+            <Value value={after} title={field.label} />
           ) : (
             <em className="text-foreground/50">empty</em>
           ))}

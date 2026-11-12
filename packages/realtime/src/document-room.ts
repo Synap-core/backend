@@ -36,15 +36,10 @@
  */
 
 import * as Y from "yjs";
+import { ROOM_META_KEYS, ROOM_META_MAP } from "@synap/events/realtime-schemas";
 
-export const ROOM_META_MAP = "synap-room";
-export const ROOM_META_KEYS = {
-  revision: "revision",
-  seedRevision: "seedRevision",
-  seedClaim: "seedClaim",
-  loadError: "loadError",
-  schemaVersion: "schemaVersion",
-} as const;
+// One home for the map and key names (the api's board read door reads them too).
+export { ROOM_META_KEYS, ROOM_META_MAP };
 
 export interface DocumentRoomRow {
   contentRevision: number;

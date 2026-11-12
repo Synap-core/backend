@@ -11363,6 +11363,16 @@ declare const ACTION_RUN_MODES: readonly [
 	"never"
 ];
 export type ActionRunMode = (typeof ACTION_RUN_MODES)[number];
+declare const PRE_APPROVAL_HELD_REASONS: readonly [
+	"version_changed",
+	"declares_tools",
+	"runs_elsewhere",
+	"runs_other_playbook",
+	"could_not_check"
+];
+export type PreApprovalHeldReason = (typeof PRE_APPROVAL_HELD_REASONS)[number];
+/** Why a playbook cannot be pre-approved for agents, whatever its rules. */
+export type PreApprovalIneligibleReason = Exclude<PreApprovalHeldReason, "version_changed">;
 declare const PACKAGE_FIELD_STATES: readonly [
 	"updates",
 	"yours",
@@ -23345,6 +23355,14 @@ export interface PresenceRecoveryRequest {
 	cancelledAt: Date | null;
 	completedAt: Date | null;
 }
+/** May a run of this playbook start on a person's pre-approval? */
+export type PreApprovalEligibility = {
+	eligible: true;
+	reason: null;
+} | {
+	eligible: false;
+	reason: PreApprovalIneligibleReason;
+};
 type GovernanceRuleDraft$1 = ReturnType<typeof nextRungRuleDraft>;
 export interface NextRungProjection {
 	proposalId: string;
@@ -24319,6 +24337,13 @@ export interface TriageProjection {
 	acceptedAt: string | null;
 	/** Who accepted it, or null. */
 	acceptedBy: string | null;
+	/**
+	 * Why a pending agent run is held although its person allowed the playbook
+	 * (or an earlier version of it) for agents (`PreApprovalHeldReason`), or
+	 * null. Only on a pending draft. Always set by {@link projectTriage};
+	 * optional so a row built elsewhere (a sample world) still types.
+	 */
+	heldBecause?: PreApprovalHeldReason | null;
 }
 /**
  * Session PARTICIPANTS — the roster of everyone staffed on a focus session,
@@ -41985,6 +42010,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetKind: "action" | "capability" | "connection" | "profile";
 				targetPattern: string;
 				targetProfile?: string | undefined;
+				targetSubjectId?: string | undefined;
+				targetSubjectVersion?: number | undefined;
 				verdict: "auto" | "deny" | "propose";
 				workspaceId?: string | undefined;
 			};
@@ -41998,6 +42025,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
+					principalOwnerId: string | null;
 					revokedAt: Date | null;
 					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
@@ -42005,6 +42033,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};
@@ -42039,9 +42069,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				} | null;
+			};
+		}>;
+		forSubject: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				subjectId: string;
+			};
+			meta: object;
+			output: {
+				preApproval: PreApprovalEligibility | null;
+				rules: {
+					agentLabel: string | null;
+					agentUserId: string | null;
+					createdAt: Date;
+					createdBy: string;
+					expiresAt: Date | null;
+					id: string;
+					principalClass: string | null;
+					principalKind: "agent" | "any" | "class";
+					scopeKind: "pod" | "workspace";
+					sourceProposalId: string | null;
+					targetKind: "action" | "capability" | "connection" | "profile";
+					targetPattern: string;
+					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
+					verdict: "auto" | "deny" | "propose";
+					workspaceId: string | null;
+				}[];
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -42064,6 +42126,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
@@ -42087,6 +42152,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId?: string | undefined;
+					targetSubjectLabel?: string | null | undefined;
+					targetSubjectVersion?: number | null | undefined;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				}[];
@@ -42251,6 +42319,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					principalClass: string | null;
 					principalKind: "agent" | "any" | "class";
+					principalOwnerId: string | null;
 					revokedAt: Date | null;
 					revokedReason: string | null;
 					scopeKind: "pod" | "workspace";
@@ -42258,6 +42327,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetKind: "action" | "capability" | "connection" | "profile";
 					targetPattern: string;
 					targetProfile: string | null;
+					targetSubjectId: string | null;
+					targetSubjectVersion: number | null;
 					verdict: "auto" | "deny" | "propose";
 					workspaceId: string | null;
 				};

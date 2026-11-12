@@ -301,6 +301,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_propose_app_from_playbook",
     "cp-connector": "pod__propose_app_from_playbook",
   },
+  synap_read_board: { "pod-mcp": "synap_read_board", "cp-connector": null },
   synap_reject_proposal: {
     "pod-mcp": "synap_reject_proposal",
     "cp-connector": "pod__reject_proposal",

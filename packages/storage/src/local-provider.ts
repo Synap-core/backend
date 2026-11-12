@@ -147,7 +147,8 @@ export class LocalStorageProvider implements IFileStorage {
       return await fs.readFile(absPath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(`File not found: ${storagePath}`);
+        // Same message as before; the class lets a reader tell "missing".
+        throw new StorageObjectNotFoundError(storagePath);
       }
       throw err;
     }
