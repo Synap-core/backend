@@ -1556,7 +1556,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // What differs here is only what it passes: the agent-facing `"all"`
       // defaults resolved above. See `session-list-conditions.ts`.
       const conditions = sessionListConditions({
-        userId: acting.userId,
+        userId: c.req.query("userId") || acting.userId,
+        roster: true,
         scope: {
           workspaceLens: workspaceIdParam,
           projectLens: projectIdParam,
@@ -1822,7 +1823,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     try {
       const conditions = [
         eq(focusSessions.id, id),
-        sessionReadableWhere({ userId: acting.userId }),
       ];
       if (workspaceIdParam) {
         conditions.push(eq(focusSessions.workspaceId, workspaceIdParam));
