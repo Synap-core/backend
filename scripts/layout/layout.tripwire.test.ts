@@ -616,6 +616,12 @@ describe("sibling fetch retries a transient failure, only", () => {
     const g = fakeGit([transient(), transient(), transient()]);
     const { o } = opts(g.run);
     expect(() => L.gitNetwork(ARGS, o)).toThrow(/gave up after 3 attempts/);
+    expect(() =>
+      L.gitNetwork(
+        ARGS,
+        opts(fakeGit([transient(), transient(), transient()]).run).o
+      )
+    ).toThrow(/^INFRA: /);
     expect(g.calls).toHaveLength(3);
   });
 
@@ -627,6 +633,7 @@ describe("sibling fetch retries a transient failure, only", () => {
       "Could not resolve host: github.com",
       "Connection reset by peer",
       "Operation timed out",
+      "remote: Repository not found.\nfatal: repository 'https://github.com/Synap-core/app-bases.git/' not found",
     ])
       expect(L.isTransientGitError(m), m).toBe(true);
     expect(L.isTransientGitError("fatal: Authentication failed")).toBe(false);
