@@ -4953,7 +4953,7 @@
           "name": "limit",
           "type": "number",
           "required": false,
-          "description": "Shapes per read (default 40, max 200)."
+          "description": "Shapes per read (default 15, max 60)."
         }
       ],
       "inputSchema": {
@@ -4973,7 +4973,7 @@
           },
           "limit": {
             "type": "number",
-            "description": "Shapes per read (default 40, max 200)."
+            "description": "Shapes per read (default 15, max 60)."
           }
         },
         "required": ["viewId"]

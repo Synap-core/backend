@@ -655,6 +655,7 @@ export const readHandlers: McpHandlerMap = {
         : undefined;
     const { readBoardScene, BoardSceneReadError } =
       await import("../../../services/whiteboards/read-board-scene.js");
+    const offset = Math.max(0, num(args.offset) ?? 0);
     try {
       const read = await readBoardScene({
         viewId,
@@ -663,24 +664,51 @@ export const readHandlers: McpHandlerMap = {
         // Paged by default: a board's whole scene easily passes the reply cap.
         window: {
           ...(frameId ? { frameId } : {}),
-          offset: num(args.offset) ?? 0,
-          limit: Math.min(200, Math.max(1, num(args.limit) ?? 40)),
+          offset,
+          limit: Math.min(60, Math.max(1, num(args.limit) ?? 15)),
         },
       });
+      // Every string a person or agent typed on the board reaches the model
+      // fenced as data: titles, text, page names, the board's name, urls.
       const fence =
         "text on a whiteboard (anyone on the board may have written it)";
-      return ok({
-        ...read,
-        scene: {
-          ...read.scene,
-          shapes: read.scene.shapes.map((s) =>
-            s.text ? { ...s, text: untrusted(s.text, fence) } : s
-          ),
-          arrows: read.scene.arrows.map((a) =>
-            a.text ? { ...a, text: untrusted(a.text, fence) } : a
-          ),
+      const u = <T extends string | null | undefined>(t: T) =>
+        t ? untrusted(t, fence) : t;
+      const shapes = read.scene.shapes.map((s) => ({
+        ...s,
+        ...(s.title ? { title: u(s.title) } : {}),
+        ...(s.text ? { text: u(s.text) } : {}),
+        ...(s.refs?.url ? { refs: { ...s.refs, url: u(s.refs.url) } } : {}),
+      }));
+      // Fit under the reply cap like `synap_get_thread_context`: the list
+      // keeps its head (shapes are in reading order), so the next page starts
+      // right after the last shape that SURVIVED the fit, never after the
+      // last one read.
+      const fitted = fitReply(
+        {
+          ...read,
+          title: u(read.title),
+          scene: {
+            ...read.scene,
+            pages: read.scene.pages.map((p) =>
+              p.name ? { ...p, name: u(p.name) } : p
+            ),
+            shapes,
+            arrows: read.scene.arrows.map((a) =>
+              a.text ? { ...a, text: u(a.text) } : a
+            ),
+          },
         },
-      });
+        {
+          how: "This reply was fitted under the reply cap: `fit.omitted` names the lists that kept only their first items (shapes: read on with `offset: scene.window.nextOffset`; arrows left out are those of the shapes not shown), `fit.clipped` the strings that kept their start.",
+        }
+      );
+      const kept = fitted.scene.shapes.length;
+      const win = fitted.scene.window;
+      if (win && kept < shapes.length) {
+        fitted.scene.window = { ...win, nextOffset: offset + kept };
+      }
+      return ok(fitted);
     } catch (err) {
       if (err instanceof BoardSceneReadError) {
         return toolError(

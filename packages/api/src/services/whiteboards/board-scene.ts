@@ -24,7 +24,9 @@
  *
  * Coordinates: tldraw stores `x`/`y` relative to the parent (a frame, an
  * artboard or a group). The scene gives PAGE coordinates (the parents' offsets
- * added). Rotation is reported but not applied to bounds.
+ * added). Rotation is NOT applied: a shape's own `rotation` is reported but its
+ * bounds are unrotated, and a ROTATED parent frame's rotation is not applied to
+ * its children's page `x`/`y` (they are offset as if the frame were upright).
  */
 
 /** What a shape points at, read from its props (only the keys present). */

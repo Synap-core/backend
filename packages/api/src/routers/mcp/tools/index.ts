@@ -3368,7 +3368,7 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Shapes per read (default 40, max 200).",
+              description: "Shapes per read (default 15, max 60).",
             },
           },
           required: ["viewId"],

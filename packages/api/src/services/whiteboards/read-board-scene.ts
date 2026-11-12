@@ -102,6 +102,15 @@ export interface ReadBoardSceneInput {
   window?: BoardSceneWindow;
 }
 
+/** A tldraw store with no record at all (not even its document or page). */
+function isEmptyStore(records: unknown): boolean {
+  return (
+    typeof records !== "object" ||
+    records === null ||
+    Object.keys(records).length === 0
+  );
+}
+
 function realtimeUrl(): string {
   return process.env.REALTIME_URL || "http://localhost:4001";
 }
@@ -142,7 +151,21 @@ async function readLiveRecords(
       "The realtime server did not answer, so whether the board is open is unknown. Retry shortly."
     );
   }
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    // "Room not open" only when the bridge says so for THIS room
+    // (`handleYjsGetState` answers `{ error, roomId }`). Any other 404 (a
+    // realtime server without the route, a proxy) is not a closed room: the
+    // stored file would be read while an open room holds newer content.
+    const body = (await res.json().catch(() => null)) as {
+      roomId?: unknown;
+    } | null;
+    if (body && body.roomId === roomId) return null;
+    logger.warn({ roomId }, "board live read: unexpected 404 from realtime");
+    throw new BoardSceneReadError(
+      "live_unavailable",
+      "The realtime server answered 404 without naming the board's room, so whether the board is open is unknown."
+    );
+  }
   if (!res.ok) {
     logger.warn({ status: res.status, roomId }, "board live read refused");
     throw new BoardSceneReadError(
@@ -264,7 +287,27 @@ export async function readBoardScene(
   const roomId = view.yjsRoomId ?? `whiteboard-${documentId}`;
   const asOfLive = new Date().toISOString();
   const live = await readLiveRecords(roomId, documentId);
+  const loadDoc = () =>
+    db.query.documents.findFirst({
+      where: eq(documents.id, documentId),
+      columns: { storageKey: true, updatedAt: true, createdAt: true },
+    });
   if (live !== null) {
+    // An open room whose map is EMPTY may be a room that failed to load its
+    // saved content (the realtime server logs a failed load and serves the
+    // room empty). Empty is only an answer when the saved file is empty too.
+    if (isEmptyStore(live)) {
+      const doc = await loadDoc();
+      if (doc?.storageKey) {
+        const stored = await readStoredRecords(doc.storageKey, documentId);
+        if (!isEmptyStore(stored.records)) {
+          throw new BoardSceneReadError(
+            "live_unreadable",
+            "The board is open but has not loaded its saved content (its live copy is empty, its saved file is not). Retry shortly, or reopen the board."
+          );
+        }
+      }
+    }
     return {
       ...base,
       source: "live",
@@ -273,10 +316,7 @@ export async function readBoardScene(
     };
   }
 
-  const doc = await db.query.documents.findFirst({
-    where: eq(documents.id, documentId),
-    columns: { storageKey: true, updatedAt: true, createdAt: true },
-  });
+  const doc = await loadDoc();
   if (!doc) throw notFound();
   if (!doc.storageKey) {
     // Never saved: the realtime server starts such a room empty too.

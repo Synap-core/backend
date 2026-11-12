@@ -111,8 +111,15 @@ function liveRoom(records: Record<string, unknown>) {
       status: 200,
     });
 }
+/** The bridge's own closed-room answer (`handleYjsGetState`: `{ error, roomId }`). */
 const roomClosed = async () =>
-  new Response(JSON.stringify({ error: "Room not active" }), { status: 404 });
+  new Response(
+    JSON.stringify({
+      error: "Room not active — load from database instead",
+      roomId: `whiteboard-${DOC}`,
+    }),
+    { status: 404 }
+  );
 
 function app(vars: Record<string, unknown> = {}) {
   const a = new OpenAPIHono();
@@ -237,6 +244,44 @@ describe("GET /whiteboards/:viewId/scene: which source answers", () => {
 });
 
 describe("GET /whiteboards/:viewId/scene: a failed read is an error, never an empty board", () => {
+  it("an open room that is EMPTY while the saved file is not → 502 live_unreadable, never an empty live board", async () => {
+    m.fetchImpl = liveRoom({});
+    const res = await get();
+    expect(res.status).toBe(502);
+    expect(await res.json()).toMatchObject({ reason: "live_unreadable" });
+    expect(m.storageCalls).toEqual([`whiteboards/${USER}/${DOC}.json`]);
+  });
+
+  it("an empty open room with no saved file, or an empty saved file, is a genuine empty board", async () => {
+    m.fetchImpl = liveRoom({});
+    m.doc = { ...m.doc, storageKey: null };
+    let res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      source: "live",
+      scene: { counts: { shapes: 0, records: 0 } },
+    });
+    m.doc = { ...m.doc, storageKey: `whiteboards/${USER}/${DOC}.json` };
+    m.storageBody = JSON.stringify({ store: {} });
+    res = await get();
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Record<string, any>).source).toBe("live");
+  });
+
+  it("a non-empty open room never pays the extra storage read", async () => {
+    m.fetchImpl = liveRoom(RECORDS);
+    expect((await get()).status).toBe(200);
+    expect(m.storageCalls).toEqual([]);
+  });
+
+  it("a 404 that is not the bridge's closed-room answer → 503 live_unavailable, stored file not read", async () => {
+    m.fetchImpl = async () => new Response("Not Found", { status: 404 });
+    const res = await get();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ reason: "live_unavailable" });
+    expect(m.storageCalls).toEqual([]);
+  });
+
   it("bridge unreachable → 503 live_unavailable, and the stale stored file is NOT served", async () => {
     m.fetchImpl = async () => {
       throw new TypeError("fetch failed");
@@ -314,6 +359,14 @@ describe("GET /whiteboards/:viewId/scene: who may read", () => {
     expect(m.accessCalls).toEqual([]);
   });
 
+  it("a view of another type the caller may not see → 404, not 400 (no type oracle)", async () => {
+    m.view = { ...m.view, type: "kanban" };
+    m.access = "none";
+    const res = await get();
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ reason: "not_found" });
+  });
+
   it("a visible view of another type → 400 not_a_board", async () => {
     m.view = { ...m.view, type: "kanban" };
     const res = await get();
@@ -356,6 +409,107 @@ describe("MCP synap_read_board: the same reader", () => {
     expect(out).toContain("BEGIN UNTRUSTED CONTENT");
     expect(out).toContain("Call Bob");
     expect(m.accessCalls).toEqual([[USER, DOC]]);
+  });
+
+  it("fences every typed string: board name, page names, titles, text, urls", async () => {
+    m.view = { ...m.view, name: "Board name X" };
+    m.fetchImpl = liveRoom({
+      "page:p": { typeName: "page", id: "page:p", name: "Page name X" },
+      "shape:f": {
+        typeName: "shape",
+        id: "shape:f",
+        type: "frame",
+        parentId: "page:p",
+        x: 0,
+        y: 0,
+        props: { w: 500, h: 500, name: "Frame name X" },
+      },
+      "shape:c": {
+        typeName: "shape",
+        id: "shape:c",
+        type: "entityCard",
+        parentId: "shape:f",
+        x: 10,
+        y: 10,
+        props: { w: 100, h: 100, entityId: "e1", title: "Card title X" },
+      },
+      "shape:u": {
+        typeName: "shape",
+        id: "shape:u",
+        type: "cell",
+        parentId: "page:p",
+        x: 0,
+        y: 600,
+        props: {
+          w: 100,
+          h: 100,
+          cellKey: "url-embed",
+          cellProps: JSON.stringify({ url: "https://evil.example/x" }),
+        },
+      },
+      "shape:a": {
+        typeName: "shape",
+        id: "shape:a",
+        type: "arrow",
+        parentId: "page:p",
+        x: 0,
+        y: 0,
+        props: { start: { x: 0, y: 0 }, end: { x: 5, y: 5 }, text: "Arrow X" },
+      },
+    });
+    const body = JSON.parse(text((await call({ viewId: VIEW })) as never));
+    const fenced = (v: unknown, raw: string) => {
+      expect(typeof v).toBe("string");
+      expect(v as string).toContain("BEGIN UNTRUSTED CONTENT");
+      expect(v as string).toContain(raw);
+    };
+    const by = Object.fromEntries(
+      body.scene.shapes.map((x: { id: string }) => [x.id, x])
+    );
+    fenced(body.title, "Board name X");
+    fenced(body.scene.pages[0].name, "Page name X");
+    fenced(by["shape:f"].title, "Frame name X");
+    fenced(by["shape:c"].title, "Card title X");
+    fenced(by["shape:u"].refs.url, "https://evil.example/x");
+    fenced(body.scene.arrows[0].text, "Arrow X");
+    // Ids are not typed text: left bare.
+    expect(by["shape:c"].refs.entityId).toBe("e1");
+  });
+
+  it("a big board fits under the reply cap and pages on with no shape skipped or repeated", async () => {
+    const big: Record<string, unknown> = {};
+    const ids: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const id = `shape:s${String(i).padStart(2, "0")}`;
+      ids.push(id);
+      big[id] = {
+        typeName: "shape",
+        id,
+        type: "sticky",
+        parentId: "page:page",
+        x: 0,
+        y: i * 300,
+        props: { w: 240, h: 200, content: `${i}:` + "w".repeat(2_000) },
+      };
+    }
+    m.fetchImpl = liveRoom(big);
+    const seen: string[] = [];
+    let offset: number | null = 0;
+    let pages = 0;
+    while (offset !== null && pages < 50) {
+      const out = text((await call({ viewId: VIEW, offset })) as never);
+      expect(out.length).toBeLessThanOrEqual(16_000);
+      const body = JSON.parse(out);
+      expect(body.truncated).toBeUndefined();
+      expect(body.scene.shapes.length).toBeGreaterThan(0);
+      // The fit keeps the untrusted fence on what it kept.
+      expect(body.scene.shapes[0].text).toContain("BEGIN UNTRUSTED CONTENT");
+      seen.push(...body.scene.shapes.map((x: { id: string }) => x.id));
+      offset = body.scene.window.nextOffset;
+      pages++;
+    }
+    expect(seen).toEqual(ids);
+    expect(pages).toBeGreaterThan(3);
   });
 
   it("a failed read is a tool error naming the reason", async () => {

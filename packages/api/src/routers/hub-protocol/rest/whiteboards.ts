@@ -498,9 +498,9 @@ export function registerWhiteboardsRoutes(app: HubHono) {
   /**
    * GET /whiteboards/:viewId/state
    *
-   * Returns semantic board state from what the backend knows (view metadata).
-   * Live shape state is maintained in the Yjs document accessed by connected
-   * clients and is not accessible server-side.
+   * Returns the board's metadata only (view row). Its CONTENT (shapes, arrows,
+   * frames, from the live room or the stored file) is read through
+   * `GET /whiteboards/:viewId/scene` (`readBoardScene`).
    */
   app.get("/whiteboards/:viewId/state", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {

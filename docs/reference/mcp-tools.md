@@ -821,7 +821,7 @@ What a whiteboard holds, in ONE read — read-only. `scene.shapes`: each shape's
 | `viewId`  | string | yes      | The whiteboard view's id (synap_list_views).                                        |
 | `frameId` | string | no       | Optional: only what this frame or artboard holds (a shape id from a previous read). |
 | `offset`  | number | no       | Skip this many shapes (use `scene.window.nextOffset`).                              |
-| `limit`   | number | no       | Shapes per read (default 40, max 200).                                              |
+| `limit`   | number | no       | Shapes per read (default 15, max 60).                                               |
 
 ## synap_list_sessions
 
