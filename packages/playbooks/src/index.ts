@@ -1258,6 +1258,22 @@ export function runnerChoices(
 }
 
 /**
+ * Does every choice of this runner land on the pod's own AI? No runner,
+ * `"self"` (a step done by the run's own runner), `"synap_ai"` and
+ * `{ synapAi }` do; an agent, a role or an engine does not. Read on a run of
+ * the pod's AI (a run handed to an agent is checked before). PURE and
+ * tolerant: a loose stage value is read as a runner.
+ */
+export function runsOnPodAi(runner: unknown): boolean {
+  return runnerChoices(runner as PlaybookRunner | null | undefined).every(
+    (c) =>
+      c === "self" ||
+      c === "synap_ai" ||
+      (typeof c === "object" && c !== null && "synapAi" in c)
+  );
+}
+
+/**
  * A step that IS another playbook, pinned at a version (founder decision,
  * proposal 72fdca0b). The run starts a child session following that playbook
  * at that version; the parent waits for it and takes back its outputs.

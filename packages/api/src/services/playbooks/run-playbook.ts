@@ -103,6 +103,7 @@ import { resolveRunner } from "../agent-dispatch/runner.js";
 import type { RunOn } from "@synap-core/types/agents";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
+import { refuseRunMissingTools } from "./run-tools-missing.js";
 import { readPlaybookProcess } from "../../schemas/playbook-process.js";
 import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
@@ -1418,6 +1419,16 @@ export async function runPlaybook(
     });
     if (refusal) throw new Error(refusal);
   }
+
+  // TOOLS — a run on the pod's AI whose tools lack what a step declares
+  // never starts (founder, 10 Nov 2026), before any session or run row.
+  await refuseRunMissingTools({
+    playbook,
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    handedToAgent: handOff !== null,
+    executor: runOn.executor,
+  });
 
   // STAGE WORKER: decide whether this fire starts anything, before any
   // session exists. A per_moment worker runs ONE session over its set and

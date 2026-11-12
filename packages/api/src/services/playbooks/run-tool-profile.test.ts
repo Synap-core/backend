@@ -124,7 +124,7 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
     expect(p.tools).not.toContain("create_entity");
   });
 
-  it("a long run (3+ stages) gets its floor (the core, the relation read, its own session tools) plus its declared run tools", async () => {
+  it("a long run (3+ stages) gets its floor (the core, the relation read, its own session tools, the run-history reads) plus its declared run tools", async () => {
     const p = await resolveRunToolProfile(
       input,
       deps({
