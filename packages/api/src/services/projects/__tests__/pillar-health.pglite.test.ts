@@ -1181,3 +1181,100 @@ describe("a placement that fails after the start was authorized undoes the birth
     }
   });
 });
+
+describe("a reverted uses link takes its pillar edges with it", () => {
+  // Rules out "the safe revert deletes the uses edge raw": the goals'
+  // advances edges to that space must go too, as with the unlink door.
+  it("undoing a recorded uses link removes the goals' advances to that space", async () => {
+    const { safeRevert } = await import("../../reversibility/safe-revert.js");
+    const uses = (
+      await q(
+        `select id from links where link_type = 'uses' and from_id = $1 and to_id = $2`,
+        [P, W_BRAND]
+      )
+    ).rows[0] as { id: string };
+    expect(uses).toBeDefined();
+    expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeDefined();
+    try {
+      const out = await safeRevert({
+        targets: [{ kind: "link", id: uses.id }],
+        mode: "all_or_nothing",
+        database: holder.db as never,
+      });
+      expect(JSON.stringify(out)).not.toMatch(/"skipped":\[\{/);
+      expect(await linkRow(P, W_BRAND, "uses")).toBeUndefined();
+      expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeUndefined();
+    } finally {
+      if (!(await linkRow(P, W_BRAND, "uses"))) {
+        await link("project", P, "workspace", W_BRAND, "uses");
+      }
+      if (!(await linkRow(G_PAUSED, W_BRAND, "advances"))) {
+        await link("track", G_PAUSED, "workspace", W_BRAND, "advances", {
+          primary: true,
+        });
+      }
+    }
+  });
+});
+
+describe("a sub-goal is never a pillar root", () => {
+  // Rules out "a sub-goal with its own primary pillar rolls up twice": G_SUB
+  // serves G_RUN (primary parent, Sales) and names Brand as ITS primary
+  // pillar. Its sessions count in Sales (through G_RUN's tree) only; in
+  // Brand it is listed as contributing and changes nothing.
+  it("lists it as contributing in its own pillar", async () => {
+    await link("track", G_SUB, "workspace", W_BRAND, "advances", {
+      primary: true,
+    });
+    try {
+      const read = await readProjectPillars(ME, P);
+      const sales = read!.pillars.find((p) => p.workspaceId === W_SALES)!;
+      const brand = read!.pillars.find((p) => p.workspaceId === W_BRAND)!;
+      expect(sales.health.sessions).toBe(4);
+      expect(brand.health.sessions).toBe(0);
+      expect(brand.health.state).toBe("stalled");
+      expect(brand.goals.find((g) => g.goalId === G_SUB)?.role).toBe(
+        "contributing"
+      );
+    } finally {
+      await q(
+        `delete from links where from_id = $1 and to_id = $2 and link_type = 'advances'`,
+        [G_SUB, W_BRAND]
+      );
+    }
+  });
+});
+
+describe("a pillar write refused midway removes nothing", () => {
+  // Rules out "unlisted pillars go first": a list whose non-primary entry the
+  // door refuses must leave the goal's current pillars in place.
+  it("keeps the old pillars when a listed one is refused", async () => {
+    const g = randomUUID();
+    await goal(g, P, "Keeps its pillar", "active");
+    await link("track", g, "workspace", W_BRAND, "advances", { primary: true });
+    try {
+      await expect(
+        applyGoalPlacement({
+          trackId: g,
+          input: {
+            pillars: [
+              { workspaceId: W_SALES, primary: true },
+              { workspaceId: W_UNUSED },
+            ],
+          },
+          userId: ME,
+        })
+      ).rejects.toThrow(PILLAR_NOT_USED_ERROR);
+      expect((await linkRow(g, W_BRAND, "advances"))?.metadata).toEqual({
+        primary: true,
+      });
+      expect(await linkRow(g, W_SALES, "advances")).toBeUndefined();
+    } finally {
+      await q(`delete from links where from_id = $1`, [g]);
+      await q(
+        `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+        [g]
+      );
+    }
+  });
+});
