@@ -46,7 +46,7 @@ import {
   parseEntityListSort,
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
-import { toolError } from "../tool-errors.js";
+import { fullUuidError, toolError } from "../tool-errors.js";
 import { fitReply } from "./fit-reply.js";
 
 import { parseEntityListFiltersInput } from "../../../utils/entity-list-filters-input.js";
@@ -630,6 +630,65 @@ export const readHandlers: McpHandlerMap = {
         callerCtx as Parameters<typeof readFlowOf>[1]
       )
     );
+  },
+  /**
+   * THE board read — the twin of Hub `GET /whiteboards/:viewId/scene`: both
+   * call `readBoardScene`. A failed read is a tool error naming its `reason`,
+   * never an empty board. Shape and arrow text is what anyone on the board
+   * wrote, so it reaches the model fenced as untrusted data.
+   */
+  synap_read_board: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const viewId = typeof args.viewId === "string" ? args.viewId.trim() : "";
+    if (!viewId)
+      return toolError(
+        `Tool '${toolName}': viewId is required: the whiteboard view's id (synap_list_views).`
+      );
+    const badId = fullUuidError(toolName, "viewId", viewId);
+    if (badId) return badId;
+    const num = (v: unknown) =>
+      typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : undefined;
+    const frameId =
+      typeof args.frameId === "string" && args.frameId.trim()
+        ? args.frameId.trim()
+        : undefined;
+    const { readBoardScene, BoardSceneReadError } =
+      await import("../../../services/whiteboards/read-board-scene.js");
+    try {
+      const read = await readBoardScene({
+        viewId,
+        userId,
+        confinedWorkspaceId: keyWorkspaceId ?? null,
+        // Paged by default: a board's whole scene easily passes the reply cap.
+        window: {
+          ...(frameId ? { frameId } : {}),
+          offset: num(args.offset) ?? 0,
+          limit: Math.min(200, Math.max(1, num(args.limit) ?? 40)),
+        },
+      });
+      const fence =
+        "text on a whiteboard (anyone on the board may have written it)";
+      return ok({
+        ...read,
+        scene: {
+          ...read.scene,
+          shapes: read.scene.shapes.map((s) =>
+            s.text ? { ...s, text: untrusted(s.text, fence) } : s
+          ),
+          arrows: read.scene.arrows.map((a) =>
+            a.text ? { ...a, text: untrusted(a.text, fence) } : a
+          ),
+        },
+      });
+    } catch (err) {
+      if (err instanceof BoardSceneReadError) {
+        return toolError(
+          `Tool '${toolName}' could not read the board (reason: ${err.reason}): ${err.message}`
+        );
+      }
+      throw err;
+    }
   },
   synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;

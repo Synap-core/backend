@@ -119,6 +119,13 @@ const REFUSED = (reason: string): FencedReadDoor => ({
 const FLOW_OF = NARROWED("entity", []);
 
 /**
+ * The board read (`readBoardScene`): Hub `GET /whiteboards/:viewId/scene` and
+ * MCP `synap_read_board` call the same function, so they share this one
+ * declaration.
+ */
+const BOARD_SCENE = READS("view", "document", "entity");
+
+/**
  * ONE proposal by id: tRPC `proposals.get`, the row on the person's
  * visibility floor (`assertProposalVisibleTo`, no grant clause) with the names
  * of the objects it touches. MCP `synap_get_proposal` and Hub
@@ -967,6 +974,13 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // holding `channel.read` (the person's messaging consent, as the
   // conversations door that shows reach).
   [route("/channels/linkedin-reach/:id"), NARROWED("channel", [])],
+  // A board's content (`readBoardScene`, services/whiteboards/): the view row
+  // and its document's tldraw records (live room or stored file), floored on
+  // the person by the room's own predicate (`resolveDocumentRoomAccess`), not
+  // through a grant clause. The scene names entities (card ids, their titles
+  // as drawn), so `entity` is declared too. A pinned key is refused. Same as
+  // MCP `synap_read_board` (BOARD_SCENE).
+  [route("/whiteboards/:id/scene"), BOARD_SCENE],
 ];
 
 /**
@@ -984,6 +998,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_list_views: SEAMED,
   // Same door as `GET /flow` (FLOW_OF): the read narrows itself.
   synap_get_flow: FLOW_OF,
+  // Same door as `GET /whiteboards/:viewId/scene` (BOARD_SCENE).
+  synap_read_board: BOARD_SCENE,
   // Aggregate doors: the subjects they read.
   synap_ask: READS(
     "entity",
