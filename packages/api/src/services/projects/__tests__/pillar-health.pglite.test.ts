@@ -63,9 +63,22 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 // The goal doors' gate: a person's write is granted (governance has its own
-// suites); the agent path is not exercised here.
+// suites); an AGENT's write is proposed, and the gate data it would file is
+// kept so a test can approve it through the real executor.
+const gate = vi.hoisted(() => ({ filed: [] as Record<string, unknown>[] }));
 vi.mock("../../../utils/permission-check.js", () => ({
-  checkPermissionOrPropose: async () => ({ granted: true }),
+  checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
+    if (opts.agentUserId) {
+      gate.filed.push(opts);
+      return {
+        granted: false,
+        proposalId: `p-${gate.filed.length}`,
+        reviewPath: "/open/p",
+        reviewUrl: "https://pod/open/p",
+      };
+    }
+    return { granted: true };
+  },
   proposedMessageFor: (_t: string, fallback: string) => fallback,
 }));
 
@@ -958,5 +971,213 @@ describe("projects.get carries the pillars only when asked", () => {
     expect((asked.pillars as unknown[]).length).toBe(2);
     expect(asked).toHaveProperty("rootHealth.pillarsTotal", 2);
     expect(asked).toHaveProperty("mainGoal");
+  });
+});
+
+describe("an approved uses link replays through the edge door", () => {
+  // Rules out "the approval inserts the edge raw": an existing edge would be
+  // left as it was, so an approved purpose change would read green and
+  // write nothing.
+  it("an approved purpose change on an existing edge lands", async () => {
+    const { proposalExecRegistry } =
+      await import("../../../routers/proposals/execution-registry.js");
+    const { registerCatchAllExecutor } =
+      await import("../../../routers/proposals/executors/catch-all.js");
+    const { isRequestShapedProposalData } =
+      await import("@synap-core/types/proposals");
+    proposalExecRegistry._reset();
+    registerCatchAllExecutor();
+    const exec = proposalExecRegistry.resolveWildcard("nothing/matches-this")!;
+    const payload = {
+      requestId: "req-uses",
+      targetType: "link",
+      changeType: "create",
+      data: {
+        fromType: "project",
+        fromId: P,
+        toType: "workspace",
+        toId: W_SALES,
+        linkType: "uses",
+        metadata: { purpose: "Keep the clients" },
+      },
+    };
+    const result = await exec.execute({
+      proposal: {
+        id: randomUUID(),
+        targetType: "link",
+        targetId: P,
+        proposalType: "create",
+        workspaceId: null,
+        sessionId: null,
+        projectId: null,
+        agentUserId: "agent-x",
+        subjectUserId: ME,
+        sourceMessageId: null,
+        data: payload,
+      },
+      payload,
+      userId: ME,
+      input: { proposalId: randomUUID() },
+      ctx: {},
+      deps: {
+        db: holder.db,
+        isRequestShapedProposalData,
+        emitProposalReviewed: () => {},
+        reportProposalOutcome: () => {},
+      },
+    } as never);
+    expect(result).toMatchObject({ success: true });
+    expect((await linkRow(P, W_SALES, "uses"))?.metadata).toEqual({
+      purpose: "Keep the clients",
+    });
+    proposalExecRegistry._reset();
+  });
+});
+
+describe("an agent's placement, approved, lands through the real executors", () => {
+  // Rules out "the replay drops parentGoalId / pillars": the agent's start
+  // and update are proposals; approving each through the track executors
+  // writes the parent and the pillars.
+  it("start then update, each approved", async () => {
+    const { proposalExecRegistry } =
+      await import("../../../routers/proposals/execution-registry.js");
+    const { registerTrackExecutors } =
+      await import("../../../routers/proposals/executors/track.js");
+    proposalExecRegistry._reset();
+    registerTrackExecutors();
+    const deps = {
+      db: holder.db,
+      emitProposalReviewed: () => {},
+      reportProposalOutcome: () => {},
+    };
+    const approve = async (
+      key: string,
+      filed: Record<string, unknown>,
+      targetId: string
+    ) => {
+      const [targetType, proposalType] = key.split("/");
+      return proposalExecRegistry.resolve(key)!.execute({
+        proposal: {
+          id: randomUUID(),
+          targetType,
+          targetId,
+          proposalType,
+          workspaceId: null,
+          sessionId: null,
+          projectId: P,
+          agentUserId: "agent-x",
+          subjectUserId: ME,
+          sourceMessageId: null,
+          data: {
+            requestId: "r",
+            targetType,
+            changeType: proposalType,
+            data: filed.data,
+          },
+        },
+        payload: {
+          requestId: "r",
+          targetType,
+          changeType: proposalType,
+          data: filed.data,
+        },
+        userId: ME,
+        input: { proposalId: randomUUID() },
+        ctx: {},
+        deps,
+      } as never);
+    };
+    gate.filed.length = 0;
+    const proposed = await startTrack({
+      projectId: P,
+      name: "Agent placed",
+      parentGoalId: G_OTHER_ROOT,
+      pillars: [{ workspaceId: W_SALES }],
+      actor: { userId: ME, agentUserId: "agent-x" },
+    });
+    expect(proposed.status).toBe("proposed");
+    expect(gate.filed).toHaveLength(1);
+    const startData = gate.filed[0]!.data as Record<string, unknown>;
+    expect(startData).toMatchObject({
+      parentGoalId: G_OTHER_ROOT,
+      pillars: [{ workspaceId: W_SALES }],
+    });
+    await approve("track/create", gate.filed[0]!, P);
+    const born = (
+      await q(`select id from project_tracks where name = 'Agent placed'`)
+    ).rows[0] as { id: string };
+    expect(born).toBeDefined();
+    expect((await linkRow(born.id, G_OTHER_ROOT, "serves"))?.metadata).toEqual({
+      primary: true,
+    });
+    expect((await linkRow(born.id, W_SALES, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+
+    gate.filed.length = 0;
+    const updated = await setTrackDirection({
+      trackId: born.id,
+      pillars: [{ workspaceId: W_BRAND }],
+      actor: { userId: ME, agentUserId: "agent-x" },
+    });
+    expect(updated.status).toBe("proposed");
+    expect(await linkRow(born.id, W_BRAND, "advances")).toBeUndefined();
+    await approve("track/update", gate.filed[0]!, born.id);
+    expect((await linkRow(born.id, W_BRAND, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+    expect(await linkRow(born.id, W_SALES, "advances")).toBeUndefined();
+    await q(`delete from links where from_id = $1`, [born.id]);
+    await q(
+      `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+      [born.id]
+    );
+    proposalExecRegistry._reset();
+  });
+});
+
+describe("a placement that fails after the start was authorized undoes the birth", () => {
+  // Rules out "the goal is born half-placed": the parent edge lands, then the
+  // pillar write fails (a store failure stands in for a race the pre-check
+  // cannot see); the goal and its edges are gone.
+  it("leaves no goal and no edge behind", async () => {
+    await client.exec(`
+      create or replace function refuse_sales_advances() returns trigger as $$
+      begin
+        if new.link_type = 'advances' and new.to_id = '${W_SALES}' then
+          raise exception 'store refused the pillar';
+        end if;
+        return new;
+      end $$ language plpgsql;
+      create trigger refuse_sales_advances before insert on links
+        for each row execute function refuse_sales_advances();`);
+    const servingBefore = await q(
+      `select id from links where link_type = 'serves' and to_id = $1 and from_type = 'track'`,
+      [G_OTHER_ROOT]
+    );
+    try {
+      await expect(
+        startTrack({
+          projectId: P,
+          name: "Half placed",
+          parentGoalId: G_OTHER_ROOT,
+          pillars: [{ workspaceId: W_SALES }],
+          actor: { userId: ME },
+        })
+      ).rejects.toThrow();
+      const born = await q(
+        `select id from project_tracks where name = 'Half placed'`
+      );
+      expect(born.rows).toHaveLength(0);
+      const serving = await q(
+        `select id from links where link_type = 'serves' and to_id = $1 and from_type = 'track'`,
+        [G_OTHER_ROOT]
+      );
+      expect(serving.rows).toEqual(servingBefore.rows);
+    } finally {
+      await client.exec(
+        `drop trigger refuse_sales_advances on links; drop function refuse_sales_advances();`
+      );
+    }
   });
 });
