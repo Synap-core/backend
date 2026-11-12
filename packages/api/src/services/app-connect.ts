@@ -1517,6 +1517,14 @@ export async function connectOAuthApp(args: {
       message: "The connection could not be approved.",
     });
   }
+  // What the person consented to is THIS document: an app that is not a
+  // Synap app acts as them only while its document is unchanged
+  // (`consentedDocumentHolds`). The consent screen was rendered from the
+  // cached document this authorization just validated.
+  const { currentDocumentSha256 } =
+    await import("../routers/oauth/app-client.js");
+  const documentSha256 = await currentDocumentSha256(args.oauthClientId);
+  if (documentSha256) await repo.setConsentedDocument(app.id, documentSha256);
   return { appId: app.id, publicId: app.publicId, proposalId: proposal.id };
 }
 
@@ -1696,6 +1704,8 @@ async function appOAuthAnswer(
 /** Why a Synap app's person token was refused, as the /token door says it. */
 const PERSON_TOKEN_REFUSALS = {
   not_a_person: "Only a person's connection can be used.",
+  reconsent:
+    "Connect this app again: it changed, or it was connected before apps acted as the person who connects them.",
   app_unavailable: "This app's connection was revoked.",
   nothing_left:
     "Nothing you approved for this app is in a space you can still reach.",

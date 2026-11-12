@@ -183,6 +183,9 @@ const LOOKALIKE = `https://content-studio.synap.live.evil.com${DOC}`;
 /** A Synap app that asks to read decisions everywhere (decision e1b59d38 B). */
 const DEVPLANE = `https://devplane.synap.live${DOC}`;
 const DECISIONS = "entity.decision.read";
+/** The cached document's hash (`oauth_clients.metadata_sha256`), v1. */
+const docSha = (clientId: string, version = 1) =>
+  createHash("sha256").update(`${clientId}#${version}`).digest("hex");
 const callbackOf = (clientId: string) =>
   `${new URL(clientId).origin}/api/synap/callback`;
 
@@ -313,9 +316,9 @@ beforeAll(async () => {
   for (const clientId of [VERIFIED, UNVERIFIED, LOOKALIKE]) {
     await q(
       `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
-         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
-       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', now())`,
-      [clientId, [callbackOf(clientId)], DECLARED[clientId]]
+         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', $4, now())`,
+      [clientId, [callbackOf(clientId)], DECLARED[clientId], docSha(clientId)]
     );
   }
   registerProposalExecutor({
@@ -754,6 +757,83 @@ describe("an app that is not a Synap app acts as the person, and never decides t
     const permissions = identity.grant!.scopes.flatMap((g) => g.permissions);
     expect(permissions).toContain(CREATE);
     expect(permissions).not.toContain(APPROVE);
+  });
+});
+
+// ─── bound to the document the person consented to ──────────────────────────
+
+describe("an app that is not a Synap app is bound to the document the person consented to", () => {
+  const PAIRS = [
+    { permission: READ, workspaceId: CONTENT },
+    { permission: CREATE, workspaceId: CONTENT },
+  ];
+  const setDoc = (clientId: string, version: number) =>
+    q(`update oauth_clients set metadata_sha256 = $2 where client_id = $1`, [
+      clientId,
+      docSha(clientId, version),
+    ]);
+
+  it("consent records the document's hash on the person's connection", async () => {
+    await connect(OWNER, UNVERIFIED, PAIRS);
+    const conn = await q<{ metadata: Record<string, unknown> }>(
+      `select metadata from apps where owner_user_id = $1 and oauth_client_id = $2 and revoked_at is null`,
+      [OWNER, UNVERIFIED]
+    );
+    expect(conn.rows[0]!.metadata.consentedDocumentSha256).toBe(
+      docSha(UNVERIFIED)
+    );
+  });
+
+  it("its document changes: the live token is dead on its next request, a refresh is refused, and re-consenting restores it", async () => {
+    const body = await connect(OWNER, UNVERIFIED, PAIRS);
+    const row = await keyRow(body.access_token);
+    expect((await write(body.access_token, CONTENT)).decision).toMatchObject({
+      granted: true,
+    });
+    await setDoc(UNVERIFIED, 2);
+    try {
+      await expect(
+        resolveKeyIdentity({ id: row.id, userId: OWNER, linkedUserId: null })
+      ).rejects.toThrow(/sign in to the app again/);
+      const next = await refresh(body.refresh_token, UNVERIFIED);
+      expect(next.status).not.toBe(200);
+      expect(next.body.synap_acts_as).toBeUndefined();
+      // The person sees the new document and consents again.
+      const again = await connect(OWNER, UNVERIFIED, PAIRS);
+      expect(again.synap_acts_as).toBe("person");
+      expect(
+        (await write(again.access_token, CONTENT)).decision
+      ).toMatchObject({ granted: true });
+    } finally {
+      await setDoc(UNVERIFIED, 1);
+      await connect(OWNER, UNVERIFIED, PAIRS);
+    }
+  });
+
+  it("a connection consented before 12 Nov (no recorded document) must be connected again", async () => {
+    const body = await connect(OWNER, LOOKALIKE, PAIRS);
+    await q(
+      `update apps set metadata = metadata - 'consentedDocumentSha256' where owner_user_id = $1 and oauth_client_id = $2`,
+      [OWNER, LOOKALIKE]
+    );
+    const next = await refresh(body.refresh_token, LOOKALIKE);
+    expect(next.status).not.toBe(200);
+    expect((await connect(OWNER, LOOKALIKE, PAIRS)).synap_acts_as).toBe(
+      "person"
+    );
+  });
+
+  it("a Synap app is not bound: Synap serves its document", async () => {
+    const body = await connect(OWNER, VERIFIED, TICKED);
+    await setDoc(VERIFIED, 2);
+    try {
+      expect((await write(body.access_token, CONTENT)).decision).toMatchObject({
+        granted: true,
+      });
+      expect((await refresh(body.refresh_token, VERIFIED)).status).toBe(200);
+    } finally {
+      await setDoc(VERIFIED, 1);
+    }
   });
 });
 

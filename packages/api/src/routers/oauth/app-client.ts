@@ -20,6 +20,7 @@ import { and, db, eq, inArray, isNull, type KeyGrant } from "@synap/database";
 import {
   apps,
   isPodWideReadPermission,
+  oauthClients,
   workspaces,
 } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
@@ -36,6 +37,7 @@ import {
 import {
   GRANT_ACTIONS,
   parsePermission,
+  patternMatches,
   QUALIFIED_GRANT_SUBJECTS,
 } from "@synap/governance-policy/grants";
 
@@ -119,8 +121,46 @@ export async function loadPersonTokenApp(publicId: string) {
     .limit(1);
   if (!app) return null;
   if (app.mode === "specific") return app;
-  if (app.mode === "oauth" && app.oauthClientId) return app;
+  if (
+    app.mode === "oauth" &&
+    app.oauthClientId &&
+    (await consentedDocumentHolds(app))
+  )
+    return app;
   return null;
+}
+
+/** The document hash the pod holds NOW for this client id, or null. */
+export async function currentDocumentSha256(
+  oauthClientId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ sha: oauthClients.metadataSha256 })
+    .from(oauthClients)
+    .where(eq(oauthClients.clientId, oauthClientId))
+    .limit(1);
+  return row?.sha ?? null;
+}
+
+/**
+ * May this pod app connection still act as its person, as far as its
+ * DOCUMENT goes? A Synap app: always (Synap serves its document, decision
+ * 2026-10-22). Any other app: only while the client-id document the pod holds
+ * hashes to the one the person consented to (`metadata
+ * .consentedDocumentSha256`, recorded by `connectOAuthApp`). A changed
+ * document, or a connection made before 12 Nov 2026 (consented as an
+ * ask-first agent, so never to "saved as you"), has the person connect it
+ * again. Re-read on every request (`loadPersonTokenApp`).
+ */
+export async function consentedDocumentHolds(app: {
+  oauthClientId: string | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<boolean> {
+  if (!app.oauthClientId) return false;
+  if (isSynapApp(app.oauthClientId)) return true;
+  const consented = (app.metadata ?? {})["consentedDocumentSha256"];
+  if (typeof consented !== "string" || !consented) return false;
+  return (await currentDocumentSha256(app.oauthClientId)) === consented;
 }
 
 /**
@@ -298,9 +338,16 @@ export function appGrantFingerprint(
   return createHash("sha256").update(pairs.join("\n")).digest("hex");
 }
 
-/** Does this permission let its holder approve or reject a proposal? */
+/**
+ * Does this permission let its holder decide proposals (approve or reject)?
+ * Matched with the grant matcher the approval door itself uses, so `*`,
+ * `proposal.*` and the review verbs are all caught (backend#984,
+ * `decidesProposals`).
+ */
 export function grantsDecision(pattern: string): boolean {
-  return patternGrants(pattern, "approve") || patternGrants(pattern, "reject");
+  return (["approve", "reject"] as const).some((action) =>
+    patternMatches(pattern, { subject: "proposal", action })
+  );
 }
 
 /** Does this permission pattern grant `verb` on anything? (grammar.ts) */

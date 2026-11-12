@@ -146,6 +146,7 @@ import {
   appSignInReach,
   intersectAppGrant,
   loadLiveApp,
+  consentedDocumentHolds,
   loadPersonTokenApp,
   narrowKeyGrant,
   personTokenInstanceId,
@@ -283,18 +284,21 @@ export type MintPodAppPersonTokenResult =
   | {
       ok: false;
       /**
-       * `not_a_person` — the connection's person is not a human; `app_unavailable` — the
+       * `not_a_person` — the connection's person is not a human;
+       * `reconsent` — an app that is not a Synap app whose document is not
+       * the one the person consented to (`consentedDocumentHolds`); `app_unavailable` — the
        * connection is gone, revoked, not this person's or approves nothing;
        * `nothing_left` — the approval ∩ the person's reach is empty.
        */
-      reason: "not_a_person" | "app_unavailable" | "nothing_left";
+      reason: "not_a_person" | "reconsent" | "app_unavailable" | "nothing_left";
     };
 
 /**
  * Mint the person's token for a SYNAP pod app connection (founder decision
  * 2026-10-22): reached ONLY from OAuth /token, at a code exchange or a
- * refresh, for a connection whose CIMD client_id `isSynapApp` (the caller
- * routes by `podAppActsAs`; re-checked here). `appId` is the person's own
+ * refresh, for any pod app connection (founder 2026-11-12; a non-Synap app
+ * only while its document is the one consented to, `consentedDocumentHolds`,
+ * else `reconsent`). `appId` is the person's own
  * connection row (mode 'oauth') — its `approved_requests` are what the person
  * consented to on the pod's screen. The token: held by the person, no linked
  * user, type `app_person`, the connection's key slot, `expiresAt`, grant =
@@ -320,10 +324,19 @@ export async function mintPodAppPersonToken(args: {
     return { ok: false, reason: "not_a_person" };
   }
   const [row] = await db
-    .select({ publicId: apps.publicId })
+    .select({
+      publicId: apps.publicId,
+      oauthClientId: apps.oauthClientId,
+      metadata: apps.metadata,
+    })
     .from(apps)
     .where(eq(apps.id, args.appId))
     .limit(1);
+  // Its document changed since the person consented, or it was connected
+  // before 12 Nov 2026 (as an ask-first agent): they connect it again.
+  if (row && !(await consentedDocumentHolds(row))) {
+    return { ok: false, reason: "reconsent" };
+  }
   const app = row ? await loadPersonTokenApp(row.publicId) : null;
   if (
     !app ||
