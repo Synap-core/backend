@@ -1712,8 +1712,9 @@ const STATUS_LABEL_ROWS = {
   // ⚠️ OVERLOADED TOKEN — deliberately rendered as the neutral word.
   // `stale` means three different things in this product: a session the reaper
   // gave up on (progress), a sync that is out of date (freshness), and a broken
-  // renderer binding. "Stalled" imposes the progress reading; "Out of date"
-  // imposes the freshness one. Both are wrong somewhere, so this table — which
+  // renderer binding. "Stalled" imposes the progress reading (and is the
+  // pillar-health word of the separate `stalled` token); "Out of date" imposes
+  // the freshness one. Both are wrong somewhere, so this table — which
   // is GLOBAL and cannot know the domain — stays neutral. A surface that knows
   // its domain should supply its own word (the data-sync and renderer surfaces
   // already do) rather than call this resolver.
@@ -1858,10 +1859,10 @@ const STATUS_LABEL_ROWS = {
   // first, and the words of its goal counts (the pillar's bar legend).
   no_active_goal: "No active goal",
   stalled: "Stalled",
-  unproven: "Unproven",
+  unproven: "Not validated yet",
   needs_attention: "Needs attention",
   moving: "Moving",
-  unvalidated_bet: "Unvalidated bet",
+  unvalidated_bet: "Not validated",
   validated: "Validated",
 } satisfies Readonly<Record<string, string>>;
 

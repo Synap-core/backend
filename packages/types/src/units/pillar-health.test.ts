@@ -162,6 +162,43 @@ describe("derivePillarHealth — worst-of, with counts, never an average", () =>
   });
 });
 
+describe("reasons: plain words, the first sentence names the state", () => {
+  // The UI shows the reason's first sentence (up to the first ";" or ".").
+  const first = (r: string) => r.split(/[.;]/)[0]!;
+  it("no retired words, and each state starts differently", () => {
+    const cases = [
+      derivePillarHealth([], false),
+      derivePillarHealth([{ status: "ready" }], false),
+      derivePillarHealth([{ status: "completed", verdict: "met" }], false),
+      derivePillarHealth([paused], false),
+      derivePillarHealth([bet], false),
+      derivePillarHealth([active(), bet, paused], false),
+      derivePillarHealth([active()], false),
+    ];
+    for (const h of cases) {
+      expect(h.reason).not.toMatch(/primary|\bbets?\b|unproven|unvalidated/i);
+    }
+    const byState = new Map<string, Set<string>>();
+    for (const h of cases) {
+      byState.set(
+        h.state,
+        (byState.get(h.state) ?? new Set()).add(first(h.reason))
+      );
+    }
+    // stalled and no_active_goal never share a first sentence.
+    const stalledFirst = [...byState.get("stalled")!];
+    for (const f of byState.get("no_active_goal")!) {
+      expect(stalledFirst).not.toContain(f);
+    }
+    expect(derivePillarHealth([], false).reason).toBe(
+      "No goal has this pillar as its main pillar."
+    );
+    expect(derivePillarHealth([bet, bet], false).reason).toBe(
+      "Only goals not validated yet are running (2)."
+    );
+  });
+});
+
 describe("the root and the order", () => {
   it("worst-of follows the declared order", () => {
     expect(worstPillarState("moving", "stalled")).toBe("stalled");
@@ -207,7 +244,8 @@ describe("words and marks: one door", () => {
       expect(mark.label).toBe(STATUS_LABELS[s]);
       expect(mark.tone === "success").toBe(s === "moving");
     }
-    expect(STATUS_LABELS.unvalidated_bet).toBe("Unvalidated bet");
+    expect(STATUS_LABELS.unvalidated_bet).toBe("Not validated");
+    expect(STATUS_LABELS.unproven).toBe("Not validated yet");
     expect(STATUS_LABELS.validated).toBe("Validated");
   });
 });

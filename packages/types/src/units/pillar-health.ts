@@ -233,30 +233,28 @@ export function derivePillarHealth(
     state = "no_active_goal";
     reason =
       counts.notStarted > 0
-        ? `No goal is running: ${plural(counts.notStarted, "goal has", "goals have")} not started.`
+        ? `No goal has started yet; ${plural(counts.notStarted, "goal", "goals")} not started.`
         : counts.validated > 0
-          ? `No goal is running: ${plural(counts.validated, "goal was", "goals were")} met.`
-          : "No goal names this pillar as its primary pillar.";
+          ? `No goal is running; ${plural(counts.validated, "goal", "goals")} met.`
+          : "No goal has this pillar as its main pillar.";
   } else if (counts.open === 0) {
     state = "stalled";
-    reason = `No goal is running; ${plural(counts.paused, "goal is", "goals are")} paused.`;
+    reason = `Every goal is paused; ${plural(counts.paused, "goal", "goals")} paused.`;
   } else if (counts.bet === counts.open) {
     state = "unproven";
-    reason = `Only unvalidated bets are running (${plural(counts.bet, "bet", "bets")}).`;
+    reason = `Only goals not validated yet are running (${counts.bet}).`;
   } else if (counts.paused > 0 || counts.bet > 0) {
     state = "needs_attention";
     const parts = [
       ...(counts.paused > 0
         ? [`${plural(counts.paused, "goal", "goals")} paused`]
         : []),
-      ...(counts.bet > 0
-        ? [`${plural(counts.bet, "unvalidated bet", "unvalidated bets")}`]
-        : []),
+      ...(counts.bet > 0 ? [`${counts.bet} not validated yet`] : []),
     ];
-    reason = `${plural(counts.open, "goal", "goals")} running; ${parts.join(", ")}.`;
+    reason = `Some goals need attention; ${plural(counts.open, "goal", "goals")} running, ${parts.join(", ")}.`;
   } else {
     state = "moving";
-    reason = `${plural(counts.open, "goal", "goals")} running, none paused, none an unvalidated bet.`;
+    reason = `Goals are moving; ${plural(counts.open, "goal", "goals")} running, none paused, none not validated yet.`;
   }
   return { state, counts, stale, reason };
 }
