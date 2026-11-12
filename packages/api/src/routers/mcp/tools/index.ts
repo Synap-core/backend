@@ -256,7 +256,7 @@ const TRACK_PLACEMENT_PROPERTIES = {
   pillars: {
     type: "array",
     description:
-      "Project spaces it advances (added); one primary, default the first.",
+      "Project spaces it advances, the whole list; one primary, default the first.",
     items: {
       type: "object",
       required: ["workspaceId"],

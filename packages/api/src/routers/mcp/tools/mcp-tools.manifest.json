@@ -5711,7 +5711,7 @@
           },
           "pillars": {
             "type": "array",
-            "description": "Project spaces it advances (added); one primary, default the first.",
+            "description": "Project spaces it advances, the whole list; one primary, default the first.",
             "items": {
               "type": "object",
               "required": ["workspaceId"],
@@ -6345,7 +6345,7 @@
           },
           "pillars": {
             "type": "array",
-            "description": "Project spaces it advances (added); one primary, default the first.",
+            "description": "Project spaces it advances, the whole list; one primary, default the first.",
             "items": {
               "type": "object",
               "required": ["workspaceId"],

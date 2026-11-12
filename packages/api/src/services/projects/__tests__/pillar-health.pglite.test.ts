@@ -84,8 +84,15 @@ import {
   PRIMARY_PILLAR_TAKEN_ERROR,
   writeDependencyLink,
 } from "../../links/dependency-links.js";
-import { applyGoalPlacement } from "../../tracks/goal-placement.js";
-import { setTrackDirection, startTrack } from "../../tracks/tracks-service.js";
+import {
+  applyGoalPlacement,
+  PARENT_OTHER_PROJECT_ERROR,
+} from "../../tracks/goal-placement.js";
+import {
+  applyTrackDirection,
+  setTrackDirection,
+  startTrack,
+} from "../../tracks/tracks-service.js";
 import { assertMainGoal } from "../update-project.js";
 import {
   readGoalGroupWork,
@@ -469,7 +476,7 @@ describe("goal placement — where a goal sits", () => {
     expect((await linkRow(g, G_RUN, "serves"))?.metadata).toEqual({});
   });
 
-  it("makes the first pillar primary when none is named; refuses an unused space", async () => {
+  it("makes the first pillar primary when none is named; the list replaces; refuses an unused space", async () => {
     const g = randomUUID();
     await goal(g, P, "Placed pillars", "active");
     await applyGoalPlacement({
@@ -482,7 +489,25 @@ describe("goal placement — where a goal sits", () => {
     expect((await linkRow(g, W_BRAND, "advances"))?.metadata).toEqual({
       primary: true,
     });
-    expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({});
+    expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({
+      primary: false,
+    });
+    // Rules out "pillars are added": the list is the whole set.
+    await applyGoalPlacement({
+      trackId: g,
+      input: { pillars: [{ workspaceId: W_SALES }] },
+      userId: ME,
+    });
+    expect(await linkRow(g, W_BRAND, "advances")).toBeUndefined();
+    expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+    await applyGoalPlacement({
+      trackId: g,
+      input: { pillars: [] },
+      userId: ME,
+    });
+    expect(await linkRow(g, W_SALES, "advances")).toBeUndefined();
     await expect(
       applyGoalPlacement({
         trackId: g,
@@ -495,6 +520,78 @@ describe("goal placement — where a goal sits", () => {
 });
 
 describe("the goal doors carry the placement", () => {
+  // Rules out "a refused placement still writes the goal's columns": G_SUB
+  // serves G_RUN, so G_RUN serving G_SUB would close a loop.
+  it("an update whose placement is refused changes nothing", async () => {
+    const before = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    await expect(
+      setTrackDirection({
+        trackId: G_RUN,
+        direction: "A new heading",
+        parentGoalId: G_SUB,
+        actor: { userId: ME },
+      })
+    ).rejects.toThrow();
+    const after = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    expect(after.rows).toEqual(before.rows);
+    expect(await linkRow(G_RUN, G_SUB, "serves")).toBeUndefined();
+  });
+
+  // The same on the replay path (an approved proposal): the placement is
+  // re-checked before the columns are written.
+  it("an approved update whose placement is now refused changes nothing", async () => {
+    const before = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    const track = (
+      await q(`select * from project_tracks where id = $1`, [G_RUN])
+    ).rows[0];
+    const project = (await q(`select * from projects where id = $1`, [P]))
+      .rows[0];
+    const camel = (row: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(row).map(([k, v]) => [
+          k.replace(/_([a-z])/g, (_m, c: string) => c.toUpperCase()),
+          v,
+        ])
+      );
+    await expect(
+      applyTrackDirection(
+        camel(track as Record<string, unknown>) as never,
+        camel(project as Record<string, unknown>) as never,
+        { direction: "Replayed heading", parentGoalId: G_SUB },
+        { userId: ME }
+      )
+    ).rejects.toThrow();
+    const after = await q(
+      `select direction from project_tracks where id = $1`,
+      [G_RUN]
+    );
+    expect(after.rows).toEqual(before.rows);
+  });
+
+  it("refuses a parent goal of another project before anything is started", async () => {
+    await expect(
+      startTrack({
+        projectId: P,
+        name: "Wrong parent",
+        parentGoalId: G_ELSEWHERE,
+        actor: { userId: ME },
+      })
+    ).rejects.toThrow(PARENT_OTHER_PROJECT_ERROR);
+    const born = await q(
+      `select id from project_tracks where name = 'Wrong parent'`
+    );
+    expect(born.rows).toHaveLength(0);
+  });
+
   it("a person's start writes the parent and the pillars with the goal", async () => {
     const started = await startTrack({
       projectId: P,
@@ -514,7 +611,9 @@ describe("the goal doors carry the placement", () => {
     expect((await linkRow(id, W_BRAND, "advances"))?.metadata).toEqual({
       primary: true,
     });
-    expect((await linkRow(id, W_SALES, "advances"))?.metadata).toEqual({});
+    expect((await linkRow(id, W_SALES, "advances"))?.metadata).toEqual({
+      primary: false,
+    });
     // An update that only places the goal moves the primary pillar.
     const updated = await setTrackDirection({
       trackId: id,
