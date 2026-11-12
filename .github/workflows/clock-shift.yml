@@ -1,0 +1,91 @@
+name: Clock shift
+
+# NIGHTLY SHIFTED-CLOCK RUN. Finds calendar time bombs months before they go
+# red: a test that hard-codes a date and reads the real clock passes today and
+# fails on a fixed day with no code change (hold.test.ts, fixed in #996, held
+# main red ~4 h; grants/holder.test.ts was next). This job runs the test files
+# that contain a 2026+ date literal with `new Date()` / `Date.now()` moved
+# forward: +45 days every night, and +400 days as well on Sundays.
+#
+# NOT a gate. It triggers on `schedule` and `workflow_dispatch` ONLY (never
+# pull_request, push or merge_group), so it never feeds a required check, the
+# merge queue, or red-main. A red run is the signal: a scheduled failure emails
+# the repo's watchers and shows on the Actions tab; the failing files are in the
+# job summary. Only a file that PASSES unshifted and FAILS shifted is reported
+# (scripts/ci/clock-shift.mjs `classify`): a file that fails at +0 too is not a
+# time bomb.
+#
+# HOW: scripts/ci/clock-shift.mjs selects the files (git grep for a date
+# literal, derived, never listed), generates a wrapper vitest config per
+# package into $RUNNER_TEMP that imports the package's own config and adds
+# scripts/ci/clock-shift.setup.ts. No existing vitest config is touched.
+#
+# KNOWN GAPS (v1):
+#  - Only packages whose tests load with no database run (SUPPORTED_PACKAGES in
+#    the script). packages/api, packages/database, apps/api, apps/pod-admin and
+#    the rest are not covered.
+#  - A JS Date override does not move PGlite / Postgres `now()` inside SQL
+#    (HYPOTHESIS, untested), so a bomb that lives in SQL time is invisible.
+#  - vi.useFakeTimers() tests pin their own clock and are unaffected.
+#  - Reporting is the job summary and the failing job; nothing is posted to
+#    the pod (no secret is used here).
+
+on:
+  schedule:
+    # 03:17 UTC: clear of the 18:30 UTC release nightly and the :00/:30 marks.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days to shift the clock (empty = the schedule's own: 45, plus 400 on Sundays)"
+        required: false
+        default: ""
+      packages:
+        description: "Comma-separated package dirs, e.g. packages/types (empty = all supported)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clock-shift
+  cancel-in-progress: false
+
+jobs:
+  shifted:
+    name: Shifted clock
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Monorepo layout + dependencies
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+
+      - name: Run the shifted clock
+        env:
+          INPUT_DAYS: ${{ inputs.days }}
+          INPUT_PACKAGES: ${{ inputs.packages }}
+        run: |
+          set -uo pipefail
+          if [ -n "${INPUT_DAYS}" ]; then
+            days_list="${INPUT_DAYS}"
+          elif [ "$(date -u +%u)" = "7" ]; then
+            days_list="45 400"
+          else
+            days_list="45"
+          fi
+          status=0
+          for d in ${days_list}; do
+            case "$d" in ''|*[!0-9]*) echo "::error::days must be a whole number: $d"; exit 2 ;; esac
+            node scripts/ci/clock-shift.mjs run --days "$d" --packages "${INPUT_PACKAGES}" || status=1
+          done
+          exit $status
