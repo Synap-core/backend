@@ -71,6 +71,7 @@ import {
   type EntityDiffField,
 } from "../../utils/entity-property-diff.js";
 import { SESSION_UNDO_COLUMNS } from "../focus-sessions/session-undo.js";
+import { removeProjectPillarEdges } from "../../utils/project-workspace.js";
 import { documentOwnedByAnotherObject } from "../entity-body/document-ownership.js";
 
 export type RevertTarget =
@@ -1113,9 +1114,25 @@ async function apply(
         .set({ status: "archived", updatedAt: now })
         .where(eq(projects.id, target.id));
       return;
-    case "link":
-      await tx.delete(links).where(eq(links.id, target.id));
+    case "link": {
+      const [removed] = await tx
+        .delete(links)
+        .where(eq(links.id, target.id))
+        .returning();
+      // A reverted `project --uses--> workspace` edge takes the project's
+      // goals' pillar edges to that space with it, as the unlink door does.
+      if (
+        removed?.linkType === "uses" &&
+        removed.fromType === "project" &&
+        removed.toType === "workspace"
+      ) {
+        await removeProjectPillarEdges(tx, {
+          projectId: removed.fromId,
+          workspaceId: removed.toId,
+        });
+      }
       return;
+    }
     case "row_patch": {
       // `inspectRowPatch` already refused a record naming a column outside
       // the allowlist, so every key written here is one an update writes.

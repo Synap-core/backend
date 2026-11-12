@@ -247,18 +247,10 @@ export async function unlinkProjectFromWorkspace(
   // always a proposal). Otherwise a stale primary pillar would block a goal
   // from naming a new one. Each removed edge emits `link.delete.completed`.
   if (removed.length > 0) {
-    const advances = await db
-      .delete(links)
-      .where(
-        and(
-          eq(links.linkType, "advances"),
-          eq(links.fromType, "track"),
-          eq(links.toType, "workspace"),
-          eq(links.toId, args.workspaceId),
-          drizzleSql`${links.fromId} IN (SELECT ${projectTracks.id}::text FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, args.projectId)})`
-        )
-      )
-      .returning();
+    const advances = await removeProjectPillarEdges(db, {
+      projectId: args.projectId,
+      workspaceId: args.workspaceId,
+    });
     for (const row of advances) {
       recordLinkMutation("delete", row, args.userId);
     }
@@ -432,4 +424,31 @@ export async function listProjectsUsingWorkspaces(
     }
   }
   return result;
+}
+
+/**
+ * THE cascade of a removed `project --uses--> workspace` edge: the project's
+ * goals' `advances` edges to that space go too (a space the project no longer
+ * uses is no pillar). Run by every door that removes a `uses` edge
+ * (`unlinkProjectFromWorkspace`, the safe revert of a recorded `uses` link),
+ * on the executor it is given (a transaction included). Returns the removed
+ * rows; emitting their `link.delete.completed` is the caller's (after its
+ * transaction).
+ */
+export async function removeProjectPillarEdges(
+  executor: Pick<Awaited<ReturnType<typeof getDb>>, "delete">,
+  args: { projectId: string; workspaceId: string }
+) {
+  return executor
+    .delete(links)
+    .where(
+      and(
+        eq(links.linkType, "advances"),
+        eq(links.fromType, "track"),
+        eq(links.toType, "workspace"),
+        eq(links.toId, args.workspaceId),
+        drizzleSql`${links.fromId} IN (SELECT ${projectTracks.id}::text FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, args.projectId)})`
+      )
+    )
+    .returning();
 }
