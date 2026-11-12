@@ -23,6 +23,7 @@ import {
   proposals,
 } from "@synap/database";
 import type { PlaybookRunStatus } from "@synap/database/schema";
+import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
 import { documentPatchPayload } from "../document-patch/document-edit-undo.js";
 
@@ -92,6 +93,9 @@ export async function settleGenerateRunOnDecision(
         )
       )
       .returning({ status: playbookRuns.status });
+    // A terminal child of an automation run settles its parent (never throws).
+    if (moved && move.terminal)
+      await settleParentAutomationRunFromChild({ playbookRunId: runId });
     return moved?.status ?? null;
   } catch (err) {
     logger.warn(

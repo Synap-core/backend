@@ -73,7 +73,8 @@ import {
 import { loadRunMethodParts, renderPlaybookMethod } from "./playbook-method.js";
 import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
+import { WORK_CLOCK } from "@synap-core/types/work-clock";
 import { oneShotRunSubjectIs } from "./run-subject.js";
 import { documentPatchPayload } from "../document-patch/document-edit-undo.js";
 import {
@@ -94,7 +95,7 @@ const logger = createLogger({ module: "generate-run" });
  * A one-shot run still `running` after this long is dead (its one call is
  * bounded far below it): the next run on its subject does not wait on it.
  */
-export const GENERATE_RUN_STALE_MS = 5 * 60_000;
+export const GENERATE_RUN_STALE_MS = WORK_CLOCK.live;
 
 /** The machine author of every proposal a one-shot run files. */
 export const GENERATE_RUN_AUTHOR = "system:generate-run" as const;
@@ -577,8 +578,9 @@ export async function executeGenerateRun(
 
   // The subject: what the prompt reads, and what answers the params it
   // declares it answers (`fillParamsFromSubject`, the run funnel's own fill).
-  // Read under the person's floor (a space they are in, not deleted): a
-  // subject they cannot see is not found, and nothing about it is quoted.
+  // Read under the person's floor (a space they are in, or a personal record
+  // of their own; not deleted): a subject they cannot see is not found, and
+  // nothing about it is quoted.
   const [subject] = await db
     .select({
       id: entities.id,
@@ -593,7 +595,11 @@ export async function executeGenerateRun(
       and(
         eq(entities.id, subjectId),
         isNull(entities.deletedAt),
-        userVisibleWhere(entities.workspaceId, input.userId)
+        ownerPrivateVisibleWhere(
+          entities.workspaceId,
+          entities.userId,
+          input.userId
+        )
       )
     )
     .limit(1);
