@@ -486,6 +486,23 @@ async function handleYjsRestore(req: IncomingMessage, res: ServerResponse) {
       return;
     }
 
+    // A room that failed to load the board takes no restore: it would be
+    // dropped at close (the room is never saved) while the caller announced
+    // "restored". Refuse it, saying why.
+    const failure = whiteboardLoadFailure(doc);
+    if (failure) {
+      res.writeHead(409, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: failure.message,
+          reason: "load-failed",
+          roomId,
+          applied: false,
+        })
+      );
+      return;
+    }
+
     const stateBuffer = Buffer.from(state, "base64");
     Y.applyUpdate(doc, new Uint8Array(stateBuffer));
     console.log(`[Bridge] Restored Yjs state for room: ${roomId}`);

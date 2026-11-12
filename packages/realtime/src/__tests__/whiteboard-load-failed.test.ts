@@ -79,6 +79,7 @@ import {
 } from "../yjs-server.js";
 import { whiteboardLoadFailure } from "../whiteboard-room-state.js";
 import { roomMeta, ROOM_META_KEYS } from "../document-room.js";
+import { StorageObjectNotFoundError } from "@synap/storage/interface";
 
 type Persistence = {
   bindState: (name: string, doc: Y.Doc) => Promise<void>;
@@ -450,6 +451,126 @@ describe("the bridge's state reply carries the SERVER flag, not a doc key", () =
       const ok = await read("whiteboard-healthy");
       expect(ok.loadFailed).toBeUndefined();
       expect(typeof ok.state).toBe("string");
+    } finally {
+      await new Promise<void>((r) => http.close(() => r()));
+    }
+  });
+});
+
+describe("a DATABASE error while loading a whiteboard room flags it on the server too", () => {
+  it("findDocument throws: flagged, sockets told load-failed, updates dropped, nothing uploaded once the DB is back", async () => {
+    mocks.findDocument.mockRejectedValueOnce(
+      new Error("connection terminated")
+    );
+    const s = server();
+    const doc = roomDoc();
+    await s.persistence.bindState(ROOM, doc);
+    expect(whiteboardLoadFailed(doc)).toBe(true);
+    expect(roomMeta(doc).has(ROOM_META_KEYS.loadError)).toBe(false);
+
+    const editor = fakeSocket("edit");
+    s.initSyncListeners(editor, doc);
+    expect(accessEmits(editor)).toEqual([
+      ["yjs-access", { access: "read", reason: "load-failed" }],
+    ]);
+    editor.handlers.get("sync-update")!(clientShape("shape:new"));
+    const answer = fakeSocket("edit");
+    s.startSynchronization(answer, doc);
+    const step1 = answer.emits.find(([e]) => e === "sync-step-1")!;
+    (step1[2] as (u: Uint8Array) => void)(clientShape("shape:idb"));
+    expect(doc.getMap(`tl_map_${BOARD}`).size).toBe(0);
+
+    // The DB is back (beforeEach's findDocument): the save still refuses.
+    await s.persistence.writeState(ROOM, doc);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled(); // the stored board was never even read
+  });
+});
+
+describe("only a definite missing KEY is an empty board", () => {
+  it.each([
+    [
+      "a bare HTTP 404 (a proxy while MinIO restarts)",
+      Object.assign(new Error("404"), { $metadata: { httpStatusCode: 404 } }),
+    ],
+    [
+      "NoSuchBucket",
+      Object.assign(new Error("bucket"), {
+        name: "NoSuchBucket",
+        $metadata: { httpStatusCode: 404 },
+      }),
+    ],
+    [
+      "a HEAD-style NotFound",
+      Object.assign(new Error("nf"), {
+        name: "NotFound",
+        $metadata: { httpStatusCode: 404 },
+      }),
+    ],
+  ])(
+    "%s → a FAILED load: flagged, the first stroke never uploaded",
+    async (_n, err) => {
+      mocks.download.mockRejectedValue(err);
+      const s = server();
+      const doc = roomDoc();
+      await s.persistence.bindState(ROOM, doc);
+      expect(whiteboardLoadFailed(doc)).toBe(true);
+      const editor = fakeSocket("edit");
+      s.initSyncListeners(editor, doc);
+      editor.handlers.get("sync-update")!(clientShape("shape:one"));
+      await s.persistence.writeState(ROOM, doc);
+      expect(mocks.upload).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    [
+      "S3 NoSuchKey (by Code)",
+      Object.assign(new Error("k"), { Code: "NoSuchKey" }),
+    ],
+    ["StorageObjectNotFoundError", new StorageObjectNotFoundError(KEY)],
+  ])("%s → an empty, editable board", async (_n, err) => {
+    mocks.download.mockRejectedValue(err);
+    const doc = roomDoc();
+    await server().persistence.bindState(ROOM, doc);
+    expect(whiteboardLoadFailed(doc)).toBe(false);
+  });
+});
+
+describe("the bridge refuses a restore into a room that failed to load", () => {
+  it("POST /yjs/:room/restore → 409 load-failed, nothing applied; a healthy room still restores", async () => {
+    const { createServer } = await import("http");
+    const { setupBridge } = await import("../bridge.js");
+    mocks.download.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    const failed = roomDoc();
+    await server().persistence.bindState(ROOM, failed);
+    const healthy = new Y.Doc();
+    const docs = new Map<string, Y.Doc>([
+      [ROOM, failed],
+      ["whiteboard-healthy", healthy],
+    ]);
+    const http = createServer();
+    setupBridge(new SocketIOServer(), http, () => ({ documents: docs }));
+    await new Promise<void>((r) => http.listen(0, "127.0.0.1", () => r()));
+    const port = (http.address() as { port: number }).port;
+    const state = Buffer.from(clientShape("shape:restored")).toString("base64");
+    const restore = (room: string) =>
+      fetch(`http://127.0.0.1:${port}/yjs/${room}/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state }),
+      });
+    try {
+      const refused = await restore(ROOM);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toMatchObject({
+        reason: "load-failed",
+        applied: false,
+      });
+      expect(failed.getMap(`tl_map_${BOARD}`).size).toBe(0);
+      const ok = await restore("whiteboard-healthy");
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toMatchObject({ applied: true });
     } finally {
       await new Promise<void>((r) => http.close(() => r()));
     }

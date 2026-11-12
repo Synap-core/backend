@@ -21,6 +21,13 @@
  * server-side disconnect, which the socket.io client does not auto-reconnect.
  * The room loads again once every socket has left (y-socket.io destroys the
  * doc). A safe retry is a follow-up: it needs the client to resync on heal.
+ *
+ * WHAT PEOPLE SEE MEANWHILE (until the client follow-up lands): the whiteboard
+ * client (synap-app `whiteboard/hooks/room-access.ts`) reads only `access`
+ * from `yjs-access`, not `reason`, so a failed room shows an EMPTY, READ-ONLY
+ * board, with no "could not load" wording and nothing telling anyone to close
+ * the board. It stays that way until EVERY tab that has the board open closes
+ * it; only then does the next open load the board again.
  */
 
 import type * as Y from "yjs";

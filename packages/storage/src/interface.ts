@@ -109,26 +109,29 @@ export class StorageObjectNotFoundError extends Error {
 }
 
 /**
- * Is `err` a definite "the object does not exist", whatever the provider?
+ * Is `err` a definite "this KEY names no object", whatever the provider?
  * `StorageObjectNotFoundError` (the local provider, stream downloads), or the
- * raw S3 error a MinIO / R2 `downloadBuffer` lets through (`NoSuchKey`,
- * `NotFound`, an HTTP 404). Anything else (a network failure, a timeout) is
- * NOT "missing" and must never be read as an empty object.
+ * S3 `NoSuchKey` a MinIO / R2 `GetObject` throws for a missing key (its error
+ * `name` or `Code`). NARROW ON PURPOSE: a bare HTTP 404, `NotFound` (a HEAD
+ * reply, no code) or `NoSuchBucket` also come from a missing bucket or a proxy
+ * in front of S3 while it restarts, and a reader that took those for "empty"
+ * would let a first stroke overwrite a board that exists. Anything else is NOT
+ * "missing" and must never be read as an empty object.
+ *
+ * Two older, wider copies are left as they are, with their own tests:
+ * `@synap/api` `file-upload-presign.ts` `isNotFound` serves a HEAD
+ * (`getMetadata`), whose not-found carries no code; `s3-stream-download.ts`
+ * `isNotFound` turns a GetObject `NotFound` or bare 404 into a
+ * `StorageObjectNotFoundError`, so a `downloadStream` caller's "missing" is
+ * still WIDER than this one (narrowing it is a follow-up). The whiteboard
+ * readers (realtime `bindState` / `writeState`, the board read door) use
+ * `downloadBuffer`, which lets the raw S3 error through to this predicate.
  */
 export function isStorageObjectNotFound(err: unknown): boolean {
   if (err instanceof StorageObjectNotFoundError) return true;
   if (!err || typeof err !== "object") return false;
-  const e = err as {
-    name?: unknown;
-    Code?: unknown;
-    $metadata?: { httpStatusCode?: unknown };
-  };
-  return (
-    e.name === "NoSuchKey" ||
-    e.name === "NotFound" ||
-    e.Code === "NoSuchKey" ||
-    e.$metadata?.httpStatusCode === 404
-  );
+  const e = err as { name?: unknown; Code?: unknown };
+  return e.name === "NoSuchKey" || e.Code === "NoSuchKey";
 }
 
 /**

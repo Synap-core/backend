@@ -360,8 +360,14 @@ class DatabasePersistence {
       applyDocumentRoomPlan(ydoc, plan);
     } catch (error) {
       console.error(`[Yjs] Failed to load document ${roomName}:`, error);
-      // A room that failed to load must not look like an empty document.
-      markDocumentRoomLoadFailed(ydoc, "The document could not be loaded.");
+      // A room that failed to load must not look like an empty document. A
+      // whiteboard room is flagged on the SERVER (a doc key would be stripped
+      // by the first client update and the room saved over the real board).
+      if (roomName.startsWith("whiteboard-")) {
+        markWhiteboardLoadFailed(ydoc);
+      } else {
+        markDocumentRoomLoadFailed(ydoc, "The document could not be loaded.");
+      }
     }
   }
 
