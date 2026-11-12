@@ -21,6 +21,142 @@ import {
 } from "./_shared.js";
 import { canWrite, userPrincipal } from "../../../access/door.js";
 import { jsonGoverned } from "../proposal-response.js";
+import { z as zOpenapi } from "@hono/zod-openapi";
+import { registerOpenApi } from "./_codecs/_register.js";
+import { uuidParam } from "./_codecs/_openapi.js";
+import {
+  BOARD_SCENE_FAILURES,
+  BoardSceneReadError,
+  readBoardScene,
+} from "../../../services/whiteboards/read-board-scene.js";
+
+// ── GET /whiteboards/:viewId/scene: the documented wire ─────────────────────
+
+const PlacedBySchema = zOpenapi.object({
+  agentUserId: zOpenapi.string().optional(),
+  proposalId: zOpenapi.string().optional(),
+});
+const ArrowEndSchema = zOpenapi.object({
+  shapeId: zOpenapi.string().nullable(),
+  x: zOpenapi.number().nullable(),
+  y: zOpenapi.number().nullable(),
+  via: zOpenapi.enum(["binding", "legacy-terminal", "point"]),
+});
+const BoardSceneReadSchema = zOpenapi
+  .object({
+    viewId: zOpenapi.string(),
+    documentId: zOpenapi.string(),
+    workspaceId: zOpenapi.string().nullable(),
+    title: zOpenapi.string().nullable(),
+    source: zOpenapi.enum(["live", "stored", "new"]),
+    asOf: zOpenapi.string(),
+    access: zOpenapi.enum(["read", "edit"]),
+    legacyFormat: zOpenapi.literal(true).optional(),
+    scene: zOpenapi.object({
+      pages: zOpenapi.array(
+        zOpenapi.object({
+          id: zOpenapi.string(),
+          name: zOpenapi.string().nullable(),
+        })
+      ),
+      shapes: zOpenapi.array(
+        zOpenapi.object({
+          id: zOpenapi.string(),
+          type: zOpenapi.string(),
+          parentId: zOpenapi.string().nullable(),
+          pageId: zOpenapi.string().nullable(),
+          frameId: zOpenapi.string().nullable(),
+          x: zOpenapi.number(),
+          y: zOpenapi.number(),
+          w: zOpenapi.number().nullable(),
+          h: zOpenapi.number().nullable(),
+          rotation: zOpenapi.number(),
+          title: zOpenapi.string().optional(),
+          text: zOpenapi.string().optional(),
+          textTruncated: zOpenapi.literal(true).optional(),
+          refs: zOpenapi
+            .object({
+              entityId: zOpenapi.string().optional(),
+              entityType: zOpenapi.string().optional(),
+              viewId: zOpenapi.string().optional(),
+              viewType: zOpenapi.string().optional(),
+              cellInstanceId: zOpenapi.string().optional(),
+              cellKey: zOpenapi.string().optional(),
+              url: zOpenapi.string().optional(),
+            })
+            .optional(),
+          artboard: zOpenapi
+            .object({
+              presetId: zOpenapi.string().optional(),
+              pageIndex: zOpenapi.number().optional(),
+              outputWidth: zOpenapi.number().optional(),
+              outputHeight: zOpenapi.number().optional(),
+            })
+            .optional(),
+          placedBy: PlacedBySchema.optional(),
+          pending: zOpenapi.literal(true).optional(),
+        })
+      ),
+      arrows: zOpenapi.array(
+        zOpenapi.object({
+          id: zOpenapi.string(),
+          parentId: zOpenapi.string().nullable(),
+          pageId: zOpenapi.string().nullable(),
+          frameId: zOpenapi.string().nullable(),
+          start: ArrowEndSchema,
+          end: ArrowEndSchema,
+          text: zOpenapi.string().optional(),
+          relationId: zOpenapi.string().optional(),
+          graphSourced: zOpenapi.literal(true).optional(),
+          placedBy: PlacedBySchema.optional(),
+          pending: zOpenapi.literal(true).optional(),
+        })
+      ),
+      counts: zOpenapi.object({
+        records: zOpenapi.number(),
+        shapes: zOpenapi.number(),
+        arrows: zOpenapi.number(),
+        byType: zOpenapi.record(zOpenapi.string(), zOpenapi.number()),
+        skipped: zOpenapi.record(zOpenapi.string(), zOpenapi.number()),
+      }),
+      bounds: zOpenapi
+        .object({
+          x: zOpenapi.number(),
+          y: zOpenapi.number(),
+          w: zOpenapi.number(),
+          h: zOpenapi.number(),
+        })
+        .nullable(),
+      window: zOpenapi
+        .object({
+          frameId: zOpenapi.string().nullable(),
+          offset: zOpenapi.number(),
+          matched: zOpenapi.number(),
+          nextOffset: zOpenapi.number().nullable(),
+        })
+        .optional(),
+    }),
+  })
+  .openapi("BoardScene");
+const BoardSceneQuerySchema = zOpenapi.object({
+  frameId: zOpenapi.string().min(1).optional().openapi({
+    description:
+      "Only what this frame or artboard holds, at any depth (a shape id from the scene).",
+  }),
+  offset: zOpenapi.coerce.number().int().min(0).optional(),
+  limit: zOpenapi.coerce.number().int().min(1).max(500).optional(),
+});
+const BoardSceneErrorSchema = zOpenapi.object({
+  error: zOpenapi.string(),
+  reason: zOpenapi
+    .enum(
+      Object.keys(BOARD_SCENE_FAILURES) as [
+        keyof typeof BOARD_SCENE_FAILURES,
+        ...Array<keyof typeof BOARD_SCENE_FAILURES>,
+      ]
+    )
+    .optional(),
+});
 
 const BoardPlacementOptionsSchema = z.object({
   x: z.number().optional(),
@@ -118,6 +254,88 @@ const ProposePlacementsBodySchema = z.object({
 });
 
 export function registerWhiteboardsRoutes(app: HubHono) {
+  registerOpenApi(app, {
+    method: "get",
+    path: "/whiteboards/{viewId}/scene",
+    tags: ["Views"],
+    summary: "What a whiteboard holds: its shapes, arrows and frames",
+    description:
+      "The board's content as a scene (`readBoardScene`, the same function as MCP `synap_read_board`): per shape its tldraw type, page-space bounds, parent and frame, what it references (entityId, viewId, cellInstanceId, url) and its text; arrows with the shape each end is bound to and `relationId`; artboard preset and page; `placedBy` / `pending` marks; counts and a bounding box. Read from the open room's live document when the board is open (`source: live`), else from the saved file (`stored`, which lags an open room by up to ~10 s), or empty when never saved (`new`). Readable by whoever may join the board's room. `frameId` narrows to one frame or artboard and `offset`/`limit` page the shapes (`scene.window.nextOffset`); `counts` and `bounds` always describe the whole board. A failed read is an error with a `reason`, never an empty board.",
+    request: {
+      params: zOpenapi.object({ viewId: uuidParam }),
+      query: BoardSceneQuerySchema,
+    },
+    responses: {
+      200: { description: "Board scene", schema: BoardSceneReadSchema },
+      400: {
+        description: "Not a whiteboard / bad id",
+        schema: BoardSceneErrorSchema,
+      },
+      403: {
+        description: "Missing scope or key confined elsewhere",
+        schema: BoardSceneErrorSchema,
+      },
+      404: {
+        description: "No such board, or not visible to you",
+        schema: BoardSceneErrorSchema,
+      },
+      409: {
+        description: "The board has no content document",
+        schema: BoardSceneErrorSchema,
+      },
+      500: { description: "Internal error", schema: BoardSceneErrorSchema },
+      502: {
+        description: "The board's content could not be decoded",
+        schema: BoardSceneErrorSchema,
+      },
+      503: {
+        description: "The realtime server or storage did not answer",
+        schema: BoardSceneErrorSchema,
+      },
+    },
+  });
+
+  /**
+   * GET /whiteboards/:viewId/scene
+   *
+   * The governed READ door of a board's content (`readBoardScene`). Static
+   * siblings of `/whiteboards/:viewId/*` only; no `/:id` catch-all precedes it.
+   */
+  app.get("/whiteboards/:viewId/scene", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const viewId = requireUuidParam(c, "viewId");
+    if (viewId instanceof Response) return viewId;
+    const query = BoardSceneQuerySchema.safeParse(c.req.query());
+    if (!query.success) {
+      return c.json(
+        { error: query.error.issues.map((i) => i.message).join(", ") },
+        400
+      );
+    }
+    const userId = c.get("userId") as string;
+    try {
+      const read = await readBoardScene({
+        viewId,
+        userId,
+        confinedWorkspaceId:
+          (c.get("keyWorkspaceId") as string | null | undefined) ?? null,
+        window: query.data,
+      });
+      return c.json(read);
+    } catch (err) {
+      if (err instanceof BoardSceneReadError) {
+        return c.json({ error: err.message, reason: err.reason }, err.status);
+      }
+      logger.error({ err, viewId }, "whiteboard scene read failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
   /**
    * POST /whiteboards/:viewId/placements/propose
    *
@@ -280,9 +498,9 @@ export function registerWhiteboardsRoutes(app: HubHono) {
   /**
    * GET /whiteboards/:viewId/state
    *
-   * Returns semantic board state from what the backend knows (view metadata).
-   * Live shape state is maintained in the Yjs document accessed by connected
-   * clients and is not accessible server-side.
+   * Returns the board's metadata only (view row). Its CONTENT (shapes, arrows,
+   * frames, from the live room or the stored file) is read through
+   * `GET /whiteboards/:viewId/scene` (`readBoardScene`).
    */
   app.get("/whiteboards/:viewId/state", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {

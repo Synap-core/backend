@@ -4426,6 +4426,202 @@
         "required": ["kind"],
         "additionalProperties": {}
       },
+      "BoardScene": {
+        "type": "object",
+        "properties": {
+          "viewId": { "type": "string" },
+          "documentId": { "type": "string" },
+          "workspaceId": { "type": ["string", "null"] },
+          "title": { "type": ["string", "null"] },
+          "source": { "type": "string", "enum": ["live", "stored", "new"] },
+          "asOf": { "type": "string" },
+          "access": { "type": "string", "enum": ["read", "edit"] },
+          "legacyFormat": { "type": "boolean", "enum": [true] },
+          "scene": {
+            "type": "object",
+            "properties": {
+              "pages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": ["string", "null"] }
+                  },
+                  "required": ["id", "name"]
+                }
+              },
+              "shapes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "type": { "type": "string" },
+                    "parentId": { "type": ["string", "null"] },
+                    "pageId": { "type": ["string", "null"] },
+                    "frameId": { "type": ["string", "null"] },
+                    "x": { "type": "number" },
+                    "y": { "type": "number" },
+                    "w": { "type": ["number", "null"] },
+                    "h": { "type": ["number", "null"] },
+                    "rotation": { "type": "number" },
+                    "title": { "type": "string" },
+                    "text": { "type": "string" },
+                    "textTruncated": { "type": "boolean", "enum": [true] },
+                    "refs": {
+                      "type": "object",
+                      "properties": {
+                        "entityId": { "type": "string" },
+                        "entityType": { "type": "string" },
+                        "viewId": { "type": "string" },
+                        "viewType": { "type": "string" },
+                        "cellInstanceId": { "type": "string" },
+                        "cellKey": { "type": "string" },
+                        "url": { "type": "string" }
+                      }
+                    },
+                    "artboard": {
+                      "type": "object",
+                      "properties": {
+                        "presetId": { "type": "string" },
+                        "pageIndex": { "type": "number" },
+                        "outputWidth": { "type": "number" },
+                        "outputHeight": { "type": "number" }
+                      }
+                    },
+                    "placedBy": {
+                      "type": "object",
+                      "properties": {
+                        "agentUserId": { "type": "string" },
+                        "proposalId": { "type": "string" }
+                      }
+                    },
+                    "pending": { "type": "boolean", "enum": [true] }
+                  },
+                  "required": [
+                    "id",
+                    "type",
+                    "parentId",
+                    "pageId",
+                    "frameId",
+                    "x",
+                    "y",
+                    "w",
+                    "h",
+                    "rotation"
+                  ]
+                }
+              },
+              "arrows": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "parentId": { "type": ["string", "null"] },
+                    "pageId": { "type": ["string", "null"] },
+                    "frameId": { "type": ["string", "null"] },
+                    "start": {
+                      "type": "object",
+                      "properties": {
+                        "shapeId": { "type": ["string", "null"] },
+                        "x": { "type": ["number", "null"] },
+                        "y": { "type": ["number", "null"] },
+                        "via": {
+                          "type": "string",
+                          "enum": ["binding", "legacy-terminal", "point"]
+                        }
+                      },
+                      "required": ["shapeId", "x", "y", "via"]
+                    },
+                    "end": {
+                      "type": "object",
+                      "properties": {
+                        "shapeId": { "type": ["string", "null"] },
+                        "x": { "type": ["number", "null"] },
+                        "y": { "type": ["number", "null"] },
+                        "via": {
+                          "type": "string",
+                          "enum": ["binding", "legacy-terminal", "point"]
+                        }
+                      },
+                      "required": ["shapeId", "x", "y", "via"]
+                    },
+                    "text": { "type": "string" },
+                    "relationId": { "type": "string" },
+                    "graphSourced": { "type": "boolean", "enum": [true] },
+                    "placedBy": {
+                      "type": "object",
+                      "properties": {
+                        "agentUserId": { "type": "string" },
+                        "proposalId": { "type": "string" }
+                      }
+                    },
+                    "pending": { "type": "boolean", "enum": [true] }
+                  },
+                  "required": [
+                    "id",
+                    "parentId",
+                    "pageId",
+                    "frameId",
+                    "start",
+                    "end"
+                  ]
+                }
+              },
+              "counts": {
+                "type": "object",
+                "properties": {
+                  "records": { "type": "number" },
+                  "shapes": { "type": "number" },
+                  "arrows": { "type": "number" },
+                  "byType": {
+                    "type": "object",
+                    "additionalProperties": { "type": "number" }
+                  },
+                  "skipped": {
+                    "type": "object",
+                    "additionalProperties": { "type": "number" }
+                  }
+                },
+                "required": ["records", "shapes", "arrows", "byType", "skipped"]
+              },
+              "bounds": {
+                "type": ["object", "null"],
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" },
+                  "w": { "type": "number" },
+                  "h": { "type": "number" }
+                },
+                "required": ["x", "y", "w", "h"]
+              },
+              "window": {
+                "type": "object",
+                "properties": {
+                  "frameId": { "type": ["string", "null"] },
+                  "offset": { "type": "number" },
+                  "matched": { "type": "number" },
+                  "nextOffset": { "type": ["number", "null"] }
+                },
+                "required": ["frameId", "offset", "matched", "nextOffset"]
+              }
+            },
+            "required": ["pages", "shapes", "arrows", "counts", "bounds"]
+          }
+        },
+        "required": [
+          "viewId",
+          "documentId",
+          "workspaceId",
+          "title",
+          "source",
+          "asOf",
+          "access",
+          "scene"
+        ]
+      },
       "McpServer": {
         "type": "object",
         "properties": {
@@ -32272,6 +32468,241 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whiteboards/{viewId}/scene": {
+      "get": {
+        "tags": ["Views"],
+        "summary": "What a whiteboard holds: its shapes, arrows and frames",
+        "description": "The board's content as a scene (`readBoardScene`, the same function as MCP `synap_read_board`): per shape its tldraw type, page-space bounds, parent and frame, what it references (entityId, viewId, cellInstanceId, url) and its text; arrows with the shape each end is bound to and `relationId`; artboard preset and page; `placedBy` / `pending` marks; counts and a bounding box. Read from the open room's live document when the board is open (`source: live`), else from the saved file (`stored`, which lags an open room by up to ~10 s), or empty when never saved (`new`). Readable by whoever may join the board's room. `frameId` narrows to one frame or artboard and `offset`/`limit` page the shapes (`scene.window.nextOffset`); `counts` and `bounds` always describe the whole board. A failed read is an error with a `reason`, never an empty board.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "viewId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Only what this frame or artboard holds, at any depth (a shape id from the scene)."
+            },
+            "required": false,
+            "description": "Only what this frame or artboard holds, at any depth (a shape id from the scene).",
+            "name": "frameId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": ["integer", "null"], "minimum": 0 },
+            "required": false,
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Board scene",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BoardScene" }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a whiteboard / bad id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "live_unavailable",
+                        "live_unreadable",
+                        "stored_unavailable",
+                        "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope or key confined elsewhere",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "live_unavailable",
+                        "live_unreadable",
+                        "stored_unavailable",
+                        "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such board, or not visible to you",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "live_unavailable",
+                        "live_unreadable",
+                        "stored_unavailable",
+                        "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The board has no content document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "live_unavailable",
+                        "live_unreadable",
+                        "stored_unavailable",
+                        "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "live_unavailable",
+                        "live_unreadable",
+                        "stored_unavailable",
+                        "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The board's content could not be decoded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "live_unavailable",
+                        "live_unreadable",
+                        "stored_unavailable",
+                        "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realtime server or storage did not answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "live_unavailable",
+                        "live_unreadable",
+                        "stored_unavailable",
+                        "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
               }
             }
           }

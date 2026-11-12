@@ -109,6 +109,29 @@ export class StorageObjectNotFoundError extends Error {
 }
 
 /**
+ * Is `err` a definite "the object does not exist", whatever the provider?
+ * `StorageObjectNotFoundError` (the local provider, stream downloads), or the
+ * raw S3 error a MinIO / R2 `downloadBuffer` lets through (`NoSuchKey`,
+ * `NotFound`, an HTTP 404). Anything else (a network failure, a timeout) is
+ * NOT "missing" and must never be read as an empty object.
+ */
+export function isStorageObjectNotFound(err: unknown): boolean {
+  if (err instanceof StorageObjectNotFoundError) return true;
+  if (!err || typeof err !== "object") return false;
+  const e = err as {
+    name?: unknown;
+    Code?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  return (
+    e.name === "NoSuchKey" ||
+    e.name === "NotFound" ||
+    e.Code === "NoSuchKey" ||
+    e.$metadata?.httpStatusCode === 404
+  );
+}
+
+/**
  * The object is larger than the reader allowed. `size` is the stored length
  * when the refusal came before reading, else the bytes seen when the cap
  * passed.

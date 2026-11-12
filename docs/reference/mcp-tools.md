@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 120 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 121 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -47,6 +47,7 @@ The pod's MCP server lists 120 tools. A new agent key lists the `entry` tools; t
 | [`synap_ask_person`](#synap_ask_person)                                   | Ask the person                    | entry        | no        |
 | [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
 | [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
+| [`synap_read_board`](#synap_read_board)                                   | Read a whiteboard                 | read         | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
 | [`synap_get_work_release`](#synap_get_work_release)                       | Get the release state             | sessions     | yes       |
@@ -808,6 +809,19 @@ How a kind's or role's work flows in a space, in ONE read — read-only. `states
 | `workspaceId` | string | no       | Optional: the space. Omitted = every space you see.        |
 | `projectId`   | string | no       | Optional: only this project's things.                      |
 | `firstN`      | number | no       | Cards per state (default 10, max 50); counts are exact.    |
+
+## synap_read_board
+
+**Read a whiteboard** · Group: `read` · readOnlyHint: true · openWorldHint: false
+
+What a whiteboard holds, in ONE read — read-only. `scene.shapes`: each shape's tldraw `type` (entityCard, view, cell, sticky, artboard, frame = a section, text, geo, note, draw…), page-space `x`/`y`/`w`/`h`, `parentId` and `frameId` (the frame or artboard holding it), `refs` (entityId, viewId, cellInstanceId, cellKey, url), `title`, `text`, `artboard` (presetId, pageIndex), `placedBy`/`pending` marks. `scene.arrows`: each end's bound `shapeId` and point, label, `relationId` when it draws a pod relation. `counts` and `bounds` (whole board; a big board is read in pages: `scene.window.nextOffset`, or one frame with `frameId`). `source`: `live` (the open board), `stored` (the saved copy, up to ~10 s behind an open board) or `new` (never saved, empty); `asOf` says when. A failed read is an error with a `reason`, never an empty board. Get a board's viewId from synap_list_views.
+
+| Parameter | Type   | Required | Description                                                                         |
+| --------- | ------ | -------- | ----------------------------------------------------------------------------------- |
+| `viewId`  | string | yes      | The whiteboard view's id (synap_list_views).                                        |
+| `frameId` | string | no       | Optional: only what this frame or artboard holds (a shape id from a previous read). |
+| `offset`  | number | no       | Skip this many shapes (use `scene.window.nextOffset`).                              |
+| `limit`   | number | no       | Shapes per read (default 15, max 60).                                               |
 
 ## synap_list_sessions
 
