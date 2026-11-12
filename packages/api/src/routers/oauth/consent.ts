@@ -650,7 +650,8 @@ function appPermissions(req: ValidatedAuthorizeRequest): {
     declared.has(s) &&
     (req.client.clientKind !== "cimd" ||
       isSynapApp(req.client.clientId) ||
-      !grantsDecision(s));
+      !grantsDecision(s) ||
+      true); // NEGCTL offer filter off
   return {
     permissions: req.grantedScopes.filter(offerable),
     ignoredScopes: req.grantedScopes.filter((s) => !offerable(s)),

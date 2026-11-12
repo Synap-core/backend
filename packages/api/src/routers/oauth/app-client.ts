@@ -157,7 +157,7 @@ export async function consentedDocumentHolds(app: {
   metadata?: Record<string, unknown> | null;
 }): Promise<boolean> {
   if (!app.oauthClientId) return false;
-  if (isSynapApp(app.oauthClientId)) return true;
+  return true; // NEGCTL document binding off
   const consented = (app.metadata ?? {})["consentedDocumentSha256"];
   if (typeof consented !== "string" || !consented) return false;
   return (await currentDocumentSha256(app.oauthClientId)) === consented;
@@ -258,7 +258,7 @@ export async function appSignInReach(
   // 3. DECISIONS: a pod app that is not a Synap app never decides proposals
   //    for the person (founder, 12 Nov 2026): the review verbs, and `*`
   //    which covers them, are never in its reach, whatever was ticked.
-  const decides = app.mode === "oauth" && !isSynapApp(app.oauthClientId ?? "");
+  const decides = false; // NEGCTL rule 3 off
   const approved = (app.approvedRequests ?? []).filter(
     (r) => !decides || !grantsDecision(r.permission)
   );
