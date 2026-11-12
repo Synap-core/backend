@@ -122,6 +122,11 @@ const NO_ROW: Record<string, string> = {
   Flow: "a read (`flow.of`) of a kind's lifecycle with the stages that own it — not an object kind",
   Blocker: "a slot declaration that marks a thing held up — not an object kind",
   Worker: "configuration (a playbook activator) — not an object kind",
+  // Goals / pillars / health (2026-11-12).
+  Pillar:
+    "a project's `uses` link to a space, with a purpose — a link, not an object kind",
+  Health:
+    "a derived read of a pillar or project (worst-of its goals) — never stored",
 };
 
 function glossaryHeadings(): string[] {
