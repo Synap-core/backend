@@ -243,6 +243,35 @@ const TRACK_GOAL_PROPERTIES = {
 };
 
 /**
+ * WHERE a goal sits (goals / pillars contract, C4) — its parent goal and the
+ * pillars of its project it advances. ONE advertised shape on both track
+ * doors; validated server-side (`goalPlacementInputSchema`, the dependency
+ * door's floors). Added, never removed, through these doors.
+ */
+const TRACK_PLACEMENT_PROPERTIES = {
+  parentGoalId: {
+    type: "string",
+    description:
+      "Optional: the goal this one SERVES (a sub-goal's parent, id from synap_list_tracks). It becomes the goal's primary parent if it has none yet — the goal then rolls up into that parent; a second parent only lists it. A loop of goals is refused.",
+  },
+  pillars: {
+    type: "array",
+    maxItems: 12,
+    description:
+      "Optional: the PILLARS this goal advances — spaces its project uses (synap_get_project lists them; link a new one with synap_project_use_workspace first). Mark the one it mainly moves `primary: true` (at most one): the goal counts fully in that pillar's health and is only listed in the others. With none marked, the first becomes primary when the goal has no primary pillar yet.",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["workspaceId"],
+      properties: {
+        workspaceId: { type: "string", description: "Space UUID" },
+        primary: { type: "boolean" },
+      },
+    },
+  },
+};
+
+/**
  * JSON Schema for `synap_create_automation`'s `dataContract` input, DERIVED from
  * `automationDataContractSchema` — the very schema `automations.create` runs to
  * reject an AI-authored automation that lacks a contract. Deriving (rather than
@@ -4794,6 +4823,7 @@ export const tools = {
               required: ["label", "target"],
             },
             ...TRACK_GOAL_PROPERTIES,
+            ...TRACK_PLACEMENT_PROPERTIES,
             reasoning: {
               type: "string",
               description:
@@ -5208,7 +5238,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them); and where it sits — a parentGoalId it serves, the pillars it advances (both ADDED). Every other field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5229,6 +5259,7 @@ export const tools = {
               },
             },
             ...TRACK_GOAL_PROPERTIES,
+            ...TRACK_PLACEMENT_PROPERTIES,
             reasoning: {
               type: "string",
               description: "Why — shown to the reviewer. One line.",
