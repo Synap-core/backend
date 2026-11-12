@@ -22,6 +22,7 @@ import {
   getDb,
   links,
   projects,
+  projectTracks,
   workspaces,
   ownerPrivateVisibleWhere,
   userVisibleWhere,
@@ -72,6 +73,7 @@ export async function hydrateUsedWorkspaces(
   return out;
 }
 import { createLink } from "../services/links/links-service.js";
+import { recordLinkMutation } from "../services/links/dependency-links.js";
 import { isUuid } from "@synap-core/types/property-render";
 
 export type LinkProjectToWorkspaceResult =
@@ -239,6 +241,28 @@ export async function unlinkProjectFromWorkspace(
       )
     )
     .returning({ id: links.id });
+  // A space the project no longer uses is no longer one of its pillars: its
+  // goals' `advances` edges to it go with the `uses` edge (same door, same
+  // gate: removing a `uses` edge is a DESTRUCTIVE link delete, an agent's
+  // always a proposal). Otherwise a stale primary pillar would block a goal
+  // from naming a new one. Each removed edge emits `link.delete.completed`.
+  if (removed.length > 0) {
+    const advances = await db
+      .delete(links)
+      .where(
+        and(
+          eq(links.linkType, "advances"),
+          eq(links.fromType, "track"),
+          eq(links.toType, "workspace"),
+          eq(links.toId, args.workspaceId),
+          drizzleSql`${links.fromId} IN (SELECT ${projectTracks.id}::text FROM ${projectTracks} WHERE ${eq(projectTracks.projectId, args.projectId)})`
+        )
+      )
+      .returning();
+    for (const row of advances) {
+      recordLinkMutation("delete", row, args.userId);
+    }
+  }
   return { unlinked: true, rows: removed.length };
 }
 

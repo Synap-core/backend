@@ -28,17 +28,17 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { and, db, eq, links, projectTracks } from "@synap/database";
+import { eq, projectTracks } from "@synap/database";
 import type { ProjectTrack } from "@synap/database/schema";
 import {
   ADVANCES_LINK_TYPE,
   LINK_PRIMARY_KEY,
   SERVES_LINK_TYPE,
-  isPrimaryLinkMetadata,
 } from "@synap-core/types/connections";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listWorkspacesUsedByProject } from "../../utils/project-workspace.js";
 import {
+  readGoalPrimary,
   writeDependencyLink,
   PILLAR_NOT_USED_ERROR,
   type LinkAttribution,
@@ -167,22 +167,12 @@ export async function checkGoalPlacement(
   }
 }
 
-/** Does goal `trackId` already have a PRIMARY edge of `linkType`? */
+/** Does goal `trackId` already have a PRIMARY `linkType` edge (THE reader)? */
 async function hasPrimary(
   trackId: string,
   linkType: typeof SERVES_LINK_TYPE | typeof ADVANCES_LINK_TYPE
 ): Promise<boolean> {
-  const rows = await db
-    .select({ metadata: links.metadata })
-    .from(links)
-    .where(
-      and(
-        eq(links.linkType, linkType),
-        eq(links.fromType, "track"),
-        eq(links.fromId, trackId)
-      )
-    );
-  return rows.some((r) => isPrimaryLinkMetadata(r.metadata));
+  return (await readGoalPrimary(trackId, linkType)) !== null;
 }
 
 /**

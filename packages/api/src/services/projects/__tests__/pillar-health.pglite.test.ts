@@ -74,7 +74,10 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL, is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import {
+  linkProjectToWorkspace,
+  unlinkProjectFromWorkspace,
+} from "../../../utils/project-workspace.js";
 import {
   PILLAR_NOT_USED_ERROR,
   PRIMARY_PARENT_TAKEN_ERROR,
@@ -142,6 +145,9 @@ function ddlFor(table: PgTable): string {
   return `create table if not exists "${cfg.name}" (${columns.join(", ")});`;
 }
 
+// Goals are created in fixture order, one second apart: the read lists them
+// oldest first, and two goals in the same instant would order by random id.
+let goalSeq = 0;
 async function goal(
   id: string,
   project: string,
@@ -151,7 +157,7 @@ async function goal(
 ) {
   await q(
     `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, verdict, uncertainty, criteria, created_at, updated_at)
-     values ($1, $2, $3, $4, '{}'::jsonb, '1', $5, $6, $7, '[]'::jsonb, now(), now())`,
+     values ($1, $2, $3, $4, '{}'::jsonb, '1', $5, $6, $7, '[]'::jsonb, timestamptz '2026-01-01' + make_interval(secs => ${++goalSeq}), now())`,
     [
       id,
       project,
@@ -683,6 +689,75 @@ describe("a sub-goal with two parents counts in one pillar", () => {
       await q(
         `delete from links where from_id = $1 and to_id = $2 and link_type = 'serves'`,
         [G_SUB, G_PAUSED]
+      );
+    }
+  });
+});
+
+describe("a space the project stops using is no pillar any more", () => {
+  // Rules out "unlinking a space leaves the goals' advances edges behind":
+  // a stale primary pillar would then block naming a new one.
+  it("removing the uses edge removes the goals' advances to it; a new primary lands", async () => {
+    const g = randomUUID();
+    await goal(g, P, "Brand push", "active");
+    await link("track", g, "workspace", W_BRAND, "advances", { primary: true });
+    const r = await unlinkProjectFromWorkspace(holder.db as never, {
+      projectId: P,
+      workspaceId: W_BRAND,
+      userId: ME,
+    });
+    expect(r).toEqual({ unlinked: true, rows: 1 });
+    try {
+      expect(await linkRow(g, W_BRAND, "advances")).toBeUndefined();
+      expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeUndefined();
+      await applyGoalPlacement({
+        trackId: g,
+        input: { pillars: [{ workspaceId: W_SALES, primary: true }] },
+        userId: ME,
+      });
+      expect((await linkRow(g, W_SALES, "advances"))?.metadata).toEqual({
+        primary: true,
+      });
+    } finally {
+      await q(`delete from links where from_id = $1`, [g]);
+      await q(
+        `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+        [g]
+      );
+      await link("project", P, "workspace", W_BRAND, "uses");
+      await link("track", G_PAUSED, "workspace", W_BRAND, "advances", {
+        primary: true,
+      });
+    }
+  });
+
+  // Rules out "any primary advances edge counts": an edge left to a space the
+  // project does not use (written before this rule) is no primary pillar.
+  it("a primary edge to an unused space does not count as the goal's primary", async () => {
+    const g = randomUUID();
+    await goal(g, P, "Stale pillar", "active");
+    await link("track", g, "workspace", W_UNUSED, "advances", {
+      primary: true,
+    });
+    try {
+      expect(
+        await writeDependencyLink({
+          edge: {
+            fromType: "track",
+            fromId: g,
+            toType: "workspace",
+            toId: W_SALES,
+            linkType: "advances",
+          },
+          userId: ME,
+          metadata: { primary: true },
+        })
+      ).toMatchObject({ ok: true, inserted: 1 });
+    } finally {
+      await q(`delete from links where from_id = $1`, [g]);
+      await q(
+        `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+        [g]
       );
     }
   });
