@@ -59,7 +59,10 @@ import {
   type ProjectMainGoal,
   type ProjectPillars,
 } from "@synap-core/types/units";
-import type { LifecycleCategory } from "@synap-core/types/lifecycle";
+import {
+  LIFECYCLE_CATEGORIES,
+  type LifecycleCategory,
+} from "@synap-core/types/lifecycle";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   hydrateUsedWorkspaces,
@@ -67,7 +70,7 @@ import {
 } from "../../utils/project-workspace.js";
 import {
   readGoalGroupWork,
-  readScopeRollup,
+  readScopeMoves,
   type ScopeKindRollup,
 } from "../status/status-rollup.js";
 import { readSpaceOutputs } from "../lifecycle/flow-read.js";
@@ -86,19 +89,11 @@ interface AdvancingGoal {
   >;
 }
 
-const CATEGORIES: readonly LifecycleCategory[] = [
-  "open",
-  "active",
-  "paused",
-  "done",
-  "lost",
-];
-
 function fullCounts(
   counts: Partial<Record<LifecycleCategory, number>>
 ): PillarIndicatorCounts {
   const out = {} as PillarIndicatorCounts;
-  for (const c of CATEGORIES) out[c] = counts[c] ?? 0;
+  for (const c of LIFECYCLE_CATEGORIES) out[c] = counts[c] ?? 0;
   return out;
 }
 
@@ -258,12 +253,8 @@ async function readPillar(
     (a) => a.primary && goalInPillarRollup(a.goal)
   );
   const [scope, work, declaredOutputs] = await Promise.all([
-    readScopeRollup({
-      userId,
-      projectId,
-      workspaceId: space.id,
-      byKind: true,
-    }),
+    // The LEAN scope read (moves + things per kind), project AND space.
+    readScopeMoves({ userId, projectId, workspaceId: space.id }),
     // Down PRIMARY parent edges only: a sub-goal with two parents counts in
     // its primary parent's pillar, once.
     readGoalGroupWork(
@@ -273,7 +264,7 @@ async function readPillar(
     ),
     readDeclaredOutputKinds(userId, space.id),
   ]);
-  const stale = (scope?.moved ?? 0) === 0 && work.moved === 0;
+  const stale = scope.moved === 0 && work.moved === 0;
   return {
     workspaceId: space.id,
     workspaceName: space.name,
@@ -286,25 +277,17 @@ async function readPillar(
       ),
       sessions: work.sessions,
     },
-    indicator: indicatorOf(scope?.kinds ?? [], declaredOutputs),
+    indicator: indicatorOf(scope.kinds, declaredOutputs),
     goals,
   };
 }
 
-/**
- * Where one project stands, pillar by pillar. `null` = the project is not
- * visible to `userId`. THROWS on a failed read.
- */
-export async function readProjectPillars(
+/** The pillars of a project the caller may see, and its root. THROWS. */
+async function readPillarsOf(
   userId: string,
   projectId: string
-): Promise<ProjectPillars | null> {
-  const project = await loadVisibleProject(await getDb(), projectId, userId);
-  if (!project) return null;
-  const [mainGoal, uses] = await Promise.all([
-    readMainGoal(projectId, userId),
-    readUses(projectId),
-  ]);
+): Promise<Pick<ProjectPillars, "pillars" | "rootHealth">> {
+  const uses = await readUses(projectId);
   // A space the reader may not see is not drawn (its name is its own data).
   const visible = await hydrateUsedWorkspaces(
     await getDb(),
@@ -327,47 +310,64 @@ export async function readProjectPillars(
       )
     )
   );
-  return {
-    projectId,
-    mainGoal,
-    pillars,
-    rootHealth: deriveProjectRootHealth(pillars),
-  };
+  return { pillars, rootHealth: deriveProjectRootHealth(pillars) };
 }
 
-/** A failed pillar read, marked — never answered as "no pillars". */
-export const PILLARS_UNAVAILABLE = { status: "unavailable" } as const;
+/**
+ * Where one project stands, pillar by pillar. `null` = the project is not
+ * visible to `userId`. THROWS on a failed read.
+ */
+export async function readProjectPillars(
+  userId: string,
+  projectId: string
+): Promise<ProjectPillars | null> {
+  const project = await loadVisibleProject(await getDb(), projectId, userId);
+  if (!project) return null;
+  const [mainGoal, rest] = await Promise.all([
+    readMainGoal(projectId, userId),
+    readPillarsOf(userId, projectId),
+  ]);
+  return { projectId, mainGoal, ...rest };
+}
 
 /**
- * The fields `projects.get` / Hub `GET /projects/:id` add to a project read.
- * A failed read keeps the project readable: `pillars` and `rootHealth` come
- * back `{ status: "unavailable" }` (never `[]` — an empty list would read as
- * "no pillars"), and `mainGoal` is read on its own so it survives. The
- * failure is logged with the project id.
+ * What a project read may ADD on request (`include`): the pillars are the
+ * costliest part of a project read (a scope read and a session union per
+ * pillar), so `projects.get` and Hub `GET /projects/:id` return them only
+ * when asked; MCP `synap_get_project` always asks.
+ */
+export const PROJECT_READ_INCLUDES = ["pillars"] as const;
+export type ProjectReadInclude = (typeof PROJECT_READ_INCLUDES)[number];
+
+/** A failed read, marked — never answered as "none" or "no pillars". */
+export const PILLARS_UNAVAILABLE = { status: "unavailable" } as const;
+type Unavailable = typeof PILLARS_UNAVAILABLE;
+
+/**
+ * The fields `projects.get` / Hub `GET /projects/:id` add to a project read
+ * the caller ALREADY checked visible (no second project check here). Each
+ * part is read on its own, so one failing never fails the project read nor
+ * the other part: a failed part is `{ status: "unavailable" }` (never `null`
+ * or `[]`, which would read as "no main goal" / "no pillars"), logged with
+ * the project id.
  */
 export async function readProjectPillarFields(
   userId: string,
   projectId: string
-): Promise<
-  | Omit<ProjectPillars, "projectId">
-  | {
-      mainGoal: ProjectMainGoal | null;
-      pillars: typeof PILLARS_UNAVAILABLE;
-      rootHealth: typeof PILLARS_UNAVAILABLE;
-    }
-> {
-  try {
-    const read = await readProjectPillars(userId, projectId);
-    if (read) {
-      const { projectId: _id, ...fields } = read;
-      return fields;
-    }
-  } catch (err) {
-    logger.warn({ err, projectId }, "pillar health NOT read — unavailable");
-  }
-  return {
-    mainGoal: await readMainGoal(projectId, userId),
-    pillars: PILLARS_UNAVAILABLE,
-    rootHealth: PILLARS_UNAVAILABLE,
-  };
+): Promise<{
+  mainGoal: ProjectMainGoal | null | Unavailable;
+  pillars: ProjectPillars["pillars"] | Unavailable;
+  rootHealth: ProjectPillars["rootHealth"] | Unavailable;
+}> {
+  const [mainGoal, rest] = await Promise.all([
+    readMainGoal(projectId, userId).catch((err: unknown) => {
+      logger.warn({ err, projectId }, "main goal NOT read — unavailable");
+      return PILLARS_UNAVAILABLE;
+    }),
+    readPillarsOf(userId, projectId).catch((err: unknown) => {
+      logger.warn({ err, projectId }, "pillar health NOT read — unavailable");
+      return { pillars: PILLARS_UNAVAILABLE, rootHealth: PILLARS_UNAVAILABLE };
+    }),
+  ]);
+  return { mainGoal, ...rest };
 }

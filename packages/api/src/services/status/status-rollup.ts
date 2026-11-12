@@ -750,36 +750,7 @@ export async function readScopeRollup(input: {
       ...(workspaceId ? { workspaceId } : {}),
     }),
     countWork(sessionsInScope),
-    // Moves of what the caller can see in the scope: its things (the entity
-    // read floor), its sessions (THE session read rule) and, for a project,
-    // the project's goals (the project was checked visible above).
-    countMovesSince(windowStart(), [
-      movesOf(
-        "entity",
-        drizzleSql`SELECT ${entities.id} AS id, 'all' AS key FROM ${entities} WHERE ${and(
-          entityReadVisibleWhere(userId),
-          // The rule `things` is counted under, so demo and probe rows never move it.
-          listableEntityWhere({ projectLens: projectId }),
-          projectId ? projectLensWhere(entities.id, projectId) : undefined,
-          workspaceId ? eq(entities.workspaceId, workspaceId) : undefined
-        )}`
-      ),
-      movesOf(
-        "focus_session",
-        drizzleSql`SELECT ${focusSessions.id} AS id, 'all' AS key FROM ${focusSessions} WHERE ${and(sessionsInScope, workAndTrackedRunsWhere())}`
-      ),
-      ...(projectId
-        ? [
-            movesOf(
-              "track",
-              drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${and(
-                eq(projectTracks.projectId, projectId),
-                pillar ? goalAdvancesWhere(workspaceId!) : undefined
-              )}`
-            ),
-          ]
-        : []),
-    ]),
+    countScopeMoves({ userId, workspaceId, projectId, sessionsInScope }),
     openWork,
   ]);
   const openIds = open.map((s) => s.id);
@@ -802,11 +773,86 @@ export async function readScopeRollup(input: {
     windowDays: ROLLUP_WINDOW_DAYS,
     things,
     work,
-    moved: moved.get("all") ?? 0,
+    moved,
     stuck,
     waitingOn,
     ...(input.byKind ? { kinds } : {}),
   };
+}
+
+/**
+ * Status moves since the window start of what the caller can see in the
+ * scope: its things (the entity read floor and the listing rule), its
+ * sessions (THE session read rule) and, for a project, the project's goals
+ * (in a pillar: those that advance the space). The ONE count both
+ * {@link readScopeRollup} and {@link readScopeMoves} return.
+ */
+async function countScopeMoves(p: {
+  userId: string;
+  workspaceId?: string;
+  projectId?: string;
+  sessionsInScope: SQL | undefined;
+}): Promise<number> {
+  const { userId, workspaceId, projectId } = p;
+  const moved = await countMovesSince(windowStart(), [
+    movesOf(
+      "entity",
+      drizzleSql`SELECT ${entities.id} AS id, 'all' AS key FROM ${entities} WHERE ${and(
+        entityReadVisibleWhere(userId),
+        // The rule `things` is counted under, so demo and probe rows never move it.
+        listableEntityWhere({ projectLens: projectId }),
+        projectId ? projectLensWhere(entities.id, projectId) : undefined,
+        workspaceId ? eq(entities.workspaceId, workspaceId) : undefined
+      )}`
+    ),
+    movesOf(
+      "focus_session",
+      drizzleSql`SELECT ${focusSessions.id} AS id, 'all' AS key FROM ${focusSessions} WHERE ${and(p.sessionsInScope, workAndTrackedRunsWhere())}`
+    ),
+    ...(projectId
+      ? [
+          movesOf(
+            "track",
+            drizzleSql`SELECT ${projectTracks.id} AS id, 'all' AS key FROM ${projectTracks} WHERE ${and(
+              eq(projectTracks.projectId, projectId),
+              workspaceId ? goalAdvancesWhere(workspaceId) : undefined
+            )}`
+          ),
+        ]
+      : []),
+  ]);
+  return moved.get("all") ?? 0;
+}
+
+/**
+ * The LEAN read of a scope: only what moved and its things per kind — no
+ * work counts, no open sessions, no waiting-on (the pillar health read needs
+ * nothing else). Same queries as {@link readScopeRollup} for these two parts,
+ * so they always agree. The caller has ALREADY checked the project visible
+ * (no second check here). THROWS.
+ */
+export async function readScopeMoves(input: {
+  userId: string;
+  workspaceId?: string;
+  projectId?: string;
+}): Promise<{ moved: number; kinds: ScopeKindRollup[] }> {
+  const { userId, workspaceId, projectId } = input;
+  const sessionsInScope = and(
+    sessionReadableWhere({ userId }),
+    ...sessionScopeConditions({
+      workspaceLens: workspaceId,
+      projectLens: projectId,
+    })
+  );
+  const [{ kinds }, moved] = await Promise.all([
+    readThings({
+      userId,
+      ...(projectId ? { projectId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+    }),
+    countScopeMoves({ userId, workspaceId, projectId, sessionsInScope }),
+  ]);
+  return { moved, kinds };
 }
 
 /**

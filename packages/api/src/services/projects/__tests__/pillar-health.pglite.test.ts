@@ -96,9 +96,13 @@ import {
 import { assertMainGoal } from "../update-project.js";
 import {
   readGoalGroupWork,
+  readScopeMoves,
   readScopeRollup,
 } from "../../status/status-rollup.js";
-import { readProjectPillars } from "../pillar-health.js";
+import {
+  readProjectPillarFields,
+  readProjectPillars,
+} from "../pillar-health.js";
 
 const ME = "user-me";
 const W_SALES = randomUUID();
@@ -858,6 +862,76 @@ describe("a space the project stops using is no pillar any more", () => {
         `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
         [g]
       );
+    }
+  });
+});
+
+describe("the lean scope read agrees with the full one", () => {
+  // Rules out "the pillar read counts moves or kinds its own way": the lean
+  // read must give exactly what readScopeRollup gives for those two parts.
+  it("gives the same moved and kinds, for a pillar and for a project", async () => {
+    await q(
+      `insert into events (id, type, subject_id, subject_type, data, user_id, timestamp)
+       values ($1, 'entity.transition.completed', $2, 'entity', '{}'::jsonb, $3, now())`,
+      [randomUUID(), E_IN, ME]
+    );
+    // A move of a goal of P that advances Brand, not Sales: in the project's
+    // count, never in the Sales pillar's.
+    await q(
+      `insert into events (id, type, subject_id, subject_type, data, user_id, timestamp)
+       values ($1, 'track.transition.completed', $2, 'track', '{}'::jsonb, $3, now())`,
+      [randomUUID(), G_PAUSED, ME]
+    );
+    for (const scope of [
+      { projectId: P, workspaceId: W_SALES },
+      { projectId: P },
+      { workspaceId: W_SALES },
+    ]) {
+      const full = await readScopeRollup({
+        userId: ME,
+        ...scope,
+        byKind: true,
+      });
+      const lean = await readScopeMoves({ userId: ME, ...scope });
+      expect(lean).toEqual({ moved: full!.moved, kinds: full!.kinds });
+    }
+    // Non-vacuity: the pillar scope saw the move and the kind.
+    const pillar = await readScopeMoves({
+      userId: ME,
+      projectId: P,
+      workspaceId: W_SALES,
+    });
+    expect(pillar.moved).toBe(1);
+    expect((await readScopeMoves({ userId: ME, projectId: P })).moved).toBe(2);
+    expect(pillar.kinds.map((k) => k.kind)).toEqual(["deal"]);
+  });
+});
+
+describe("a failed part of the project read is marked, never empty", () => {
+  // Rules out "a failed pillar read answers [] / a failed main goal answers
+  // null": each part fails on its own and says so; the other part stands.
+  it("marks the failed part unavailable and keeps the other", async () => {
+    await q(`update projects set main_goal_id = $1 where id = $2`, [G_RUN, P]);
+    await q(`alter table links rename to links_gone`);
+    try {
+      const fields = await readProjectPillarFields(ME, P);
+      expect(fields.pillars).toEqual({ status: "unavailable" });
+      expect(fields.rootHealth).toEqual({ status: "unavailable" });
+      expect(fields.mainGoal).toEqual({
+        id: G_RUN,
+        name: "Win clients",
+        status: "active",
+      });
+    } finally {
+      await q(`alter table links_gone rename to links`);
+    }
+    await q(`alter table project_tracks rename to project_tracks_gone`);
+    try {
+      const fields = await readProjectPillarFields(ME, P);
+      expect(fields.mainGoal).toEqual({ status: "unavailable" });
+      expect(fields.pillars).toEqual({ status: "unavailable" });
+    } finally {
+      await q(`alter table project_tracks_gone rename to project_tracks`);
     }
   });
 });
