@@ -7,8 +7,8 @@
  *
  * Driven end to end on PGlite through the REAL doors, keys minted the real
  * way: consent (`decideOAuthAuthorization` → `connectOAuthApp`) → `POST /token`
- * (`oauthApp` → `mintAppOAuthAccessKey` → the person-token door for a Synap
- * app, the app's own agent key for any other) → the token presented to the
+ * (`oauthApp` → `mintAppOAuthAccessKey` → the person-token door, for every
+ * pod app since 12 Nov 2026) → the token presented to the
  * REAL Hub auth door (`hubAuthMiddleware`: lookup, `resolveKeyIdentity`, W1
  * fence, `runWithGrant`) → the REAL threads routes and the REAL answer loop
  * (`recordOwnerRoomReply`).
@@ -17,7 +17,7 @@
  *   STUDIO  content-studio.synap.live  person   channel.read + session.update
  *   CRM     crm.synap.live             person   channel.read + entity.deal.update
  *   HUB     hub.synap.live             person   channel.read + message.create
- *   OTHER   studio.example.com         agent    channel.read + session.update
+ *   OTHER   studio.example.com         person   channel.read + session.update
  * and the owner's own AI (Claude Code): an agent key minted by
  * `createNamedAgent`, the "AI — read & propose" preset (no `message.create`).
  *
@@ -27,7 +27,8 @@
  *   - the person's official app (session.update) refused in its run's room,
  *     or its post stored as anything but the person's words, or not
  *     answering the open question;
- *   - an agent-acting app's post stored as the person's;
+ *   - an agent's post (the owner's own AI) stored as the person's, or an app
+ *     that is not a Synap app posting as anything but the person;
  *   - a room in a space the grant does not tick written;
  *   - a channel that is no session's room written without `message.create`;
  *   - the owner's own AI (`synap session post`) refused in a session's room;
@@ -329,9 +330,16 @@ beforeAll(async () => {
   for (const clientId of [STUDIO, CRM, HUB, OTHER]) {
     await q(
       `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
-         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
-       values ($1, 'cimd', 'Room app', $2, '{}', $3, '{}', now(), now() + interval '1 hour', now())`,
-      [clientId, [callbackOf(clientId)], DECLARED]
+         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+       values ($1, 'cimd', 'Room app', $2, '{}', $3, '{}', now(), now() + interval '1 hour', $4, now())`,
+      // The document's hash: an app that is not a Synap app acts as the
+      // person only while it is the one consented to (`consentedDocumentHolds`).
+      [
+        clientId,
+        [callbackOf(clientId)],
+        DECLARED,
+        createHash("sha256").update(clientId).digest("hex"),
+      ]
     );
   }
   await seedRun(ROOM, SESSION, CONTENT);
@@ -505,21 +513,20 @@ describe("a post in a room needs a write grant, not only a read", () => {
     });
   }, 120_000);
 
-  it("the keys are what production mints: the person's for a Synap app, the app's agent's for any other", async () => {
-    for (const clientId of [STUDIO, CRM, HUB]) {
+  it("the keys are what production mints: the person's, for every pod app", async () => {
+    for (const clientId of [STUDIO, CRM, HUB, OTHER]) {
       const row = await keyRow(token[clientId]!);
       expect(row).toMatchObject({ user_id: OWNER, key_type: "app_person" });
       // Every one may write SOMETHING: a refusal below is the grant's verdict
       // on the room, never the key's missing `hub-protocol.write` scope.
       expect(row.scope).toContain("hub-protocol.write");
     }
-    const other = await keyRow(token[OTHER]!);
-    expect(other.key_type).toBe("hub_inbound");
-    expect(other.user_id).toBe(await appAgentOf(OTHER));
+    // No agent was made for the app that is not a Synap app either.
+    expect(await appAgentOf(OTHER)).toBeNull();
   });
 
-  it("the agent-acting app asks in the run's room: stored as its agent, never as the person", async () => {
-    const res = await post(token[OTHER]!, ROOM, {
+  it("the owner's own AI asks in the run's room: stored as its agent, never as the person", async () => {
+    const res = await post(claude.apiKey, ROOM, {
       role: "assistant",
       content: "Which pillar is this carousel for?",
       userId: OWNER,
@@ -532,7 +539,7 @@ describe("a post in a room needs a write grant, not only a read", () => {
     expect(row).toMatchObject({
       user_id: OWNER,
       author_type: "ai_agent",
-      routed_teammate_id: await appAgentOf(OTHER),
+      routed_teammate_id: claude.agentUserId,
     });
   });
 
@@ -554,6 +561,23 @@ describe("a post in a room needs a write grant, not only a read", () => {
     expect(question.metadata?.roomPost?.answer).toMatchObject({
       messageId: mine.id,
       answeredBy: OWNER,
+    });
+  });
+
+  it("an app that is not a Synap app writes in its run's room as the person too, never as an agent", async () => {
+    const res = await post(token[OTHER]!, ROOM, {
+      role: "user",
+      content: "And a slide on the method.",
+      userId: OWNER,
+    });
+    expect(res.status).toBe(200);
+    const [row] = (await messagesIn(ROOM)).filter(
+      (m) => m.id === res.body.messageId
+    );
+    expect(row).toMatchObject({
+      user_id: OWNER,
+      author_type: "human",
+      routed_teammate_id: null,
     });
   });
 
@@ -694,7 +718,8 @@ describe("a post in a room needs a write grant, not only a read", () => {
   });
 
   it("an agent key's message wakes nobody; the person's next one does", async () => {
-    const byAgent = await post(token[OTHER]!, BY_AGENT.room, {
+    // The owner's own AI: an agent key (a pod app's token is the person's).
+    const byAgent = await post(claude.apiKey, BY_AGENT.room, {
       role: "user",
       content: "Status?",
       userId: OWNER,

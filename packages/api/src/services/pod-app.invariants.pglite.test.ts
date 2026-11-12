@@ -14,7 +14,10 @@
  *
  * The app's document is a FRESH `oauth_clients` cache row, so
  * `resolveCimdClient` reads it without a fetch (the fetch is pinned in
- * client-metadata.test.ts).
+ * client-metadata.test.ts). Since 12 Nov 2026 (founder: "an app is not an
+ * agent; connecting is the approval") every pod app's token is HELD BY THE
+ * PERSON who consented (`app_person`); the cache row carries its document
+ * hash, which the consent records (`consentedDocumentHolds`).
  *
  * Seams replaced, and why: the event store (`EventRepository`) and `auditLog`
  * write through the postgres-js client this harness has not — both are
@@ -23,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -114,10 +117,8 @@ import {
 } from "../routers/oauth/consent.js";
 import { previewPermissionDecision } from "../utils/permission-check.js";
 import { applyProposalApproval } from "../routers/proposals/apply-approval.js";
-import { assertAgentKeyMayReject } from "../routers/proposals/review-authority.js";
 import { resolveKeyIdentity } from "../access/key-identity.js";
 import { apiKeyService } from "./api-keys.js";
-import { reapplyAgentKeyGrants } from "./agent-identity-service.js";
 import { oauthAppPodWideKinds, revokeApp } from "./app-connect.js";
 
 const ISSUER = "https://pod.test.synap.live";
@@ -144,7 +145,7 @@ const VERIFIER = "v".repeat(64);
 const CHALLENGE = computeS256Challenge(VERIFIER);
 const READ = "entity.post.read";
 const CREATE = "entity.post.create";
-/** A third-party app that asks for what an agent key may hold. */
+/** A third-party app that asks for the review verbs and `*` too. */
 const CRM = "https://crm.example.com/.well-known/synap-client.json";
 const CRM_CB = "https://crm.example.com/cb";
 const CRM_ASK = [
@@ -197,10 +198,17 @@ async function cacheApp(
 ) {
   await q(
     `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
-       requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
-     values ($1, 'cimd', $2, $3, '{}', $4, $5, now(), now() + interval '1 hour', now())
+       requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+     values ($1, 'cimd', $2, $3, '{}', $4, $5, now(), now() + interval '1 hour', $6, now())
      on conflict (client_id) do nothing`,
-    [clientId, name, [callback], permissions, templates]
+    [
+      clientId,
+      name,
+      [callback],
+      permissions,
+      templates,
+      createHash("sha256").update(clientId).digest("hex"),
+    ]
   );
 }
 
@@ -268,7 +276,7 @@ beforeAll(async () => {
   }
   // A pod-wide `post` kind (the create gate refuses an unknown kind first),
   // and the pod default (0282): agents act on reversible writes. Seeded on
-  // purpose — under it a plain agent EXECUTES; the app's agent must propose.
+  // purpose: what refuses an app's write below is its ticks, never posture.
   await q(
     `insert into profiles (id, slug, scope, is_active, origin) values ($1, 'post', 'system', true, 'system')`,
     [randomUUID()]
@@ -627,63 +635,64 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
       { permissions: [READ], workspaceIds: [BRAND] },
     ]);
     expect((await apiKeyService.validateApiKey(token))?.id).toBe(record.id);
-    // The app's agent leaves the space it no longer reaches.
-    const agent = (await appRow(OWNER, STUDIO))!.agent_user_id!;
-    const spaces = (
-      await q<{ workspace_id: string }>(
-        `select workspace_id from workspace_members where user_id = $1`,
-        [agent]
-      )
-    ).rows.map((r) => r.workspace_id);
-    expect(spaces).toEqual([BRAND]);
+    // No app agent holds a membership to narrow: the key is the person's.
+    expect((await appRow(OWNER, STUDIO))!.agent_user_id).toBeNull();
   });
 });
 
-describe("I3 — per-app identity: the key is the app's own agent's, for this person", () => {
-  it("the key resolves as the app's ask-first agent acting for the person, attributed to the app", async () => {
-    const { record } = await connect([
+describe("I3 — per-app identity: the key is the PERSON's, attributed to the app", () => {
+  it("the key resolves as the person acting through the app, never an agent, never full access", async () => {
+    const { body, record } = await connect([
       { permission: READ, workspaceId: BRAND },
     ]);
+    expect(body.synap_acts_as).toBe("person");
     const row = (await appRow(OWNER, STUDIO))!;
     expect(row.mode).toBe("oauth");
-    const [agent] = (
-      await q<{ user_type: string; agent_type: string }>(
-        `select user_type, agent_type from users where id = $1`,
-        [row.agent_user_id]
+    // No agent is made for the connection: there is nothing to act as but
+    // the person (an app is not an AI agent, founder 12 Nov 2026).
+    expect(row.agent_user_id).toBeNull();
+    expect(record.userId).toBe(OWNER);
+    expect(record.linkedUserId ?? null).toBeNull();
+    const [key] = (
+      await q<{ key_type: string; instance_id: string }>(
+        `select key_type, instance_id from api_keys where id = $1`,
+        [record.id]
       )
     ).rows;
-    expect(agent).toEqual({ user_type: "agent", agent_type: row.public_id });
-    expect(agent!.agent_type).not.toMatch(/^claude-web/);
-    expect(record.userId).toBe(row.agent_user_id);
-    expect(record.linkedUserId).toBe(OWNER);
+    expect(key!.key_type).toBe("app_person");
     const id = await resolveKeyIdentity(record);
-    expect(id).toMatchObject({
-      isAgent: true,
-      agentUserId: row.agent_user_id,
-      effectiveUserId: OWNER,
-    });
+    expect(id).toMatchObject({ isAgent: false, effectiveUserId: OWNER });
+    expect(id.agentUserId ?? null).toBeNull();
+    // "via <app>": every write it makes is stamped with the connection.
     expect(id.grant?.clientId).toBe(row.public_id);
     expect(id.grant?.scopes.some((s) => s.permissions.includes("*"))).toBe(
       false
     );
   });
 
-  it("two apps for one person get two distinct agents", async () => {
-    await connect([{ permission: READ, workspaceId: BRAND }]);
-    await connect([{ permission: READ, workspaceId: BRAND }], {
+  it("two apps for one person get two distinct connections and key slots", async () => {
+    const a = await connect([{ permission: READ, workspaceId: BRAND }]);
+    const b = await connect([{ permission: READ, workspaceId: BRAND }], {
       clientId: NOTES,
       callback: NOTES_CB,
     });
-    const a = (await appRow(OWNER, STUDIO))!;
-    const b = (await appRow(OWNER, NOTES))!;
-    expect(a.id).not.toBe(b.id);
-    expect(a.agent_user_id).toBeTruthy();
-    expect(b.agent_user_id).toBeTruthy();
-    expect(a.agent_user_id).not.toBe(b.agent_user_id);
+    const ra = (await appRow(OWNER, STUDIO))!;
+    const rb = (await appRow(OWNER, NOTES))!;
+    expect(ra.id).not.toBe(rb.id);
+    expect(ra.public_id).not.toBe(rb.public_id);
+    expect(a.record.id).not.toBe(b.record.id);
+    // Both stay live: one connection's token never rotates the other's.
+    expect((await apiKeyService.validateApiKey(a.token))?.id).toBe(a.record.id);
+    expect((await resolveKeyIdentity(a.record)).grant?.clientId).toBe(
+      ra.public_id
+    );
+    expect((await resolveKeyIdentity(b.record)).grant?.clientId).toBe(
+      rb.public_id
+    );
   });
 
-  it("the same app for two people gets two distinct rows and agents", async () => {
-    await connect([{ permission: READ, workspaceId: BRAND }]);
+  it("the same app for two people gets two distinct rows, each key held by its own person", async () => {
+    const mineKey = await connect([{ permission: READ, workspaceId: BRAND }]);
     const { record } = await connect(
       [{ permission: READ, workspaceId: SHARED }],
       { user: OTHER }
@@ -691,68 +700,39 @@ describe("I3 — per-app identity: the key is the app's own agent's, for this pe
     const mine = (await appRow(OWNER, STUDIO))!;
     const theirs = (await appRow(OTHER, STUDIO))!;
     expect(mine.id).not.toBe(theirs.id);
-    expect(mine.agent_user_id).not.toBe(theirs.agent_user_id);
-    expect(record.linkedUserId).toBe(OTHER);
-  });
-
-  it("tripwire: re-applying agent capabilities never widens an app agent's key", async () => {
-    const { record } = await connect([
-      { permission: READ, workspaceId: BRAND },
-    ]);
-    const agent = (await appRow(OWNER, STUDIO))!.agent_user_id!;
-    expect(
-      await reapplyAgentKeyGrants({ agentUserId: agent, createdBy: OWNER })
-    ).toBe(0);
-    expect(await liveGrantsOf(record.id)).toEqual([
-      { permissions: [READ], workspaceIds: [BRAND] },
-    ]);
+    expect(mineKey.record.userId).toBe(OWNER);
+    expect(record.userId).toBe(OTHER);
   });
 });
 
-describe("I4 — the app's writes are governed (ask-first); consent never sets auto-apply", () => {
-  it("a write inside the consented reach is PROPOSED; outside it is refused", async () => {
+describe("I4 — the app's writes are the person's, within what they ticked", () => {
+  const decide = (
+    workspaceId: string,
+    grant: Parameters<typeof runWithGrant>[0] | null
+  ) => {
+    const run = () =>
+      previewPermissionDecision({
+        userId: OWNER,
+        workspaceId,
+        subjectType: "entity",
+        action: "create",
+        data: { profileSlug: "post", title: "Launch" },
+      } as Parameters<typeof previewPermissionDecision>[0]);
+    return grant ? runWithGrant(grant, run) : run();
+  };
+
+  it("a write inside the consented reach EXECUTES as the person (no proposal); outside it is refused", async () => {
     const { record } = await connect([
       { permission: CREATE, workspaceId: SHARED },
     ]);
     const id = await resolveKeyIdentity(record);
-    const decide = (workspaceId: string) =>
-      runWithGrant(id.grant!, () =>
-        previewPermissionDecision({
-          userId: id.effectiveUserId,
-          agentUserId: id.agentUserId,
-          workspaceId,
-          subjectType: "entity",
-          action: "create",
-          data: { profileSlug: "post", title: "Launch" },
-        } as Parameters<typeof previewPermissionDecision>[0])
-      );
-    expect(await decide(SHARED)).toEqual({ decision: "propose" });
-    expect(await decide(BRAND)).toMatchObject({ decision: "deny" });
-    // The posture the agent was given before it was linked: propose, only.
-    const verdicts = (
-      await q<{ verdict: string }>(
-        `select verdict from governance_rules where agent_user_id = $1 and revoked_at is null`,
-        [id.agentUserId]
-      )
-    ).rows.map((r) => r.verdict);
-    expect(verdicts.length).toBeGreaterThan(0);
-    expect(new Set(verdicts)).toEqual(new Set(["propose"]));
+    expect(id.agentUserId ?? null).toBeNull();
+    expect(await decide(SHARED, id.grant!)).toEqual({ decision: "execute" });
+    expect(await decide(BRAND, id.grant!)).toMatchObject({ decision: "deny" });
   });
 
-  it("CONTROL: a plain agent under the same pod default executes", async () => {
-    await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor') on conflict do nothing`,
-      [randomUUID(), SHARED, AGENT]
-    );
-    const r = await previewPermissionDecision({
-      userId: OWNER,
-      agentUserId: AGENT,
-      workspaceId: SHARED,
-      subjectType: "entity",
-      action: "create",
-      data: { profileSlug: "post", title: "Launch" },
-    } as Parameters<typeof previewPermissionDecision>[0]);
-    expect(r).toEqual({ decision: "execute" });
+  it("CONTROL: the same person, with no app grant, may write in Brand: the refusal above is the app's ticks", async () => {
+    expect(await decide(BRAND, null)).toEqual({ decision: "execute" });
   });
 });
 
@@ -811,8 +791,9 @@ describe("T4 — the app's own token can never re-consent, widen or end itself",
     ]);
     const id = await resolveKeyIdentity(record);
     const row = (await appRow(OWNER, STUDIO))!;
-    const asApp = <T>(fn: () => Promise<T>) =>
-      runWithActingAgent(id.agentUserId!, () => runWithGrant(id.grant!, fn));
+    // The key door's shape for a person-held app token: its grant, no agent.
+    expect(id.agentUserId ?? null).toBeNull();
+    const asApp = <T>(fn: () => Promise<T>) => runWithGrant(id.grant!, fn);
     const before = {
       proposals: await countProposals(),
       codes: await countCodes(),
@@ -823,7 +804,10 @@ describe("T4 — the app's own token can never re-consent, widen or end itself",
     ).rejects.toMatchObject(PERSON_ONLY_REFUSAL);
     await expect(
       asApp(() => revokeApp({ publicId: row.public_id, ownerUserId: OWNER }))
-    ).rejects.toMatchObject(AGENT_CREDENTIAL_REFUSAL("revoke an app"));
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/^A scoped key cannot revoke an app/),
+    });
     // No code minted, nothing filed, nothing approved.
     expect(await countCodes()).toBe(before.codes);
     expect(await countProposals()).toBe(before.proposals);
@@ -837,7 +821,7 @@ describe("T4 — the app's own token can never re-consent, widen or end itself",
 });
 
 describe("I6 — revocation is immediate", () => {
-  it("revokeApp: a token that validated (and is cached) is refused at once; the agent leaves every space", async () => {
+  it("revokeApp: a token that validated (and is cached) is refused at once, its grants with it", async () => {
     const { token, record } = await connect([
       { permission: READ, workspaceId: BRAND },
     ]);
@@ -846,13 +830,15 @@ describe("I6 — revocation is immediate", () => {
     await revokeApp({ publicId: row.public_id, ownerUserId: OWNER });
     expect(await apiKeyService.validateApiKey(token)).toBeNull();
     expect(await liveGrantsOf(record.id)).toEqual([]);
+    // The person's own memberships are theirs, never the app's to end.
     expect(
       (
-        await q(`select id from workspace_members where user_id = $1`, [
-          row.agent_user_id,
-        ])
+        await q(
+          `select id from workspace_members where user_id = $1 and workspace_id = $2`,
+          [OWNER, BRAND]
+        )
       ).rows
-    ).toEqual([]);
+    ).toHaveLength(1);
   });
 
   it("revokeApp burns a code still waiting: it redeems to nothing", async () => {
@@ -945,90 +931,102 @@ describe("the token's plaintext lives only in the /token response", () => {
   });
 });
 
-describe("apps = agents (founder decision 4): it may ASK for what an agent key holds; every act still runs the ladder", () => {
+describe("an app may ASK for the review verbs and `*`; only a Synap app is offered or holds them (founder, 12 Nov 2026)", () => {
   const crm = { clientId: CRM, callback: CRM_CB, scope: CRM_ASK.join(" ") };
+  const DECIDES = ["proposal.approve", "proposal.reject", "*"];
 
-  it("the consent offers every permission it declared: reads where the person reads, the rest where they may write", async () => {
+  it("the consent offers the rest of what it declared, says it acts as the person, and sets the review verbs aside", async () => {
     const ctx = await getOAuthConsentContext(
       params(CRM, CRM_CB, crm.scope),
       OWNER
     );
-    expect(ctx.app!.actsAs.kind).toBe("agent");
+    expect(ctx.app!.actsAs.kind).toBe("person");
+    expect(ctx.app!.actsAs.note).toMatch(/cannot[^.]*approve changes/);
     const offer = Object.fromEntries(
       ctx.app!.permissions.map((p) => [
         p.permission,
         p.workspaces.map((w) => w.workspaceName),
       ])
     );
-    expect(Object.keys(offer)).toEqual(CRM_ASK);
+    expect(Object.keys(offer)).toEqual(
+      CRM_ASK.filter((p) => !DECIDES.includes(p))
+    );
+    expect(ctx.app!.ignoredScopes).toEqual(DECIDES);
     expect(offer[READ]).toEqual(["Brand", "Shared", "Viewing"]);
-    for (const p of CRM_ASK.filter((p) => !p.endsWith(".read"))) {
+    for (const p of Object.keys(offer).filter((p) => !p.endsWith(".read"))) {
       expect(offer[p], p).toEqual(["Brand", "Shared"]);
     }
   });
 
-  /** Connected with full access, run and approve in Shared only. */
-  async function connectBroad() {
-    const { record } = await connect(
+  for (const permission of DECIDES) {
+    it(`a tampered consent POST ticking ${permission} is refused: nothing filed, no code`, async () => {
+      const before = {
+        proposals: await countProposals(),
+        codes: await countCodes(),
+      };
+      await expect(
+        consent(
+          [
+            { permission: READ, workspaceId: SHARED },
+            { permission, workspaceId: SHARED },
+          ],
+          crm
+        )
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(await countProposals()).toBe(before.proposals);
+      expect(await countCodes()).toBe(before.codes);
+    });
+  }
+
+  it("an approval that names them (stored before this rule) never reaches a token minted from it, and it cannot approve", async () => {
+    const { body } = await connect(
       [
-        { permission: "*", workspaceId: SHARED },
+        { permission: READ, workspaceId: SHARED },
         { permission: "playbook.run", workspaceId: SHARED },
-        { permission: "proposal.approve", workspaceId: SHARED },
       ],
       crm
     );
-    expect(await liveGrantsOf(record.id)).toEqual([
-      {
-        permissions: ["*", "playbook.run", "proposal.approve"],
-        workspaceIds: [SHARED],
-      },
-    ]);
+    const row = (await appRow(OWNER, CRM))!;
+    await q(
+      `update apps set approved_requests = approved_requests || $1::jsonb where id = $2`,
+      [
+        JSON.stringify(
+          DECIDES.map((permission) => ({
+            permission,
+            workspaceId: SHARED,
+            scope: "space",
+          }))
+        ),
+        row.id,
+      ]
+    );
+    // A refresh mints from the CURRENT approval ∩ reach (`appSignInReach`
+    // rule 3 cuts the review verbs and `*`); a narrowing on request alone
+    // could never add them, so the minted key is what discriminates.
+    const res = await oauthApp.request("/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: body.refresh_token,
+        client_id: CRM,
+      }).toString(),
+    });
+    expect(res.status).toBe(200);
+    const next = (await res.json()) as { access_token: string };
+    const record = (await apiKeyService.validateApiKey(next.access_token))!;
+    const minted = (await liveGrantsOf(record.id)).flatMap(
+      (g) => g.permissions
+    );
+    expect(minted).toContain("playbook.run");
+    for (const p of DECIDES) expect(minted, p).not.toContain(p);
     const id = await resolveKeyIdentity(record);
-    expect(id.isAgent).toBe(true);
-    // A `*` pinned to the spaces it was given is not full access (S1).
+    expect(id.isAgent).toBe(false);
+    const held = id.grant!.scopes.flatMap((g) => g.permissions);
+    expect(held).toContain("playbook.run");
+    for (const p of DECIDES) expect(held, p).not.toContain(p);
     expect(isFullAccessGrant(id.grant!)).toBe(false);
-    return id;
-  }
 
-  it("holding `*`, its writes and its runs are PROPOSED (ask-first), and refused outside its space", async () => {
-    const id = await connectBroad();
-    const decide = (
-      workspaceId: string,
-      subjectType: string,
-      action: string,
-      extra: Record<string, unknown> = {}
-    ) =>
-      runWithActingAgent(id.agentUserId!, () =>
-        runWithGrant(id.grant!, () =>
-          previewPermissionDecision({
-            userId: id.effectiveUserId,
-            agentUserId: id.agentUserId,
-            workspaceId,
-            subjectType,
-            action,
-            ...extra,
-          } as Parameters<typeof previewPermissionDecision>[0])
-        )
-      );
-    const post = { data: { profileSlug: "post", title: "Launch" } };
-    expect(await decide(SHARED, "entity", "create", post)).toEqual({
-      decision: "propose",
-    });
-    // `POST /playbooks/:id/run` → `playbooks.run` gates exactly this
-    // (subject `playbook`, action `run`, `heldAsDraft` for an agent's own run).
-    expect(
-      await decide(SHARED, "playbook", "run", { heldAsDraft: true })
-    ).toEqual({ decision: "propose" });
-    expect(await decide(BRAND, "entity", "create", post)).toMatchObject({
-      decision: "deny",
-    });
-    expect(
-      await decide(BRAND, "playbook", "run", { heldAsDraft: true })
-    ).toMatchObject({ decision: "deny" });
-  });
-
-  it("holding `proposal.approve` (and `*`), it still cannot approve; it may decline only its own work", async () => {
-    const id = await connectBroad();
     const proposalId = randomUUID();
     await q(
       `insert into proposals (id, target_type, target_id, proposal_type, workspace_id, status, data, agent_user_id, created_by, revision_history, comments)
@@ -1041,21 +1039,16 @@ describe("apps = agents (founder decision 4): it may ASK for what an agent key h
         [proposalId]
       )
     ).rows;
-    const asApp = <T>(fn: () => T) =>
-      runWithActingAgent(id.agentUserId!, () => runWithGrant(id.grant!, fn));
     await expect(
-      asApp(() =>
+      runWithGrant(id.grant!, () =>
         applyProposalApproval({
           proposal: proposal as never,
           userId: OWNER,
           input: { proposalId },
-          ctx: HUMAN_CTX(OWNER, { agentUserId: id.agentUserId }),
+          ctx: HUMAN_CTX(OWNER),
         })
       )
-    ).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      message: expect.stringMatching(/agent credential cannot approve/),
-    });
+    ).rejects.toThrow(/approve/i);
     expect(
       (
         await q<{ status: string }>(
@@ -1064,23 +1057,5 @@ describe("apps = agents (founder decision 4): it may ASK for what an agent key h
         )
       ).rows[0]!.status
     ).toBe("pending");
-    // Another's proposal: refused, even holding `*` in that space.
-    expect(() =>
-      asApp(() => assertAgentKeyMayReject({ agentUserId: AGENT }, "reject"))
-    ).toThrow(/may only reject its own/);
-    // Its own: it may withdraw it.
-    expect(() =>
-      asApp(() =>
-        assertAgentKeyMayReject({ agentUserId: id.agentUserId }, "reject")
-      )
-    ).not.toThrow();
-    // CONTROL: an UNBOUNDED `*` key is unchanged.
-    expect(() =>
-      runWithActingAgent(AGENT, () =>
-        runWithGrant({ scopes: [{ permissions: ["*"] }], clientId: null }, () =>
-          assertAgentKeyMayReject({ agentUserId: OTHER }, "reject")
-        )
-      )
-    ).not.toThrow();
   });
 });

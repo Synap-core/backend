@@ -1994,8 +1994,9 @@ describe("CIMD clients", () => {
       accessToken: "synap_hub_live_APPKEY",
       keyId: "app-key-1",
       expiresAt: new Date(Date.now() + 3600 * 1000),
-      actsAs: "agent",
-      agentUserId: APP_AGENT_ID,
+      // Every pod app's token is the person's (founder, 12 Nov 2026).
+      actsAs: "person",
+      agentUserId: null,
       publicId: APP_PUBLIC_ID,
       grant: [
         {
@@ -2009,9 +2010,10 @@ describe("CIMD clients", () => {
   }
 
   // Flipped on purpose in PB2 (was: /token refuses a CIMD code with
-  // unauthorized_client). A CIMD code now mints — through the app's OWN agent
-  // (mintAppOAuthAccessKey), never the shared claude-web* door.
-  it("TRIPWIRE I3: a CIMD client's key is its own app agent's, never a claude-web* key", async () => {
+  // unauthorized_client). A CIMD code now mints through the pod app door
+  // (mintAppOAuthAccessKey: the person's own key since 12 Nov 2026, was the
+  // app's own agent's), never the shared claude-web* door.
+  it("TRIPWIRE I3: a CIMD client's key comes from the pod app door, never a claude-web* key", async () => {
     const code = await appCode("mcp.read entity.post.read");
     mintAnswers();
     const { res, body } = await token({
@@ -2108,7 +2110,7 @@ describe("CIMD clients", () => {
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });
     // Who the token acts as, as the key door minted it (`podAppActsAs`).
-    expect(body.synap_acts_as).toBe("agent");
+    expect(body.synap_acts_as).toBe("person");
     // Which app this is on the pod, and where the person manages it.
     expect(body.synap_app).toEqual({
       id: APP_PUBLIC_ID,
@@ -2272,7 +2274,76 @@ describe("CIMD clients", () => {
       ],
       templates: ["content-studio"],
       ignoredScopes: ["mcp.read"],
+      // Every pod app acts as the person (founder, 12 Nov 2026).
+      actsAs: { kind: "person" },
     });
+  });
+
+  it("an app that is not a Synap app is never offered the review verbs; a Synap app is", async () => {
+    const decides = ["proposal.approve", "proposal.reject", "*"];
+    const synap =
+      "https://content-studio.synap.live/.well-known/synap-client.json";
+    for (const [id, offered] of [
+      [APP_ID, false],
+      [synap, true],
+    ] as const) {
+      const callback = `${new URL(id).origin}/cb`;
+      store.cimd.set(id, {
+        clientId: id,
+        clientKind: "cimd",
+        clientName: "Content Studio",
+        redirectUris: [callback],
+        scopes: [],
+        requestedPermissions: ["entity.post.read", ...decides],
+        createdAt: new Date(),
+      });
+      const context = await getOAuthConsentContext(
+        {
+          clientId: id,
+          redirectUri: callback,
+          responseType: "code",
+          scope: ["entity.post.read", ...decides].join(" "),
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+        },
+        HUMAN_ID
+      );
+      const permissions = context.app!.permissions.map((p) => p.permission);
+      expect(context.app!.actsAs.kind, id).toBe("person");
+      if (offered) {
+        expect(permissions, id).toEqual(["entity.post.read", ...decides]);
+        expect(context.app!.actsAs.note, id).not.toMatch(/approve changes/);
+      } else {
+        expect(permissions, id).toEqual(["entity.post.read"]);
+        expect(context.app!.ignoredScopes, id).toEqual(decides);
+        expect(context.app!.actsAs.note, id).toMatch(
+          /cannot[^.]*approve changes/
+        );
+      }
+    }
+  });
+
+  it("the consent of an app that is not a Synap app never hands the review verbs to the connection", async () => {
+    cacheApp({
+      requestedPermissions: ["entity.post.read", "proposal.approve"],
+    });
+    await decideOAuthAuthorization(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read proposal.approve",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        approve: true,
+        approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+      },
+      HUMAN_ID,
+      HUMAN_CTX
+    );
+    expect(appConnect.connect).toHaveBeenCalledWith(
+      expect.objectContaining({ permissions: ["entity.post.read"] })
+    );
   });
 
   it("a Synap app (exact https://<id>.synap.live origin) is shown verified; a look-alike is not", async () => {
