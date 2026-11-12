@@ -18,7 +18,6 @@ import {
   drizzleSql,
   entities,
 } from "@synap/database";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { TRPCError } from "@trpc/server";
 import { listProjectsUsingWorkspaces } from "../../../utils/project-workspace.js";
 import { setProjectWorkspaceMembershipGoverned } from "../../../services/projects/project-workspace-membership.js";

@@ -669,10 +669,11 @@ async function readThings(input: {
   stuck.items = candidates
     .sort((a, b) => b.forDays - a.forDays)
     .slice(0, STUCK_LISTED);
-  const kinds = [...perKind.values()].sort((a, b) =>
-    a.kind.localeCompare(b.kind)
-  );
-  return { things, stuck, kinds };
+  return {
+    things,
+    stuck,
+    kinds: [...perKind.values()].sort((a, b) => a.kind.localeCompare(b.kind)),
+  };
 }
 
 /**
