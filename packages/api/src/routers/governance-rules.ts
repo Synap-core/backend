@@ -217,6 +217,46 @@ export async function assertCanManageRule(
 export const SUBJECT_RULE_REPLACED = "replaced_by_newer_approval";
 
 /**
+ * A newer approval of one object replaces the same person's older ones for the
+ * same principal and place (they name a version that no longer runs), and their
+ * host seeds with them. Another person's approvals are left alone. A helper, not
+ * inline in `create`: the read-scoping tripwire slices a procedure to the next
+ * builder it knows (`credentialProcedure` is none), so a `.where(` written in
+ * `create` reads as part of `ownOrganiseDefault`, a query.
+ */
+async function revokeReplacedSubjectRules(
+  rule: typeof governanceRules.$inferSelect,
+  ownerUserId: string
+): Promise<void> {
+  if (!rule.targetSubjectId) return;
+  const replaced = await db
+    .update(governanceRules)
+    .set({ revokedAt: new Date(), revokedReason: SUBJECT_RULE_REPLACED })
+    .where(
+      and(
+        activeRulePredicate(),
+        eq(governanceRules.targetSubjectId, rule.targetSubjectId),
+        eq(governanceRules.targetPattern, rule.targetPattern),
+        eq(governanceRules.principalKind, rule.principalKind),
+        eq(governanceRules.principalOwnerId, ownerUserId),
+        eq(governanceRules.scopeKind, rule.scopeKind),
+        rule.workspaceId
+          ? eq(governanceRules.workspaceId, rule.workspaceId)
+          : isNull(governanceRules.workspaceId),
+        rule.agentUserId
+          ? eq(governanceRules.agentUserId, rule.agentUserId)
+          : isNull(governanceRules.agentUserId),
+        ne(governanceRules.id, rule.id)
+      )
+    )
+    .returning({ id: governanceRules.id });
+  await revokeHostSeeds(
+    db,
+    replaced.map((r) => r.id)
+  );
+}
+
+/**
  * Letting agents run a playbook without asking is the PERSON's act (founder
  * decision, 10 Nov 2026): an agent credential may ask for it, never grant it.
  * The rule holds for the version the person saw, so a playbook edited since
@@ -853,31 +893,7 @@ export const governanceRulesRouter = router({
       // rule is seeded, so its own seed is never caught. Another person's
       // approvals are left alone.
       if (rule?.targetSubjectId) {
-        const replaced = await db
-          .update(governanceRules)
-          .set({ revokedAt: new Date(), revokedReason: SUBJECT_RULE_REPLACED })
-          .where(
-            and(
-              activeRulePredicate(),
-              eq(governanceRules.targetSubjectId, rule.targetSubjectId),
-              eq(governanceRules.targetPattern, rule.targetPattern),
-              eq(governanceRules.principalKind, rule.principalKind),
-              eq(governanceRules.principalOwnerId, ctx.userId),
-              eq(governanceRules.scopeKind, rule.scopeKind),
-              rule.workspaceId
-                ? eq(governanceRules.workspaceId, rule.workspaceId)
-                : isNull(governanceRules.workspaceId),
-              rule.agentUserId
-                ? eq(governanceRules.agentUserId, rule.agentUserId)
-                : isNull(governanceRules.agentUserId),
-              ne(governanceRules.id, rule.id)
-            )
-          )
-          .returning({ id: governanceRules.id });
-        await revokeHostSeeds(
-          db,
-          replaced.map((r) => r.id)
-        );
+        await revokeReplacedSubjectRules(rule, ctx.userId);
       }
       // The same rule for the agent's box, when the box is the agent's
       // (host-seed.ts). A seed that fails leaves the box asking: stricter.
