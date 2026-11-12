@@ -402,11 +402,9 @@ const cap = (xs, n = 8) =>
  * is the list of files the BASE commit's baseline names, when it changed.
  * `collectionInert` lists the changed package.json files whose diff touches
  * only INERT_PACKAGE_KEYS (ci-changes.mjs reads both sides): they are package
- * config edges, not full-suite paths.
- * `everyTripwire` (default true) adds every tripwire, as a PR runs them. The
- * merge queue's semantic-overlap measure (ci-changes.mjs semanticOverlap)
- * passes false: a tripwire every change selects says nothing about whether
- * two changes meet, so only the tripwires the change itself reaches stay.
+ * config edges, not full-suite paths. Every tripwire is added, as a PR runs
+ * them (so an empty change selects exactly every tripwire: a light merge-queue
+ * entry, ci-changes.mjs).
  * Returns { scope: "full" | "selected", tests, e2e, why }:
  *   tests  scope=selected: every test file to run (sorted), tripwires included
  *   why    what forced the full suite, or what was selected and from what
@@ -414,7 +412,7 @@ const cap = (xs, n = 8) =>
 export function selectTier(
   files,
   g,
-  { baseBaseline = [], collectionInert = [], everyTripwire = true } = {}
+  { baseBaseline = [], collectionInert = [] } = {}
 ) {
   const inert = new Set(collectionInert.filter((f) => PACKAGE_JSON.test(f)));
   // A file a vitest config imports decides collection like the config.
@@ -488,7 +486,7 @@ export function selectTier(
     : [];
   for (const f of byBaseline) selected.add(f);
   const beforeTripwires = selected.size;
-  if (everyTripwire) for (const t of g.tripwires) selected.add(t);
+  for (const t of g.tripwires) selected.add(t);
   return {
     scope: "selected",
     tests: [...selected].sort(),
@@ -504,11 +502,7 @@ export function selectTier(
       ...(byBaseline.length
         ? [`${byBaseline.length} file(s) the known-red baseline names`]
         : []),
-      ...(everyTripwire
-        ? [
-            `${selected.size - beforeTripwires} more: every tripwire (${g.tripwires.length})`,
-          ]
-        : []),
+      `${selected.size - beforeTripwires} more: every tripwire (${g.tripwires.length})`,
       ...(neutral.length
         ? [
             `read by no test: ${neutral.length} generated file(s) under docs/reference/`,

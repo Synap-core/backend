@@ -62,9 +62,13 @@ permissions:
 # API surface changed (scripts/ci/affected.mjs). Push to main and release
 # branches always run everything; a pod updates only to a main commit whose
 # post-merge run was all green (docker-publish.yml, ci-gate). A merge queue
-# entry runs the Release gate and takes the Full suite + API e2e from its PR's
-# own run when both concluded `success` there (founder 2026-10-28, "light
-# queue run", #428); otherwise it runs the tier of what it changes on top of
+# entry runs the Release gate and EVERY TRIPWIRE on the combined tree, and
+# takes the rest of the Full suite + API e2e from its PR's own run when both
+# concluded `success` there (founder 2026-10-28, "light queue run", #428;
+# every tripwire since 2026-11-12, plan b5820982 §1: two PRs green alone broke
+# main together on a tripwire four times). A tripwire also red on main's
+# latest finished push run does not fail the entry (scripts/ci-changes.mjs
+# "RED AT BASE"). Otherwise it runs the tier of what it changes on top of
 # the main it lands on, on the combined tree. Every required check RUNS on a PR or
 # a queue entry: one whose work is not needed passes through a "Not affected"
 # step that names why, never through a skip. An entry whose TREE is the tree
@@ -146,23 +150,10 @@ jobs:
           REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
           SELECTION_OUT: ${{ runner.temp }}/selection/selection.json
-          OVERLAP_OUT: ${{ runner.temp }}/overlap/semantic-overlap.json
         run: node scripts/ci-changes.mjs
 
-      # A merge-queue entry's semantic overlap, LOG-ONLY (scripts/ci-changes.mjs
-      # "SEMANTIC OVERLAP", plan d679e92c C1(a)): the test files both its PR and
-      # what main gained since the PR's run can reach. Kept so 2-3 days of
-      # queue runs can be counted; it decides nothing.
-      - name: Upload the semantic overlap
-        if: ${{ github.event_name == 'merge_group' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: semantic-overlap
-          path: ${{ runner.temp }}/overlap/semantic-overlap.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # A PR's selected or full tier: the plan the shards and the judge read
+      # A PR's selected or full tier, or a light queue entry's tripwires (with
+      # the files red on main, `redAtBase`): the plan the shards and the judge read
       # (which test files, in which shard, under which report id). One file
       # for all of them, so they cannot disagree; a missing one fails them.
       - name: Upload the test selection
@@ -597,9 +588,10 @@ jobs:
 
   # The Full suite: shard jobs run the tests, one judge job ("Full suite", the
   # required check) reads their reports and applies the ratchet once. A PR's
-  # selection (scope=selected, lane L8) runs in 1 to 8 shards sized from its
-  # measured cost (`shards`, scripts/test-ratchet-shards.mjs planSelection);
-  # everything else (main, a full PR, `changes` failed) runs the 4-shard
+  # selection (scope=selected, lane L8) and a light queue entry's tripwires
+  # run in 1 to 8 shards sized from their measured cost (`shards`,
+  # scripts/test-ratchet-shards.mjs planSelection); everything else (main, a
+  # queue entry's full fall-through, `changes` failed) runs the 4-shard
   # plan. Measured
   # 2026-10-27: one job took 65 min, of which packages/api (1,950 files) was
   # ~38 min of critical path; split 4 ways it is ~10 min per shard. Since
@@ -1053,13 +1045,18 @@ jobs:
 
       # An explicit, logged pass: only a successful `changes` that decided
       # e2e=false with no hold reaches it.
-      - name: Not affected (no API surface path changed)
+      - name: Not affected (the API e2e suite did not need to run)
         if: ${{ needs.changes.result == 'success' && needs.changes.outputs.e2e == 'false' && needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' }}
         env:
+          EVENT: ${{ github.event_name }}
           REASON: ${{ needs.changes.outputs.reason }}
         run: |
-          echo "API e2e not run: $REASON"
-          printf '### API e2e: not affected\n\n%s.\n\nDecided by "What changed" (scripts/ci-changes.mjs, API_SURFACE in scripts/ci/affected.mjs); main runs the e2e suite after the merge.\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+          case "$EVENT" in
+            merge_group) WHY="a merge queue entry: its pull request's own API e2e passed (scripts/ci-changes.mjs)" ;;
+            *) WHY="no API surface path changed (scripts/ci-changes.mjs, API_SURFACE in scripts/ci/affected.mjs)" ;;
+          esac
+          echo "API e2e not run: $WHY ($REASON)"
+          printf '### API e2e: not affected\n\n%s.\n\n%s.\n\nMain runs the e2e suite after the merge.\n' "$WHY" "$REASON" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout Repository
         if: ${{ env.RUN_WORK == 'true' }}
