@@ -41,7 +41,7 @@ import {
 
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { isPodAdmin } from "../../utils/workspace-role.js";
-import { isSynapApp, oauthKeyInstanceId, podAppActsAs } from "./config.js";
+import { isSynapApp, oauthKeyInstanceId } from "./config.js";
 import type { AppGrantRequest, StoredClient } from "./store.js";
 
 /**
@@ -119,12 +119,7 @@ export async function loadPersonTokenApp(publicId: string) {
     .limit(1);
   if (!app) return null;
   if (app.mode === "specific") return app;
-  if (
-    app.mode === "oauth" &&
-    app.oauthClientId &&
-    isSynapApp(app.oauthClientId)
-  )
-    return app;
+  if (app.mode === "oauth" && app.oauthClientId) return app;
   return null;
 }
 
@@ -199,6 +194,8 @@ export function intersectAppGrant(
  *  2. WHAT: the app's current approval ∩ what its owner could STILL give
  *     (an approval outlives a role — `ownerGrantableNow`) ∩ the spaces the
  *     person can reach. Their own role still decides each write.
+ *  3. DECISIONS: a pod app connection (`mode = 'oauth'`) that is not a
+ *     Synap app never holds the review verbs (`grantsDecision`).
  *
  * `"not_for_you"` = rule 1 refused; `[]` = nothing left.
  */
@@ -206,6 +203,9 @@ export async function appSignInReach(
   app: {
     ownerUserId: string;
     approvedRequests: readonly AppGrantRequest[] | null;
+    /** Required, so no caller can skip rule 3 by passing a partial row. */
+    mode: string;
+    oauthClientId: string | null;
   },
   personUserId: string
 ): Promise<AppGrantRequest[] | "not_for_you"> {
@@ -215,7 +215,13 @@ export async function appSignInReach(
   ) {
     return "not_for_you";
   }
-  const approved = app.approvedRequests ?? [];
+  // 3. DECISIONS: a pod app that is not a Synap app never decides proposals
+  //    for the person (founder, 12 Nov 2026): the review verbs, and `*`
+  //    which covers them, are never in its reach, whatever was ticked.
+  const decides = app.mode === "oauth" && !isSynapApp(app.oauthClientId ?? "");
+  const approved = (app.approvedRequests ?? []).filter(
+    (r) => !decides || !grantsDecision(r.permission)
+  );
   if (approved.length === 0) return [];
   // Loaded on use: the app service pulls a large graph the protocol
   // endpoints (and their tests) otherwise never load.
@@ -290,6 +296,11 @@ export function appGrantFingerprint(
     ...new Set(requests.map((r) => `${r.workspaceId} ${r.permission}`)),
   ].sort();
   return createHash("sha256").update(pairs.join("\n")).digest("hex");
+}
+
+/** Does this permission let its holder approve or reject a proposal? */
+export function grantsDecision(pattern: string): boolean {
+  return patternGrants(pattern, "approve") || patternGrants(pattern, "reject");
 }
 
 /** Does this permission pattern grant `verb` on anything? (grammar.ts) */
@@ -413,12 +424,14 @@ export async function describeAppSignIn(
 
 /**
  * What a POD APP's consent screen says about who its token acts as
- * (`podAppActsAs`), every word from here — the screen writes none of it.
- *  - `person` (a Synap app): `note` says it acts as the person, how a write
- *    lands and what it cannot do, derived from the permissions the app asked
- *    for. What it may do where is the consent's headline, the ONE access
- *    sentence over the person's ticks (pod admin `consentHeadline`).
- *  - `agent` (any other app): the ask-first sentence, unchanged.
+ * (`podAppActsAs`: the person, for every pod app since 12 Nov 2026), every
+ * word from here — the screen writes none of it. `note` says it acts as the
+ * person, how a write lands and what it cannot do, derived from the
+ * permissions the app asked for; deciding proposals only for a Synap app
+ * (`appSignInReach` rule 3). What it may do where is the consent's headline,
+ * the ONE access sentence over the person's ticks (pod admin
+ * `consentHeadline`). `agent` stays in the type for the pod admin screen,
+ * which still renders an older pod's answer.
  */
 export type PodAppActsAsDescription =
   { kind: "person"; note: string } | { kind: "agent"; note: string };
@@ -428,19 +441,18 @@ export function describePodAppActsAs(
   appName: string,
   permissions: readonly string[]
 ): PodAppActsAsDescription {
-  if (podAppActsAs(clientId) === "agent") {
-    return {
-      kind: "agent",
-      // No "see other spaces": a space grant reads what a member of the space
-      // reads, including records of other spaces with a role there (the
-      // consent screen's SPACE_REACH_NOTE, rv-ui U1).
-      note: "Every change it makes is sent to you for review first. It can never approve its own changes or create keys.",
-    };
-  }
-  const canApprove = permissions.some((p) => patternGrants(p, "approve"));
+  const canApprove =
+    isSynapApp(clientId) &&
+    permissions.some((p) => patternGrants(p, "approve"));
   const canDelete = permissions.some((p) => patternGrants(p, "delete"));
-  // No "see other spaces" (rv-ui U1): see the agent note above.
-  const cannot = [...(canDelete ? [] : ["delete"]), "create keys"];
+  // No "see other spaces": a space grant reads what a member of the space
+  // reads, including records of other spaces with a role there (the consent
+  // screen's SPACE_REACH_NOTE, rv-ui U1).
+  const cannot = [
+    ...(canApprove ? [] : ["approve changes"]),
+    ...(canDelete ? [] : ["delete"]),
+    "create keys",
+  ];
   return {
     kind: "person",
     note: `What you do in ${appName} is saved as you, right away — not sent for review${

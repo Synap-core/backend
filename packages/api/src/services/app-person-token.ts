@@ -15,16 +15,18 @@
  * `resolveKeyIdentity` this person-held key must NOT be adopted onto the app's
  * agent (the 0313 rule for every other person-held key that names an app).
  *
- * The SAME door serves a SYNAP pod app (founder decision 2026-10-22,
- * `mintPodAppPersonToken`): a pod app (CIMD client) whose client_id origin is
- * exactly `https://<id>.synap.live` for a listed id (`isSynapApp`) is given a
- * token held by the person who consented — key type `app_person`, slot
- * `oauth:<client_id URL>:<person>`, grant = the person's own connection
- * approval (their consent) ∩ their current reach, `client_id` = the
- * connection's public id — instead of its own ask-first agent's key. It lives
- * 1 h and refreshes through the pod-app refresh family (rotating,
- * refresh.ts), exactly as the agent key it replaces, so the app's OAuth flow
- * is unchanged. Every other pod app keeps its agent (`podAppActsAs`).
+ * The SAME door serves EVERY pod app (`mintPodAppPersonToken`). Founder
+ * decision 2026-10-22 opened it for a Synap app (`isSynapApp`, an exact
+ * `https://<id>.synap.live` origin); founder 2026-11-12 ("an app is not an
+ * agent; connecting is the approval") opened it for every pod app (CIMD
+ * client): the token is held by the person who consented — key type
+ * `app_person`, slot `oauth:<client_id URL>:<person>`, grant = the person's
+ * own connection approval (their consent) ∩ their current reach, minus the
+ * review verbs for an app that is not a Synap app, `client_id` = the
+ * connection's public id ("via <app>"). It lives 1 h and refreshes through
+ * the pod-app refresh family (rotating, refresh.ts), so the app's OAuth flow
+ * is unchanged. Before 12 Nov every other pod app held its own ask-first
+ * agent's key; the first person mint revokes such a slot's agent key.
  *
  * THREAT MODEL — each threat, its defence, and the test that holds it
  * (`app-person-token.pglite.test.ts` unless named):
@@ -78,34 +80,42 @@
  *     A cookie-carrying decision must also come from the pod-admin origin
  *     (PR #29 L2, `apiKeys.decideOAuthAuthorization`).
  *
- * A SYNAP POD APP (`mintPodAppPersonToken`; tests in
+ * A POD APP (`mintPodAppPersonToken`; tests in
  * `pod-app-person-token.pglite.test.ts`):
  *  T9′ Phishing (H1) does not apply the A1 way: a pod app connection is the
  *     consenting person's OWN row (owner = the person; no one else's approval
- *     is lent to them), and the person path is opened only for a client_id on
- *     a Synap-RUN origin — the founder's mitigation: only Synap can serve the
- *     metadata document and receive the code (its redirect_uris must share
- *     that origin, client-metadata.ts). → "any member consenting to a Synap
- *     app gets a token that is theirs, bounded by their own consent".
- *  T11 A lookalike / unverified client reaching the person path. The verdict
- *     is `isSynapApp` (exact https origin, no credentials, listed ids),
- *     re-read at mint, at refresh and on EVERY request (`loadPersonTokenApp`):
+ *     is lent to them). The code only ever goes back to the domain the
+ *     consent screen named (its redirect_uris must share the client_id's
+ *     origin, client-metadata.ts), and the screen names that domain and says
+ *     "saved as you". RISK ACCEPTED (founder 2026-11-12): a site the person
+ *     connected changes, directly and as them, what they ticked for it; the
+ *     guards are the ticks, their own rights, T13, revocation from
+ *     Connected, the pod admin's switch for unverified apps
+ *     (pod-app-policy.ts), and "via <app>" on every write. → "any member
+ *     consenting to a Synap app gets a token that is theirs", "an app that
+ *     is not a Synap app acts as the person".
+ *  T11 A lookalike of a Synap app. Being a Synap app (`isSynapApp`: exact
+ *     https origin, no credentials, listed ids) no longer decides WHO the
+ *     token is (always the person) but still decides T13 and the "Synap
+ *     app" label; re-read on every request (`appSignInReach`):
  *     `https://content-studio.synap.live.evil.com`, `http://…`, another port
- *     or `user@…` never qualify, and a person key naming an unverified
- *     connection is dead. → "a lookalike client gets the agent key",
- *     config.test "a lookalike … never does".
+ *     or `user@…` never qualify. → "… never decides the person's
+ *     proposals", config.test "a lookalike … never does".
  *  T12 Refresh as a widening. A refresh re-derives the token from the
  *     connection's CURRENT approval ∩ the person's CURRENT reach and keeps the
  *     person identity; revoking the connection, a refresh-token reuse or
  *     /revoke ends the slot's person key too (refresh.ts
  *     `revokeConnectionAccessKey`). → "refresh keeps the person", "revoking
  *     the connection ends it".
- *  T13 Approving through a pod app. Only a Synap app's document may ask for
- *     the review verbs (`proposal.approve` / `proposal.reject`,
- *     client-metadata.ts), the person ticks them per space, and every
- *     decision still names its target (D3) — so it approves only where the
- *     person consented, and only as the person. → "approves in its granted
- *     space, refused outside it".
+ *  T13 Approving through a pod app. Any app's document may ASK for the
+ *     review verbs (client-metadata.ts takes any valid permission), but only
+ *     a Synap app is offered them (consent.ts `appPermissions`) or holds them
+ *     (`appSignInReach` rule 3: `proposal.approve`, `proposal.reject` and
+ *     `*` are cut from any other app's reach on every request). The person
+ *     ticks them per space, and every decision still names its target (D3) —
+ *     so a Synap app approves only where the person consented, and only as
+ *     the person. → "approves in its granted space, refused outside it",
+ *     "… never decides the person's proposals".
  */
 
 import {
@@ -129,7 +139,7 @@ import { attachGrantsOrRevoke } from "./key-grant.js";
 import { grantsForApprovedRequests } from "./app-connect.js";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
 import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
-import { isSynapApp, oauthKeyInstanceId } from "../routers/oauth/config.js";
+import { oauthKeyInstanceId } from "../routers/oauth/config.js";
 import {
   APP_PERSON_SCOPES,
   APP_PERSON_TOKEN_TTL_DAYS,
@@ -273,13 +283,11 @@ export type MintPodAppPersonTokenResult =
   | {
       ok: false;
       /**
-       * `not_verified` — the client is not a Synap app; `not_a_person` — the
-       * connection's person is not a human; `app_unavailable` — the
+       * `not_a_person` — the connection's person is not a human; `app_unavailable` — the
        * connection is gone, revoked, not this person's or approves nothing;
        * `nothing_left` — the approval ∩ the person's reach is empty.
        */
-      reason:
-        "not_verified" | "not_a_person" | "app_unavailable" | "nothing_left";
+      reason: "not_a_person" | "app_unavailable" | "nothing_left";
     };
 
 /**
@@ -304,9 +312,6 @@ export async function mintPodAppPersonToken(args: {
   expiresAt: Date;
   plainKey?: string;
 }): Promise<MintPodAppPersonTokenResult> {
-  if (!isSynapApp(args.oauthClientId)) {
-    return { ok: false, reason: "not_verified" };
-  }
   const person = await db.query.users.findFirst({
     where: eq(users.id, args.personUserId),
     columns: { id: true, userType: true },

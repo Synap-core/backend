@@ -90,6 +90,7 @@ import {
   appSignInReach,
   describeAppSignIn,
   describePodAppActsAs,
+  grantsDecision,
   isAppClientId,
   loadLiveApp,
   resolveAppClient,
@@ -642,9 +643,17 @@ function appPermissions(req: ValidatedAuthorizeRequest): {
   ignoredScopes: string[];
 } {
   const declared = new Set(req.client.requestedPermissions);
+  // A pod app that is not a Synap app is never offered the review verbs: it
+  // acts as the person, but never decides their proposals (`appSignInReach`
+  // rule 3 holds it on every request; this keeps the screen honest).
+  const offerable = (s: string) =>
+    declared.has(s) &&
+    (req.client.clientKind !== "cimd" ||
+      isSynapApp(req.client.clientId) ||
+      !grantsDecision(s));
   return {
-    permissions: req.grantedScopes.filter((s) => declared.has(s)),
-    ignoredScopes: req.grantedScopes.filter((s) => !declared.has(s)),
+    permissions: req.grantedScopes.filter(offerable),
+    ignoredScopes: req.grantedScopes.filter((s) => !offerable(s)),
   };
 }
 
