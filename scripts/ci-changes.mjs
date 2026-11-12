@@ -59,21 +59,10 @@
  * main may have moved since; Preflight re-reads the one cross-repo red we
  * measured (door-tool-names) on every queue run.
  *
- * ── SEMANTIC OVERLAP, LOG-ONLY (plan d679e92c C1(a), 31 Oct) ───────────────
- * Two PRs green alone can be red together: #403×#265 and #556×#558 broke
- * main, and #558 entered the queue after #556 had merged, so comparing only
- * the entries queued together would miss it too. Before a light queue entry
- * takes its PR's Full suite and API e2e, this run measures the overlap: the
- * test files the PR's change reaches, intersected with the test files that
- * every file changed on main (and in the entries ahead of it) since the
- * commit the PR's run tested reaches, both through affected.mjs selectTier
- * on this checkout's graph (every-tripwire padding left out: it would make
- * every pair overlap). It writes one log line, a step summary section and
- * OVERLAP_OUT (default coverage/semantic-overlap.json, uploaded by ci.yml as
- * the "semantic-overlap" artifact) so 2-3 days of queue runs can be counted.
- * It changes NO output: it runs after GITHUB_OUTPUT is written, and any
- * failure is recorded as status "error". Whether to re-run the overlap is
- * the next decision, taken on those counts.
+ * (A log-only "semantic overlap" measure ran here from 31 Oct to 12 Nov,
+ * plan d679e92c C1(a). Its answer, from 292 light entries: a median 1,752 of
+ * ~3,785 test files overlap, so selecting the overlap would re-run nearly the
+ * PR tier; it was deleted, plan b5820982 §1.)
  *
  * ── OUTPUTS (GITHUB_OUTPUT) ──────────────────────────────────────────────────
  *   gate          Release gate runs           false: negctl branch, docs-only
@@ -504,121 +493,6 @@ export function decide({
   };
 }
 
-/**
- * The semantic overlap of a light queue entry (header, "SEMANTIC OVERLAP").
- * Pure. `prFiles`: what the PR changes on top of the code it lands on.
- * `mainFiles`: what changed on main and in the entries ahead since the commit
- * the PR's run tested. Either null = unreadable. `testsOf(files, side)` is
- * selectTier's answer ({ scope, tests, why }) for one side ("pr" | "main"),
- * or null when the graph is unreadable; a "full" side reaches `everyTest`.
- * Returns { status: "ok" | "unknown", overlap (sorted test files), prTests,
- * mainTests (counts), prFull, mainFull, why }.
- */
-export function semanticOverlap({
-  prFiles,
-  mainFiles,
-  testsOf,
-  everyTest = [],
-}) {
-  const unknown = (why) => ({
-    status: "unknown",
-    overlap: [],
-    prTests: null,
-    mainTests: null,
-    prFull: false,
-    mainFull: false,
-    why: [why],
-  });
-  if (!prFiles || !mainFiles) return unknown("changed files unreadable");
-  if (mainFiles.length === 0)
-    return {
-      status: "ok",
-      overlap: [],
-      prTests: null,
-      mainTests: 0,
-      prFull: false,
-      mainFull: false,
-      why: ["nothing changed on main since the PR's run tested it"],
-    };
-  const side = (files, name) => {
-    const t = testsOf(files, name);
-    if (!t) return null;
-    const full = t.scope === "full";
-    return {
-      full,
-      tests: new Set(full ? everyTest : t.tests),
-      why: full ? t.why : [],
-    };
-  };
-  const pr = side(prFiles, "pr");
-  const main = side(mainFiles, "main");
-  if (!pr || !main) return unknown("dependency graph unreadable");
-  return {
-    status: "ok",
-    overlap: [...pr.tests].filter((f) => main.tests.has(f)).sort(),
-    prTests: pr.tests.size,
-    mainTests: main.tests.size,
-    prFull: pr.full,
-    mainFull: main.full,
-    why: [
-      ...pr.why.map((w) => `PR side: ${w}`),
-      ...main.why.map((w) => `main side: ${w}`),
-    ],
-  };
-}
-
-/**
- * The `testsOf` semanticOverlap reads: affected.mjs selectTier over `g`, the
- * graph a PR's tier uses, without the every-tripwire padding (a tripwire the
- * change reaches through imports or reads stays). Docs-only paths widen
- * nothing, as in a PR's tier. `sidesOf(side)` returns the [before, after]
- * reader of that side's range, for package.json files that change only inert
- * keys (collectionInert).
- */
-export function overlapTestsOf(g, sidesOf = () => () => [null, null]) {
-  return (files, side) =>
-    selectTier(
-      files.filter((f) => !isDocsOnly(f)),
-      g,
-      {
-        collectionInert: collectionInert(files, sidesOf(side)),
-        everyTripwire: false,
-      }
-    );
-}
-
-/** The one log line of a semantic overlap (header, "SEMANTIC OVERLAP"). */
-export function overlapLine(o) {
-  if (o.status !== "ok")
-    return `semantic overlap: ${o.status}${o.why?.length ? ` (${o.why.join("; ")})` : ""}; reuse unchanged (log-only)`;
-  const n = o.overlap.length;
-  const names = o.overlap.slice(0, 10).join(", ");
-  return `semantic overlap: ${n} test file(s) would re-run${n ? `: ${names}${n > 10 ? `, and ${n - 10} more` : ""}` : ""} (PR side ${o.prTests ?? 0}, main side ${o.mainTests}); reuse unchanged (log-only)`;
-}
-
-/** The step summary section of a semantic overlap. */
-export function overlapSummary(o) {
-  return [
-    "### Merge queue: semantic overlap (log-only, plan d679e92c C1(a))",
-    "",
-    `${overlapLine(o)}.`,
-    ...(o.why?.length && o.status === "ok"
-      ? ["", ...o.why.map((w) => `- ${w}`)]
-      : []),
-    ...(o.overlap?.length
-      ? [
-          "",
-          "<details><summary>The overlapping test files</summary>",
-          "",
-          ...o.overlap.map((f) => `- \`${f}\``),
-          "",
-          "</details>",
-        ]
-      : []),
-    "",
-  ].join("\n");
-}
-
 /** One line for a tier: what the Full suite and API e2e run, and why. */
 export function tierText(t) {
   const suite =
@@ -849,8 +723,6 @@ async function queueEvidence() {
       pr,
       headSha,
       suitesPassed: suitesPassed(checkRuns),
-      // The run whose Full suite a light entry takes (semantic overlap).
-      suitesRun: runIdOf(decidingRun(checkRuns, "Full suite")),
       reuse: await reuseEvidence(get, checkRuns),
     };
   } catch (err) {
@@ -895,81 +767,6 @@ async function testedCommitOf(get, runId) {
       ?.steps?.map((st) => TESTED_STEP.exec(st.name)?.[1])
       .find(Boolean) ?? null
   );
-}
-
-// A commit's first parent, or null (git cannot say).
-function firstParent(sha) {
-  if (!sha) return null;
-  try {
-    return execFileSync("git", ["rev-parse", `${sha}^1`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * The semantic overlap of this queue entry (header, "SEMANTIC OVERLAP"),
- * with what it was measured from. Never throws: a failure is status "error".
- * Only a light entry (its PR's suites taken, not re-run) is measured: a
- * same-tree entry re-runs nothing on the very tree that was tested, and an
- * entry whose suites run checks the combined tree already.
- */
-async function queueOverlap(queue, d) {
-  const head = process.env.QUEUE_HEAD_SHA ?? null;
-  const record = { pr: queue?.pr ?? null, queueHeadSha: head };
-  const skip = (status, why, extra = {}) => ({
-    ...record,
-    ...extra,
-    status,
-    overlap: [],
-    why: [why],
-  });
-  if (!queue) return skip("unknown", "no queue evidence");
-  if (d.reuse)
-    return skip("same-tree", "the queue tree is the tree the PR's run tested");
-  if (!queue.suitesPassed)
-    return skip("not-reused", "the PR's own suites are not taken");
-  try {
-    const get = githubGet();
-    const testedRun = queue.suitesRun;
-    const testedCommit =
-      get && testedRun ? await testedCommitOf(get, testedRun) : null;
-    if (!testedCommit)
-      return skip("unknown", "the PR's Full suite run names no tested commit", {
-        testedRun,
-      });
-    // A PR run tests GitHub's test merge: its first parent is the main it
-    // was tested on. The queue head's first parent is main plus the entries
-    // ahead of this one (merge_group.base_sha when it cannot be read).
-    const mainAtTest =
-      (await get(`/git/commits/${testedCommit}`)).parents?.[0]?.sha ?? null;
-    const landsOn = firstParent(head) ?? process.env.QUEUE_BASE_SHA ?? null;
-    const prFiles = changedFiles(landsOn, head);
-    const mainFiles = changedFiles(mainAtTest, landsOn);
-    const cg = checkoutGraph();
-    const sides = { pr: [landsOn, head], main: [mainAtTest, landsOn] };
-    const o = semanticOverlap({
-      prFiles,
-      mainFiles,
-      everyTest: cg.everyTest,
-      testsOf: overlapTestsOf(cg.g, (side) => sidesOf(...sides[side])),
-    });
-    return {
-      ...record,
-      testedRun,
-      testedCommit,
-      mainAtTest,
-      landsOn,
-      prFiles: prFiles?.length ?? null,
-      mainFiles: mainFiles?.length ?? null,
-      ...o,
-    };
-  } catch (err) {
-    return skip("error", String(err?.message ?? err));
-  }
 }
 
 // The files the known-red baseline names at a commit ([] when unreadable).
@@ -1138,30 +935,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         ? `### Merge queue: verdict reused\n\n${d.reason}.\n\nReused run: https://github.com/${process.env.REPO}/actions/runs/${queue?.reuse?.runId}\n`
         : summary(d, files)
     );
-  // Log-only (header, "SEMANTIC OVERLAP"): after the outputs, so it cannot
-  // change them.
-  if (event === "merge_group") {
-    let o;
-    try {
-      o = await queueOverlap(queue, d);
-    } catch (err) {
-      o = { status: "error", overlap: [], why: [String(err?.message ?? err)] };
-    }
-    console.log(overlapLine(o));
-    try {
-      const outFile = resolve(
-        process.env.OVERLAP_OUT ?? "coverage/semantic-overlap.json"
-      );
-      mkdirSync(dirname(outFile), { recursive: true });
-      const decision = d.reuse ? "same-tree" : d.suites ? "suites" : "light";
-      writeFileSync(
-        outFile,
-        `${JSON.stringify({ ...o, overlapCount: o.overlap.length, decision }, null, 1)}\n`
-      );
-      if (process.env.GITHUB_STEP_SUMMARY)
-        appendFileSync(process.env.GITHUB_STEP_SUMMARY, overlapSummary(o));
-    } catch (err) {
-      console.log(`semantic overlap: not recorded (${err.message})`);
-    }
-  }
 }

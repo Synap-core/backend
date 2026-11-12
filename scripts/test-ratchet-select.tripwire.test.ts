@@ -333,8 +333,8 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
     // An EXTRA file is red in its own run and passes in a run collected AFTER
     // it (vitest's file filters are substrings: one file can run twice). The
     // file is derived: one whose own run is not the last, since which run a
-    // file lands in moves with every tripwire added to the repo (adding
-    // scripts/ci/semantic-overlap.tripwire.test.ts put EXTRA[0] in the last).
+    // file lands in moves with every tripwire added to the repo (adding one
+    // tripwire on 31 Oct put EXTRA[0] in the last).
     const last = large.runs.length - 1;
     const file = EXTRA.find((f) => {
       const i = large.runs.findIndex((x) => x.files.includes(f));
