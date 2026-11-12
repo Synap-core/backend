@@ -127,6 +127,8 @@ const UpdateProjectSchema = z.object({
    * the gate — same helper as the tRPC `projects.update`).
    */
   homeWorkspaceId: z.string().uuid().optional(),
+  /** The project's main goal (0423): one of its live goals; `null` clears. */
+  mainGoalId: z.string().uuid().nullable().optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   /** Why — shown to the reviewer; never stored on the project. */

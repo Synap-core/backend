@@ -27,12 +27,17 @@
 import { TRPCError } from "@trpc/server";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { isProjectIcon } from "@synap-core/types/projects";
+import { isTrackClosed } from "@synap-core/types/units";
 import {
   getDb,
+  eq,
   EventRepository,
   sql,
   ProjectRepository,
+  projectTracks,
 } from "@synap/database";
+import type { ProjectTrack } from "@synap/database/schema";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import { emitSideEffects } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
@@ -71,6 +76,11 @@ export interface ProjectPatch {
   subjectEntityId?: string | null;
   /** D6: move the project's HOME workspace. */
   homeWorkspaceId?: string;
+  /**
+   * The project's MAIN GOAL (0423): one of its own live goals. `null` clears
+   * it; omitted = untouched. Checked before the gate ({@link assertMainGoal}).
+   */
+  mainGoalId?: string | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
@@ -132,6 +142,12 @@ export async function updateProjectGoverned(
     input.homeWorkspaceId
   );
 
+  // The main goal is refused to its author BEFORE governance: a goal of
+  // another project, a closed one or an invisible one is never filed.
+  if (input.mainGoalId) {
+    await assertMainGoal(id, input.mainGoalId, userId);
+  }
+
   const patch = {
     ...(name !== undefined ? { name } : {}),
     ...(input.description !== undefined
@@ -146,6 +162,7 @@ export async function updateProjectGoverned(
     ...(input.subjectEntityId !== undefined
       ? { subjectEntityId: input.subjectEntityId }
       : {}),
+    ...(input.mainGoalId !== undefined ? { mainGoalId: input.mainGoalId } : {}),
     ...(input.settings !== undefined ? { settings: input.settings } : {}),
     ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
   };
@@ -255,4 +272,36 @@ export async function updateProjectGoverned(
   });
 
   return { status: "updated", row };
+}
+
+/**
+ * A project's main goal must be ONE OF ITS OWN goals, visible to the writer
+ * (the goal read rule — visible iff its project is) and LIVE (open, active or
+ * paused): a closed or dropped goal is history, not what the project is for.
+ * Re-checked on the `project/update` replay, which re-enters this door.
+ */
+export async function assertMainGoal(
+  projectId: string,
+  goalId: string,
+  userId: string
+): Promise<ProjectTrack> {
+  const goal = await scopedDb(
+    AccessContext.from({ userId })
+  ).findFirst<ProjectTrack>(projectTracks, {
+    where: eq(projectTracks.id, goalId),
+  });
+  if (!goal || goal.projectId !== projectId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "The main goal must be one of this project's own goals (synap_list_tracks with this projectId lists them).",
+    });
+  }
+  if (isTrackClosed(goal)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Goal "${goal.name}" is closed or dropped; a project's main goal is a live one. Reopen it, or name another goal.`,
+    });
+  }
+  return goal;
 }

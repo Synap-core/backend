@@ -4700,7 +4700,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Read one project: name, description, home workspace, and usedWorkspaces (domains this engagement spans via the uses INDEX). Call after orient when you need the span map. Not an ACL.",
+          "Read one project: name, description, home workspace, usedWorkspaces (domains this engagement spans via the uses INDEX; not an ACL), its mainGoal, and its PILLARS: each space it uses, with its purpose, the goals advancing it (role primary or contributing) and a derived health (state moving | needs_attention | unproven | stalled | no_active_goal, worst-of, with counts; only primary goals count). rootHealth sums the pillars. A failed health read is {status:'unavailable'}, never empty. Call after orient when you need the span map or where the project stands.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5279,7 +5279,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
+          "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, name its main goal, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5310,6 +5310,11 @@ export const tools = {
               description:
                 "Move the project's HOME to this workspace (UUID from synap_list_workspaces). You must be able to write it. Entities and sessions stay where they are.",
             },
+            mainGoalId: {
+              type: ["string", "null"],
+              description:
+                "The project's MAIN goal: what the whole project is for. One of this project's own live goals (id from synap_list_tracks). null clears it; omit to leave it.",
+            },
             reasoning: {
               type: "string",
               description:
@@ -5330,12 +5335,17 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
+          "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). A space the project uses is one of its PILLARS: give `purpose` to say what the project needs from it; goals then say which pillar they advance (synap_start_track / synap_update_track `pillars`). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent: calling it again with a purpose changes only the purpose. Governed: may return proposed. remove:true removes the edge instead (always a proposal for an agent).",
         inputSchema: {
           type: "object",
           properties: {
             projectId: { type: "string" },
             workspaceId: { type: "string" },
+            purpose: {
+              type: ["string", "null"],
+              description:
+                "What the project needs from this space, one line (max 280), e.g. 'Win the first clients'. Shown as the pillar's purpose. null clears it; omit to leave it. Not with remove.",
+            },
             remove: {
               type: "boolean",
               description:

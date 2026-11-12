@@ -97,6 +97,11 @@ export async function linkProjectToWorkspace(
     projectId: string;
     workspaceId: string;
     userId: string;
+    /**
+     * What the project needs from this space (`metadata.purpose`): a string
+     * sets it, `null` clears it, absent leaves the stored one untouched.
+     */
+    purpose?: string | null;
   }
 ): Promise<LinkProjectToWorkspaceResult> {
   const [visible] = await db
@@ -134,8 +139,50 @@ export async function linkProjectToWorkspace(
     toType: "workspace",
     toId: args.workspaceId,
     linkType: "uses",
+    ...(typeof args.purpose === "string"
+      ? { metadata: { [USES_PURPOSE_KEY]: args.purpose } }
+      : {}),
   });
+  // The edge already existed: the insert was a no-op, so a purpose the caller
+  // named is set on the stored row (`null` clears it; absent leaves it).
+  if (!created && args.purpose !== undefined) {
+    await db
+      .update(links)
+      .set({
+        metadata:
+          args.purpose === null
+            ? drizzleSql`${links.metadata} - ${USES_PURPOSE_KEY}::text`
+            : drizzleSql`${links.metadata} || jsonb_build_object(${USES_PURPOSE_KEY}::text, ${args.purpose}::text)`,
+      })
+      .where(
+        and(
+          eq(links.fromType, "project"),
+          eq(links.fromId, args.projectId),
+          eq(links.toType, "workspace"),
+          eq(links.toId, args.workspaceId),
+          eq(links.linkType, "uses")
+        )
+      );
+  }
   return { linked: true, ...(created?.id ? { linkId: created.id } : {}) };
+}
+
+/**
+ * `links.metadata.purpose` on a `project --uses--> workspace` edge: what the
+ * project needs from that space — the PILLAR's one line ("Win the first
+ * clients" in CRM). Written only by {@link linkProjectToWorkspace}, through
+ * the governed membership door; read by the pillar health read.
+ */
+export const USES_PURPOSE_KEY = "purpose" as const;
+
+/** The longest purpose a pillar carries: one line, not a brief. */
+export const USES_PURPOSE_MAX = 280;
+
+/** The purpose stored on a `uses` edge's metadata; `null` when none. */
+export function readUsesPurpose(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const v = (metadata as Record<string, unknown>)[USES_PURPOSE_KEY];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
 }
 
 export type UnlinkProjectFromWorkspaceResult =
