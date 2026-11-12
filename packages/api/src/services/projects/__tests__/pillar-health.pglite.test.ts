@@ -584,7 +584,7 @@ describe("the goal doors carry the placement", () => {
         camel(track as Record<string, unknown>) as never,
         camel(project as Record<string, unknown>) as never,
         { direction: "Replayed heading", parentGoalId: G_SUB },
-        { userId: ME }
+        { userId: ME, statedBy: ME }
       )
     ).rejects.toThrow();
     const after = await q(

@@ -186,7 +186,7 @@ export async function checkGoalPlacement(
       const valid = await validateDependencyEdge(
         {
           fromType: "track",
-          fromId: ctx.trackId,
+          fromId: existing,
           toType: "track",
           toId: input.parentGoalId,
           linkType: SERVES_LINK_TYPE,
