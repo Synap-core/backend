@@ -306,6 +306,14 @@ export interface CapabilityPlaybookDef {
    * a capability seeded was forced session-scoped regardless of what it authored.
    */
   scope?: "session" | "project";
+  /**
+   * What a run of it may use beyond its class floor, "only these" (0419): run
+   * tools, intent slugs, capabilities. `playbooks.create` validates it and
+   * refuses a stage list outside it.
+   */
+  tools?: string[];
+  /** DEPRECATED input: `playbooks.create` folds it into `tools`. */
+  requiredIntents?: string[];
 }
 
 // Mirrors the `automations.create` tRPC input (routers/automations.ts:164). An
@@ -1427,6 +1435,12 @@ export async function createCapabilityFromDefinition(
           executor: p.executor ?? "is-agent",
           status: p.status ?? "draft",
           scope: p.scope,
+          // The ONE tools list (0419) and its deprecated input: the door folds
+          // them; dropping them gave every capability playbook its floor only.
+          ...(p.tools !== undefined ? { tools: p.tools } : {}),
+          ...(p.requiredIntents !== undefined
+            ? { requiredIntents: p.requiredIntents }
+            : {}),
           // D2: an agent applying a capability (hub /capabilities/apply) gets
           // the playbook gate, not the operator path this ctx would take.
           agentUserId: getActingAgentUserId(),

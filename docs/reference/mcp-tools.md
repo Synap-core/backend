@@ -931,7 +931,7 @@ The one verb for 'build me an app / a UI for this playbook'. From the playbook a
 
 **Save session as template** · Group: `sessions` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
-Escalation L4 — crystallize AFTER a session succeeded and the process is clearly repeatable (not a one-off). Promotes a validated focus session into a reusable Playbook (runtime → config): re-grants capabilities used and records lineage. May propose; never promote failed or speculative sessions.
+Escalation L4 — crystallize AFTER a session succeeded and the process is clearly repeatable (not a one-off). Promotes a validated focus session into a reusable Playbook (runtime → config): its `tools` list keeps what the session's work had (the core write tools, the origin playbook's tools, the capabilities used), and it records lineage. May propose; never promote failed or speculative sessions.
 
 | Parameter   | Type   | Required | Description                                                                                         |
 | ----------- | ------ | -------- | --------------------------------------------------------------------------------------------------- |

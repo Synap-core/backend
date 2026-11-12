@@ -120,6 +120,15 @@ export const LONG_RUN_FLOOR = [
   "get_session",
 ] as const;
 
+/**
+ * The tools a long run has and a short run does not: the core's writes.
+ * Where a playbook is made from work that had them (a promoted session, a
+ * pre-0419 row: migration 0419), they are declared so its runs keep them.
+ */
+export const LONG_RUN_WRITES: readonly string[] = LONG_RUN_FLOOR.filter(
+  (t) => !(SHORT_RUN_FLOOR as readonly string[]).includes(t)
+);
+
 /** The floor of each class. */
 export const RUN_TOOL_FLOORS: Readonly<Record<RunClass, readonly string[]>> = {
   "one-shot": [],
