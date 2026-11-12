@@ -88,6 +88,7 @@ import { SQL, is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import {
+  countProjectPillarGoals,
   linkProjectToWorkspace,
   unlinkProjectFromWorkspace,
 } from "../../../utils/project-workspace.js";
@@ -1275,6 +1276,52 @@ describe("a pillar write refused midway removes nothing", () => {
         `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
         [g]
       );
+    }
+  });
+});
+
+describe("the unlink cascade stays inside its project", () => {
+  // Rules out "every advances edge to the space goes": another project using
+  // the same space keeps its goals' pillar edges; the count said to the
+  // approver counts this project's goals only.
+  it("leaves another project's goals' edges to the same space alone", async () => {
+    if (!(await linkRow(P_OTHER, W_BRAND, "uses"))) {
+      await link("project", P_OTHER, "workspace", W_BRAND, "uses");
+    }
+    await link("track", G_ELSEWHERE, "workspace", W_BRAND, "advances", {
+      primary: true,
+    });
+    try {
+      expect(
+        await countProjectPillarGoals(holder.db as never, {
+          projectId: P,
+          workspaceId: W_BRAND,
+        })
+      ).toBe(1);
+      await unlinkProjectFromWorkspace(holder.db as never, {
+        projectId: P,
+        workspaceId: W_BRAND,
+        userId: ME,
+      });
+      expect(await linkRow(G_PAUSED, W_BRAND, "advances")).toBeUndefined();
+      expect(
+        (await linkRow(G_ELSEWHERE, W_BRAND, "advances"))?.metadata
+      ).toEqual({
+        primary: true,
+      });
+    } finally {
+      await q(
+        `delete from links where from_id = $1 and to_id = $2 and link_type = 'advances'`,
+        [G_ELSEWHERE, W_BRAND]
+      );
+      if (!(await linkRow(P, W_BRAND, "uses"))) {
+        await link("project", P, "workspace", W_BRAND, "uses");
+      }
+      if (!(await linkRow(G_PAUSED, W_BRAND, "advances"))) {
+        await link("track", G_PAUSED, "workspace", W_BRAND, "advances", {
+          primary: true,
+        });
+      }
     }
   });
 });

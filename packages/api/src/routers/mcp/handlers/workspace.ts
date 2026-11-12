@@ -821,6 +821,9 @@ export const workspaceHandlers: McpHandlerMap = {
           status: "proposed",
           proposalId: outcome.proposalId,
           reviewUrl: outcome.reviewUrl,
+          ...(outcome.goalsStopAdvancing
+            ? { goalsStopAdvancing: outcome.goalsStopAdvancing }
+            : {}),
         });
       }
       if (outcome.effect === "unlinked") {
@@ -829,6 +832,7 @@ export const workspaceHandlers: McpHandlerMap = {
           projectId,
           workspaceId,
           removed: outcome.rows,
+          goalsStoppedAdvancing: outcome.goalsStoppedAdvancing,
         });
       }
       return ok({ status: "linked", projectId, workspaceId });
