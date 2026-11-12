@@ -804,3 +804,68 @@ describe("proposedRecord — a document create reads as a document", () => {
     expect(value && "text" in value && value.text.endsWith("…")).toBe(true);
   });
 });
+
+describe("proposedRecord — a card whose renderer is an HTML page", () => {
+  const PAGE = "<!DOCTYPE html><html><body><h1>Person</h1></body></html>";
+  const MODULE = "import React from 'react';\nexport default () => null;";
+  const create = (rendererSource: string) =>
+    proposedRecord({
+      action: "create",
+      kind: "cell",
+      changes: [
+        {
+          path: "name",
+          label: "Name",
+          operation: "create",
+          after: "Person card",
+        },
+        {
+          path: "description",
+          label: "",
+          operation: "create",
+          after: "Small card",
+        },
+        {
+          path: "rendererSource",
+          label: "Renderer source",
+          operation: "create",
+          after: rendererSource,
+        },
+      ],
+    });
+
+  it("reads the page as a page, whole, and leads the card with it", () => {
+    const record = create(PAGE)!;
+    expect(record.fields[0]).toMatchObject({
+      key: "rendererSource",
+      wide: true,
+      after: { kind: "page", html: PAGE },
+    });
+  });
+
+  it("keeps a React module as code, never a page", () => {
+    const field = create(MODULE)!.fields.find(
+      (f) => f.key === "rendererSource"
+    );
+    expect(field?.after?.kind).toBe("code");
+  });
+
+  it("an update keeps the page after and the replaced source before", () => {
+    const record = proposedRecord({
+      action: "update",
+      kind: "cell",
+      changes: [
+        {
+          path: "rendererSource",
+          label: "",
+          operation: "update",
+          before: "<p>old</p>",
+          after: PAGE,
+        },
+      ],
+    })!;
+    const f = record.fields[0]!;
+    expect(f.after).toMatchObject({ kind: "page", html: PAGE });
+    expect(f.before).toMatchObject({ kind: "page", html: "<p>old</p>" });
+  });
+});
