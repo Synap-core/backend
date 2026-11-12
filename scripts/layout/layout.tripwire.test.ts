@@ -10,7 +10,16 @@
  *   - that the hold runs the default branch's code, never the PR's.
  * Named `*.tripwire.test.ts` so `pnpm tripwires` and the Full suite run it.
  */
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
@@ -636,5 +645,138 @@ describe("sibling fetch retries a transient failure, only", () => {
     const src = read("scripts/layout/layout.mjs");
     expect(src).toMatch(/gitNetwork\(\[\s*\.\.\.auth,[\s\S]*?"fetch"/);
     expect(src).not.toMatch(/\n\s+git\(\[\.\.\.auth/);
+  });
+});
+
+// Plan b5820982 §2 P0: backend CI read control-plane-api at its moving main,
+// so a CP change turned unrelated backend PRs and main red. A sibling is now
+// laid out at its pin (sibling-pins.json) unless a --ref or a pending
+// Depends-On says otherwise.
+describe("sibling pins: which commit a sibling is laid out at", () => {
+  const CP = "synap-control-plane-api";
+  const sha = (c: string) => c.repeat(40);
+  const row = (over: Record<string, string> = {}) => ({
+    dir: CP,
+    repo: "Synap-core/control-plane-api",
+    ref: sha("a"),
+    ...over,
+  });
+
+  it("--ref, then a pending Depends-On, then the pin, then the default branch", () => {
+    const refs = new Map([[CP, "refs/pull/9/head"]]);
+    const dependsOn = new Map([[CP, sha("d")]]);
+    const pins = new Map([[CP, sha("a")]]);
+    const at = (o: object) => L.siblingRef(CP, { layout, ...o });
+    expect(at({ refs, dependsOn, pins })).toEqual({
+      ref: "refs/pull/9/head",
+      from: "--ref",
+    });
+    expect(at({ dependsOn, pins })).toEqual({
+      ref: sha("d"),
+      from: "Depends-On",
+    });
+    expect(at({ pins })).toEqual({ ref: sha("a"), from: "pin" });
+    expect(at({})).toEqual({ ref: "main", from: "default branch" });
+    // a pin of another sibling moves nothing here
+    expect(
+      L.siblingRef("synap-app", { layout, pins }).from,
+      "a pin of another sibling moves nothing here"
+    ).toBe("default branch");
+    expect(L.siblingRef("synap-bridge", { layout }).ref).toBe("master");
+  });
+
+  it("materialize picks every sibling's ref through siblingRef, and checks a pinned checkout landed on the pin", () => {
+    const src = read("scripts/layout/layout.mjs");
+    const body = src.slice(src.indexOf("export function materialize("));
+    expect(body).toMatch(
+      /const \{ ref, from \} = siblingRef\(dir, \{ refs, dependsOn, pins, layout \}\)/
+    );
+    expect(body).toMatch(/from === "pin" && sha !== ref/);
+    // The CLI keeps the two sources apart, so --ref can win over Depends-On.
+    expect(src).toMatch(/dependsOn\.set\(d, r\)/);
+  });
+
+  it("reads a pins manifest in relay's monorepo.json shape, with the Depends-On grammar", () => {
+    const pins = L.siblingPins({ repos: [row()] }, { layout });
+    expect([...pins]).toEqual([[CP, sha("a")]]);
+    expect(L.pinLines({ repos: [row()] })).toBe(
+      `Depends-On: Synap-core/control-plane-api@${sha("a")}`
+    );
+  });
+
+  it("a malformed pin fails loudly, never reads as 'no pin'", () => {
+    const bad: [unknown, RegExp][] = [
+      [{}, /"repos" must be an array/],
+      [{ repos: [row({ ref: "main" })] }, /full 40-character commit sha/],
+      [{ repos: [row({ ref: "abc1234" })] }, /full 40-character commit sha/],
+      [
+        { repos: [row({ dir: "synap-app" })] },
+        /checked out as synap-control-plane-api, not synap-app/,
+      ],
+      [{ repos: [row({ repo: "Synap-core/nope" })] }, /unknown repo/],
+      [{ repos: [row(), row({ ref: sha("b") })] }, /pinned twice/],
+      [{ repos: [row(), row()] }, /pinned twice/],
+    ];
+    for (const [manifest, why] of bad)
+      expect(
+        () => L.siblingPins(manifest, { layout }),
+        JSON.stringify(manifest)
+      ).toThrow(why);
+  });
+
+  it("the CLI refuses a malformed pins file before it clones anything", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pins-"));
+    try {
+      const pinsFile = join(dir, "pins.json");
+      writeFileSync(
+        pinsFile,
+        JSON.stringify({ repos: [row({ ref: "main" })] })
+      );
+      const r = spawnSync(
+        "node",
+        [
+          "scripts/layout/layout.mjs",
+          "materialize",
+          "backend-ci",
+          "--root",
+          join(dir, "root"),
+          "--pins",
+          pinsFile,
+        ],
+        {
+          cwd: REPO,
+          encoding: "utf8",
+          // No credentials at all: a resolver that ignored the pins would
+          // fail its fetch here, never clone a private sibling.
+          env: {
+            ...process.env,
+            LAYOUT_TOKEN: "",
+            GITHUB_TOKEN: "",
+            GH_TOKEN: "",
+            GIT_CONFIG_GLOBAL: "/dev/null",
+            GIT_CONFIG_NOSYSTEM: "1",
+            GIT_TERMINAL_PROMPT: "0",
+          },
+        }
+      );
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("full 40-character commit sha");
+      expect(existsSync(join(dir, "root"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("this repo pins control-plane-api at a full sha, in a root file backend CI reads", () => {
+    const pins = L.loadSiblingPins(join(REPO, L.PINS_FILE_NAME), { layout });
+    expect(pins.get(CP)).toMatch(/^[0-9a-f]{40}$/);
+    // CI lays the siblings out with --self-path: the pins come from there.
+    const action = read(".github/actions/monorepo-setup/action.yml");
+    expect(action).toMatch(
+      /materialize backend-ci \\\n\s+--root "\$\{GITHUB_WORKSPACE\}\/\.\." --self-path "\$\{GITHUB_WORKSPACE\}"/
+    );
+    // every pinned sibling is one backend CI lays out
+    for (const dir of pins.keys())
+      expect(layout.layouts["backend-ci"].siblings).toContain(dir);
   });
 });

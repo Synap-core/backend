@@ -1,0 +1,10 @@
+{
+  "$note": "The commit backend CI lays each pinned sibling out at (plan b5820982 §2 P0). scripts/layout/layout.mjs materialize reads this file from the checkout it lays out beside: an explicit --ref wins, then a PR body's pending Depends-On, then this pin, then the sibling's main. A sibling not listed here is read at its main. Shape: relay-app's monorepo.json (repos[].{dir, repo, ref}); `ref` is a full 40-character sha on the sibling's main. To bump a pin, in ONE pull request: set `ref` to the new sha; check ../<dir> out at it; regenerate every mirror of that sibling (control-plane-api: cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts, prettier on door-tool-names.generated.ts, then the same command with --check). CI runs the tests that read the sibling when this file changes (scripts/ci-changes.mjs). This file sits at the repo root, outside the merge bot's INFRA_PATHS, so a bump lands without the 2 h hold.",
+  "repos": [
+    {
+      "dir": "synap-control-plane-api",
+      "repo": "Synap-core/control-plane-api",
+      "ref": "d13ba4f00b6c8caa09ccf4e84dc428ad566ab798"
+    }
+  ]
+}
