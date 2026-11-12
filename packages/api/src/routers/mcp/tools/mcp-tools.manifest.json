@@ -2948,6 +2948,37 @@
       }
     },
     {
+      "name": "synap_read_board",
+      "annotations": {
+        "title": "Read a whiteboard",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "What a whiteboard holds, in ONE read — read-only. `scene.shapes`: each shape's tldraw `type` (entityCard, view, cell, sticky, artboard, frame = a section, text, geo, note, draw…), page-space `x`/`y`/`w`/`h`, `parentId` and `frameId` (the frame or artboard holding it), `refs` (entityId, viewId, cellInstanceId, cellKey, url), `title`, `text`, `artboard` (presetId, pageIndex), `placedBy`/`pending` marks. `scene.arrows`: each end's bound `shapeId` and point, label, `relationId` when it draws a pod relation. `counts` and `bounds` (whole board; a big board is read in pages: `scene.window.nextOffset`, or one frame with `frameId`). `source`: `live` (the open board), `stored` (the saved copy, up to ~10 s behind an open board) or `new` (never saved, empty); `asOf` says when. A failed read is an error with a `reason`, never an empty board. Get a board's viewId from synap_list_views.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "viewId": {
+            "type": "string",
+            "description": "The whiteboard view's id (synap_list_views)."
+          },
+          "frameId": {
+            "type": "string",
+            "description": "Optional: only what this frame or artboard holds (a shape id from a previous read)."
+          },
+          "offset": {
+            "type": "number",
+            "description": "Skip this many shapes (use `scene.window.nextOffset`)."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Shapes per read (default 40, max 200)."
+          }
+        },
+        "required": ["viewId"]
+      }
+    },
+    {
       "name": "synap_list_sessions",
       "annotations": {
         "title": "List focus sessions",

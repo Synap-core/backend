@@ -859,6 +859,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/automations\/?$/, LIST_AUTOMATIONS],
   [route("/threads/:id/context"), THREAD_CONTEXT],
   [/^\/channels\/personal\/?$/, GET_CHANNEL],
+  // A board's content (`readBoardScene`, services/whiteboards/): the view row
+  // and its document's tldraw records (live room or stored file), floored on
+  // the person by the room's own predicate (`resolveDocumentRoomAccess`), not
+  // through a grant clause. The scene names entities (card ids, their titles
+  // as drawn), so `entity` is declared too. A pinned key is refused. Same as
+  // MCP `synap_read_board` (BOARD_SCENE).
+  [route("/whiteboards/:id/scene"), BOARD_SCENE],
 ];
 
 /**
@@ -974,13 +981,6 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // holding `channel.read` (the person's messaging consent, as the
   // conversations door that shows reach).
   [route("/channels/linkedin-reach/:id"), NARROWED("channel", [])],
-  // A board's content (`readBoardScene`, services/whiteboards/): the view row
-  // and its document's tldraw records (live room or stored file), floored on
-  // the person by the room's own predicate (`resolveDocumentRoomAccess`), not
-  // through a grant clause. The scene names entities (card ids, their titles
-  // as drawn), so `entity` is declared too. A pinned key is refused. Same as
-  // MCP `synap_read_board` (BOARD_SCENE).
-  [route("/whiteboards/:id/scene"), BOARD_SCENE],
 ];
 
 /**
