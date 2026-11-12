@@ -34,6 +34,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   const mocked = {
     ...actual,
     getDb: async () => holder.db,
+    // A goal's birth appends its events; the log is not under test here.
+    EventRepository: class {
+      async append() {}
+    },
     ProfileResolutionService: class extends (actual.ProfileResolutionService as new (
       db: unknown
     ) => object) {
@@ -58,6 +62,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   return mocked;
 });
 
+// The goal doors' gate: a person's write is granted (governance has its own
+// suites); the agent path is not exercised here.
+vi.mock("../../../utils/permission-check.js", () => ({
+  checkPermissionOrPropose: async () => ({ granted: true }),
+  proposedMessageFor: (_t: string, fallback: string) => fallback,
+}));
+
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { SQL, is } from "drizzle-orm";
@@ -71,6 +82,7 @@ import {
   writeDependencyLink,
 } from "../../links/dependency-links.js";
 import { applyGoalPlacement } from "../../tracks/goal-placement.js";
+import { setTrackDirection, startTrack } from "../../tracks/tracks-service.js";
 import { assertMainGoal } from "../update-project.js";
 import {
   readGoalGroupWork,
@@ -473,6 +485,66 @@ describe("goal placement — where a goal sits", () => {
       })
     ).rejects.toThrow(PILLAR_NOT_USED_ERROR);
     await q(`delete from links where from_id = $1`, [g]);
+  });
+});
+
+describe("the goal doors carry the placement", () => {
+  it("a person's start writes the parent and the pillars with the goal", async () => {
+    const started = await startTrack({
+      projectId: P,
+      name: "Born placed",
+      parentGoalId: G_OTHER_ROOT,
+      pillars: [
+        { workspaceId: W_SALES },
+        { workspaceId: W_BRAND, primary: true },
+      ],
+      actor: { userId: ME },
+    });
+    expect(started.status).toBe("started");
+    const id = (started as { track: { id: string } }).track.id;
+    expect((await linkRow(id, G_OTHER_ROOT, "serves"))?.metadata).toEqual({
+      primary: true,
+    });
+    expect((await linkRow(id, W_BRAND, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+    expect((await linkRow(id, W_SALES, "advances"))?.metadata).toEqual({});
+    // An update that only places the goal moves the primary pillar.
+    const updated = await setTrackDirection({
+      trackId: id,
+      pillars: [
+        { workspaceId: W_BRAND, primary: false },
+        { workspaceId: W_SALES, primary: true },
+      ],
+      actor: { userId: ME },
+    });
+    expect(updated.status).toBe("updated");
+    expect((await linkRow(id, W_SALES, "advances"))?.metadata).toEqual({
+      primary: true,
+    });
+    expect((await linkRow(id, W_BRAND, "advances"))?.metadata).toEqual({
+      primary: false,
+    });
+    await q(`delete from links where from_id = $1`, [id]);
+    await q(
+      `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+      [id]
+    );
+  });
+
+  it("refuses an unused space BEFORE anything is started", async () => {
+    await expect(
+      startTrack({
+        projectId: P,
+        name: "Never born",
+        pillars: [{ workspaceId: W_UNUSED }],
+        actor: { userId: ME },
+      })
+    ).rejects.toThrow(PILLAR_NOT_USED_ERROR);
+    const born = await q(
+      `select id from project_tracks where name = 'Never born'`
+    );
+    expect(born.rows).toHaveLength(0);
   });
 });
 
