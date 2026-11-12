@@ -45,6 +45,7 @@ import {
   resolveEntityMedia,
   type MediaRef,
 } from "@synap-core/types/presentation";
+import { isHtmlPageSource } from "@synap-core/types/renderables";
 import { formatDate, formatTimestamp } from "../../../lib/format";
 import {
   hasChanges,
@@ -79,6 +80,8 @@ export type RecordValue =
   | { kind: "tags"; items: string[] }
   /** Source code, whole: never clipped (the card may fold it, never cut it). */
   | { kind: "code"; text: string; lines: number }
+  /** An HTML page (a card's renderer), drawn as the page with its source a toggle away. */
+  | { kind: "page"; html: string }
   /**
    * A rewritten text, whole, with its changes where they happen (instructions,
    * a goal, a note's body). `code`: read as source, line by line.
@@ -127,6 +130,7 @@ export const RECORD_FIELDS_SHOWN = 9;
  * the one review.
  */
 const MUST_READ_KEYS: readonly string[] = [
+  "rendererSource",
   "code",
   "body",
   "instructions",
@@ -135,6 +139,7 @@ const MUST_READ_KEYS: readonly string[] = [
 
 /** The record's own keys drawn whole, as written: never clipped. */
 const WHOLE_TEXT_KEYS: ReadonlySet<string> = new Set([
+  "rendererSource",
   "code",
   "body",
   "instructions",
@@ -402,6 +407,16 @@ function sideValue(
   // The record's own code and instructions (a skill's), never a property that
   // happens to be named so: drawn as written, every line, so the reviewer
   // reads exactly what will run or what an agent will be told.
+  // A card's renderer that IS an HTML page is drawn as the page (its source
+  // a toggle away); a React module stays code.
+  if (
+    !isProperty &&
+    key === "rendererSource" &&
+    typeof value === "string" &&
+    isHtmlPageSource(value)
+  ) {
+    return { kind: "page", html: value };
+  }
   if (!isProperty && WHOLE_TEXT_KEYS.has(key)) return codeValue(value);
   const renderKind = classifyPropertyKind({ slug: key, value, def });
   return recordValue(renderKind, value, resolved);
@@ -611,6 +626,7 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
       (v) =>
         (v?.kind === "text" && v.long) ||
         v?.kind === "code" ||
+        v?.kind === "page" ||
         v?.kind === "changes"
     );
     fields.push({

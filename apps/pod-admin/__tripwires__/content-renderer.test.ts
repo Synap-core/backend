@@ -147,7 +147,7 @@ describe("content is drawn, never injected", () => {
     expect(sameOrigin.map((f) => f.path)).toEqual([]);
   });
 
-  it("mounts the frame only on a page and in a body's cell embed", () => {
+  it("mounts the frame only on a page, in a cell embed and in a proposal's preview", () => {
     // Every file that names one of the frame's exports, outside the frame
     // itself. A third site would run HTML somewhere these tests do not
     // reach. It sees names, not calls: an export re-bound under another name
@@ -171,11 +171,31 @@ describe("content is drawn, never injected", () => {
       (f) =>
         !f.test &&
         f.path !== door &&
-        /\b(?:HtmlFrame|SandboxedFrame|HtmlPageSection|HtmlPageBody)\b/.test(
+        /\b(?:HtmlFrame|SandboxedFrame|HtmlPageSection|HtmlPageBody|HtmlPagePreview)\b/.test(
           f.body
         )
     ).map((f) => f.path);
-    expect(sites.sort()).toEqual([pageSite, embedSite].sort());
+    // The preview (`html-preview.tsx`, no pod bridge) is the third door, used
+    // by a proposal's record card and a proposed document's body only.
+    const previewDoor = join(
+      "app",
+      "_lib",
+      "object",
+      "content",
+      "html-preview.tsx"
+    );
+    const proposalDir = join("app", "proposal", "[id]");
+    const proposalSites = [
+      join(proposalDir, "ProposedRecordCard.tsx"),
+      join(proposalDir, "ProposedDocumentBody.tsx"),
+    ];
+    expect(sites.sort()).toEqual(
+      [pageSite, embedSite, previewDoor, ...proposalSites].sort()
+    );
+    // Non-vacuity: the preview never answers pod reads.
+    expect(FILES.find((f) => f.path === previewDoor)?.body).toContain(
+      "bridge={false}"
+    );
     // Non-vacuity: the embed site mounts the shared frame, by its name.
     expect(FILES.find((f) => f.path === embedSite)?.body).toMatch(
       /<HtmlFrame\b/
