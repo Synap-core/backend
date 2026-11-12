@@ -400,7 +400,8 @@ const cap = (xs, n = 8) =>
  * `collectionInert` lists the changed package.json files whose diff touches
  * only INERT_PACKAGE_KEYS (ci-changes.mjs reads both sides): they are package
  * config edges, not full-suite paths. Every tripwire is added, as a PR runs
- * them.
+ * them (so an empty change selects exactly every tripwire: a light merge-queue
+ * entry, ci-changes.mjs).
  * Returns { scope: "full" | "selected", tests, e2e, why }:
  *   tests  scope=selected: every test file to run (sorted), tripwires included
  *   why    what forced the full suite, or what was selected and from what

@@ -52,6 +52,8 @@ import {
   collectionInert,
   sidesOf,
   reusableRun,
+  redAtBase,
+  newFailuresInLog,
   shardMatrix,
   withPlan,
   suitesPassed,
@@ -1011,35 +1013,183 @@ describe("ci-changes: the merge queue", () => {
       queue: { pr: 471, headSha: "bc328a622", suitesPassed, reuse },
     });
 
-  // The light queue run (#428, kept under the tiers): the PR's own Full
-  // suite and API e2e passed, so the entry re-checks the Release gate only,
-  // and the two suite checks pass out loud ("Not affected", this reason).
-  it("the PR's own suites passed, main moved: the light run (Release gate only)", () => {
+  // The light queue run (#428; every tripwire since 2026-11-12, plan
+  // b5820982 §1): the PR's own Full suite and API e2e passed, so the entry
+  // re-checks the Release gate AND every tripwire on the combined tree; API
+  // e2e passes out loud ("Not affected", this reason).
+  it("the PR's own suites passed, main moved: the Release gate and EVERY tripwire, API e2e taken", () => {
+    // A change that reaches files beyond the tripwires: the entry still
+    // runs only the tripwires (the PR's run judged the rest).
+    const files = ["packages/types/src/x.ts"];
+    expect(
+      tier(files).tests.filter((f: string) => !isTripwire(f)).length
+    ).toBeGreaterThan(0);
     const d = queued(
       { runId: 1, testedCommit: "c", testedTree: T, queueTree: U },
-      ["packages/types/src/x.ts"],
+      files,
       true
     );
-    expect([d.gate, d.suites, d.scope, d.e2e, d.reuse]).toEqual([
+    expect([d.gate, d.suites, d.scope, d.e2e, d.reuse, d.dependents]).toEqual([
+      true,
+      true,
+      "selected",
+      false,
+      undefined,
+      false,
+    ]);
+    // Exactly every tripwire of this checkout, planned like a PR selection.
+    expect(graph.tripwires.length).toBeGreaterThan(300);
+    expect(d.selection.tests).toEqual([...graph.tripwires].sort());
+    expect(selectionProblems(d.selection, graph.tripwires)).toEqual([]);
+    expect(shardMatrix(d)).toEqual(
+      Array.from({ length: d.selection.shards }, (_, i) => i + 1)
+    );
+    expect(d.reason).toContain("#471's own Full suite and API e2e passed");
+    expect(d.reason).toContain(
+      `every tripwire (${graph.tripwires.length} test file(s)`
+    );
+    expect(d.reason).toContain("takes API e2e from that run");
+    const s = summary(d, files);
+    expect(s).toContain(
+      `| Full suite | runs: ${graph.tripwires.length} selected test file(s)`
+    );
+    expect(s).toContain("| API e2e | not affected |");
+    expect(s).toContain("| Release gate | runs |");
+  });
+
+  it("a light entry that changes only docs runs no suite; an unreadable graph runs the full suite", () => {
+    const docs = queued(
+      { runId: 1, testedCommit: "c", testedTree: T, queueTree: U },
+      ["docs/DEVELOPER.md"],
+      true
+    );
+    expect([docs.gate, docs.suites, docs.scope, docs.e2e]).toEqual([
       true,
       false,
       "none",
       false,
-      undefined,
     ]);
-    expect(d.reason).toContain("#471's own Full suite and API e2e passed");
-    expect(summary(d, ["packages/types/src/x.ts"])).toContain(
-      "| Full suite | not affected |"
-    );
+    const blind = decide({
+      event: "merge_group",
+      headRef: "",
+      draft: false,
+      files: ["packages/types/src/x.ts"],
+      siblingTests: none,
+      tier: () => null,
+      queue: { pr: 471, headSha: "bc328a622", suitesPassed: true, reuse: null },
+    });
+    expect([blind.suites, blind.scope, blind.e2e, blind.selection]).toEqual([
+      true,
+      "full",
+      false,
+      null,
+    ]);
+    expect(blind.reason).toContain("the dependency graph could not be read");
   });
 
-  it("same tree beats the light run: nothing re-runs", () => {
+  it("same tree beats the light run: nothing re-runs, the tripwires included", () => {
+    // The PR's run judged every tripwire on this very tree: re-running them
+    // re-asks the question it answered.
     const d = queued(
       { runId: 1, testedCommit: "c", testedTree: T, queueTree: T },
-      null,
+      ["packages/types/src/x.ts"],
       true
     );
-    expect([d.gate, d.reuse]).toEqual([false, true]);
+    expect([d.gate, d.suites, d.scope, d.e2e, d.reuse, d.selection]).toEqual([
+      false,
+      false,
+      "none",
+      false,
+      true,
+      null,
+    ]);
+    expect(d.reason).toContain("the tripwires included; nothing re-runs");
+  });
+
+  // RED AT BASE: what main's latest FINISHED push run named as new failures
+  // (the light entry's selection carries it; test-ratchet.mjs judges it).
+  describe("red at base: main's latest finished push run", () => {
+    const FULL_SUITE_LOG = readFileSync(
+      join(REPO, "scripts/ci/__fixtures__/red-main-40797830929/full-suite.txt"),
+      "utf8"
+    );
+    const NAMED = newFailuresInLog(FULL_SUITE_LOG);
+    const run = (id: number, conclusion: string | null, created: string) => ({
+      id,
+      event: "push",
+      head_branch: "main",
+      head_sha: `${id}`.padEnd(40, "0"),
+      status: conclusion ? "completed" : "in_progress",
+      conclusion,
+      created_at: created,
+    });
+    const fake =
+      (runs: object[], judge: string | null = "failure") =>
+      async (path: string, opts?: { raw?: boolean }) => {
+        if (path.startsWith("/actions/workflows/ci.yml/runs?branch=main"))
+          return { workflow_runs: runs };
+        if (/^\/actions\/runs\/\d+\/jobs/.test(path))
+          return {
+            jobs: [
+              { id: 7, name: "Release gate", conclusion: "success" },
+              ...(judge
+                ? [{ id: 9, name: "Full suite", conclusion: judge }]
+                : []),
+            ],
+          };
+        if (path === "/actions/jobs/9/logs" && opts?.raw) return FULL_SUITE_LOG;
+        throw new Error(`unexpected ${path}`);
+      };
+
+    it("the recorded log of a red main names its new failures, test files only", () => {
+      expect(NAMED.length).toBe(3);
+      for (const f of NAMED) expect(f).toMatch(/\.test\.ts$/);
+    });
+
+    it("main red: the files its Full suite named", async () => {
+      const r = await redAtBase(fake([run(2, "failure", "2026-11-12T10:00Z")]));
+      expect(r.run.id).toBe(2);
+      expect(r.files).toEqual(NAMED);
+    });
+
+    it("a newer run still in progress, or cancelled, is not waited for: the latest FINISHED run decides", async () => {
+      const r = await redAtBase(
+        fake([
+          run(4, null, "2026-11-12T12:00Z"),
+          { ...run(3, "cancelled", "2026-11-12T11:00Z"), status: "completed" },
+          run(2, "failure", "2026-11-12T10:00Z"),
+          run(1, "success", "2026-11-12T09:00Z"),
+        ])
+      );
+      expect(r.run.id).toBe(2);
+      expect(r.files).toEqual(NAMED);
+    });
+
+    it("main green, or red elsewhere than the Full suite: nothing is tolerated", async () => {
+      const green = await redAtBase(
+        fake([
+          run(3, "success", "2026-11-12T11:00Z"),
+          run(2, "failure", "2026-11-12T10:00Z"),
+        ])
+      );
+      expect([green.run.id, green.files]).toEqual([3, []]);
+      const gateOnly = await redAtBase(
+        fake([run(2, "failure", "2026-11-12T10:00Z")], "success")
+      );
+      expect(gateOnly.files).toEqual([]);
+    });
+
+    it("unreadable (no token, an API error, no finished run): null, so nothing is tolerated", async () => {
+      expect(await redAtBase(null)).toBeNull();
+      expect(
+        await redAtBase(async () => {
+          throw new Error("HTTP 502");
+        })
+      ).toBeNull();
+      expect(
+        await redAtBase(fake([run(4, null, "2026-11-12T12:00Z")]))
+      ).toBeNull();
+    });
   });
 
   it.each([

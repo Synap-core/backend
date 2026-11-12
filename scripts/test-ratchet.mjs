@@ -736,7 +736,12 @@ async function selectMode() {
     });
   const plannedSet = new Set(planned.flatMap((r) => r.files));
   const failing = [...results].filter(([, v]) => !v.ok);
-  const newRed = failing.filter(([f]) => !baseline.has(f));
+  // RED AT BASE (a merge-queue entry; scripts/ci-changes.mjs header): a file
+  // main's latest finished push run also named as a new failure fails
+  // without this entry too. Listed, never counted; the retry ran first.
+  const redAtBase = new Set(SELECTION.redAtBase ?? []);
+  const atBase = failing.filter(([f]) => !baseline.has(f) && redAtBase.has(f));
+  const newRed = failing.filter(([f]) => !baseline.has(f) && !redAtBase.has(f));
   const fixed = [];
   const stale = [];
   for (const [f] of baseline) {
@@ -810,9 +815,19 @@ async function selectMode() {
           `::warning file=${f.file},title=Flaky test file::failed, then passed on the retry (not counted). First run: ${f.firstReason}`
         );
   }
+  if (atBase.length) {
+    console.log(
+      `\n  [red-at-base]\n      ${atBase.length} file(s) failed here and on main's latest finished push run too: main's red, not this change's. Not counted; main's red is fixed by one owner:\n${atBase.map(([f, v]) => `      ${f}\n        ↳ ${v.reason}`).join("\n")}`
+    );
+    if (IN_CI)
+      for (const [f] of atBase)
+        console.log(
+          `::warning file=${f},title=Red at base::fails on main's latest finished push run too (not counted)`
+        );
+  }
   if (problems.length === 0) {
     console.log(
-      `\n✓ test ratchet OK — every planned file ran, every red file is a known, owned baseline entry.\n`
+      `\n✓ test ratchet OK — every planned file ran, every red file is a known, owned baseline entry${atBase.length ? " or red on main too" : ""}.\n`
     );
     process.exit(0);
   }

@@ -95,6 +95,7 @@ type Sel = {
   tests: string[];
   dropped: string[];
   added?: string[];
+  redAtBase?: string[];
 };
 
 /** Write what the shards write for this plan (with faults), then judge. */
@@ -319,6 +320,41 @@ describe("test-ratchet --select: the PR selection, judged as CI judges it", () =
     expect(r.status).toBe(1);
     expect(r.out).toContain("[new-failure]");
     expect(r.out).toContain(EXTRA[2]);
+  });
+
+  // RED AT BASE (a merge-queue entry, scripts/ci-changes.mjs header): a file
+  // main's latest finished push run also named as a new failure is listed,
+  // not counted. Only THAT file: another red file in the same entry stays red.
+  it("red at base: a file main's run named too is listed, not counted; any other red still fails", () => {
+    const tolerated = judge(
+      { ...small, redAtBase: [EXTRA[2]] },
+      {
+        red: [EXTRA[2]],
+      }
+    );
+    expect(tolerated.out).toContain("[red-at-base]");
+    expect(tolerated.out).toContain(EXTRA[2]);
+    expect(tolerated.out).not.toContain("[new-failure]");
+    expect(tolerated.status).toBe(0);
+    const other = judge(
+      { ...small, redAtBase: [EXTRA[1]] },
+      {
+        red: [EXTRA[2]],
+      }
+    );
+    expect(other.out).toContain("[new-failure]");
+    expect(other.out).toContain(EXTRA[2]);
+    expect(other.status).toBe(1);
+    const both = judge(
+      { ...small, redAtBase: [EXTRA[2]] },
+      {
+        red: [EXTRA[1], EXTRA[2]],
+      }
+    );
+    expect(both.out).toContain("[red-at-base]");
+    expect(both.out.split("[new-failure]")[1]).toContain(EXTRA[1]);
+    expect(both.out.split("[new-failure]")[1]).not.toContain(EXTRA[2]);
+    expect(both.status).toBe(1);
   });
 
   it("a run with tests and not one passing: red (vacuous), as in the full mode", () => {

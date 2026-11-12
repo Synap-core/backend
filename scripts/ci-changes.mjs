@@ -32,18 +32,41 @@
  * summary; it is never skipped by its `if:` (GitHub counts a skipped job as a
  * passed required check, #441).
  *
- * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run", #428) ──────────
+ * ── THE MERGE QUEUE (founder, 2026-10-28: "light queue run", #428; every
+ * tripwire since 2026-11-12, plan b5820982 §1) ────────────────────────────────
  * A queue entry re-checks what can break when PRs combine — the Release gate
  * (install, lint, typecheck, build, migrate, boot; the image per
- * IMAGE_INPUTS) — and takes the Full
- * suite + API e2e from the PR's OWN run, but only when that run really ran
- * them: both checks concluded `success` on the PR's head commit (since
+ * IMAGE_INPUTS) and EVERY TRIPWIRE (the tier of an empty change: affected.mjs
+ * selectTier([]), planned like a PR selection) — and takes the rest of the
+ * Full suite + API e2e from the PR's OWN run, but only when that run really
+ * ran them: both checks concluded `success` on the PR's head commit (since
  * 2026-10-29 that run checked the PR's tier, not everything: main's
  * post-merge run checks everything, and only an all-green one reaches a pod).
+ * Why the tripwires: two PRs each green alone broke main together four times
+ * on a tripwire (uuid-one-check, grant-door-classification,
+ * presence-approve-doors x2) while the queue re-ran only the Release gate. The
+ * one tripwire shard (~7 min) runs beside the Release gate (~10 min).
  * A skipped or neutral conclusion, a failure, a missing check or any API
  * error falls through to the tier of what the entry changes on top of the
  * main it will land on (`git diff <merge_group.base_sha>...<merge_group.
  * head_sha>`: the PR plus any entry ahead of it), on the combined tree.
+ *
+ * RED AT BASE (Chromium CQ's rule: a failure is the change's when it fails
+ * with it, fails on retry, and passes without it). A light entry's selection
+ * carries `redAtBase`: the test files main's latest FINISHED push run named
+ * as new failures (its Full suite log, culprit-finder.mjs failingFiles; the
+ * run merge-bot.mjs finishedMainRuns calls main's state, so the queue and the
+ * bot agree on whether main is red). The judge (test-ratchet.mjs) lists such
+ * a file `[red-at-base]` instead of failing the entry: it fails without this
+ * entry too, and ejecting the entry would only count a strike against a PR
+ * that did not cause it. The ratchet's retry still runs first, so a file it
+ * tolerates failed twice here AND failed on main. A newer main run still in
+ * progress is not waited for: it has measured nothing yet, and while the
+ * latest finished run is red the bot itself calls main red. Unreadable (no
+ * token, an API error, no finished run) tolerates nothing: the entry fails
+ * as before. Granularity is the FILE: an entry that breaks a second test in
+ * a file already red on main lands; main's next push run and the culprit
+ * finder catch it.
  *
  * SAME TREE, NOTHING RE-RUNS (2026-10-28): #471 passed all 4 required checks
  * on its PR run, entered the queue with main unchanged, and the queue ran a
@@ -53,7 +76,10 @@
  * whose tree equals the tree of the commit tested by the PR run on which ALL
  * 5 required checks (4 until 2026-11-09) concluded `success` (one run; skipped, neutral or missing
  * is not success) re-runs nothing: the required checks skip, which GitHub
- * reports as passed, and the step summary names the reused run. Anything else
+ * reports as passed, and the step summary names the reused run. That run's
+ * Full suite already judged every tripwire on this exact tree (or, for a
+ * docs-only PR, judged that none needed to run), so re-running them would
+ * re-ask the question it answered. Anything else
  * falls through to the light queue run above, then to the tier. What it
  * does not re-check: the sibling repos (control-plane-api, app-bases) at
  * main may have moved since; Preflight re-reads the one cross-repo red we
@@ -62,7 +88,7 @@
  * (A log-only "semantic overlap" measure ran here from 31 Oct to 12 Nov,
  * plan d679e92c C1(a). Its answer, from 292 light entries: a median 1,752 of
  * ~3,785 test files overlap, so selecting the overlap would re-run nearly the
- * PR tier; it was deleted, plan b5820982 §1.)
+ * PR tier; it was deleted for the every-tripwire run above.)
  *
  * ── OUTPUTS (GITHUB_OUTPUT) ──────────────────────────────────────────────────
  *   gate          Release gate runs           false: negctl branch, docs-only
@@ -70,8 +96,8 @@
  *                                             touching no IMAGE_INPUTS path
  *   image_reason  image=false: why (the judge prints it beside the skip)
  *   suites        the Full suite shards run   false: draft, stack, negctl,
- *                                             docs-only, a same-tree or a
- *                                             light queue entry
+ *                                             docs-only, a same-tree queue
+ *                                             entry
  *   scope         what the shards run: "full" | "selected" | "none"
  *   shards        the shard matrix, JSON (`[1,2,3,4]`; scope=selected: 1 to
  *                 SELECTION_MAX_SHARDS, sized from the selection's measured
@@ -81,7 +107,8 @@
  *   The selection itself (which files, in which shard, under which report id)
  *   is written to SELECTION_OUT (default coverage/selection.json); ci.yml
  *   uploads it, and the shards and the judge read that one file
- *   (test-ratchet.mjs --select=).
+ *   (test-ratchet.mjs --select=). A light queue entry's adds `redAtBase`
+ *   (header, "RED AT BASE").
  *   e2e           API e2e runs (the API surface changed, or everything runs)
  *   reuse         a queue entry re-runs nothing (same tree as its PR's
  *                 all-green run)
@@ -129,6 +156,9 @@ import {
   planSelection,
 } from "./test-ratchet-shards.mjs";
 import { isTripwire } from "./tripwire-discovery.mjs";
+import { failingFiles } from "./ci/culprit-finder.mjs";
+import { finishedMainRuns } from "./ci/merge-bot.mjs";
+import { CI_WORKFLOW } from "./ci/release-gate-wait.mjs";
 // THE test-file pattern (the import graph's): the selection, everyTest and
 // the negctl tests agree on what a test file is.
 import { TEST_FILE } from "./ci/import-graph.mjs";
@@ -343,7 +373,7 @@ export function decide({
     return {
       ...nothing,
       reuse: true,
-      reason: `merge queue: tree ${reuse.testedTree.slice(0, 9)} is the tree #${queue.pr}'s run ${reuse.runId} tested (commit ${String(reuse.testedCommit).slice(0, 9)}), where all ${QUEUE_REUSE_CHECKS.length} required checks passed; nothing re-runs`,
+      reason: `merge queue: tree ${reuse.testedTree.slice(0, 9)} is the tree #${queue.pr}'s run ${reuse.runId} tested (commit ${String(reuse.testedCommit).slice(0, 9)}), where all ${QUEUE_REUSE_CHECKS.length} required checks passed, the tripwires included; nothing re-runs`,
     };
   if (event !== "pull_request" && event !== "merge_group")
     return { ...all, reason: `${event}: every check runs (tier 2: main)` };
@@ -383,24 +413,41 @@ export function decide({
     why: t.why,
   });
 
-  // The light queue run (#428): the PR's own Full suite and API e2e passed,
-  // so the entry re-checks the Release gate. The two suite checks pass
-  // through their "Not affected" steps, which name this reason.
-  if (event === "merge_group" && queue?.suitesPassed === true)
+  // The light queue run (#428; every tripwire since 2026-11-12, header "THE
+  // MERGE QUEUE"): the PR's own Full suite and API e2e passed, so the entry
+  // re-checks the Release gate and every tripwire on the combined tree (the
+  // tier of an empty change). API e2e passes through its "Not affected" step,
+  // which names this reason. Docs only still runs no suite; an unreadable
+  // graph runs the full suite (fail-safe).
+  if (event === "merge_group" && queue?.suitesPassed === true) {
+    const t = docsOnly
+      ? pick()
+      : ((tier && tier([])) ?? {
+          scope: "full",
+          tests: [],
+          e2e: false,
+          why: ["full suite: the dependency graph could not be read"],
+        });
+    const suite =
+      t.scope === "none"
+        ? "no test suite (docs only)"
+        : t.scope === "full"
+          ? `the full suite [${t.why.join("; ")}]`
+          : `every tripwire (${t.tests.length} test file(s)${t.selection ? ` in ${t.selection.shards} shard(s)` : ""})`;
     return {
       ...all,
       image,
       imageWhy,
-      suites: false,
-      scope: "none",
+      ...tierFields(t),
       e2e: false,
       reason: [
-        `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate`,
+        `merge queue: #${queue.pr}'s own Full suite and API e2e passed on ${String(queue.headSha).slice(0, 9)}; this run re-checks the Release gate and ${suite} on the combined tree, and takes API e2e from that run`,
         imageWhy,
       ]
         .filter(Boolean)
         .join("; "),
     };
+  }
 
   // A queue entry whose PR run did not pass both: the Release gate and the
   // FULL suite on the combined tree (rare: the PR's own suites were red,
@@ -693,7 +740,8 @@ function githubGet() {
   const repo = process.env.REPO;
   const token = process.env.GITHUB_TOKEN;
   if (!repo || !token) return null;
-  return async (path) => {
+  // `raw`: the body as text (a job log; GitHub redirects to its storage).
+  return async (path, { raw = false } = {}) => {
     const res = await fetch(`https://api.github.com/repos/${repo}${path}`, {
       headers: {
         authorization: `Bearer ${token}`,
@@ -701,7 +749,7 @@ function githubGet() {
       },
     });
     if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
-    return res.json();
+    return raw ? res.text() : res.json();
   };
 }
 
@@ -769,6 +817,47 @@ async function testedCommitOf(get, runId) {
   );
 }
 
+/**
+ * The test files a Full suite judge's log names as new failures (the
+ * ratchet's `[new-failure]` list: failed twice where retried), through
+ * culprit-finder.mjs failingFiles, the one parser of that log. Pure.
+ */
+export function newFailuresInLog(log) {
+  return failingFiles(log)
+    .filter((f) => f.kind === "test")
+    .map((f) => f.file);
+}
+
+/**
+ * RED AT BASE (header): main's latest finished push run of CI and the test
+ * files its Full suite named as new failures ([] when it is green), or null
+ * when unreadable (then nothing is tolerated). `get` is githubGet().
+ */
+export async function redAtBase(get) {
+  if (!get) return null;
+  try {
+    const runs = (
+      await get(
+        `/actions/workflows/${CI_WORKFLOW}/runs?branch=main&event=push&per_page=30`
+      )
+    ).workflow_runs;
+    const run = finishedMainRuns(runs)[0];
+    if (!run) return null;
+    if (run.conclusion === "success") return { run, files: [] };
+    const judge = (
+      await get(`/actions/runs/${run.id}/jobs?filter=latest&per_page=100`)
+    ).jobs.find((j) => j.name === "Full suite");
+    if (judge?.conclusion !== "failure") return { run, files: [] };
+    const log = await get(`/actions/jobs/${judge.id}/logs`, { raw: true });
+    return { run, files: newFailuresInLog(log) };
+  } catch (err) {
+    console.log(
+      `merge queue: main's latest run could not be read (${err.message}); no red at base is tolerated`
+    );
+    return null;
+  }
+}
+
 // The files the known-red baseline names at a commit ([] when unreadable).
 function baselineAt(sha) {
   if (!sha) return [];
@@ -786,8 +875,9 @@ function baselineAt(sha) {
 // comes with its shard plan (scripts/test-ratchet-shards.mjs planSelection).
 // So does a PR's FULL tier (lead decision, 29 Oct): every test file, planned
 // by cost in up to 8 shards, judged with the full mode's floors (`full`).
-// Main pushes and the merge queue never reach this function: they keep the
-// 4-shard plan.
+// A light merge-queue entry plans the tier of an empty change (every
+// tripwire). Main pushes and a queue entry's full fall-through never reach
+// this function: they keep the 4-shard plan.
 // This checkout's graph, read once ({ root, g, everyTest }); throws when it
 // cannot be read.
 let graphMemo = null;
@@ -866,7 +956,8 @@ export function withPlan(t, ctx) {
 
 /**
  * The shard matrix of a decision: a selection's own count (a PR's selected or
- * full tier), else the committed plan's 4 (main, the merge queue, fail-safe).
+ * full tier, a light queue entry's tripwires), else the committed plan's 4
+ * (main, a queue entry's full fall-through, fail-safe).
  */
 export function shardMatrix(d) {
   const n = d.selection ? d.selection.shards : 4;
@@ -900,6 +991,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // A selection reaches the shards and the judge as one file (ci.yml uploads
   // it); without it they fail, they never run something else.
   if (d.selection) {
+    if (event === "merge_group" && queue?.suitesPassed === true) {
+      const base = await redAtBase(githubGet());
+      d.selection.redAtBase = base?.files ?? [];
+      console.log(
+        base
+          ? `red at base: main's run ${base.run.id} (${String(base.run.head_sha).slice(0, 9)}, ${base.run.conclusion}) names ${base.files.length} new failure(s)${base.files.length ? `: ${base.files.join(", ")}` : ""}`
+          : "red at base: main's latest finished run unread; nothing is tolerated"
+      );
+    }
     const outFile = resolve(
       process.env.SELECTION_OUT ?? "coverage/selection.json"
     );
