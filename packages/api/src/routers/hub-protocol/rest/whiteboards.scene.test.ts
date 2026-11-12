@@ -16,6 +16,7 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { ROOM_META_KEYS, ROOM_META_MAP } from "@synap/events/realtime-schemas";
 
 const USER = "0aaaaaaa-0000-4000-8000-000000000001";
 const VIEW = "1b1b1b1b-0000-4000-8000-0000000000aa";
@@ -244,6 +245,30 @@ describe("GET /whiteboards/:viewId/scene: which source answers", () => {
 });
 
 describe("GET /whiteboards/:viewId/scene: a failed read is an error, never an empty board", () => {
+  it("an open room the realtime server marked load-failed → 502 live_unreadable naming the mark", async () => {
+    const doc = new Y.Doc();
+    doc
+      .getMap(ROOM_META_MAP)
+      .set(
+        ROOM_META_KEYS.loadError,
+        "The board's saved content could not be loaded."
+      );
+    // Even with records in it: the mark says the live map is not the board.
+    doc.getMap(`tl_map_${DOC}`).set("shape:s", RECORDS["shape:s"]);
+    const state = Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64");
+    m.fetchImpl = async () =>
+      new Response(JSON.stringify({ roomId: `whiteboard-${DOC}`, state }), {
+        status: 200,
+      });
+    const res = await get();
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.reason).toBe("live_unreadable");
+    expect(body.error).toContain(
+      "The board's saved content could not be loaded."
+    );
+  });
+
   it("an open room that is EMPTY while the saved file is not → 502 live_unreadable, never an empty live board", async () => {
     m.fetchImpl = liveRoom({});
     const res = await get();

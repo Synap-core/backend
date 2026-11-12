@@ -29,6 +29,26 @@ import {
 } from "@synap-core/types/lifecycle";
 
 // ============================================================================
+// Yjs room meta: the `synap-room` map every realtime room may carry
+// ============================================================================
+
+/**
+ * The Yjs room's meta map and its keys: ONE home, read by `@synap/realtime`
+ * (`document-room.ts`, the room server) and `@synap/api` (the board read door,
+ * `services/whiteboards/read-board-scene.ts`), which cannot import each other.
+ * The client mirror is synap-app `packages/web/src/document/roomMeta.ts`; the
+ * key sets must stay identical. Meanings: `document-room.ts`.
+ */
+export const ROOM_META_MAP = "synap-room";
+export const ROOM_META_KEYS = {
+  revision: "revision",
+  seedRevision: "seedRevision",
+  seedClaim: "seedClaim",
+  loadError: "loadError",
+  schemaVersion: "schemaVersion",
+} as const;
+
+// ============================================================================
 // Pass-through schema for legacy events without a dedicated shape
 // ============================================================================
 

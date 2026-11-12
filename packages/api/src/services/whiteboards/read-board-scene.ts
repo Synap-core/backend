@@ -25,6 +25,7 @@ import * as Y from "yjs";
 import { db, documents, eq, views } from "@synap/database";
 import { storage } from "@synap/storage";
 import { createLogger } from "@synap-core/core";
+import { ROOM_META_KEYS, ROOM_META_MAP } from "@synap/events/realtime-schemas";
 import { resolveDocumentRoomAccess } from "../../utils/document-edit-access.js";
 import { bridgeRequestHeaders } from "../../utils/chat-realtime-broadcast.js";
 import {
@@ -115,12 +116,23 @@ function realtimeUrl(): string {
   return process.env.REALTIME_URL || "http://localhost:4001";
 }
 
-/** The records of a Y.Doc's tldraw map, from an encoded update. */
-function recordsFromYjsUpdate(update: Uint8Array, documentId: string): unknown {
+/**
+ * The records of a Y.Doc's tldraw map, from an encoded update, and the room's
+ * `loadError` mark (the realtime server sets it when the room could not load
+ * the board's saved content; `ROOM_META_*` are the shared names).
+ */
+function decodeYjsUpdate(
+  update: Uint8Array,
+  documentId: string
+): { records: unknown; loadError: string | null } {
   const doc = new Y.Doc();
   try {
     Y.applyUpdate(doc, update);
-    return doc.getMap(`tl_map_${documentId}`).toJSON();
+    const mark = doc.getMap(ROOM_META_MAP).get(ROOM_META_KEYS.loadError);
+    return {
+      records: doc.getMap(`tl_map_${documentId}`).toJSON(),
+      loadError: mark === undefined ? null : String(mark),
+    };
   } finally {
     doc.destroy();
   }
@@ -173,10 +185,11 @@ async function readLiveRecords(
       `The realtime server answered ${res.status} for the board's room. Retry shortly.`
     );
   }
+  let decoded: { records: unknown; loadError: string | null };
   try {
     const body = (await res.json()) as { state?: unknown };
     if (typeof body.state !== "string") throw new Error("no state");
-    return recordsFromYjsUpdate(
+    decoded = decodeYjsUpdate(
       new Uint8Array(Buffer.from(body.state, "base64")),
       documentId
     );
@@ -187,6 +200,15 @@ async function readLiveRecords(
       "The open board's state could not be decoded."
     );
   }
+  // The room says it failed to load the saved board: its live map is not the
+  // board, whatever it holds.
+  if (decoded.loadError !== null) {
+    throw new BoardSceneReadError(
+      "live_unreadable",
+      `The board is open but failed to load its saved content: ${decoded.loadError} Retry once everyone has left the board, or reopen it.`
+    );
+  }
+  return decoded.records;
 }
 
 /** The stored file's records, and whether it was the legacy `yjs:` form. */
@@ -208,10 +230,10 @@ async function readStoredRecords(
     // Same two forms the realtime server loads (`yjs-server.ts` bindState).
     if (body.startsWith("yjs:")) {
       return {
-        records: recordsFromYjsUpdate(
+        records: decodeYjsUpdate(
           new Uint8Array(Buffer.from(body.slice(4), "base64")),
           documentId
-        ),
+        ).records,
         legacy: true,
       };
     }

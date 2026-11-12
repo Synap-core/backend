@@ -169,6 +169,29 @@ function editorOutdated(socket: Socket, doc: Y.Doc): boolean {
 /** What an outdated editor is told (a client words it "Update Synap to edit"). */
 const OUTDATED_ACCESS = { access: "read", reason: "editor-outdated" } as const;
 
+/** What the room says when a whiteboard's saved content failed to load. */
+export const WHITEBOARD_LOAD_FAILED_MESSAGE =
+  "The board's saved content could not be loaded.";
+
+/**
+ * A whiteboard room whose saved content FAILED to load (`loadError` mark, set
+ * by `bindState`). Its live map is empty or partial, not the board: it takes
+ * no client write (every socket is served it read-only) and is never saved
+ * (`writeState` refuses), so the stored file keeps the real board. The room is
+ * loaded again from storage once every socket has left.
+ */
+export function whiteboardLoadFailed(doc: Y.Doc): boolean {
+  const name = (doc as Y.Doc & { name?: unknown }).name;
+  return (
+    typeof name === "string" &&
+    name.startsWith("whiteboard-") &&
+    roomMeta(doc).get(ROOM_META_KEYS.loadError) !== undefined
+  );
+}
+
+/** What every socket of such a room is told (a client words it "could not load"). */
+const LOAD_FAILED_ACCESS = { access: "read", reason: "load-failed" } as const;
+
 /**
  * The verified user of a handshake, handed from the library's `authenticate`
  * (which sees only the handshake) to the room gate (which sees the socket, and
@@ -248,24 +271,29 @@ class DatabasePersistence {
             store?: TldrawStoreSnapshot;
           };
           const store = parsed.store ?? parsed;
-          if (typeof store === "object" && store !== null) {
-            const yMap = ydoc.getMap(`tl_map_${documentId}`);
-            ydoc.transact(() => {
-              for (const [key, val] of Object.entries(store)) {
-                if (val != null && typeof val === "object") {
-                  yMap.set(key, val);
-                }
-              }
-            });
-            console.log(
-              `[Yjs] Loaded whiteboard from MinIO for ${roomName} (${Object.keys(store).length} records)`
-            );
+          if (typeof store !== "object" || store === null) {
+            throw new Error("the stored body is not a tldraw store");
           }
+          const yMap = ydoc.getMap(`tl_map_${documentId}`);
+          ydoc.transact(() => {
+            for (const [key, val] of Object.entries(store)) {
+              if (val != null && typeof val === "object") {
+                yMap.set(key, val);
+              }
+            }
+          });
+          console.log(
+            `[Yjs] Loaded whiteboard from MinIO for ${roomName} (${Object.keys(store).length} records)`
+          );
         } catch (error) {
-          console.warn(
+          // A FAILED read is surfaced on the room, never an empty board: the
+          // room then takes no write and is never saved over the stored file
+          // (`whiteboardLoadFailed`), exactly as a document room is marked.
+          console.error(
             `[Yjs] Failed to load whiteboard from MinIO for ${roomName}:`,
             error
           );
+          markDocumentRoomLoadFailed(ydoc, WHITEBOARD_LOAD_FAILED_MESSAGE);
         }
         return;
       }
@@ -344,6 +372,14 @@ class DatabasePersistence {
       const isWhiteboard = roomName.startsWith("whiteboard-");
 
       if (isWhiteboard) {
+        // A room that failed to load holds no board: saving it would replace
+        // the stored file (the real board) with whatever the room has.
+        if (whiteboardLoadFailed(ydoc)) {
+          console.error(
+            `[Yjs] Refusing to save whiteboard ${roomName}: its saved content failed to load`
+          );
+          return;
+        }
         // Whiteboard: save to MinIO (canonical source, no version)
         let storageKey = doc.storageKey;
 
@@ -645,15 +681,21 @@ export function installReadOnlySync(yServer: unknown): void {
 
   hooks.initSyncListeners = (socket, doc) => {
     const access = socketAccess(socket);
-    const outdated = access === "edit" && editorOutdated(socket, doc);
-    socket.emit("yjs-access", outdated ? OUTDATED_ACCESS : { access });
-    if (access === "edit" && !outdated) {
+    const failed = whiteboardLoadFailed(doc);
+    const outdated =
+      access === "edit" && !failed && editorOutdated(socket, doc);
+    socket.emit(
+      "yjs-access",
+      failed ? LOAD_FAILED_ACCESS : outdated ? OUTDATED_ACCESS : { access }
+    );
+    if (access === "edit" && !outdated && !failed) {
       // An editor — until a newer editor stamps the room past its schema.
       let told = false;
       const facade = Object.create(socket) as Socket;
       facade.on = ((event: string, listener: (...args: unknown[]) => void) => {
         if (event === "sync-update") {
           return socket.on(event, (...args: unknown[]) => {
+            if (whiteboardLoadFailed(doc)) return;
             if (!editorOutdated(socket, doc)) return listener(...args);
             if (!told) {
               told = true;
@@ -691,7 +733,12 @@ export function installReadOnlySync(yServer: unknown): void {
         // editor the room has not outgrown (checked when it ARRIVES).
         const apply = args[1];
         return socket.emit(event, args[0], (...reply: unknown[]) => {
-          if (!editor || editorOutdated(socket, doc)) return;
+          if (
+            !editor ||
+            editorOutdated(socket, doc) ||
+            whiteboardLoadFailed(doc)
+          )
+            return;
           if (typeof apply === "function") apply(...reply);
         });
       }
