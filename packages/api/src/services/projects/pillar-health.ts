@@ -13,9 +13,12 @@
  *
  *   health     the pure rule (`derivePillarHealth`, `@synap-core/types/units`)
  *              over the primary goals; `sessions` = ONE union over those
- *              goals' trees, walked down PRIMARY parent edges only (a
- *              sub-goal sits in one tree), and the sessions spawned under
- *              them (`readGoalGroupWork`), never a sum per goal;
+ *              goals' trees, walked down PRIMARY parent edges only, and the
+ *              sessions spawned under them (`readGoalGroupWork`), never a sum
+ *              per goal. A goal with a primary parent is never a pillar ROOT
+ *              (it is listed as contributing in its own pillars): its work
+ *              counts in its primary parent's pillar only, so a session counts
+ *              in one pillar;
  *   stale      nothing moved in the window: no move of the pillar's things,
  *              sessions or advancing goals (`readScopeRollup` with BOTH
  *              lenses) and none in the primary goals' work;
@@ -82,6 +85,12 @@ const logger = createLogger({ module: "pillar-health" });
 /** A goal advancing one of the project's spaces, as read. */
 interface AdvancingGoal {
   workspaceId: string;
+  /**
+   * The goal is a ROOT of this pillar: its `advances` edge here is primary
+   * AND it has no primary parent goal. A sub-goal's pillar comes from its
+   * primary parent's chain (its sessions count there, once), so a sub-goal
+   * is listed in its own pillars but never rolls up in them.
+   */
   primary: boolean;
   goal: Pick<
     ProjectTrack,
@@ -156,6 +165,7 @@ async function readAdvancingGoals(
       verdict: projectTracks.verdict,
       workKind: projectTracks.workKind,
       uncertainty: projectTracks.uncertainty,
+      hasPrimaryParent: drizzleSql<boolean>`EXISTS (SELECT 1 FROM links p WHERE p.link_type = 'serves' AND p.from_type = 'track' AND p.to_type = 'track' AND p.from_id = ${projectTracks.id}::text AND (p.metadata ->> 'primary') = 'true')`,
     })
     .from(links)
     .innerJoin(
@@ -175,7 +185,7 @@ async function readAdvancingGoals(
     .orderBy(asc(projectTracks.createdAt), asc(projectTracks.id));
   return rows.map((r) => ({
     workspaceId: r.workspaceId,
-    primary: isPrimaryLinkMetadata(r.metadata),
+    primary: isPrimaryLinkMetadata(r.metadata) && !r.hasPrimaryParent,
     goal: {
       id: r.id,
       name: r.name,
