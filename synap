@@ -4799,12 +4799,17 @@ _ue_verify() { # <manifest> <services...>
 # project (an exited one keeps its last health, so it is not judged here — the
 # "is running" check covers it); health is Docker's own verdict
 # (.State.Health.Status), `none` without a healthcheck.
+# The start period goes through `json` ON PURPOSE: the field is a Go
+# time.Duration, which a template prints as "30m0s", and the integer test in
+# _ue_services_healthy then fails silently — postgres-backup (30m start period)
+# was judged "still starting" and the 12 Nov 2026 update rolled back for it.
+# `json` prints the nanoseconds.
 _ue_health_states() {
     local ids
     ids="$(docker compose ps -q 2>/dev/null)"
     [ -n "$ids" ] || return 0
     # shellcheck disable=SC2086 # one id per word
-    docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{if .Config.Healthcheck}}{{.Config.Healthcheck.StartPeriod}}{{else}}0{{end}}' $ids 2>/dev/null || true
+    docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{if .Config.Healthcheck}}{{json .Config.Healthcheck.StartPeriod}}{{else}}0{{end}}' $ids 2>/dev/null || true
 }
 
 # Every service with a healthcheck must reach `healthy` (Docker restarts only on
