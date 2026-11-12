@@ -693,7 +693,7 @@ export async function executeGenerateRun(
         userId: input.userId,
         documentRevision: current?.revision ?? doc.contentRevision,
       });
-      if (open) return { open };
+      if (open) return { kind: "open" as const, run: open };
     }
     const [inserted] = await tx
       .insert(playbookRuns)
@@ -710,10 +710,10 @@ export async function executeGenerateRun(
         generation: base,
       })
       .returning();
-    return { run: inserted! };
+    return { kind: "new" as const, run: inserted! as PlaybookRun };
   });
-  if ("open" in claimed) {
-    const open = claimed.open;
+  if (claimed.kind === "open") {
+    const open = claimed.run;
     const answer = answerOf(open, true);
     if (answer) return { run: open, generated: answer, reused: true };
     throw new TRPCError({
