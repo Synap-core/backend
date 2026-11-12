@@ -1502,7 +1502,7 @@ export function needsYouWithheld(
  * (`blockingSignals`), the rows split by THE fold rule. One number, one
  * source: the count and the rows cannot come from two reads. A key the
  * request's grant narrows reads only the halves its grant bounds
- * (`needsYouWithheld`); `withheld` names the others (empty = the whole read).
+ * (`needsYouWithheld`); `withheld` names the others (absent = the whole read).
  */
 async function readNeedsYouClassified(
   ctx: SignalsCtx,
@@ -1512,7 +1512,7 @@ async function readNeedsYouClassified(
   count: ReturnType<typeof countOf>;
   rows: NeedsYouClassifiedRows;
   truncated: boolean;
-  withheld: SignalSubRead[];
+  withheld?: SignalSubRead[];
 }> {
   const withheld = needsYouWithheld(getRequestGrant());
   const attention = await readAttention(
@@ -1547,7 +1547,10 @@ async function readNeedsYouClassified(
     count,
     rows,
     truncated: cut || count.truncated,
-    withheld,
+    // Optional and omitted when empty: the answer a person or a full key
+    // reads is byte-for-byte what it was before `withheld` existed, so a
+    // dependent's `Handler<"signals.needsYou">` still compiles unchanged.
+    ...(withheld.length > 0 ? { withheld } : {}),
   };
 }
 

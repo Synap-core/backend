@@ -29,7 +29,7 @@
  *    handed a proposal reader of A the proposals of B (found by this file's
  *    negative control; fixed in `buildProposalScopeConditions`);
  *  - REGRESSION: a full-access key reads exactly what the person reads
- *    (same count, same rows by fold), `withheld` empty.
+ *    (same count, same rows by fold), `withheld` absent.
  *
  * Cannot see: production Postgres; the real review half's SQL (stubbed, see
  * above; its floor is `sessionListConditions` → `sessionReadableWhere`).
@@ -391,8 +391,8 @@ describe("GET /needs-you — a key bounded by a grant", () => {
     expect(body.withheld).toEqual(
       expect.arrayContaining(["proposals", "notifications", "captures"])
     );
-    expect(body.withheld).not.toContain("owed");
-    expect(body.withheld).not.toContain("review");
+    expect(body.withheld ?? []).not.toContain("owed");
+    expect(body.withheld ?? []).not.toContain("review");
   });
 
   it("naming space B gives that key nothing of B (the grant bounds the lens)", async () => {
@@ -408,7 +408,7 @@ describe("GET /needs-you — a key bounded by a grant", () => {
     expect(text).toContain(PROPOSAL_A);
     expect(text).not.toContain(PROPOSAL_B);
     expect(text).not.toContain(ASK_B);
-    expect(body.withheld).not.toContain("proposals");
+    expect(body.withheld ?? []).not.toContain("proposals");
     expect(body.withheld).toContain("notifications");
   });
 
@@ -431,7 +431,7 @@ describe("GET /needs-you — a key bounded by a grant", () => {
   it("REGRESSION: a full-access key reads exactly what the person reads, nothing withheld", async () => {
     const { status, body, text } = await needsYou("full");
     expect(status, text).toBe(200);
-    expect(body.withheld).toEqual([]);
+    expect(body.withheld).toBeUndefined();
     // Non-vacuity of the fixtures: both spaces, the proposals and the
     // notifications are in the whole read.
     for (const id of [ASK_A, ASK_B, REVIEW_A, REVIEW_B, PROPOSAL_A, PROPOSAL_B])
@@ -447,7 +447,7 @@ describe("GET /needs-you — a key bounded by a grant", () => {
         isHubProtocol: true,
       } as never)
       .needsYou({ limit: 100 });
-    expect(person.withheld).toEqual([]);
+    expect(person.withheld).toBeUndefined();
     expect(body.count).toEqual(JSON.parse(JSON.stringify(person.count)));
     expect(idsByFold(body)).toEqual(
       idsByFold(JSON.parse(JSON.stringify(person)) as NeedsYouBody)
