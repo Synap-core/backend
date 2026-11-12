@@ -103,6 +103,9 @@ export const ROOT_FULL = [
 
 /** Paths outside every package that go through the graph (header, "NARROWED"). */
 export const NARROWED = [
+  // which commit CI lays each pinned sibling out at: ci-changes.mjs
+  // withSiblingPinReaders adds the code that reads those siblings
+  /^sibling-pins\.json$/,
   /^skills\//,
   /^(deploy|kratos|docker)\//,
   /^(Dockerfile[^/]*|\.dockerignore|install\.sh|synap)$/,

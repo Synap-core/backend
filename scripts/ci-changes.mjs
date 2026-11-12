@@ -120,11 +120,18 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  PINS_FILE_NAME,
+  loadLayout,
+  loadSiblingPins,
+} from "./layout/layout.mjs";
+import { stripComments } from "./strip-comments.mjs";
 import {
   BASELINE,
   PACKAGE_JSON,
@@ -209,6 +216,42 @@ const SHARED_FOR_DEPENDENTS = [
 ];
 export const touchesDependents = (files) =>
   files.some((f) => SHARED_FOR_DEPENDENTS.some((re) => re.test(f)));
+
+// THE SIBLING PINS (plan b5820982 §2). sibling-pins.json fixes the commit CI
+// lays each pinned sibling out at (scripts/layout/layout.mjs). Bumping a pin
+// changes what every test reading that sibling reads, but no import or path
+// edge leads there: those tests read `../<dir>`, never the pins file. So a
+// change to it stands for a change to every code file that names a pinned
+// sibling's directory in a string (comments stripped: siblingCheckout("<dir>"),
+// "<dir>/src/…"); the import graph then reaches the tests of those files. A
+// pins file that does not parse stands for every sibling: over-select, never
+// under-select. affected.mjs NARROWED keeps the file itself out of the full
+// suite.
+export function withSiblingPinReaders(
+  files,
+  { root, codeFiles, read = (f) => readFileSync(join(root, f), "utf8") }
+) {
+  if (!files.includes(PINS_FILE_NAME)) return files;
+  let dirs;
+  try {
+    dirs = [...loadSiblingPins(join(root, PINS_FILE_NAME)).keys()];
+  } catch {
+    dirs = Object.keys(loadLayout().repos);
+  }
+  // layout.json directories are [\w-]: nothing to escape
+  const names = dirs.map((d) => new RegExp(`["'\`]${d}["'\`/]`));
+  const readers = codeFiles.filter((f) => {
+    if (!/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(f) || f.endsWith(".d.ts"))
+      return false;
+    try {
+      const text = stripComments(read(f), "ts");
+      return names.some((re) => re.test(text));
+    } catch {
+      return false;
+    }
+  });
+  return [...new Set([...files, ...readers])];
+}
 
 export const isDocsOnly = (path) => DOCS_ONLY.some((re) => re.test(path));
 export const isImageInput = (path) => IMAGE_INPUTS.some((re) => re.test(path));
@@ -1021,10 +1064,14 @@ function tierOfCheckout(baseSha, headSha) {
     const added = addedFiles(baseSha, headSha).filter((f) => TEST_FILE.test(f));
     return (files) =>
       withPlan(
-        selectTier(files, g, {
-          baseBaseline,
-          collectionInert: collectionInert(files, sides),
-        }),
+        selectTier(
+          withSiblingPinReaders(files, { root, codeFiles: g.imports.files }),
+          g,
+          {
+            baseBaseline,
+            collectionInert: collectionInert(files, sides),
+          }
+        ),
         {
           everyTest,
           suiteDirs: suites,

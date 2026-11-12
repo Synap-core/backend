@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 import {
   BASELINE,
   COMMITTED_PLAN,
+  ROOT_FULL,
   SUITE_NEUTRAL,
   TEST_FILE,
   loadGraph,
@@ -56,8 +57,11 @@ import {
   withPlan,
   suitesPassed,
   summary,
+  withSiblingPinReaders,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./ci-changes.mjs";
+// @ts-expect-error — plain ESM script, no declarations
+import { isInfraPath } from "./ci/merge-bot.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const none = () => [];
@@ -869,6 +873,66 @@ describe("ci-changes: the PR tier on the real graph", () => {
 // #509, #365 in 08027767c). The culprit's REAL file list (gh api
 // pulls/<n>/files) must select the file it broke. Tripwires are not listed:
 // every PR runs every tripwire.
+// Plan b5820982 §2 P0: a bump of sibling-pins.json changes the commit every
+// test reading that sibling reads, though none of them reads the pins file.
+describe("ci-changes: a sibling pin bump runs the tests that read the sibling", () => {
+  const withPins = (files: string[]) =>
+    withSiblingPinReaders(files, {
+      root: REPO,
+      codeFiles: graph.imports.files,
+    });
+  // The tests that read ../synap-control-plane-api (directly, or through
+  // gen-door-tool-names.ts), found by hand on 2026-11-12.
+  const CP_READERS = [
+    "packages/api/src/routers/mcp/door-tool-names.freshness.test.ts",
+    "packages/api/src/__tripwires__/cp-pod-content-kind-parity.test.ts",
+    "packages/api/src/__tripwires__/cp-pod-package-schema-parity.test.ts",
+    "packages/api/src/__tripwires__/synap-app-ids-reserved.tripwire.test.ts",
+  ];
+
+  it("selects every CP reader, and not the full suite", () => {
+    const d = pr(withPins(["sibling-pins.json"]));
+    expect(d.scope).toBe("selected");
+    expect(tests(d)).toEqual(expect.arrayContaining(CP_READERS));
+    // the freshness test is no tripwire: only the pin reaches it
+    expect(isTripwire(CP_READERS[0])).toBe(false);
+    const other = pr(["packages/governance-policy/src/index.ts"]);
+    expect(other.scope).toBe("selected");
+    expect(tests(other)).not.toContain(CP_READERS[0]);
+  });
+
+  it("CI's tier (tierOfCheckout) selects through it", () => {
+    const src = readFileSync(join(REPO, "scripts/ci-changes.mjs"), "utf8");
+    const body = src.slice(src.indexOf("function tierOfCheckout("));
+    expect(body.slice(0, body.indexOf("\n}\n"))).toMatch(
+      /selectTier\(\s*withSiblingPinReaders\(files, \{ root, codeFiles: g\.imports\.files \}\)/
+    );
+  });
+
+  it("without the pins file in the change, nothing is added", () => {
+    const files = ["packages/governance-policy/src/index.ts"];
+    expect(withPins(files)).toBe(files);
+  });
+
+  it("an unreadable pins file stands for every sibling: over-select, never under-select", () => {
+    const out = withSiblingPinReaders(["sibling-pins.json"], {
+      root: join(tmpdir(), "no-such-root"),
+      codeFiles: ["a.ts", "b.ts", "c.md"],
+      read: (f: string) =>
+        f === "a.ts" ? 'siblingCheckout("synap-app")' : "// synap-app/x\n",
+    });
+    expect(out).toEqual(["sibling-pins.json", "a.ts"]);
+  });
+
+  it("the pins file lands without the merge bot's 2 h infra hold, and is not a full-suite path", () => {
+    expect(isInfraPath("sibling-pins.json")).toBe(false);
+    expect(ROOT_FULL.some((re: RegExp) => re.test("sibling-pins.json"))).toBe(
+      false
+    );
+    expect(isDocsOnly("sibling-pins.json")).toBe(false);
+  });
+});
+
 describe("ci-changes: every main red of 27-29 Oct is selected by the PR that caused it", () => {
   const { prs } = JSON.parse(
     readFileSync(join(REPO, "scripts/ci/finding-606c00e3-prs.json"), "utf8")
