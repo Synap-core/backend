@@ -1854,6 +1854,15 @@ const STATUS_LABEL_ROWS = {
   // (`automation_runs.status`, `automation_step_runs.status`): a calm outcome,
   // not a failure; its unit state is `blocked` on a rule (`units/state.ts`).
   blocked_by_policy: "Blocked by policy",
+  // A project PILLAR's derived health (`units/pillar-health.ts`), worst
+  // first, and the words of its goal counts (the pillar's bar legend).
+  no_active_goal: "No active goal",
+  stalled: "Stalled",
+  unproven: "Unproven",
+  needs_attention: "Needs attention",
+  moving: "Moving",
+  unvalidated_bet: "Unvalidated bet",
+  validated: "Validated",
 } satisfies Readonly<Record<string, string>>;
 
 export const STATUS_LABELS: Readonly<Record<string, string>> =
