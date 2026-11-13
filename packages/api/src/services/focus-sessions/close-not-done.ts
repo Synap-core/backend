@@ -319,8 +319,10 @@ export function hasWaiting(w: NotDoneAtClose): boolean {
 export async function loadOpenRequiredWork(
   session: Pick<
     FocusSession,
-    "id" | "userId" | "criteria" | "expectedOutputs" | "channelId"
-  >
+    "id" | "userId" | "criteria" | "expectedOutputs"
+  > &
+    // The room the session's mail lands in; absent or null = no mail to read.
+    Partial<Pick<FocusSession, "channelId">>
 ): Promise<NotDoneAtClose> {
   // Loaded lazily: evaluate.ts pulls the capability runner and the stage
   // gates, which the close door must not load at import time.
