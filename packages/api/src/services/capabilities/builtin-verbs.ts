@@ -301,16 +301,13 @@ const feedPostHandler: BuiltinVerbHandler = async (params, ctx) => {
 
 /**
  * output.generate — place a multi-slide artboard deck (carousel/deck) onto a
- * whiteboard, IN-PROCESS, through the SAME `placeArtboardDeck` emit the Hub REST
- * `POST /whiteboards/:viewId/place` route calls. This is the governed, discoverable
- * capability surface for "generate output": any client finds it via
- * list_capabilities and runs it via run_capability, while the existing IS-tool →
- * /whiteboards/place path keeps working unchanged (hybrid, not a migration).
+ * whiteboard, IN-PROCESS, through THE place door (`placeOnBoard`, via
+ * `placeArtboardDeck`): the same governed write as Hub
+ * `POST /whiteboards/:viewId/placements` and MCP `synap_place_on_board`. Any
+ * client finds it via list_capabilities and runs it via run_capability.
  *
- * The args mirror the existing place resource: a board id (viewId) + workspace
- * lens + the artboard-deck fields (preset, title, slides[{html,title?}]). The
- * emit itself is NOT reimplemented here — it delegates to the shared function so
- * the socket event shape has exactly one home.
+ * The args mirror the deck resource: a board id (viewId) + workspace lens +
+ * the artboard-deck fields (preset, title, slides[{html,title?}]).
  */
 const outputGenerateParams = z.object({
   /** The whiteboard view id (board) to place the deck onto. */
@@ -353,10 +350,8 @@ const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
-  // Confirm the target board actually lives in the acting workspace. Without
-  // this a member of workspace A could emit a board:place onto a board in
-  // workspace B by passing its viewId. (The verb is emit-only, no read leak,
-  // but this closes the cross-workspace placement surface the review flagged.)
+  // Confirm the target board actually lives in the acting workspace (the
+  // place door refuses another space's board too: `workspaceId` below).
   const [board] = await db
     .select({ id: views.id })
     .from(views)
@@ -371,15 +366,21 @@ const outputGenerateHandler: BuiltinVerbHandler = async (params, ctx) => {
     });
   }
 
-  // Delegate to the SHARED emit — the SAME function the /whiteboards/:id/place
-  // route uses. No duplicated event logic.
-  const result = placeArtboardDeck({
+  // THE place door: governed, written into the open board or its saved file.
+  const result = await placeArtboardDeck({
     viewId: input.boardId,
     deck: { preset: input.preset, title: input.title, slides: input.slides },
     options: input.options,
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    workspaceId: ctx.workspaceId,
   });
 
-  return { boardId: result.viewId, slideCount: result.slideCount };
+  return {
+    boardId: result.viewId,
+    slideCount: result.slideCount,
+    placement: result.placement,
+  };
 };
 
 /**

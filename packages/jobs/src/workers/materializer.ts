@@ -268,14 +268,13 @@ export async function handleMaterialize(
         await materializeProjectMember(action, data);
         break;
       case "whiteboard":
-        // Whiteboard proposals are handled inline by their own REST route;
-        // the materializer path is not yet implemented. Log and skip rather
-        // than hard-fail so the job does not fill the retry queue.
-        logger.warn(
-          { subjectType, action, subjectId },
-          "Whiteboard materialization via worker is not yet supported; skipping"
+        // A whiteboard write is applied by its approve executor
+        // (api routers/proposals/executors/whiteboard.ts, through the place
+        // door's realtime write), never here: this worker cannot reach the
+        // board. Refuse loudly rather than report a write that did not happen.
+        throw new Error(
+          `Whiteboard ${action} is applied by its approve executor, not the materializer (proposal subject ${subjectId}).`
         );
-        return;
       default:
         logger.warn(
           { subjectType },

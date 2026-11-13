@@ -269,7 +269,6 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   },
   { door: "focus_session/grant_capability", reason: SEVERED },
   { door: "proactive/recap", reason: SEVERED },
-  { door: "whiteboard/place", reason: SEVERED },
 ];
 
 /**
@@ -277,7 +276,7 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
  * LOWERED. Raising it is how this contract would quietly erode, so any PR that
  * raises it is doing the thing this file exists to prevent.
  */
-const GAP_CEILING = 8;
+const GAP_CEILING = 7;
 
 // ── Load the sources ─────────────────────────────────────────────────────────
 

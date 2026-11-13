@@ -4622,6 +4622,120 @@
           "scene"
         ]
       },
+      "BoardPlacementResult": {
+        "type": "object",
+        "properties": {
+          "viewId": { "type": "string" },
+          "documentId": { "type": "string" },
+          "workspaceId": { "type": ["string", "null"] },
+          "created": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["applied", "proposed"] },
+              "shapeIds": { "type": "array", "items": { "type": "string" } },
+              "target": { "type": "string", "enum": ["live", "stored"] },
+              "pending": { "type": "boolean" },
+              "proposalId": { "type": "string" },
+              "reviewUrl": { "type": "string" }
+            },
+            "required": ["status", "shapeIds"]
+          },
+          "updated": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["applied", "proposed"] },
+              "shapeIds": { "type": "array", "items": { "type": "string" } },
+              "target": { "type": "string", "enum": ["live", "stored"] },
+              "pending": { "type": "boolean" },
+              "proposalId": { "type": "string" },
+              "reviewUrl": { "type": "string" }
+            },
+            "required": ["status", "shapeIds"]
+          },
+          "removed": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string", "enum": ["applied", "proposed"] },
+              "shapeIds": { "type": "array", "items": { "type": "string" } },
+              "target": { "type": "string", "enum": ["live", "stored"] },
+              "pending": { "type": "boolean" },
+              "proposalId": { "type": "string" },
+              "reviewUrl": { "type": "string" }
+            },
+            "required": ["status", "shapeIds"]
+          }
+        },
+        "required": ["viewId", "documentId", "workspaceId"]
+      },
+      "BoardPlacementRequest": {
+        "type": "object",
+        "properties": {
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "entity",
+                    "view",
+                    "cellInstance",
+                    "cellDefinition",
+                    "html",
+                    "artboard-deck",
+                    "automation",
+                    "url"
+                  ]
+                }
+              },
+              "required": ["kind"],
+              "additionalProperties": {},
+              "description": "One thing to place (`BoardResourceRef`): entity {entityId, title?}, view {viewId}, cellInstance {cellInstanceId}, cellDefinition {cellKey, props?}, html {name, html}, artboard-deck {preset, title?, slides:[{html, title?}]}, automation {automationId, mode}, url {url, title?}."
+            },
+            "maxItems": 50
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "w": { "type": "number" },
+              "h": { "type": "number" },
+              "frameId": { "type": "string" },
+              "layout": {
+                "type": "string",
+                "enum": ["stack", "grid", "flow", "freeform"]
+              }
+            }
+          },
+          "update": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "shapeId": { "type": "string" },
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "w": { "type": "number" },
+                "h": { "type": "number" },
+                "props": { "type": "object", "additionalProperties": {} }
+              },
+              "required": ["shapeId"]
+            },
+            "maxItems": 50
+          },
+          "remove": {
+            "type": "array",
+            "items": { "type": "string" },
+            "maxItems": 50
+          },
+          "idempotencyKey": { "type": "string" },
+          "workspaceId": { "type": "string" },
+          "reasoning": { "type": "string" },
+          "sourceMessageId": { "type": "string" }
+        }
+      },
       "McpServer": {
         "type": "object",
         "properties": {
@@ -32699,6 +32813,276 @@
                         "live_unreadable",
                         "stored_unavailable",
                         "stored_unreadable"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whiteboards/{viewId}/placements": {
+      "post": {
+        "tags": ["Views"],
+        "summary": "Place things on a whiteboard, or change what it holds",
+        "description": "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; nothing is half-written.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+            },
+            "required": true,
+            "name": "viewId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/BoardPlacementRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What was placed, changed or proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardPlacementResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request, unknown frame or shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing scope, read-only, or denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such board, or not in your space",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The board failed to load or has no document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The board or a cell could not be read or made",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed"
+                      ]
+                    }
+                  },
+                  "required": ["error"]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The realtime server or storage did not answer, or the save did not land",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "reason": {
+                      "type": "string",
+                      "enum": [
+                        "not_found",
+                        "not_a_board",
+                        "not_initialized",
+                        "read_only",
+                        "wrong_workspace",
+                        "bad_request",
+                        "frame_not_found",
+                        "shape_not_found",
+                        "denied",
+                        "load_failed",
+                        "unavailable",
+                        "unreadable",
+                        "save_failed",
+                        "materialize_failed"
                       ]
                     }
                   },

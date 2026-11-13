@@ -15,16 +15,11 @@
  */
 
 import { z } from "zod";
+import { db, eq, and, desc, cellInstances } from "@synap/database";
 import {
-  db,
-  eventRepository,
-  createDocumentWithContent,
-  eq,
-  and,
-  desc,
-  cellInstances,
-  normalizeDocumentType,
-} from "@synap/database";
+  createHtmlCellInstance,
+  insertCellInstance,
+} from "../../../services/cells/create-cell-instance.js";
 import {
   hasScope,
   logger,
@@ -261,20 +256,16 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         });
       }
 
-      const [row] = await db
-        .insert(cellInstances)
-        .values({
-          workspaceId,
-          userId,
-          cellType: body.cellType,
-          config: body.config ?? {},
-          name: body.name,
-          isTemplate: body.isTemplate ?? false,
-          sourceDocumentId: body.sourceDocumentId,
-          createdByKind: resolvedAgentUserId ? "agent" : "user",
-          trustLevel: resolvedAgentUserId ? "generated" : "trusted",
-        })
-        .returning();
+      const row = await insertCellInstance({
+        workspaceId,
+        userId,
+        cellType: body.cellType,
+        config: body.config,
+        name: body.name,
+        isTemplate: body.isTemplate,
+        sourceDocumentId: body.sourceDocumentId,
+        agentUserId: resolvedAgentUserId,
+      });
 
       return c.json(serialize(row));
     } catch (err) {
@@ -381,33 +372,13 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         });
       }
 
-      const title = body.name ?? "HTML Cell";
-      // The ONE create door: fresh-key upload + row + v1 checkpoint.
-      const document = await createDocumentWithContent(db, eventRepository, {
-        ownerUserId: userId,
+      const row = await createHtmlCellInstance({
         workspaceId,
-        title,
-        type: normalizeDocumentType("text", "text"),
-        extension: "html",
-        content: body.html,
-        mimeType: "text/html",
-        provenance: { createdByKind: "human" },
+        userId,
+        html: body.html,
+        name: body.name,
+        agentUserId: resolvedAgentUserId,
       });
-
-      const [row] = await db
-        .insert(cellInstances)
-        .values({
-          workspaceId,
-          userId,
-          cellType: "html-embed",
-          config: {},
-          name: body.name,
-          isTemplate: false,
-          sourceDocumentId: document.id,
-          createdByKind: resolvedAgentUserId ? "agent" : "user",
-          trustLevel: resolvedAgentUserId ? "generated" : "trusted",
-        })
-        .returning();
 
       return c.json(serialize(row));
     } catch (err) {

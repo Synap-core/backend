@@ -47,7 +47,15 @@ import {
   markWhiteboardLoadFailed,
   stripWhiteboardLoadErrorKey,
   whiteboardLoadFailed,
+  WHITEBOARD_LOAD_FAILED_MESSAGE,
 } from "./whiteboard-room-state.js";
+import { withRoomLock } from "./room-lock.js";
+import {
+  YJS_APPLY_FAILURES,
+  type YjsApplyFailure,
+  type YjsRoomApplyReply,
+  type YjsRoomApplyRequest,
+} from "@synap/events/realtime-schemas";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
@@ -202,6 +210,63 @@ const verifiedDevices = new WeakMap<object, string>();
 
 /** Tldraw store snapshot format: Record<id, record> */
 type TldrawStoreSnapshot = Record<string, unknown>;
+
+/** What one whiteboard save did (`saveWhiteboardRoom`). */
+export type WhiteboardSaveOutcome =
+  | "saved"
+  | "no-document"
+  | "wrong-type"
+  | "load-failed"
+  | "empty-skipped"
+  | "refused-empty-over-content"
+  | "upload-failed";
+
+/** A refused place-door write: the reason the bridge answers with. */
+export class WhiteboardApplyError extends Error {
+  readonly status: number;
+  constructor(
+    readonly reason: YjsApplyFailure,
+    message: string
+  ) {
+    super(message);
+    this.name = "WhiteboardApplyError";
+    this.status = YJS_APPLY_FAILURES[reason];
+  }
+}
+
+/** Put and remove records in a board's map, as ONE Y transaction. */
+function applyBoardRecords(
+  ydoc: Y.Doc,
+  documentId: string,
+  request: Pick<YjsRoomApplyRequest, "put" | "remove" | "origin">
+): void {
+  const yMap = ydoc.getMap(`tl_map_${documentId}`);
+  ydoc.transact(() => {
+    for (const record of request.put) yMap.set(record.id, record);
+    for (const id of request.remove ?? []) yMap.delete(id);
+  }, request.origin);
+}
+
+/** A save the place door reports as done must be on disk. */
+function assertSaved(outcome: WhiteboardSaveOutcome, roomName: string): void {
+  if (outcome === "saved") return;
+  if (outcome === "no-document" || outcome === "wrong-type") {
+    throw new WhiteboardApplyError(
+      "not_found",
+      `No whiteboard document for room ${roomName}.`
+    );
+  }
+  if (outcome === "load-failed") {
+    throw new WhiteboardApplyError(
+      "load_failed",
+      WHITEBOARD_LOAD_FAILED_MESSAGE
+    );
+  }
+  throw new WhiteboardApplyError(
+    "save_failed",
+    `The board could not be saved (${outcome}). Retry: the same records replace themselves.`
+  );
+}
 
 /**
  * Custom persistence adapter: MinIO for whiteboards (canonical); for text
@@ -372,11 +437,189 @@ class DatabasePersistence {
   }
 
   /**
+   * Save a whiteboard room's records to MinIO (canonical, no version) and say
+   * what happened. The room's own saves (`writeState`) log the outcome; the
+   * place door's apply (`applyWhiteboardRecords`) needs it, since a write it
+   * reports as done must be on disk. Throws only on an unexpected error.
+   */
+  async saveWhiteboardRoom(
+    roomName: string,
+    ydoc: Y.Doc
+  ): Promise<WhiteboardSaveOutcome> {
+    const documentId = parseRoomName(roomName);
+    if (!documentId) return "no-document";
+    const doc = await db.query.documents.findFirst({
+      where: eq(documents.id, documentId),
+    });
+    if (!doc) return "no-document";
+    if (!roomFitsDocumentType(roomName, doc.type)) {
+      console.error(
+        `[Yjs] Refusing to persist room ${roomName} over a ${doc.type} document`
+      );
+      return "wrong-type";
+    }
+    // A room that failed to load holds no board: saving it would replace
+    // the stored file (the real board) with whatever the room has.
+    if (whiteboardLoadFailed(ydoc)) {
+      console.error(
+        `[Yjs] Refusing to save whiteboard ${roomName}: its saved content failed to load`
+      );
+      return "load-failed";
+    }
+    // Whiteboard: save to MinIO (canonical source, no version)
+    let storageKey = doc.storageKey;
+
+    // Safety net: derive storageKey if missing (legacy whiteboards or
+    // creation edge cases). It is persisted only AFTER an upload succeeded
+    // below, so the row never names an object that does not exist.
+    const derivedKey = !storageKey;
+    if (!storageKey) {
+      console.warn(
+        `[Yjs] Whiteboard ${roomName} missing storageKey — deriving fallback`
+      );
+      const userId = (doc as { userId?: string }).userId ?? "system";
+      storageKey = `whiteboards/${userId}/${documentId}.json`;
+    }
+
+    // Extract Tldraw store from Yjs Map
+    const yMap = ydoc.getMap(`tl_map_${documentId}`);
+    const store: TldrawStoreSnapshot = {};
+    yMap.forEach((val, key) => {
+      if (val != null && typeof val === "object") {
+        store[key] = val as unknown;
+      }
+    });
+
+    let content: string;
+    const storeIsEmpty = Object.keys(store).length === 0;
+
+    if (!storeIsEmpty) {
+      // Tldraw store found — save as JSON
+      content = JSON.stringify({ store });
+    } else {
+      // No Tldraw map — save raw Yjs state as base64
+      const state = Y.encodeStateAsUpdate(ydoc);
+      if (state.byteLength <= 2) {
+        // Empty doc, skip save
+        return "empty-skipped";
+      }
+      content = `yjs:${Buffer.from(state).toString("base64")}`;
+    }
+
+    // --- GUARD 1: Never overwrite non-empty with empty store ---
+    // If the Yjs map is empty, check what's already in MinIO before writing.
+    // An empty client state must not clobber existing content (e.g. after a
+    // client error, reconnect, or partial sync).
+    if (storeIsEmpty) {
+      let priorIsNonEmpty = false;
+      try {
+        const priorBuf = await storage.downloadBuffer(storageKey);
+        const priorLen = priorBuf.byteLength;
+        if (priorLen > 0) {
+          // Legacy yjs: blob — treat any blob larger than a trivial Yjs header as non-empty
+          const priorStr = priorBuf.toString("utf-8");
+          if (priorStr.startsWith("yjs:")) {
+            priorIsNonEmpty = priorStr.length > 6; // "yjs:" + at least 2 base64 chars
+          } else {
+            // JSON path: check for non-empty store
+            try {
+              const priorParsed = JSON.parse(priorStr) as {
+                store?: TldrawStoreSnapshot;
+              };
+              const priorStore = priorParsed.store ?? priorParsed;
+              priorIsNonEmpty =
+                typeof priorStore === "object" &&
+                priorStore !== null &&
+                Object.keys(priorStore).length > 0;
+            } catch {
+              // Unparseable prior content — treat as non-empty to be safe
+              priorIsNonEmpty = priorLen > 4;
+            }
+          }
+        }
+      } catch (error) {
+        // No object yet: nothing to clobber, the empty write creates it.
+        // Any other failure is uncertain: skip the empty write.
+        priorIsNonEmpty = !isStorageObjectNotFound(error);
+      }
+
+      if (priorIsNonEmpty) {
+        console.warn(
+          `[Yjs] Refusing to overwrite non-empty whiteboard ${roomName} with empty store — skipping write`
+        );
+        return "refused-empty-over-content";
+      }
+      // Prior is also empty (or didn't exist) — safe to proceed with empty write
+    }
+
+    // NOTE: versioned backups are taken on SESSION CLOSE (see createSnapshot),
+    // not on every ~10s save — one bounded snapshot per editing session, so
+    // overwrites stay recoverable without unbounded per-save storage bloat.
+
+    // --- Upload with retry (3 attempts, exponential backoff) ---
+    let uploadOk = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise<void>((r) =>
+            setTimeout(r, 200 * Math.pow(2, attempt - 1))
+          );
+        }
+        await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
+          contentType: "application/json",
+        });
+        uploadOk = true;
+        break;
+      } catch (uploadErr) {
+        console.warn(
+          `[Yjs] MinIO upload attempt ${attempt + 1} failed for ${roomName}:`,
+          uploadErr
+        );
+      }
+    }
+
+    // --- GUARD 3: Fail LOUD on upload failure ---
+    if (!uploadOk) {
+      console.error(
+        `[Yjs] All MinIO upload attempts failed for ${roomName} — whiteboard data NOT saved`,
+        { roomName, storageKey, contentBytes: content.length }
+      );
+      recordYjsPersistFailure();
+      // Do NOT bump updatedAt — the DB timestamp must reflect the last VERIFIED save
+      return "upload-failed";
+    }
+
+    await db
+      .update(documents)
+      .set(
+        derivedKey
+          ? { storageKey, updatedAt: new Date() }
+          : { updatedAt: new Date() }
+      )
+      .where(eq(documents.id, documentId));
+    if (derivedKey) {
+      console.log(
+        `[Yjs] Persisted derived storageKey for ${roomName}: ${storageKey}`
+      );
+    }
+    recordYjsPersist();
+    console.log(
+      `[Yjs] Saved whiteboard to MinIO for ${roomName} (${Object.keys(store).length} tldraw records, ${content.length} bytes)`
+    );
+    return "saved";
+  }
+
+  /**
    * Save Y.Doc: whiteboard rooms to MinIO (canonical, no version), others to document_versions.
    * Realtime save every 30s – working state only, no version creation.
    */
   async writeState(roomName: string, ydoc: Y.Doc): Promise<void> {
     try {
+      if (roomName.startsWith("whiteboard-")) {
+        await this.saveWhiteboardRoom(roomName, ydoc);
+        return;
+      }
+
       const documentId = parseRoomName(roomName);
       if (!documentId) return;
 
@@ -388,160 +631,6 @@ class DatabasePersistence {
       if (!roomFitsDocumentType(roomName, doc.type)) {
         console.error(
           `[Yjs] Refusing to persist room ${roomName} over a ${doc.type} document`
-        );
-        return;
-      }
-
-      const isWhiteboard = roomName.startsWith("whiteboard-");
-
-      if (isWhiteboard) {
-        // A room that failed to load holds no board: saving it would replace
-        // the stored file (the real board) with whatever the room has.
-        if (whiteboardLoadFailed(ydoc)) {
-          console.error(
-            `[Yjs] Refusing to save whiteboard ${roomName}: its saved content failed to load`
-          );
-          return;
-        }
-        // Whiteboard: save to MinIO (canonical source, no version)
-        let storageKey = doc.storageKey;
-
-        // Safety net: derive storageKey if missing (legacy whiteboards or
-        // creation edge cases). It is persisted only AFTER an upload succeeded
-        // below, so the row never names an object that does not exist.
-        const derivedKey = !storageKey;
-        if (!storageKey) {
-          console.warn(
-            `[Yjs] Whiteboard ${roomName} missing storageKey — deriving fallback`
-          );
-          const userId = (doc as { userId?: string }).userId ?? "system";
-          storageKey = `whiteboards/${userId}/${documentId}.json`;
-        }
-
-        // Extract Tldraw store from Yjs Map
-        const yMap = ydoc.getMap(`tl_map_${documentId}`);
-        const store: TldrawStoreSnapshot = {};
-        yMap.forEach((val, key) => {
-          if (val != null && typeof val === "object") {
-            store[key] = val as unknown;
-          }
-        });
-
-        let content: string;
-        const storeIsEmpty = Object.keys(store).length === 0;
-
-        if (!storeIsEmpty) {
-          // Tldraw store found — save as JSON
-          content = JSON.stringify({ store });
-        } else {
-          // No Tldraw map — save raw Yjs state as base64
-          const state = Y.encodeStateAsUpdate(ydoc);
-          if (state.byteLength <= 2) {
-            // Empty doc, skip save
-            return;
-          }
-          content = `yjs:${Buffer.from(state).toString("base64")}`;
-        }
-
-        // --- GUARD 1: Never overwrite non-empty with empty store ---
-        // If the Yjs map is empty, check what's already in MinIO before writing.
-        // An empty client state must not clobber existing content (e.g. after a
-        // client error, reconnect, or partial sync).
-        if (storeIsEmpty) {
-          let priorIsNonEmpty = false;
-          try {
-            const priorBuf = await storage.downloadBuffer(storageKey);
-            const priorLen = priorBuf.byteLength;
-            if (priorLen > 0) {
-              // Legacy yjs: blob — treat any blob larger than a trivial Yjs header as non-empty
-              const priorStr = priorBuf.toString("utf-8");
-              if (priorStr.startsWith("yjs:")) {
-                priorIsNonEmpty = priorStr.length > 6; // "yjs:" + at least 2 base64 chars
-              } else {
-                // JSON path: check for non-empty store
-                try {
-                  const priorParsed = JSON.parse(priorStr) as {
-                    store?: TldrawStoreSnapshot;
-                  };
-                  const priorStore = priorParsed.store ?? priorParsed;
-                  priorIsNonEmpty =
-                    typeof priorStore === "object" &&
-                    priorStore !== null &&
-                    Object.keys(priorStore).length > 0;
-                } catch {
-                  // Unparseable prior content — treat as non-empty to be safe
-                  priorIsNonEmpty = priorLen > 4;
-                }
-              }
-            }
-          } catch (error) {
-            // No object yet: nothing to clobber, the empty write creates it.
-            // Any other failure is uncertain: skip the empty write.
-            priorIsNonEmpty = !isStorageObjectNotFound(error);
-          }
-
-          if (priorIsNonEmpty) {
-            console.warn(
-              `[Yjs] Refusing to overwrite non-empty whiteboard ${roomName} with empty store — skipping write`
-            );
-            return;
-          }
-          // Prior is also empty (or didn't exist) — safe to proceed with empty write
-        }
-
-        // NOTE: versioned backups are taken on SESSION CLOSE (see createSnapshot),
-        // not on every ~10s save — one bounded snapshot per editing session, so
-        // overwrites stay recoverable without unbounded per-save storage bloat.
-
-        // --- Upload with retry (3 attempts, exponential backoff) ---
-        let uploadOk = false;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            if (attempt > 0) {
-              await new Promise<void>((r) =>
-                setTimeout(r, 200 * Math.pow(2, attempt - 1))
-              );
-            }
-            await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
-              contentType: "application/json",
-            });
-            uploadOk = true;
-            break;
-          } catch (uploadErr) {
-            console.warn(
-              `[Yjs] MinIO upload attempt ${attempt + 1} failed for ${roomName}:`,
-              uploadErr
-            );
-          }
-        }
-
-        // --- GUARD 3: Fail LOUD on upload failure ---
-        if (!uploadOk) {
-          console.error(
-            `[Yjs] All MinIO upload attempts failed for ${roomName} — whiteboard data NOT saved`,
-            { roomName, storageKey, contentBytes: content.length }
-          );
-          recordYjsPersistFailure();
-          // Do NOT bump updatedAt — the DB timestamp must reflect the last VERIFIED save
-          return;
-        }
-
-        await db
-          .update(documents)
-          .set(
-            derivedKey
-              ? { storageKey, updatedAt: new Date() }
-              : { updatedAt: new Date() }
-          )
-          .where(eq(documents.id, documentId));
-        if (derivedKey) {
-          console.log(
-            `[Yjs] Persisted derived storageKey for ${roomName}: ${storageKey}`
-          );
-        }
-        recordYjsPersist();
-        console.log(
-          `[Yjs] Saved whiteboard to MinIO for ${roomName} (${Object.keys(store).length} tldraw records, ${content.length} bytes)`
         );
         return;
       }
@@ -789,6 +878,15 @@ export interface YjsServerInstance {
   documents: Map<string, Y.Doc>;
   /** Flush all pending debounced saves immediately — call before process exit. */
   flushAll: () => Promise<void>;
+  /**
+   * The place door's write (`POST /yjs/:roomId/apply`): records into the
+   * open room (then saved at once), else into the stored file, under the
+   * room's lock. Throws `WhiteboardApplyError` with the reason.
+   */
+  applyWhiteboardRecords: (
+    roomName: string,
+    request: YjsRoomApplyRequest
+  ) => Promise<YjsRoomApplyReply>;
   // Expose event emitter surface used by server.ts
   on: YSocketIO["on"];
 }
@@ -864,11 +962,43 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
   // the doc, so we handle final snapshot creation inside writeState when the room is closing.
   const closingRooms = new Set<string>();
 
+  // Whiteboard rooms whose load FINISHED, by name: what the place door writes
+  // into. Set inside the room's lock at the end of `bindState`, so a write
+  // waiting on that lock sees the loaded doc even before y-socket.io lists it
+  // in `documents` (it does so only after `bindState` resolves). Dropped when
+  // y-socket.io destroys the doc (`document-destroy`).
+  const boundWhiteboards = new Map<string, Y.Doc>();
+  const isWhiteboard = (docName: string) => docName.startsWith("whiteboard-");
+  // A whiteboard room's load and saves hold the room's lock (room-lock.ts),
+  // as the place door's write does; other rooms are unchanged.
+  const lockedWrite = (docName: string, ydoc: Y.Doc) =>
+    isWhiteboard(docName)
+      ? withRoomLock(docName, () => persistence.writeState(docName, ydoc))
+      : persistence.writeState(docName, ydoc);
+
   (yServer as any).persistence = {
     bindState: async (docName: string, ydoc: Y.Doc) => {
-      await persistence.bindState(docName, ydoc);
+      if (!isWhiteboard(docName)) {
+        await persistence.bindState(docName, ydoc);
+        return;
+      }
+      await withRoomLock(docName, async () => {
+        await persistence.bindState(docName, ydoc);
+        boundWhiteboards.set(docName, ydoc);
+      });
     },
     writeState: async (docName: string, ydoc: Y.Doc) => {
+      if (isWhiteboard(docName)) {
+        await withRoomLock(docName, () => writeStateUnlocked(docName, ydoc));
+        return;
+      }
+      await writeStateUnlocked(docName, ydoc);
+    },
+    provider: null,
+  };
+
+  async function writeStateUnlocked(docName: string, ydoc: Y.Doc) {
+    {
       if (closingRooms.has(docName)) {
         // Room is closing — do final snapshot instead of regular write
         closingRooms.delete(docName);
@@ -895,9 +1025,8 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
           console.error(`[Yjs] writeState failed for ${docName}:`, err);
         }
       }
-    },
-    provider: null,
-  };
+    }
+  }
 
   // Register the /yjs|* dynamic namespace. y-socket.io@1.1.3 does this in
   // `initialize()` — the constructor leaves `nsp` null — so nothing (including
@@ -976,7 +1105,7 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
 
       // Set new timeout for debounced save
       const timeout = setTimeout(() => {
-        persistence.writeState(docName, doc);
+        void lockedWrite(docName, doc);
         saveIntervals.delete(docName);
       }, persistenceInterval);
 
@@ -1023,7 +1152,7 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
       const doc = docs?.get(docName);
       if (doc) {
         flushPromises.push(
-          persistence.writeState(docName, doc).catch((err) => {
+          lockedWrite(docName, doc).catch((err) => {
             console.error(
               `[Yjs] flushAll writeState failed for ${docName}:`,
               err
@@ -1039,7 +1168,86 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
     }
   };
 
+  // A destroyed room is no longer the board: the next write goes to the file.
+  yServer.on("document-destroy", (doc: Y.Doc & { name?: string }) => {
+    const docName = doc?.name;
+    if (docName && boundWhiteboards.get(docName) === doc) {
+      boundWhiteboards.delete(docName);
+    }
+  });
+
+  /**
+   * The place door's write, under the room's lock:
+   *  - OPEN room (loaded): one Y transaction in the live doc, which every
+   *    client receives, then saved at once (a reported write is on disk).
+   *    A room closing meanwhile is still safe: its final save either ran
+   *    before (this save writes the doc with the records) or runs after (it
+   *    saves the doc that holds them).
+   *  - CLOSED: the stored file is loaded into a scratch doc exactly as a room
+   *    would load it (`bindState`), the records applied, and saved back. A
+   *    person opening the board meanwhile waits on the lock in `bindState`
+   *    and loads the result.
+   *  - A room, or a stored file, that failed to load takes no write.
+   */
+  const applyWhiteboardRecords = (
+    roomName: string,
+    request: YjsRoomApplyRequest
+  ): Promise<YjsRoomApplyReply> =>
+    withRoomLock(roomName, async () => {
+      const removed = request.remove?.length ?? 0;
+      const live =
+        boundWhiteboards.get(roomName) ??
+        (yServer as unknown as { documents: Map<string, Y.Doc> }).documents.get(
+          roomName
+        );
+      if (live) {
+        if (whiteboardLoadFailed(live)) {
+          throw new WhiteboardApplyError(
+            "load_failed",
+            `${WHITEBOARD_LOAD_FAILED_MESSAGE} It takes no write until everyone has left the board.`
+          );
+        }
+        applyBoardRecords(live, request.documentId, request);
+        assertSaved(
+          await persistence.saveWhiteboardRoom(roomName, live),
+          roomName
+        );
+        return {
+          roomId: roomName,
+          applied: true,
+          target: "live",
+          put: request.put.length,
+          removed,
+        };
+      }
+      const scratch = Object.assign(new Y.Doc(), { name: roomName });
+      try {
+        await persistence.bindState(roomName, scratch);
+        if (whiteboardLoadFailed(scratch)) {
+          throw new WhiteboardApplyError(
+            "load_failed",
+            WHITEBOARD_LOAD_FAILED_MESSAGE
+          );
+        }
+        applyBoardRecords(scratch, request.documentId, request);
+        assertSaved(
+          await persistence.saveWhiteboardRoom(roomName, scratch),
+          roomName
+        );
+      } finally {
+        scratch.destroy();
+      }
+      return {
+        roomId: roomName,
+        applied: true,
+        target: "stored",
+        put: request.put.length,
+        removed,
+      };
+    });
+
   const server = yServer as unknown as YjsServerInstance;
   server.flushAll = flushAll;
+  server.applyWhiteboardRecords = applyWhiteboardRecords;
   return server;
 }

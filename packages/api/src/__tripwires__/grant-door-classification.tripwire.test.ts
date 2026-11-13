@@ -202,8 +202,6 @@ const GATED_WRITE_ROUTES: Readonly<Record<string, Gate>> = {
   "POST /files/uploads/finalize": "canWrite",
   // rest/cells.ts — a person's define needs the write floor, an agent's the gate.
   "POST /cells/define": "canWrite",
-  // rest/whiteboards.ts — a placement proposal: the write floor, then the gate.
-  "POST /whiteboards/:viewId/placements/propose": "canWrite",
   // rest/capture.ts — drafting a process into a space: its write floor.
   "POST /capture/draft-process": "assertWorkspaceWrite",
   // rest/commands.ts — running a command is a governed write.
@@ -357,6 +355,11 @@ const GATED_ELSEWHERE: Readonly<
     }
   >
 > = {
+  "POST /whiteboards/:viewId/placements": {
+    via: "placeOnBoard",
+    load: () => import("../services/whiteboards/place-on-board.js"),
+    why: "whiteboard.place / update_shapes / delete_shapes through checkPermissionOrPropose on the board's own room floor, shared with MCP synap_place_on_board",
+  },
   "POST /installations/request": {
     via: "requestInstallation",
     load: () => import("../services/installations/request-installation.js"),

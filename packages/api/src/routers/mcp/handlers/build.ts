@@ -13,7 +13,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
-import { toolError } from "../tool-errors.js";
+import { fullUuidError, toolError } from "../tool-errors.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import {
@@ -906,6 +906,63 @@ export const buildHandlers: McpHandlerMap = {
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
+  },
+  /**
+   * THE board write — the twin of Hub `POST /whiteboards/:viewId/placements`:
+   * both call `placeOnBoard`. New shapes appear at once (an agent's marked
+   * pending for the person to keep); changing or removing shapes is a
+   * proposal by default. A refusal is a tool error naming its `reason`.
+   */
+  synap_place_on_board: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      keyWorkspaceId,
+    } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const viewId = typeof args.viewId === "string" ? args.viewId.trim() : "";
+    if (!viewId)
+      return toolError(
+        `Tool '${toolName}': viewId is required: the whiteboard view's id (synap_list_views).`
+      );
+    const badId = fullUuidError(toolName, "viewId", viewId);
+    if (badId) return badId;
+    const { PlaceOnBoardRequestSchema } =
+      await import("@synap-core/types/whiteboard");
+    const { viewId: _viewId, ...request } = args;
+    const parsed = PlaceOnBoardRequestSchema.safeParse(request);
+    if (!parsed.success) {
+      return toolError(
+        `Tool '${toolName}': ${parsed.error.issues
+          .map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`)
+          .join("; ")}`
+      );
+    }
+    const { placeOnBoard, BoardPlaceError } =
+      await import("../../../services/whiteboards/place-on-board.js");
+    try {
+      return ok(
+        await placeOnBoard({
+          viewId,
+          userId,
+          agentUserId: agentUserId ?? null,
+          confinedWorkspaceId: keyWorkspaceId ?? null,
+          request: parsed.data,
+        })
+      );
+    } catch (err) {
+      if (err instanceof BoardPlaceError) {
+        return toolError(
+          `Tool '${toolName}' could not place on the board (reason: ${err.reason}): ${err.message}`
+        );
+      }
+      throw err;
+    }
   },
   /**
    * Edit an existing view's name and/or config through the Hub's governed

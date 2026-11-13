@@ -5899,7 +5899,7 @@ export const tools = {
           destructiveHint: false,
           openWorldHint: false,
         },
-        description: `Update the content of an existing whiteboard view (add/move/delete shapes). Goes through governance. Whiteboards only: to rename a view or change its config (a bento's blocks, a kanban's grouping) use synap_update_view.`,
+        description: `Replace a whiteboard's whole saved content with a tldraw store. Governed. To add, move or remove shapes use synap_place_on_board. To rename a view or change its config use synap_update_view.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -5939,6 +5939,66 @@ export const tools = {
         },
       },
       {
+        name: "synap_place_on_board",
+        annotations: {
+          title: "Place on a whiteboard",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Put things on a whiteboard, or change what it holds, in ONE governed write. `resources` CREATES shapes: entity cards (`{kind:'entity', entityId}`), live views (`{kind:'view', viewId}`), cells (`cellInstance` / `cellDefinition`), HTML (`{kind:'html', name, html}`), web pages (`{kind:'url', url}`), automations (`{kind:'automation', automationId, mode}`) and decks or carousels (`{kind:'artboard-deck', preset, slides:[{html, title?}]}`, one artboard per slide). They appear at once, marked pending until the person keeps or rejects them. `update` (x, y, w, h, props) and `remove` change shapes already there (ids from synap_read_board) and are proposals by default: `proposed` is success. Placed to the right of what the board holds unless you give `options.x`/`y`; `options.frameId` places inside a frame or artboard; `options.layout` stack | grid | flow | freeform. Pass the same `idempotencyKey` to retry: it replaces what the first call placed, never duplicates. Works whether or not the board is open. A refusal is an error with a `reason` (not_found, read_only, frame_not_found, shape_not_found, load_failed, unavailable…); nothing is half-written. Get a board's viewId from synap_list_views.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            viewId: {
+              type: "string",
+              description: "The whiteboard view's id (synap_list_views).",
+            },
+            resources: {
+              type: "array",
+              description:
+                "Things to place (at most 50), each with a `kind`: entity {entityId, title?}, view {viewId}, cellInstance {cellInstanceId}, cellDefinition {cellKey, props?, name?}, html {name, html}, url {url, title?}, automation {automationId, mode: flow|detail|status|trigger}, artboard-deck {preset, title?, slides:[{html, title?}]}.",
+              items: { type: "object" },
+            },
+            options: {
+              type: "object",
+              description:
+                "Where to put new shapes: {x?, y?, w?, h?, frameId?, layout?: stack|grid|flow|freeform}.",
+            },
+            update: {
+              type: "array",
+              description:
+                "Shapes to change: [{shapeId, x?, y?, w?, h?, props?}] (a proposal by default).",
+              items: { type: "object" },
+            },
+            remove: {
+              type: "array",
+              description:
+                "Shape ids to remove, with what they hold (a proposal by default).",
+              items: { type: "string" },
+            },
+            idempotencyKey: {
+              type: "string",
+              description:
+                "Retry key: the same key places the same shape ids (a retry replaces).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional: the space you act in; a board of another space is refused.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["viewId"],
+        },
+      },
+      {
         name: "synap_update_view",
         annotations: {
           title: "Edit view",
@@ -5947,7 +6007,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit an existing view you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every widget you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the widget catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_update_view_content.",
+          "Edit an existing view you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every widget you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the widget catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_place_on_board.",
         inputSchema: {
           type: "object",
           properties: {

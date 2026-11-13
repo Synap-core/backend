@@ -77,16 +77,18 @@ const MANIFEST = {
 
   // ----- WHITEBOARD PLACEMENT -----------------------------------------------------
   whiteboardPlacement: {
-    endpoint: "POST /api/hub/whiteboards/{viewId}/placements/propose",
-    governance: "proposal-gated",
+    endpoint: "POST /api/hub/whiteboards/{viewId}/placements",
+    governance:
+      "create applied at once (an agent's shapes marked pending); update and remove are proposals by default",
     description:
-      "Propose spatial placement of existing or newly-created resources on a whiteboard. Create resources first; the whiteboard stores placement only.",
+      "Place resources on a whiteboard (written into the open board or its saved file), or change and remove shapes it holds. Same door as MCP synap_place_on_board. Read a board first with GET /api/hub/whiteboards/{viewId}/scene.",
     resourceKinds: [
       "entity",
       "view",
       "cellInstance",
       "cellDefinition",
       "html",
+      "artboard-deck",
       "automation",
       "url",
     ],
@@ -174,7 +176,7 @@ const MANIFEST = {
     "Workspaces are lenses, not silos — add views to existing workspaces before proposing new ones",
     "Always propose workspace creation before committing — workspace.create is proposal-gated",
     "bento.arrange is auto-approved — safe to call without hesitation for rearranges",
-    "Whiteboard placement is proposal-gated — create resources first, then call /whiteboards/{viewId}/placements/propose",
+    "Whiteboard placement: POST /whiteboards/{viewId}/placements (new shapes land pending for the person to keep; changing or removing shapes is a proposal)",
     "Entity creation uses profileSlug, not type (deprecated)",
     "Drizzle enum: use TypeScript enum value, not string literal",
     "tRPC URL on pod: ${podUrl}/trpc (no /api prefix)",
