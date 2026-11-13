@@ -152,10 +152,7 @@ const CONFIG = {
 };
 const CONFIG_2 = {
   version: 1,
-  collections: {
-    paper: { sort: ["title"], slugField: "title" },
-    essay: { slugField: "title" },
-  },
+  collections: { paper: { sort: ["title"], slugField: "title", pageSize: 20 } },
 };
 
 let world: ReturnType<typeof siteWorld>;
@@ -232,10 +229,10 @@ describe("an app the person signed in to configures their site AS them", () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as any).status).toBe("updated");
     const [row] = await siteRow(P);
-    expect(Object.keys(row!.site_config.collections).sort()).toEqual([
-      "essay",
-      "paper",
-    ]);
+    expect(row!.site_config.collections.paper).toMatchObject({
+      sort: ["title"],
+      pageSize: 20,
+    });
     expect((await manifest(site.token)).status).toBe(200);
   });
 });
@@ -345,10 +342,10 @@ describe("the app reads its site (GET /shares/sites, finding f4f0cbf4)", () => {
     expect(byProject.status).toBe(200);
     const st = (await byProject.json()) as any;
     expect(st).toMatchObject({ siteId: site.siteId, projectId: P, live: true });
-    expect(Object.keys(st.config.collections).sort()).toEqual([
-      "essay",
-      "paper",
-    ]);
+    expect(st.config.collections.paper).toMatchObject({
+      sort: ["title"],
+      pageSize: 20,
+    });
     expect(JSON.stringify(st)).not.toContain(site.token);
     const ids = st.members.map((m: any) => m.entityId);
     expect(ids).toContain(rec.one);
