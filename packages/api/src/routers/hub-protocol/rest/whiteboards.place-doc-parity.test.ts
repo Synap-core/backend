@@ -21,9 +21,7 @@ const field = (schema: unknown, name: string): unknown =>
 
 describe("PlacementRequestDoc documents what PlaceOnBoardRequestObject parses", () => {
   it("the request has the same fields", () => {
-    expect(keys(PlacementRequestDoc)).toEqual(
-      keys(PlaceOnBoardRequestObject)
-    );
+    expect(keys(PlacementRequestDoc)).toEqual(keys(PlaceOnBoardRequestObject));
   });
   it("options has the same fields", () => {
     expect(keys(field(PlacementRequestDoc, "options"))).toEqual(
@@ -37,6 +35,8 @@ describe("PlacementRequestDoc documents what PlaceOnBoardRequestObject parses", 
   });
   it("is not vacuous: the key lists are real", () => {
     expect(keys(PlaceOnBoardRequestObject)).toContain("idempotencyKey");
-    expect(keys(field(PlaceOnBoardRequestObject, "update"))).toContain("shapeId");
+    expect(keys(field(PlaceOnBoardRequestObject, "update"))).toContain(
+      "shapeId"
+    );
   });
 });

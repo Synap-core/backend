@@ -239,13 +239,12 @@ export const PlaceOnBoardRequestSchema = PlaceOnBoardRequestObject.refine(
       (r.remove?.length ?? 0) >
     0,
   { message: "Nothing to do: pass resources, update or remove." }
-)
-  .refine(
-    (r) => placementCellCount(r.resources ?? []) <= BOARD_PLACE_MAX_NEW_CELLS,
-    {
-      message: `A call creates at most ${BOARD_PLACE_MAX_NEW_CELLS} cells (html, url, automation, cell and deck-slide resources). Split it.`,
-    }
-  );
+).refine(
+  (r) => placementCellCount(r.resources ?? []) <= BOARD_PLACE_MAX_NEW_CELLS,
+  {
+    message: `A call creates at most ${BOARD_PLACE_MAX_NEW_CELLS} cells (html, url, automation, cell and deck-slide resources). Split it.`,
+  }
+);
 export type PlaceOnBoardRequest = z.infer<typeof PlaceOnBoardRequestSchema>;
 
 /** What one part of a place call did. */
