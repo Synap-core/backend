@@ -119,7 +119,10 @@ function keyApp(keyType: string, grant: KeyGrant) {
     c.set("userId" as never, A as never);
     c.set("scopes" as never, SCOPES as never);
     c.set("keyType" as never, keyType as never);
-    if (isFencedGrant(grant) && !restDoorAllowed(c.req.method, c.req.path, grant)) {
+    if (
+      isFencedGrant(grant) &&
+      !restDoorAllowed(c.req.method, c.req.path, grant)
+    ) {
       return c.json({ code: "GRANT_DOOR_UNSUPPORTED" }, 403);
     }
     return runWithGrant(grant, () => next());
