@@ -615,10 +615,10 @@
     }
   },
   "synap/showing": {
-    "teachesTools": ["focus_surface", "place_on_whiteboard"],
+    "teachesTools": ["focus_surface", "synap_place_on_board"],
     "skillGroup": "core",
     "alwaysOn": false,
-    "summary": "Show, don't just tell: open results on the user's screen with focus_surface (place_on_whiteboard for spatial PR review) — navigation, no proposal.",
+    "summary": "Show, don't just tell: open results on the user's screen with focus_surface (navigation, no proposal); lay work out on a whiteboard with synap_place_on_board (new shapes land pending for the person to keep).",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

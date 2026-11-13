@@ -445,6 +445,69 @@ describe("creating shapes: applied at once, marked pending, retry-safe", () => {
   });
 });
 
+describe("url embeds: the browser's embed rule, on the server", () => {
+  it.each([
+    [
+      "http (insecure)",
+      { kind: "url", url: "http://example.com/" },
+      "insecure",
+    ],
+    ["javascript:", { kind: "url", url: "javascript:alert(1)" }, "scheme"],
+    [
+      "a stored file",
+      {
+        kind: "url",
+        url: "https://bucket.s3.amazonaws.com/a.svg?X-Amz-Signature=abc",
+      },
+      "stored-file",
+    ],
+    [
+      "the pod itself",
+      { kind: "url", url: "https://pod.place.test/settings" },
+      "own-pod",
+    ],
+    [
+      "an iframe-embed cell definition",
+      {
+        kind: "cellDefinition",
+        cellKey: "iframe-embed",
+        props: { url: "data:text/html,<script>1</script>" },
+      },
+      "scheme",
+    ],
+  ])(
+    "refuses %s before governance, writing nothing",
+    async (_n, resource, why) => {
+      const before = process.env.PUBLIC_URL;
+      process.env.PUBLIC_URL = "https://pod.place.test";
+      try {
+        const res = await place({ resources: [resource] });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.reason).toBe("embed_refused");
+        expect(body.error).toContain(`(${why})`);
+        expect(m.gateCalls).toHaveLength(0);
+        expect(m.cellInserts).toHaveLength(0);
+        expect(m.applies).toHaveLength(0);
+      } finally {
+        if (before === undefined) delete process.env.PUBLIC_URL;
+        else process.env.PUBLIC_URL = before;
+      }
+    }
+  );
+
+  it("a https website is placed", async () => {
+    const res = await place({
+      resources: [{ kind: "url", url: "https://example.com/page" }],
+    });
+    expect(res.status).toBe(200);
+    expect(m.cellInserts[0]).toMatchObject({
+      cellType: "iframe-embed",
+      config: { url: "https://example.com/page" },
+    });
+  });
+});
+
 describe("changing and removing shapes: a proposal by default", () => {
   it("update and remove go through checkPermissionOrPropose and, proposed, write nothing", async () => {
     m.verdicts["whiteboard/update_shapes"] = proposed("prop-u");

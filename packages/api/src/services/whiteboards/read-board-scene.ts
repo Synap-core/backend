@@ -133,7 +133,7 @@ function recordsFromYjsUpdate(update: Uint8Array, documentId: string): unknown {
  * other answer is a failure, never "not open": a closed bridge must not read
  * as a closed room, because the stored file lags an open one.
  */
-async function readLiveRecords(
+export async function readLiveRecords(
   roomId: string,
   documentId: string
 ): Promise<unknown | null> {

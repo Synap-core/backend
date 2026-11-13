@@ -234,5 +234,10 @@ export const BOARD_PLACE_FAILURES = {
   save_failed: 503,
   /** A cell the placement needs could not be created. */
   materialize_failed: 502,
+  /**
+   * A url embed that is not a website (`classifyEmbedUrl`,
+   * `@synap-core/types/embed-url`): not https, a stored file, the pod itself.
+   */
+  embed_refused: 400,
 } as const;
 export type BoardPlaceFailure = keyof typeof BOARD_PLACE_FAILURES;
