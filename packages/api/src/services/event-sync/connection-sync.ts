@@ -1564,7 +1564,8 @@ export const ConnectionSyncStatusSchema = z.object({
       resolved: z.literal(true).optional(),
       next: z
         .object({
-          kind: z.enum(["add", "connect", "enable", "run", "none"]),
+          // The pod's ONE next-action vocabulary (`CapabilityNextAction`).
+          kind: z.enum(["add", "connect", "enable", "update", "run", "none"]),
           hint: z.string(),
           url: z.string().optional(),
         })
