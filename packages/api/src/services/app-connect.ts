@@ -90,7 +90,6 @@ import {
   parseOauthKeyInstanceId,
 } from "../routers/oauth/config.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
-import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
 import { revokeConnectionRefreshTokens } from "../routers/oauth/refresh.js";
 import { isSynapApp, type PodAppActsAs } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
@@ -2227,10 +2226,11 @@ const pairKey = (r: AppApprovedRequest) =>
  * exact (permission, space) pairs of the current approval, at least one (all
  * gone is Revoke). Anything not already approved is refused.
  *
- * The live access shrinks now: a pod app's live key is revoked (its 1 h
- * token cannot be re-issued to the app from here), and its next refresh is
- * minted from the narrowed approval (`mintAppOAuthAccessKey` reads the current
- * one); its agent leaves the spaces it lost. An App Connect app's long-lived
+ * The live access shrinks now: a pod app's live key is revoked, the
+ * person's token as much as a legacy agent's (its 1 h token cannot be
+ * re-issued to the app from here), and its next refresh is minted from the
+ * narrowed approval (`mintAppOAuthAccessKey` reads the current one); a legacy
+ * agent leaves the spaces it lost. An App Connect app's long-lived
  * key is re-derived in place (`applyApprovedReach`).
  *
  * Who may: the app's owner signed in as themselves (`assertOwnerCredential`),
@@ -2274,17 +2274,20 @@ export async function narrowApp(args: {
   const repo = new AppRepository(db);
   await repo.setApprovedRequests(found.app.id, keep);
   if (found.app.mode === "oauth") {
+    // The connection's live key, whoever holds it: the person's token (every
+    // pod app since 12 Nov 2026) or, for a connection not refreshed since,
+    // its agent's. Its grants go with it (`revokeAppKeys`).
+    await revokeAppKeys(
+      found,
+      args.ownerUserId,
+      `Access narrowed for ${found.app.name}: the next token carries the narrower reach`
+    );
     if (found.app.agentUserId) {
       await syncAppAgentMemberships(
         found.app.agentUserId,
         found.app.ownerUserId,
         keep
       );
-      await revokeActiveHubInboundKeysForUser(db, {
-        userId: found.app.agentUserId,
-        revokedBy: args.ownerUserId,
-        revokedReason: `Access narrowed for ${found.app.name}: the next token carries the narrower reach`,
-      });
     }
   } else {
     await applyApprovedReach(found.app.id);
