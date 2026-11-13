@@ -92,7 +92,8 @@ import {
   skillRequiresEdges,
 } from "../../routers/skills.js";
 import {
-  skillExecFieldsChanged,
+  changedExecFieldNames,
+  RE_APPROVAL_FIELDS,
   execFieldsChanged,
   MCP_SERVER_RE_APPROVAL_FIELDS,
   allowedHostsChanged,
@@ -501,13 +502,33 @@ async function stampSourceCapability(
  *
  * The patch mirrors the applier's `.set({...})` projection exactly — a field
  * this comparator reads must be a field that update actually writes.
+ *
+ * Derived from {@link definitionSkillExecChanges}, so "does it change what
+ * runs" and "which fields change it" are one rule, never two lists.
  */
 export function definitionSkillChangesExecution(
   s: CapabilitySkillDef,
   existing: Record<string, unknown>,
   readerTrust: { officialSource: boolean }
 ): boolean {
-  const execContentChanged = skillExecFieldsChanged(
+  return definitionSkillExecChanges(s, existing, readerTrust).length > 0;
+}
+
+/**
+ * The execution fields applying `s` would change on its installed row, by
+ * name: the `RE_APPROVAL_FIELDS` columns (`code`, `inputMap`, ...) in that
+ * order, then the `metadata` keys the same rule reads, as
+ * `metadata.allowedHosts`, `metadata.box` and `metadata.readOnly`. Empty =
+ * the update leaves what the skill runs alone. A held update names these to
+ * the owner (`reconcile-capabilities-to-templates.ts`).
+ */
+export function definitionSkillExecChanges(
+  s: CapabilitySkillDef,
+  existing: Record<string, unknown>,
+  readerTrust: { officialSource: boolean }
+): string[] {
+  const changed = changedExecFieldNames(
+    RE_APPROVAL_FIELDS,
     {
       kind: s.kind ?? "code",
       code: s.code ?? null,
@@ -521,37 +542,47 @@ export function definitionSkillChangesExecution(
     existing
   );
   const box = declaredBox(s.metadata);
-  return (
-    execContentChanged ||
-    // Widening (or narrowing) the sandbox's egress allowlist is an
-    // execution change — `metadata.allowedHosts` is the ONE thing deciding
-    // which hosts an approved skill may reach. It cannot ride in
-    // `RE_APPROVAL_FIELDS`: `metadata` is a shallow-merged bag, not a
-    // spread column, so the field comparison literally cannot see it. This
-    // is the SAME rule `routers/skills.ts` applies on the human/agent edit
-    // door — the two doors drifted once, which is why the rule lives in
-    // `skill-exec-fields.ts` and both doors call it.
+  // Widening (or narrowing) the sandbox's egress allowlist is an
+  // execution change — `metadata.allowedHosts` is the ONE thing deciding
+  // which hosts an approved skill may reach. It cannot ride in
+  // `RE_APPROVAL_FIELDS`: `metadata` is a shallow-merged bag, not a
+  // spread column, so the field comparison literally cannot see it. This
+  // is the SAME rule `routers/skills.ts` applies on the human/agent edit
+  // door — the two doors drifted once, which is why the rule lives in
+  // `skill-exec-fields.ts` and both doors call it.
+  if (
     allowedHostsChanged(
       s.metadata as Record<string, unknown> | undefined,
       existing.metadata as Record<string, unknown> | null
-    ) ||
-    // A box skill's declaration (packages, hosts, limits) is what the person
-    // approved besides the code: a changed one re-earns approval, by the same
-    // `boxDeclarationChanged` the skill edit door applies. Compared on the
-    // NORMALISED declaration, as stored.
+    )
+  ) {
+    changed.push("metadata.allowedHosts");
+  }
+  // A box skill's declaration (packages, hosts, limits) is what the person
+  // approved besides the code: a changed one re-earns approval, by the same
+  // `boxDeclarationChanged` the skill edit door applies. Compared on the
+  // NORMALISED declaration, as stored.
+  if (
     boxDeclarationChanged(
       box !== undefined ? { box } : undefined,
       existing.metadata as Record<string, unknown> | null
-    ) ||
-    // Same blind spot, same bag, same both-doors rule: turning
-    // `metadata.readOnly` ON makes the capability gate auto-run this verb
-    // before any grant rung, converting a reviewed action into an
-    // unattended one. Widening it must re-earn approval.
+    )
+  ) {
+    changed.push("metadata.box");
+  }
+  // Same blind spot, same bag, same both-doors rule: turning
+  // `metadata.readOnly` ON makes the capability gate auto-run this verb
+  // before any grant rung, converting a reviewed action into an
+  // unattended one. Widening it must re-earn approval.
+  if (
     readOnlyWidened(
       s.metadata as Record<string, unknown> | undefined,
       existing.metadata as Record<string, unknown> | null
     )
-  );
+  ) {
+    changed.push("metadata.readOnly");
+  }
+  return changed;
 }
 
 /** How far the applier trusts where a definition came from. */

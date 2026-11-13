@@ -116,6 +116,7 @@ export {
   reconcileChangedCapabilityTemplates,
   type CapabilityReconcileReport,
   type CapabilityReconcileEntry,
+  type CapabilityUpdateHold,
 } from "./services/capabilities/reconcile-capabilities-to-templates.js";
 export {
   notifyCapabilityUpdatesAvailable,
