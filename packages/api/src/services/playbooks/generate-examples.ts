@@ -61,14 +61,14 @@ export interface PastOutcomeWithoutText {
   runId: string;
 }
 
-/** The counts a landing asks for, each 0 when absent. */
+/** The counts a landing asks for, each 0 when absent (the schema bounds them). */
 export function examplesAsked(examples: OutputLandingExamples | undefined): {
   approved: number;
   rejected: number;
 } {
   return {
-    approved: Math.max(0, Math.trunc(examples?.approved ?? 0)),
-    rejected: Math.max(0, Math.trunc(examples?.rejected ?? 0)),
+    approved: examples?.approved ?? 0,
+    rejected: examples?.rejected ?? 0,
   };
 }
 
@@ -124,13 +124,18 @@ async function readDecided(input: {
       subjectTitle: entities.title,
     })
     .from(playbookRuns)
+    // The JSON side is cast, never the column, so each join reads the
+    // primary key's index.
     .innerJoin(
       proposals,
-      drizzleSql`${proposals.id}::text = ${playbookRuns.generation}->'proposal'->>'id'`
+      drizzleSql`${proposals.id} = (${playbookRuns.generation}->'proposal'->>'id')::uuid`
     )
     .leftJoin(
       entities,
-      drizzleSql`${entities.id}::text = ${playbookRuns.generation}->>'subjectId'`
+      and(
+        drizzleSql`${entities.id} = (${playbookRuns.generation}->>'subjectId')::uuid`,
+        isNull(entities.deletedAt)
+      )
     )
     .where(
       and(
@@ -168,7 +173,7 @@ async function readDecided(input: {
       outcome: input.outcome,
       proposalId: r.proposalId,
       runId: r.runId,
-      subjectTitle: r.subjectTitle ?? null,
+      subjectTitle: r.subjectTitle,
       text,
       reason,
     });

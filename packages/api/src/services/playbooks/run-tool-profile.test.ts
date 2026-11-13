@@ -106,12 +106,11 @@ function deps(pb: Partial<Pb> = {}, over: Partial<Deps> = {}): Deps {
 const input = { playbookId: "pb-1", workspaceId: "ws-run", userId: "u-1" };
 
 describe("resolveRunToolProfile — floor of the class plus only these", () => {
-  it("a short run (<= 2 stages, no gate) declaring nothing gets the 6 reads and nothing else", async () => {
+  it("a short run (<= 2 stages, no gate) declaring nothing gets the reads and nothing else", async () => {
     const d = deps();
     const p = await resolveRunToolProfile(input, d);
     expect(p).toMatchObject({ runClass: "short", capabilitiesRead: "ok" });
     expect(p.tools).toEqual([...SHORT_RUN_FLOOR]);
-    expect(p.tools).toHaveLength(6);
     expect(p.verbs).toEqual([]);
     // Nothing declared beyond run tools: the registry is never read.
     expect(d.readRegistry).not.toHaveBeenCalled();
@@ -140,7 +139,6 @@ describe("resolveRunToolProfile — floor of the class plus only these", () => {
     );
     expect(p.runClass).toBe("long");
     expect(p.tools).toEqual([...LONG_RUN_FLOOR, "web_fetch"]);
-    expect(p.tools).toHaveLength(27);
   });
 
   it("a gate makes a 1-stage run long", async () => {

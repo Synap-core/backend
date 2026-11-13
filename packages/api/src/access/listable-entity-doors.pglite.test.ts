@@ -752,6 +752,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "edges of a focal object (opening it), not an entity listing",
   "services/object-graph/graph-service.ts":
     "a focal object's graph neighbourhood (opening it) + name resolution",
+  "services/playbooks/generate-run.ts":
+    "a one-shot run's subject, by id: the one record its prompt reads",
   "services/playbooks/playbook-lifecycle.ts":
     "a run's name: the title of the one object a param names, by id",
   "services/postiz/record-postiz-published.ts": "match by external id",

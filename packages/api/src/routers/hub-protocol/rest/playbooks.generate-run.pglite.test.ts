@@ -85,6 +85,8 @@ const h = vi.hoisted(() => {
     recalls: 0,
     /** The past-outcomes read throws (slice 8's failed-read row). */
     examplesFail: false,
+    /** The record write after filing a draft throws (review finding 8). */
+    settleFail: false,
     noopEvents: () =>
       new Proxy(
         {},
@@ -223,6 +225,22 @@ vi.mock("../../../services/playbooks/playbook-skill-preflight.js", () => ({
   findUnenabledPlaybookSkills: async () => [],
 }));
 // The real past-outcomes read, made to fail on demand.
+// The one writer after an executor, made to fail on a `proposed` settle.
+vi.mock("../../../services/playbooks/run-playbook.js", async (orig) => {
+  const actual =
+    await orig<typeof import("../../../services/playbooks/run-playbook.js")>();
+  return {
+    ...actual,
+    recordExecutorResult: async (
+      ...args: Parameters<typeof actual.recordExecutorResult>
+    ) => {
+      if (h.settleFail && args[1].status === "proposed") {
+        throw new Error("record write failed (test)");
+      }
+      return actual.recordExecutorResult(...args);
+    },
+  };
+});
 vi.mock("../../../services/playbooks/generate-examples.js", async (orig) => {
   const actual =
     await orig<
@@ -245,6 +263,10 @@ import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { registerPlaybooksRoutes } from "./playbooks.js";
 import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
+import { executeGenerateRun } from "../../../services/playbooks/generate-run.js";
+import { settleGenerateRunOnDecision } from "../../../services/playbooks/generate-run-decision.js";
+import { emitProposalReviewed } from "../../proposals/apply-approval.js";
+import { eq as eqCol } from "drizzle-orm";
 import {
   buildGeneratePrompt,
   GENERATE_PROMPT_MAX_CHARS,
@@ -279,7 +301,13 @@ function ddlFor(table: PgTable): string {
 }
 
 const PERSON = randomUUID();
+const MEMBER = randomUUID(); // another member of the same space
 const WS = randomUUID();
+const OTHER_WS = randomUUID(); // a space the person is not in
+const HIDDEN_POST = randomUUID(); // a post in OTHER_WS
+const HIDDEN_DOC = randomUUID();
+const GONE_POST = randomUUID(); // a deleted post in WS
+const GONE_DOC = randomUUID();
 const KEY = randomUUID();
 const POST = randomUUID();
 const POST_2 = randomUUID();
@@ -332,6 +360,22 @@ beforeAll(async () => {
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
     [randomUUID(), WS, PERSON]
   );
+  await q(`insert into users (id, email, user_type) values ($1,$2,'human')`, [
+    MEMBER,
+    "member@example.test",
+  ]);
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'member')`,
+    [randomUUID(), WS, MEMBER]
+  );
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'Their space',$2,'{}'::jsonb)`,
+    [OTHER_WS, MEMBER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+    [randomUUID(), OTHER_WS, MEMBER]
+  );
   // The person's own key: unbounded, acting as the person.
   await q(
     `insert into api_keys (id, user_id, linked_user_id, is_active) values ($1,$2,$2,true)`,
@@ -372,6 +416,24 @@ beforeAll(async () => {
           "post-platform": "instagram",
         }),
       ]
+    );
+  }
+  // A post in a space the person is not in, and a deleted post in theirs.
+  for (const [post, doc, ws, owner, title, deleted] of [
+    [HIDDEN_POST, HIDDEN_DOC, OTHER_WS, MEMBER, "Their secret launch", false],
+    [GONE_POST, GONE_DOC, WS, PERSON, "A deleted post", true],
+  ] as const) {
+    const key = `${owner}/documents/${doc}.md`;
+    h.blobs.set(key, SCRIPT);
+    await q(
+      `insert into documents (id, user_id, workspace_id, title, type, storage_key, current_version, content_revision, metadata)
+       values ($1,$2,$3,$4,'markdown',$5,1,1,'{}'::jsonb)`,
+      [doc, owner, ws, `${title} script`, key]
+    );
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, title, document_id, properties, system_data, version, deleted_at)
+       values ($1,$2,$3,'post',$4,$5,'{}'::jsonb,'{}'::jsonb,1,$6)`,
+      [post, owner, ws, title, doc, deleted ? new Date().toISOString() : null]
     );
   }
   const playbook = (
@@ -429,6 +491,7 @@ beforeEach(async () => {
   h.dispatched = [];
   h.recalls = 0;
   h.examplesFail = false;
+  h.settleFail = false;
   h.answer = DRAFT;
   h.getApiKeyStatus = async () => ({
     status: "valid",
@@ -904,5 +967,285 @@ describe("a landing on the person's own target (lands.owner: person, decision of
     );
     expect(after).not.toContain("synap-section");
     expect(after).not.toContain("The caption the person saved.");
+  });
+});
+
+// ── Review of the lean-runs wave (findings 2, 3, 4, 6, 7, 8, 9) ─────────────
+
+/** Run a one-shot playbook as the scheduled path does: one open run per subject. */
+async function scheduled(playbookId: string, subjectId: string) {
+  const [pb] = await (h.db as any)
+    .select()
+    .from(schema.playbooks)
+    .where(eqCol(schema.playbooks.id, playbookId));
+  return executeGenerateRun({
+    playbook: pb,
+    workspaceId: WS,
+    userId: PERSON,
+    subjectId,
+    params: {},
+    runOn: null,
+    idempotentBySubject: true,
+  });
+}
+
+/** Another member's filed draft on a subject: its run row and its proposal. */
+async function theirDraft(opts: {
+  playbookId: string;
+  subjectId: string;
+  documentId: string;
+  status: "pending" | "approved";
+  body: string;
+}) {
+  const runId = randomUUID();
+  const proposalId = randomUUID();
+  const data = {
+    data: {
+      documentId: opts.documentId,
+      ops: [
+        {
+          op: "upsert_section",
+          id: "caption-draft",
+          title: "Caption draft",
+          body: opts.body,
+        },
+      ],
+      baseRevision: 1,
+    },
+  };
+  await q(
+    `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, data, created_by, reviewed_at, updated_at, created_at)
+     values ($1,$2,'document',$3,'update',$4,$5::jsonb,'system:generate-run',$6,now(),now())`,
+    [
+      proposalId,
+      WS,
+      opts.documentId,
+      opts.status,
+      JSON.stringify(data),
+      opts.status === "approved" ? new Date().toISOString() : null,
+    ]
+  );
+  await q(
+    `insert into playbook_runs (id, workspace_id, playbook_id, session_id, executor, status, generation, started_at, created_by)
+     values ($1,$2,$3,null,'generate','proposed',$4::jsonb,now(),$5)`,
+    [
+      runId,
+      WS,
+      opts.playbookId,
+      JSON.stringify({
+        subjectId: opts.subjectId,
+        lands: { target: "subject_document_section", section: "Caption draft" },
+        proposal: {
+          id: proposalId,
+          reviewUrl: "x",
+          reviewPath: "x",
+          documentId: opts.documentId,
+          sectionId: "caption-draft",
+        },
+      }),
+      MEMBER,
+    ]
+  );
+  return { runId, proposalId };
+}
+
+describe("one-shot runs stay the person's (review of the lean-runs wave)", () => {
+  it("another member's decided drafts are never shown as this person's examples", async () => {
+    await theirDraft({
+      playbookId: CAPTION_EX,
+      subjectId: POST,
+      documentId: DOC,
+      status: "approved",
+      body: "MEMBER'S OWN APPROVED CAPTION",
+    });
+    h.generateCalls = [];
+    const pFinal = await draft(CAPTION_EX, POST_2, DRAFT);
+    expect(h.generateCalls[0]!.prompt).not.toContain(
+      "MEMBER'S OWN APPROVED CAPTION"
+    );
+    const run = (await runRows()).find(
+      (r) => r.generation?.proposal?.id === pFinal
+    )!;
+    expect(run.generation!.examples).toEqual({
+      asked: { approved: 1, rejected: 2 },
+      used: [],
+    });
+  });
+
+  it("a subject in a space the person is not in, or deleted, is not found and never quoted", async () => {
+    for (const subject of [HIDDEN_POST, GONE_POST]) {
+      const { status, body } = await runPlaybook(CAPTION, subject);
+      expect(status).toBe(404);
+      expect(JSON.stringify(body)).not.toMatch(
+        /Their secret launch|A deleted post/
+      );
+    }
+    expect(h.generateCalls).toEqual([]);
+    expect(await runRows()).toEqual([]);
+  });
+
+  it("reuse: the scheduled path returns the person's own pending draft, filing nothing new", async () => {
+    const first = await scheduled(CAPTION, POST);
+    const second = await scheduled(CAPTION, POST);
+    expect(second.reused).toBe(true);
+    expect(second.generated.proposalId).toBe(first.generated.proposalId);
+    expect(h.generateCalls).toHaveLength(1);
+    expect(await proposalRows()).toHaveLength(1);
+  });
+
+  it("reuse never hands this person another member's pending draft", async () => {
+    const theirs = await theirDraft({
+      playbookId: CAPTION,
+      subjectId: POST,
+      documentId: DOC,
+      status: "pending",
+      body: "MEMBER'S PENDING DRAFT",
+    });
+    const mine = await scheduled(CAPTION, POST);
+    expect(mine.reused).toBeUndefined();
+    expect(mine.generated.proposalId).not.toBe(theirs.proposalId);
+    expect(h.generateCalls).toHaveLength(1);
+  });
+
+  it("two runs started together file ONE draft: the other waits on it", async () => {
+    const results = await Promise.allSettled([
+      scheduled(CAPTION, POST),
+      scheduled(CAPTION, POST),
+    ]);
+    expect(await proposalRows()).toHaveLength(1);
+    expect(h.generateCalls).toHaveLength(1);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const fresh = fulfilled.filter(
+      (r) => !(r as PromiseFulfilledResult<{ reused?: true }>).value.reused
+    );
+    expect(fresh).toHaveLength(1);
+    for (const r of results) {
+      if (r.status === "rejected")
+        expect((r.reason as { code?: string }).code).toBe("CONFLICT");
+    }
+  });
+
+  it("a pending draft the document moved past is not open: the next run drafts again", async () => {
+    const first = await scheduled(CAPTION, POST);
+    await q(
+      `update documents set content_revision = content_revision + 1 where id = $1`,
+      [DOC]
+    );
+    try {
+      const second = await scheduled(CAPTION, POST);
+      expect(second.reused).toBeUndefined();
+      expect(second.generated.proposalId).not.toBe(first.generated.proposalId);
+      expect(h.generateCalls).toHaveLength(2);
+    } finally {
+      await q(`update documents set content_revision = 1 where id = $1`, [DOC]);
+    }
+  });
+
+  it("a run stuck running past the stale window is not open; a fresh one is", async () => {
+    const stuck = (minutesAgo: number) =>
+      q(
+        `insert into playbook_runs (id, workspace_id, playbook_id, session_id, executor, status, generation, started_at, created_by)
+         values ($1,$2,$3,null,'generate','running',$4::jsonb, now() - ($5 || ' minutes')::interval, $6)`,
+        [
+          randomUUID(),
+          WS,
+          CAPTION,
+          JSON.stringify({ subjectId: POST }),
+          String(minutesAgo),
+          PERSON,
+        ]
+      );
+    await stuck(10);
+    const ok = await scheduled(CAPTION, POST);
+    expect(ok.reused).toBeUndefined();
+    await h.client!.exec("delete from playbook_runs; delete from proposals;");
+    await stuck(1);
+    await expect(scheduled(CAPTION, POST)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+
+  it("a failure after the model call is recorded: run failed, the call's usage kept", async () => {
+    h.answer = "   ";
+    const { status } = await runPlaybook(CAPTION, POST);
+    expect(status).toBeGreaterThanOrEqual(400);
+    const [run] = await runRows();
+    expect(run).toMatchObject({
+      status: "failed",
+      error: "The model answered with no draft text.",
+    });
+    expect(run!.generation).toMatchObject({
+      inputTokens: 1800,
+      outputTokens: 90,
+      model: "claude-haiku-5-5",
+    });
+    expect(await proposalRows()).toEqual([]);
+  });
+
+  it("a filed draft whose record write fails is not a failed run: the proposal stands", async () => {
+    h.settleFail = true;
+    const { status, body } = await runPlaybook(CAPTION, POST);
+    expect(status, JSON.stringify(body)).toBe(200);
+    const [p] = await proposalRows();
+    expect(p).toMatchObject({ status: "pending" });
+    expect(body.generated.proposalId).toBe(p!.id);
+    const [run] = await runRows();
+    expect(run!.status).not.toBe("failed");
+  });
+});
+
+describe("a one-shot run follows its draft's decision (cross-repo review, watch 10)", () => {
+  it("approved: the run is completed, once", async () => {
+    const pid = await draft(CAPTION, POST, DRAFT);
+    expect(await settleGenerateRunOnDecision(pid, "approved")).toBe(
+      "completed"
+    );
+    const [run] = await runRows();
+    expect(run!.status).toBe("completed");
+    // Already moved: nothing moves twice.
+    expect(await settleGenerateRunOnDecision(pid, "approved")).toBeNull();
+  });
+
+  it("whichever door decides it: rejected → cancelled (discarded), reopened → proposed again", async () => {
+    const pid = await draft(CAPTION, POST, DRAFT);
+    emitProposalReviewed(pid, WS, "rejected", PERSON);
+    await vi.waitFor(async () => {
+      expect((await runRows())[0]!.status).toBe("cancelled");
+    });
+    emitProposalReviewed(pid, WS, "reopened", PERSON);
+    await vi.waitFor(async () => {
+      expect((await runRows())[0]!.status).toBe("proposed");
+    });
+  });
+
+  it("a proposal no one-shot run filed moves no run", async () => {
+    expect(
+      await settleGenerateRunOnDecision(randomUUID(), "approved")
+    ).toBeNull();
+  });
+});
+
+describe("the prompt never overshoots its bound when the subject leaves almost no room", () => {
+  it("every room left for the document, 0 to 40 characters included, stays under the bound", () => {
+    const big = "x".repeat(1_000);
+    const base: Record<string, unknown> = {};
+    for (let i = 0; i < 21; i++) base[`p${i}`] = big;
+    for (let n = 0; n < 1_000; n += 1) {
+      const out = buildGeneratePrompt({
+        method: { contextSkill: null, guidance: "" },
+        goal: "Write the caption.",
+        section: "Caption draft",
+        subject: {
+          id: "s",
+          title: "Post",
+          kind: "post",
+          properties: { ...base, q: "y".repeat(n) },
+        },
+        document: { id: "d", title: "Script", content: "z".repeat(30_000) },
+      });
+      expect(out.text.length, `q of ${n}`).toBeLessThanOrEqual(
+        GENERATE_PROMPT_MAX_CHARS
+      );
+    }
   });
 });

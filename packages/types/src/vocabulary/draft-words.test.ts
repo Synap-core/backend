@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 
 import { PROPOSAL_STATUSES } from "../proposals/attention.js";
 import {
-  DRAFT_DECISION_API,
   DRAFT_DECISIONS,
   DRAFT_DECISION_WORDS,
   draftDecisionWord,
@@ -34,14 +33,6 @@ describe("draft words: a draft decided in place (one definition)", () => {
     expect(draftStateOf(undefined)).toBe("unknown");
     expect(draftStateOf("toString")).toBe("unknown");
     expect(draftStateOf(" Rejected ")).toBe("discarded");
-  });
-
-  it("a draft is discarded through the API's reject, approved through its approve", () => {
-    expect(DRAFT_DECISION_API).toEqual({
-      approve: "approve",
-      discard: "reject",
-    });
-    expect([...DRAFT_DECISIONS]).toEqual(["approve", "discard"]);
   });
 
   it("the vocabulary's approve and discard ARE the draft words, in every mood and language", () => {

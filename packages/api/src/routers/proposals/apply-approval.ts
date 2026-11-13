@@ -9,6 +9,7 @@
  */
 
 import { sendWaitHoldCheck } from "../../services/lifecycle/wait-hold-check.js";
+import { settleGenerateRunOnDecision } from "../../services/playbooks/generate-run-decision.js";
 import { TRPCError } from "@trpc/server";
 import { twinsShownOnCard } from "../../services/duplicates/find-duplicate-candidates.js";
 import {
@@ -217,6 +218,9 @@ export function emitProposalReviewed(
   status: "approved" | "rejected" | "reopened" | "withdrawn",
   userId?: string
 ): void {
+  // A one-shot run moves with its draft's decision (approved → completed,
+  // discarded → cancelled), whichever door decided it.
+  void settleGenerateRunOnDecision(proposalId, status);
   // A null-workspace (pod-wide) proposal still needs its reviewed event so the
   // bell clears — route it to the user's room instead of a workspace room.
   // Workspace is an optional lens, never a delivery requirement.

@@ -66,7 +66,13 @@ export interface RunCostFirstCall {
   /** The provider reported `promptTokens` (else it is the IS's estimate). */
   reported: boolean;
   toolCount: number;
-  chars: { system: number; tools: number; history: number; message: number };
+  /** Each part's size; `null` = that part's size was not recorded. */
+  chars: {
+    system: number | null;
+    tools: number | null;
+    history: number | null;
+    message: number | null;
+  };
   /** The system prompt's sections by name and size; `null` = not recorded. */
   sections: { name: string; chars: number }[] | null;
   /** The tool names offered; `null` = not recorded. */
@@ -178,10 +184,10 @@ function firstCallOf(t: RunTurnRecord | undefined): RunCostFirstCall | null {
     reported: f.reported === true,
     toolCount,
     chars: {
-      system: count(chars.system) ?? 0,
-      tools: count(chars.tools) ?? 0,
-      history: count(chars.history) ?? 0,
-      message: count(chars.message) ?? 0,
+      system: count(chars.system),
+      tools: count(chars.tools),
+      history: count(chars.history),
+      message: count(chars.message),
     },
     sections,
     tools: names(f.tools),

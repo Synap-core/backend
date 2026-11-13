@@ -15549,11 +15549,12 @@ export interface RunCostFirstCall {
 	/** The provider reported `promptTokens` (else it is the IS's estimate). */
 	reported: boolean;
 	toolCount: number;
+	/** Each part's size; `null` = that part's size was not recorded. */
 	chars: {
-		history: number;
-		message: number;
-		system: number;
-		tools: number;
+		history: number | null;
+		message: number | null;
+		system: number | null;
+		tools: number | null;
 	};
 	/** The system prompt's sections by name and size; `null` = not recorded. */
 	sections: {
@@ -15911,6 +15912,8 @@ export interface PlaybookRunDetail {
 	 * content, readable by its owner and its room's human roster). `session` is
 	 * then null and the page renders the "private session" placeholder — no
 	 * goal, no door. False when there is a readable session or none at all.
+	 * Also true for ANOTHER person's one-shot run: its record (`generation`)
+	 * is its creator's alone, so it is withheld the same way.
 	 */
 	sessionPrivate: boolean;
 	/** Entities the session produced (`session --produced--> entity`), user-visible only. */

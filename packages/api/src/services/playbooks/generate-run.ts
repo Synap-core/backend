@@ -2,10 +2,8 @@
  * A ONE-SHOT playbook run (`executor: "generate"`, plan 08e4fba7 slice 1,
  * founder decisions of 9 Nov 2026).
  *
- * A button that drafts four lines (a post's caption) used to start a full agent
- * run: a session, a room, a recall, a 19-tool agent turn with a 24k-token
- * prompt, a checkpoint and a continuation (document 2e7a93d1: 252k input
- * tokens for one caption). A one-shot playbook instead runs as:
+ * A playbook that drafts one piece of text runs as ONE model call, never an
+ * agent run (plan 08e4fba7; measurements in document 2e7a93d1):
  *
  *   1. resolve (the run door already did), the subject check, one open run per
  *      subject (`idempotentBySubject`), the params rendered into the goal;
@@ -22,9 +20,12 @@
  *      that asked, or in Needs you, as any proposal.
  *
  * NOT created: a session, a room, a recall, a kickoff message, a tool profile,
- * an IS agent turn, a continuation, an enrolment. No reaper looks at it: a
+ * an IS agent turn, a continuation, an enrolment. No reaper settles it: a
  * filed run is `proposed` (settled), and its `running` window is the one
- * synchronous call.
+ * synchronous call. A run still `running` after
+ * {@link GENERATE_RUN_STALE_MS} (its process died mid-call) is NOT treated as
+ * open by the next run on that subject, so it never blocks the record; its
+ * row stays `running` until an operator looks.
  *
  * The door's answer (`GeneratedRunAnswer`) is synchronous: the run id, the
  * proposal id and its review link, so the app shows the draft inline at once.
@@ -34,10 +35,12 @@ import { TRPCError } from "@trpc/server";
 import {
   and,
   desc,
+  documents,
   drizzleSql,
   eq,
   entities,
   getDb,
+  isNull,
   playbookRuns,
   proposals,
 } from "@synap/database";
@@ -70,6 +73,10 @@ import {
 import { loadRunMethodParts, renderPlaybookMethod } from "./playbook-method.js";
 import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
+import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
+import { WORK_CLOCK } from "@synap-core/types/work-clock";
+import { oneShotRunSubjectIs } from "./run-subject.js";
+import { documentPatchPayload } from "../document-patch/document-edit-undo.js";
 import {
   applyDocumentPatch,
   loadPatchDocument,
@@ -83,6 +90,12 @@ import {
 } from "./generate-examples.js";
 
 const logger = createLogger({ module: "generate-run" });
+
+/**
+ * A one-shot run still `running` after this long is dead (its one call is
+ * bounded far below it): the next run on its subject does not wait on it.
+ */
+export const GENERATE_RUN_STALE_MS = WORK_CLOCK.live;
 
 /** The machine author of every proposal a one-shot run files. */
 export const GENERATE_RUN_AUTHOR = "system:generate-run" as const;
@@ -199,7 +212,7 @@ export function readGenerateLanding(
       section: output.lands!.section.trim(),
       ...(output.lands!.owner === "person" ? { owner: "person" as const } : {}),
     },
-    ...(examples && typeof examples === "object" ? { examples } : {}),
+    ...(examples ? { examples } : {}),
   };
 }
 
@@ -390,7 +403,9 @@ export function buildGeneratePrompt(input: {
   let docTruncated = false;
   if (input.document && docText.length > room) {
     docText =
-      room > 1
+      // The cut marker takes 37 characters: below 40 of room the document
+      // is left out whole rather than overshoot the bound.
+      room >= 40
         ? `${docText.slice(0, room - 40)}\n\n[… the rest of the document is cut]`
         : "";
     docTruncated = true;
@@ -447,33 +462,51 @@ export function buildGeneratePrompt(input: {
   };
 }
 
-/** The pending proposal an earlier run of this playbook filed on this subject. */
+type GenerateDb = Awaited<ReturnType<typeof getDb>>;
+type GenerateTx = Parameters<Parameters<GenerateDb["transaction"]>[0]>[0];
+
+/**
+ * THIS PERSON's open run of this playbook on this subject: one still drafting
+ * (and not stale, {@link GENERATE_RUN_STALE_MS}), or one whose draft is still
+ * pending AND still applies (its base revision is the document's current one;
+ * a draft the document has moved past can never be approved, so it is not
+ * open). Another person's run is never theirs to reuse.
+ */
 async function openGenerateRunFor(
-  playbookId: string,
-  subjectId: string
+  tx: GenerateTx,
+  input: {
+    playbookId: string;
+    subjectId: string;
+    userId: string;
+    documentRevision: number;
+  }
 ): Promise<PlaybookRun | null> {
-  const db = await getDb();
-  const [latest] = await db
+  const [latest] = await tx
     .select()
     .from(playbookRuns)
     .where(
       and(
-        eq(playbookRuns.playbookId, playbookId),
-        drizzleSql`${playbookRuns.generation}->>'subjectId' = ${subjectId}`
+        eq(playbookRuns.playbookId, input.playbookId),
+        oneShotRunSubjectIs(input.subjectId, input.userId)
       )
     )
     .orderBy(desc(playbookRuns.startedAt))
     .limit(1);
   if (!latest) return null;
-  if (latest.status === "running") return latest as PlaybookRun;
+  if (latest.status === "running") {
+    const age = Date.now() - new Date(latest.startedAt).getTime();
+    return age < GENERATE_RUN_STALE_MS ? (latest as PlaybookRun) : null;
+  }
   const proposalId = latest.generation?.proposal?.id;
   if (latest.status !== "proposed" || !proposalId) return null;
-  const [p] = await db
-    .select({ status: proposals.status })
+  const [p] = await tx
+    .select({ status: proposals.status, data: proposals.data })
     .from(proposals)
     .where(eq(proposals.id, proposalId))
     .limit(1);
-  return p?.status === ProposalStatus.PENDING ? (latest as PlaybookRun) : null;
+  if (p?.status !== ProposalStatus.PENDING) return null;
+  const base = documentPatchPayload(p.data).baseRevision;
+  return base === input.documentRevision ? (latest as PlaybookRun) : null;
 }
 
 function answerOf(run: PlaybookRun, reused?: true): GeneratedRunAnswer | null {
@@ -545,6 +578,9 @@ export async function executeGenerateRun(
 
   // The subject: what the prompt reads, and what answers the params it
   // declares it answers (`fillParamsFromSubject`, the run funnel's own fill).
+  // Read under the person's floor (a space they are in, or a personal record
+  // of their own; not deleted): a subject they cannot see is not found, and
+  // nothing about it is quoted.
   const [subject] = await db
     .select({
       id: entities.id,
@@ -555,7 +591,17 @@ export async function executeGenerateRun(
       documentId: entities.documentId,
     })
     .from(entities)
-    .where(eq(entities.id, subjectId))
+    .where(
+      and(
+        eq(entities.id, subjectId),
+        isNull(entities.deletedAt),
+        ownerPrivateVisibleWhere(
+          entities.workspaceId,
+          entities.userId,
+          input.userId
+        )
+      )
+    )
     .limit(1);
   if (!subject) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Subject not found." });
@@ -572,10 +618,9 @@ export async function executeGenerateRun(
     declaredParams,
     fillParamsFromSubject(declaredParams, input.params, {
       id: subjectId,
-      title: subject.title ?? null,
-      preview: subject.preview ?? null,
-      properties:
-        (subject.properties as Record<string, unknown> | null) ?? null,
+      title: subject.title,
+      preview: subject.preview,
+      properties: subject.properties as Record<string, unknown>,
       kinds: subjectKinds,
     }).values
   );
@@ -591,28 +636,16 @@ export async function executeGenerateRun(
     );
   }
 
-  // ── One open run per subject (the scheduled path). ─────────────────────────
-  if (input.idempotentBySubject) {
-    const open = await openGenerateRunFor(playbook.id, subjectId);
-    const answer = open ? answerOf(open, true) : null;
-    if (open && answer) return { run: open, generated: answer, reused: true };
-    if (open && open.status === "running") {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: `"${playbook.name}" is already drafting for this record (run ${open.id}).`,
-      });
-    }
-  }
-
   // ── What the prompt reads: the subject's document, as the person. ─────────
   if (!subject.documentId) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: `"${subject.title ?? "This record"}" has no document, so "${playbook.name}" has nowhere to put its "${lands.section}" draft.`,
+      message: `This record has no document, so "${playbook.name}" has nowhere to put its "${lands.section}" draft.`,
     });
   }
   // The person must be able to edit where the draft lands (and read it):
-  // checked BEFORE the model call, so a refused landing costs nothing.
+  // checked BEFORE the model call, and before any message quotes the
+  // subject, so a refused landing costs nothing and says nothing.
   await loadEditableDocument(input.userId, subject.documentId);
   const doc = await loadPatchDocument(subject.documentId);
   const content = await readPatchDocumentContent(doc);
@@ -625,7 +658,7 @@ export async function executeGenerateRun(
         declaredParams,
         renderSubjectParamValues(declaredParams, resolution.values, {
           id: subjectId,
-          title: subject.title ?? null,
+          title: subject.title,
         })
       ),
       playbook.id
@@ -647,24 +680,58 @@ export async function executeGenerateRun(
     finishReason: null,
     outputChars: null,
   };
-  const [run] = await db
-    .insert(playbookRuns)
-    .values({
-      workspaceId: input.workspaceId,
-      playbookId: playbook.id,
-      sessionId: null,
-      executor: "generate",
-      ...(input.runOn ? { runOn: input.runOn } : {}),
-      status: "running",
-      input: resolution.values,
-      createdBy: input.userId,
-      definitionSnapshot: buildDefinitionSnapshot(playbook),
-      generation: base,
-    })
-    .returning();
-  const runId = run!.id;
+  // ── One open run per subject (the scheduled path), then the row. The check
+  // and the insert hold ONE advisory lock on (playbook, subject), so two runs
+  // started together cannot both find nothing open and both file a draft.
+  const claimed = await db.transaction(async (tx) => {
+    if (input.idempotentBySubject) {
+      await tx.execute(
+        drizzleSql`select pg_advisory_xact_lock(hashtext(${`generate:${playbook.id}:${subjectId}`}))`
+      );
+      const [current] = await tx
+        .select({ revision: documents.contentRevision })
+        .from(documents)
+        .where(eq(documents.id, doc.id))
+        .limit(1);
+      const open = await openGenerateRunFor(tx, {
+        playbookId: playbook.id,
+        subjectId,
+        userId: input.userId,
+        documentRevision: current?.revision ?? doc.contentRevision,
+      });
+      if (open) return { kind: "open" as const, run: open };
+    }
+    const [inserted] = await tx
+      .insert(playbookRuns)
+      .values({
+        workspaceId: input.workspaceId,
+        playbookId: playbook.id,
+        sessionId: null,
+        executor: "generate",
+        ...(input.runOn ? { runOn: input.runOn } : {}),
+        status: "running",
+        input: resolution.values,
+        createdBy: input.userId,
+        definitionSnapshot: buildDefinitionSnapshot(playbook),
+        generation: base,
+      })
+      .returning();
+    return { kind: "new" as const, run: inserted! as PlaybookRun };
+  });
+  if (claimed.kind === "open") {
+    const open = claimed.run;
+    const answer = answerOf(open, true);
+    if (answer) return { run: open, generated: answer, reused: true };
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `"${playbook.name}" is already drafting for this record (run ${open.id}).`,
+    });
+  }
+  const run = claimed.run;
+  const runId = run.id;
 
   let record: PlaybookRunGeneration = base;
+  let filedProposalId: string | null = null;
   const collector = new AiUsageCollector();
   try {
     // The method: the context skill and the rules this playbook follows; the
@@ -705,7 +772,7 @@ export async function executeGenerateRun(
       section: lands.section,
       subject: {
         id: subjectId,
-        title: subject.title ?? null,
+        title: subject.title,
         kind: subject.type,
         properties: (subject.properties ?? {}) as Record<string, unknown>,
       },
@@ -787,14 +854,34 @@ export async function executeGenerateRun(
         sectionId,
       },
     };
-    const settled = await settleRun(runId, {
-      status: "proposed",
-      summary: `Drafted "${lands.section}" for review.`,
-      generation: record,
-    });
+    filedProposalId = filed.proposalId;
+    let settled: PlaybookRun;
+    try {
+      settled = await settleRun(runId, {
+        status: "proposed",
+        summary: `Drafted "${lands.section}" for review.`,
+        generation: record,
+      });
+    } catch (settleErr) {
+      // The draft IS filed and pending: never mark this run failed over a
+      // record write. Say where the draft is and answer with it.
+      logger.error(
+        { err: settleErr, runId, proposalId: filed.proposalId },
+        "recording a filed one-shot draft failed; the proposal stands"
+      );
+      settled = { ...run, generation: record } as PlaybookRun;
+    }
     return { run: settled, generated: answerOf(settled)! };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (filedProposalId) {
+      // A pending proposal exists for this run: it is not a failed run.
+      logger.error(
+        { err, runId, proposalId: filedProposalId },
+        "a one-shot run failed after filing its draft; the proposal stands"
+      );
+      throw err;
+    }
     if (collector.size > 0) record = withUsage(record, collector);
     try {
       await settleRun(runId, {

@@ -27,7 +27,6 @@ import {
   desc,
   inArray,
   notInArray,
-  or,
   channels,
   entities,
   focusSessions,
@@ -137,6 +136,7 @@ import {
   type PreApprovalHeldReason,
 } from "./pre-approved-run.js";
 import type { GeneratedRunAnswer } from "./generate-run.js";
+import { runSubjectMatches } from "./run-subject.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -2531,12 +2531,8 @@ async function latestRunFailedWithinCooldown(
     .where(
       and(
         eq(playbookRuns.playbookId, playbookId),
-        // A run's subject is its session's — or, for a one-shot run that has
-        // no session, the one its record names (`generation.subjectId`).
-        or(
-          eq(focusSessions.subjectEntityId, subjectId),
-          drizzleSql`${playbookRuns.generation}->>'subjectId' = ${subjectId}`
-        )
+        // A guardrail of the run door: a system read of what the run is about.
+        runSubjectMatches(subjectId, null)
       )
     )
     .orderBy(desc(playbookRuns.startedAt))

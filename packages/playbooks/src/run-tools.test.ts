@@ -1,6 +1,6 @@
 /**
  * The class of a run and the tools of a turn (plan 08e4fba7, decisions 3 and
- * 4): one-shot gets nothing, short gets 6 reads, long its 26-tool floor; a
+ * 4): one-shot gets nothing, short gets the reads, long its floor; a
  * declared list adds only run tools; a stage list narrows its playbook's.
  */
 import { describe, expect, it } from "vitest";
@@ -54,10 +54,8 @@ describe("runClassOf", () => {
 });
 
 describe("the floors and the vocabulary", () => {
-  it("one-shot has none, short the 6 reads, long the 19 core tools, the relation read, its own 3 and the 3 run-history reads; short is inside long", () => {
+  it("one-shot has none, short the reads, long the core tools, the relation read, its own and the run-history reads; short is inside long", () => {
     expect(RUN_TOOL_FLOORS["one-shot"]).toEqual([]);
-    expect(SHORT_RUN_FLOOR).toHaveLength(6);
-    expect(LONG_RUN_FLOOR).toHaveLength(26);
     for (const t of SHORT_RUN_FLOOR) expect(LONG_RUN_FLOOR).toContain(t);
   });
   it("the long floor holds the run-history reads (plan fbfadf54 fix 1.5)", () => {

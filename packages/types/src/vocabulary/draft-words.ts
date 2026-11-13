@@ -14,7 +14,7 @@
  * the browser and an app built on the SDK say the same word.
  *
  * DEPENDENCY-FREE LEAF, on purpose: `@synap-core/sdk` vendors this file byte
- * for byte (synap-app `packages/sdk/scripts/vendor-vocabulary.mjs`, pinned by
+ * for byte (synap-app `packages/sdk/scripts/vendor-draft-words.mjs`, pinned by
  * its tripwire) because generated apps may only import the SDK. No import may
  * be added here.
  */

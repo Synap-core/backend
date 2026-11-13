@@ -12,6 +12,8 @@
  *   - the run's SUBJECT through the entity read floor (`accessScopeWhere`,
  *     the grant ANDed): the prompt quotes the subject's fields and its
  *     document, so a run about a thing the grant does not reach is not found.
+ * The record is its CREATOR's (`playbook_runs.created_by` = the key's
+ * person): another member's run in the same space reads as no record.
  * Everything else (a session run's turns, room, records, proposals) is said
  * withheld, never an empty list.
  */
@@ -60,6 +62,7 @@ export async function readRunRecordForKey(input: {
       startedAt: playbookRuns.startedAt,
       completedAt: playbookRuns.completedAt,
       sessionId: playbookRuns.sessionId,
+      createdBy: playbookRuns.createdBy,
       generation: playbookRuns.generation,
     })
     .from(playbookRuns)
@@ -72,9 +75,14 @@ export async function readRunRecordForKey(input: {
     .limit(1);
   if (!run) return null;
 
-  // A one-shot run's record quotes its subject: readable only when the grant
-  // reaches that subject. A session run has no such record here.
-  const generation = !run.sessionId ? (run.generation ?? null) : null;
+  // A one-shot run's record quotes its subject and the person's past drafts:
+  // it is its CREATOR's alone (another member's run reads as no record), and
+  // readable only when the grant reaches that subject. A session run has no
+  // such record here.
+  const generation =
+    !run.sessionId && run.createdBy === input.userId
+      ? (run.generation ?? null)
+      : null;
   if (generation?.subjectId) {
     const [subject] = await db
       .select({ id: entities.id })

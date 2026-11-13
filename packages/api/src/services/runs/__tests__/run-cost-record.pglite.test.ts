@@ -391,4 +391,28 @@ describe("ledgerRecordOf (pure)", () => {
     // A first call that recorded no inventory reads as none.
     expect(r.firstCall).toBeNull();
   });
+  it("a first-call size that was not recorded is null, never 0", () => {
+    const { message: _dropped, ...chars } = FIRST_TURN.firstCall.chars;
+    const r = ledgerRecordOf(
+      {
+        runTurns: {
+          runId: RUN,
+          stops: 0,
+          autoContinues: 0,
+          firstTurn: {
+            ...FIRST_TURN,
+            firstCall: { ...FIRST_TURN.firstCall, chars },
+          },
+          turns: [],
+        },
+      },
+      RUN
+    );
+    expect(r.firstCall?.chars).toEqual({
+      system: 40_000,
+      tools: 12_000,
+      history: 0,
+      message: null,
+    });
+  });
 });
